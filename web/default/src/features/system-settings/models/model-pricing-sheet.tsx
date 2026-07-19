@@ -28,6 +28,7 @@ import {
 } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { sideDrawerContentClassName } from '@/components/drawer-layout'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -62,6 +63,7 @@ import {
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import {
   EMPTY_LANE_ENABLED,
@@ -80,7 +82,11 @@ import {
   type PricingMode,
 } from './model-pricing-core'
 import { PriceInput, PriceLane } from './model-pricing-inputs'
-import { formatPricingNumber } from './pricing-format'
+import {
+  formatDisplayPriceFromUSD,
+  formatPricingNumber,
+  formatUSDPriceFromDisplay,
+} from './pricing-format'
 import { TieredPricingEditor } from './tiered-pricing-editor'
 
 export type { ModelRatioData } from './model-pricing-core'
@@ -157,6 +163,27 @@ export const ModelPricingEditorPanel = forwardRef<
   const [requestRuleExpr, setRequestRuleExpr] = useState('')
   const [editorReloadToken, setEditorReloadToken] = useState(0)
   const isEditMode = !!editData
+  const quotaDisplayType = useSystemConfigStore(
+    (state) => state.config.currency.quotaDisplayType
+  )
+  const configuredUsdExchangeRate = useSystemConfigStore(
+    (state) => state.config.currency.usdExchangeRate
+  )
+  const currencyConfigLoading = useSystemConfigStore((state) => state.loading)
+  const isCnyPricing = quotaDisplayType === 'CNY'
+  const hasValidCnyExchangeRate =
+    !isCnyPricing ||
+    (Number.isFinite(configuredUsdExchangeRate) &&
+      configuredUsdExchangeRate > 0)
+  const pricingExchangeRate = isCnyPricing ? configuredUsdExchangeRate : 1
+  const pricingCurrencySymbol = isCnyPricing ? '¥' : '$'
+  const pricingCurrencyLabel = isCnyPricing ? 'CNY' : 'USD'
+  const priceUnitSuffix = isCnyPricing ? 'CNY/1M' : '$/1M'
+  const pricingFieldsReady = !currencyConfigLoading && hasValidCnyExchangeRate
+  const formatPreviewPrice = useCallback(
+    (value: string) => `${pricingCurrencySymbol}${value}`,
+    [pricingCurrencySymbol]
+  )
 
   const form = useForm<ModelPricingFormValues>({
     resolver: zodResolver(createModelPricingSchema(t)),
@@ -174,12 +201,14 @@ export const ModelPricingEditorPanel = forwardRef<
   })
 
   useEffect(() => {
-    const nextLaneState = createInitialLaneState(editData)
+    if (currencyConfigLoading) return
+
+    const nextLaneState = createInitialLaneState(editData, pricingExchangeRate)
 
     if (editData) {
       form.reset({
         name: editData.name,
-        price: editData.price || '',
+        price: formatDisplayPriceFromUSD(editData.price, pricingExchangeRate),
         ratio: editData.ratio || '',
         cacheRatio: editData.cacheRatio || '',
         createCacheRatio: editData.createCacheRatio || '',
@@ -188,13 +217,13 @@ export const ModelPricingEditorPanel = forwardRef<
         audioRatio: editData.audioRatio || '',
         audioCompletionRatio: editData.audioCompletionRatio || '',
       })
-      setPricingMode(
-        editData.billingMode === 'tiered_expr'
-          ? 'tiered_expr'
-          : editData.price
-            ? 'per-request'
-            : 'per-token'
-      )
+      let nextPricingMode: PricingMode = 'per-token'
+      if (editData.billingMode === 'tiered_expr') {
+        nextPricingMode = 'tiered_expr'
+      } else if (editData.price) {
+        nextPricingMode = 'per-request'
+      }
+      setPricingMode(nextPricingMode)
       setBillingExpr(editData.billingExpr || '')
       setRequestRuleExpr(editData.requestRuleExpr || '')
     } else {
@@ -218,7 +247,7 @@ export const ModelPricingEditorPanel = forwardRef<
     setLanePrices(nextLaneState.prices)
     setLaneEnabled(nextLaneState.enabled)
     setEditorReloadToken((token) => token + 1)
-  }, [editData, form])
+  }, [currencyConfigLoading, editData, form, pricingExchangeRate])
 
   const setFormValue = (field: keyof ModelPricingFormValues, value: string) => {
     form.setValue(field, value, {
@@ -253,9 +282,15 @@ export const ModelPricingEditorPanel = forwardRef<
     nextLaneEnabled = laneEnabled
   ) => {
     const inputPrice = toNumberOrNull(nextPromptPrice)
+    const inputPriceUSD = formatUSDPriceFromDisplay(
+      nextPromptPrice,
+      pricingExchangeRate
+    )
     setFormValue(
       'ratio',
-      inputPrice !== null ? formatPricingNumber(inputPrice / 2) : ''
+      inputPrice !== null && inputPriceUSD
+        ? formatPricingNumber(Number(inputPriceUSD) / 2)
+        : ''
     )
 
     laneConfigs.forEach(({ key }) => {
@@ -351,7 +386,8 @@ export const ModelPricingEditorPanel = forwardRef<
         promptPrice,
         lanePrices,
         laneEnabled,
-        t
+        t,
+        formatPreviewPrice
       ),
     [
       billingExpr,
@@ -361,6 +397,7 @@ export const ModelPricingEditorPanel = forwardRef<
       promptPrice,
       requestRuleExpr,
       t,
+      formatPreviewPrice,
       watchedValues,
     ]
   )
@@ -411,6 +448,15 @@ export const ModelPricingEditorPanel = forwardRef<
   }, [editData, laneEnabled, lanePrices, pricingMode, promptPrice, t])
 
   const validatePricingValues = useCallback(() => {
+    if (!pricingFieldsReady) {
+      toast.error(
+        t(
+          'Set a positive CNY per USD exchange rate before editing model prices.'
+        )
+      )
+      return false
+    }
+
     if (
       pricingMode === 'per-token' &&
       toNumberOrNull(promptPrice) === null &&
@@ -436,14 +482,25 @@ export const ModelPricingEditorPanel = forwardRef<
     }
 
     return true
-  }, [form, laneEnabled, lanePrices, pricingMode, promptPrice, t])
+  }, [
+    form,
+    laneEnabled,
+    lanePrices,
+    pricingFieldsReady,
+    pricingMode,
+    promptPrice,
+    t,
+  ])
 
   const buildSubmitData = useCallback(
     (values: ModelPricingFormValues) => {
       const data: ModelRatioData = {
         name: values.name.trim(),
         billingMode: pricingMode,
-        price: values.price || '',
+        price:
+          pricingMode === 'per-request'
+            ? formatUSDPriceFromDisplay(values.price, pricingExchangeRate)
+            : '',
         ratio: values.ratio || '',
         cacheRatio: values.cacheRatio || '',
         createCacheRatio: values.createCacheRatio || '',
@@ -460,7 +517,7 @@ export const ModelPricingEditorPanel = forwardRef<
 
       return data
     },
-    [billingExpr, pricingMode, requestRuleExpr]
+    [billingExpr, pricingExchangeRate, pricingMode, requestRuleExpr]
   )
 
   useImperativeHandle(
@@ -516,6 +573,28 @@ export const ModelPricingEditorPanel = forwardRef<
                   </Alert>
                 )}
 
+                {isCnyPricing && !currencyConfigLoading && (
+                  <Alert
+                    variant={
+                      hasValidCnyExchangeRate ? 'default' : 'destructive'
+                    }
+                  >
+                    {!hasValidCnyExchangeRate && (
+                      <AlertTriangle data-icon='inline-start' />
+                    )}
+                    <AlertDescription>
+                      {hasValidCnyExchangeRate
+                        ? t(
+                            'CNY prices are converted to USD at {{rate}} CNY per USD when saved.',
+                            { rate: pricingExchangeRate }
+                          )
+                        : t(
+                            'Set a positive CNY per USD exchange rate before editing model prices.'
+                          )}
+                    </AlertDescription>
+                  </Alert>
+                )}
+
                 <FormField
                   control={form.control}
                   name='name'
@@ -562,29 +641,48 @@ export const ModelPricingEditorPanel = forwardRef<
                         <FieldLabel>{t('Input price')}</FieldLabel>
                         <PriceInput
                           value={promptPrice}
-                          placeholder='3'
+                          placeholder={formatDisplayPriceFromUSD(
+                            '3',
+                            pricingExchangeRate
+                          )}
+                          disabled={!pricingFieldsReady}
+                          prefix={pricingCurrencySymbol}
+                          suffix={priceUnitSuffix}
                           onChange={handlePromptPriceChange}
                         />
                         <FieldDescription>
-                          {t('USD price per 1M input tokens.')}
+                          {isCnyPricing
+                            ? t('CNY price per 1M input tokens.')
+                            : t('USD price per 1M input tokens.')}
                         </FieldDescription>
                       </Field>
 
                       <div className='grid gap-3 sm:grid-cols-[repeat(auto-fit,minmax(400px,1fr))]'>
                         {laneConfigs.map((lane) => {
-                          const disabled =
-                            lane.key === 'audioOutput' &&
-                            (!laneEnabled.audioInput ||
-                              !hasValue(lanePrices.audioInput))
+                          const laneDisabled =
+                            !pricingFieldsReady ||
+                            (lane.key === 'audioOutput' &&
+                              (!laneEnabled.audioInput ||
+                                !hasValue(lanePrices.audioInput)))
                           return (
                             <PriceLane
                               key={lane.key}
                               title={t(lane.titleKey)}
                               description={t(lane.descriptionKey)}
-                              placeholder={lane.placeholder}
+                              placeholder={formatDisplayPriceFromUSD(
+                                lane.placeholder,
+                                pricingExchangeRate
+                              )}
                               value={lanePrices[lane.key]}
                               enabled={laneEnabled[lane.key]}
-                              disabled={disabled}
+                              disabled={laneDisabled}
+                              prefix={pricingCurrencySymbol}
+                              suffix={priceUnitSuffix}
+                              unitDescription={
+                                isCnyPricing
+                                  ? t('CNY price per 1M tokens.')
+                                  : t('USD price per 1M tokens.')
+                              }
                               onEnabledChange={(checked) =>
                                 handleLaneToggle(lane.key, checked)
                               }
@@ -609,10 +707,16 @@ export const ModelPricingEditorPanel = forwardRef<
                               <FieldLabel>{t('Fixed price')}</FieldLabel>
                               <FormControl>
                                 <InputGroup>
-                                  <InputGroupAddon>$</InputGroupAddon>
+                                  <InputGroupAddon>
+                                    {pricingCurrencySymbol}
+                                  </InputGroupAddon>
                                   <InputGroupInput
                                     inputMode='decimal'
-                                    placeholder='0.01'
+                                    placeholder={formatDisplayPriceFromUSD(
+                                      '0.01',
+                                      pricingExchangeRate
+                                    )}
+                                    disabled={!pricingFieldsReady}
                                     {...field}
                                     onChange={(event) => {
                                       const value = event.target.value
@@ -627,9 +731,13 @@ export const ModelPricingEditorPanel = forwardRef<
                                 </InputGroup>
                               </FormControl>
                               <FieldDescription>
-                                {t(
-                                  'Cost in USD per request, regardless of tokens used.'
-                                )}
+                                {isCnyPricing
+                                  ? t(
+                                      'Cost in CNY per request, converted to USD when saved.'
+                                    )
+                                  : t(
+                                      'Cost in USD per request, regardless of tokens used.'
+                                    )}
                               </FieldDescription>
                               <FormMessage />
                             </Field>
@@ -641,14 +749,18 @@ export const ModelPricingEditorPanel = forwardRef<
 
                   <TabsContent value='tiered_expr' className='pt-0'>
                     <FieldGroup className='gap-5'>
-                      <TieredPricingEditor
-                        key={editorReloadToken}
-                        modelName={watchedValues.name}
-                        billingExpr={billingExpr}
-                        requestRuleExpr={requestRuleExpr}
-                        onBillingExprChange={setBillingExpr}
-                        onRequestRuleExprChange={setRequestRuleExpr}
-                      />
+                      {pricingFieldsReady && (
+                        <TieredPricingEditor
+                          key={editorReloadToken}
+                          modelName={watchedValues.name}
+                          billingExpr={billingExpr}
+                          requestRuleExpr={requestRuleExpr}
+                          currencyLabel={pricingCurrencyLabel}
+                          exchangeRate={pricingExchangeRate}
+                          onBillingExprChange={setBillingExpr}
+                          onRequestRuleExprChange={setRequestRuleExpr}
+                        />
+                      )}
                     </FieldGroup>
                   </TabsContent>
                 </Tabs>
