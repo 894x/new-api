@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 const DISPLAY_DECIMALS = 12
 const SNAP_DECIMALS = 8
-const SNAP_EPSILON = 1e-12
+const SNAP_EPSILON = 1e-10
 
 function toNumberOrNull(value: unknown): number | null {
   if (

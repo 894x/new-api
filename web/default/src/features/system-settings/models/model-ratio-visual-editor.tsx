@@ -16,13 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import {
-  type ColumnFiltersState,
-  type OnChangeFn,
-  type PaginationState,
-  type RowSelectionState,
-  type VisibilityState,
-  type SortingState,
+import type {
+  ColumnFiltersState,
+  OnChangeFn,
+  PaginationState,
+  RowSelectionState,
+  VisibilityState,
+  SortingState,
 } from '@tanstack/react-table'
 import { Copy, Plus } from 'lucide-react'
 import {
@@ -49,6 +49,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
 import { useMediaQuery } from '@/hooks'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { safeJsonParse } from '../utils/json-parser'
 import {
@@ -128,6 +129,15 @@ const ModelRatioVisualEditorComponent = forwardRef<
   ref
 ) {
   const { t } = useTranslation()
+  const quotaDisplayType = useSystemConfigStore(
+    (state) => state.config.currency.quotaDisplayType
+  )
+  const configuredUsdExchangeRate = useSystemConfigStore(
+    (state) => state.config.currency.usdExchangeRate
+  )
+  const isCnyPricing = quotaDisplayType === 'CNY'
+  const priceSummaryCurrencySymbol = isCnyPricing ? '¥' : '$'
+  const priceSummaryExchangeRate = isCnyPricing ? configuredUsdExchangeRate : 1
   const isMobile = useMediaQuery('(max-width: 767px)')
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
@@ -210,23 +220,25 @@ const ModelRatioVisualEditorComponent = forwardRef<
     const draftByName = new Map(draftRows.map((row) => [row.name, row]))
     const modelNames = new Set([...savedByName.keys(), ...draftByName.keys()])
 
-    return Array.from(modelNames)
-      .map((name) => {
-        const saved = savedByName.get(name)
-        const draft = draftByName.get(name)
-        const displayed = saved ?? draft
-        const savedSignature = getSnapshotSignature(saved)
-        const draftSignature = getSnapshotSignature(draft)
+    const rows: ModelRow[] = []
+    for (const name of modelNames) {
+      const saved = savedByName.get(name)
+      const draft = draftByName.get(name)
+      const displayed = saved ?? draft
+      if (!displayed) continue
 
-        return {
-          ...displayed!,
-          saved,
-          draft,
-          isDraftChanged: savedSignature !== draftSignature,
-          isDraftDeleted: Boolean(saved && !draft),
-          isDraftNew: Boolean(!saved && draft),
-        }
+      rows.push({
+        ...displayed,
+        saved,
+        draft,
+        isDraftChanged:
+          getSnapshotSignature(saved) !== getSnapshotSignature(draft),
+        isDraftDeleted: Boolean(saved && !draft),
+        isDraftNew: Boolean(!saved && draft),
       })
+    }
+
+    return rows
       .filter((row) => !row.isDraftDeleted)
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [
@@ -276,6 +288,12 @@ const ModelRatioVisualEditorComponent = forwardRef<
   const handleEdit = useCallback(
     (model: ModelRow) => {
       const editableModel = model.draft ?? model.saved ?? model
+      let editableBillingMode: ModelRatioData['billingMode'] = 'per-token'
+      if (editableModel.billingMode === 'tiered_expr') {
+        editableBillingMode = 'tiered_expr'
+      } else if (editableModel.price && editableModel.price !== '') {
+        editableBillingMode = 'per-request'
+      }
       setEditData({
         name: editableModel.name,
         price: editableModel.price,
@@ -286,12 +304,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
         imageRatio: editableModel.imageRatio,
         audioRatio: editableModel.audioRatio,
         audioCompletionRatio: editableModel.audioCompletionRatio,
-        billingMode:
-          editableModel.billingMode === 'tiered_expr'
-            ? 'tiered_expr'
-            : editableModel.price && editableModel.price !== ''
-              ? 'per-request'
-              : 'per-token',
+        billingMode: editableBillingMode,
         billingExpr: editableModel.billingExpr,
         requestRuleExpr: editableModel.requestRuleExpr,
       })
@@ -423,9 +436,19 @@ const ModelRatioVisualEditorComponent = forwardRef<
       buildModelRatioColumns({
         onDelete: handleDelete,
         onEdit: handleEdit,
+        priceDisplay: {
+          currencySymbol: priceSummaryCurrencySymbol,
+          exchangeRate: priceSummaryExchangeRate,
+        },
         t,
       }),
-    [handleEdit, handleDelete, t]
+    [
+      handleEdit,
+      handleDelete,
+      priceSummaryCurrencySymbol,
+      priceSummaryExchangeRate,
+      t,
+    ]
   )
 
   const { table } = useDataTable({
@@ -500,7 +523,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
         value: string | undefined
       ) => {
         if (!value || value === '') return
-        const parsed = parseFloat(value)
+        const parsed = Number.parseFloat(value)
         if (Number.isFinite(parsed)) target[name] = parsed
       }
 

@@ -8,7 +8,7 @@
     "build": "rsbuild build",
     "build:check": "tsgo -b && rsbuild build",
     "typecheck": "tsgo -b",
-    "test:model-pricing": "vitest run src/features/system-settings/models/pricing-format.test.ts src/features/system-settings/models/model-pricing-core.test.ts",
+    "test:model-pricing": "vitest run src/features/system-settings/models/pricing-format.test.ts src/features/system-settings/models/model-pricing-core.test.ts src/features/system-settings/models/model-pricing-snapshots.test.ts",
     "lint": "oxlint -c .oxlintrc.json .",
     "lint:fix": "oxlint -c .oxlintrc.json . --fix",
     "preview": "rsbuild preview",

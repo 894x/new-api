@@ -54,4 +54,9 @@ describe('model pricing display currency conversion', () => {
     const displayPrice = formatDisplayPriceFromUSD('0.00000125', 7.3)
     expect(formatUSDPriceFromDisplay(displayPrice, 7.3)).toBe('0.00000125')
   })
+
+  it('removes floating-point drift from saved CNY model prices', () => {
+    expect(formatDisplayPriceFromUSD('1.095890410958', 7.3)).toBe('8')
+    expect(formatDisplayPriceFromUSD('3.424657534244', 7.3)).toBe('25')
+  })
 })
