@@ -71,6 +71,7 @@ import {
   buildPreviewRows,
   createInitialLaneState,
   createModelPricingSchema,
+  deriveModelRatioFromDisplayPrice,
   hasValue,
   laneConfigs,
   numericDraftRegex,
@@ -282,14 +283,13 @@ export const ModelPricingEditorPanel = forwardRef<
     nextLaneEnabled = laneEnabled
   ) => {
     const inputPrice = toNumberOrNull(nextPromptPrice)
-    const inputPriceUSD = formatUSDPriceFromDisplay(
-      nextPromptPrice,
-      pricingExchangeRate
-    )
     setFormValue(
       'ratio',
-      inputPrice !== null && inputPriceUSD
-        ? formatPricingNumber(Number(inputPriceUSD) / 2)
+      inputPrice !== null
+        ? deriveModelRatioFromDisplayPrice(
+            nextPromptPrice,
+            pricingExchangeRate
+          )
         : ''
     )
 

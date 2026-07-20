@@ -21,11 +21,20 @@ import { describe, expect, it } from 'vitest'
 import {
   buildPreviewRows,
   createInitialLaneState,
+  deriveModelRatioFromDisplayPrice,
   EMPTY_LANE_ENABLED,
   EMPTY_LANE_PRICES,
 } from './model-pricing-core'
 
 describe('model pricing currency-aware state', () => {
+  it('derives the canonical model ratio from the display currency price', () => {
+    expect(deriveModelRatioFromDisplayPrice('2', 1)).toBe('1')
+    expect(deriveModelRatioFromDisplayPrice('14.6', 7.3)).toBe('1')
+    expect(deriveModelRatioFromDisplayPrice('3', 7.3)).toBe('0.205479452055')
+    expect(deriveModelRatioFromDisplayPrice('', 7.3)).toBe('')
+    expect(deriveModelRatioFromDisplayPrice('3', 0)).toBe('')
+  })
+
   it('converts stored USD token prices to CNY while preserving ratios', () => {
     const state = createInitialLaneState(
       {

@@ -23,6 +23,7 @@ import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
 import {
   formatDisplayPriceFromUSD,
   formatPricingNumber,
+  formatUSDPriceFromDisplay,
 } from './pricing-format'
 
 export const createModelPricingSchema = (t: (key: string) => string) =>
@@ -157,6 +158,15 @@ export function toNumberOrNull(value: unknown): number | null {
   if (!hasValue(value) && value !== 0) return null
   const num = Number(value)
   return Number.isFinite(num) ? num : null
+}
+
+export function deriveModelRatioFromDisplayPrice(
+  value: unknown,
+  exchangeRate: unknown = 1
+): string {
+  const usdPrice = formatUSDPriceFromDisplay(value, exchangeRate)
+  if (!usdPrice) return ''
+  return formatPricingNumber(Number(usdPrice) / 2)
 }
 
 function ratioToBasePrice(ratio: unknown): string {
