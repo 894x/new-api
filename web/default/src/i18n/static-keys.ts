@@ -52,6 +52,9 @@ export const STATIC_I18N_KEYS = [
   'Worker instances do not run master-only background tasks.',
   'Drawing task polling',
 
+  // Channel brands resolved dynamically
+  'Tencent TokenHub',
+
   // Pricing constants
   'Name',
   'Price: Low to High',
