@@ -55,6 +55,8 @@ const headerNavSchema = z.object({
   pricingRequireAuth: z.boolean(),
   rankingsEnabled: z.boolean(),
   rankingsRequireAuth: z.boolean(),
+  tokenCostEnabled: z.boolean(),
+  tokenCostRequireAuth: z.boolean(),
   docs: z.boolean(),
   about: z.boolean(),
 })
@@ -89,6 +91,14 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.rankings?.requireAuth === undefined
       ? HEADER_NAV_DEFAULT.rankings.requireAuth
       : Boolean(config.rankings.requireAuth),
+  tokenCostEnabled:
+    config.token_cost?.enabled === undefined
+      ? HEADER_NAV_DEFAULT.token_cost.enabled
+      : Boolean(config.token_cost.enabled),
+  tokenCostRequireAuth:
+    config.token_cost?.requireAuth === undefined
+      ? HEADER_NAV_DEFAULT.token_cost.requireAuth
+      : Boolean(config.token_cost.requireAuth),
   docs:
     config.docs === undefined ? HEADER_NAV_DEFAULT.docs : Boolean(config.docs),
   about:
@@ -130,6 +140,11 @@ export function HeaderNavigationSection({
         ...(config.rankings ?? HEADER_NAV_DEFAULT.rankings),
         enabled: values.rankingsEnabled,
         requireAuth: values.rankingsRequireAuth,
+      },
+      token_cost: {
+        ...(config.token_cost ?? HEADER_NAV_DEFAULT.token_cost),
+        enabled: values.tokenCostEnabled,
+        requireAuth: values.tokenCostRequireAuth,
       },
     }
 
@@ -178,7 +193,10 @@ export function HeaderNavigationSection({
   const accessModules: Array<{
     enabledKey: keyof HeaderNavFormValues
     requireAuthKey: keyof HeaderNavFormValues
-    requireAuthDependsOn: 'pricingEnabled' | 'rankingsEnabled'
+    requireAuthDependsOn:
+      | 'pricingEnabled'
+      | 'rankingsEnabled'
+      | 'tokenCostEnabled'
     title: string
     description: string
     requireAuthTitle: string
@@ -204,6 +222,19 @@ export function HeaderNavigationSection({
       requireAuthTitle: t('Require login to view rankings'),
       requireAuthDescription: t(
         'Visitors must authenticate before accessing the rankings page.'
+      ),
+    },
+    {
+      enabledKey: 'tokenCostEnabled',
+      requireAuthKey: 'tokenCostRequireAuth',
+      requireAuthDependsOn: 'tokenCostEnabled',
+      title: t('Token Cost Calculator'),
+      description: t(
+        'Estimate token costs using customer-facing model prices.'
+      ),
+      requireAuthTitle: t('Require login to use calculator'),
+      requireAuthDescription: t(
+        'Visitors must authenticate before accessing the token cost calculator.'
       ),
     },
   ]

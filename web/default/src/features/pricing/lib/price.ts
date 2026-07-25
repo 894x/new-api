@@ -60,7 +60,7 @@ export function stripTrailingZeros(formatted: string): string {
  * Returns NaN when the required ratio field is missing/null so callers can
  * skip rendering that price type.
  */
-function calculateTokenPrice(
+export function calculateTokenPrice(
   model: PricingModel,
   type: PriceType,
   ratio: number
@@ -128,7 +128,7 @@ function hasRatio(value: number | null | undefined): boolean {
  *    - formatCurrencyFromUSD(0.571) → 0.571 × 7 = ¥4 ✓
  *    - Normal price: ¥7, Recharge price: ¥4 (cheaper!)
  */
-function applyRechargeRate(
+export function applyRechargeRate(
   price: number,
   showWithRecharge: boolean,
   priceRate: number,

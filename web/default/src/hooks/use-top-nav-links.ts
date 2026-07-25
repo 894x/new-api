@@ -86,6 +86,16 @@ export function useTopNavLinks(): TopNavLink[] {
     links.push({ title: t('Rankings'), href: '/rankings', requiresAuth })
   }
 
+  const tokenCost = modules?.token_cost
+  if (tokenCost && typeof tokenCost === 'object' && tokenCost.enabled) {
+    const requiresAuth = tokenCost.requireAuth && !isAuthed
+    links.push({
+      title: t('Token Cost Calculator'),
+      href: '/token-cost',
+      requiresAuth,
+    })
+  }
+
   // Docs (supports external links)
   if (modules?.docs !== false) {
     if (docsLink) {
