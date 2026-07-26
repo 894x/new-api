@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useEffect, useRef } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
@@ -28,14 +28,23 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { CTA, Features, Hero, HowItWorks, Stats } from './components'
 import { useHomePageContent } from './hooks'
+import type { HomePageTemplate } from './types'
 
-export function Home() {
+const QualityHome = lazy(() => import('./templates/quality-home'))
+const EconomyHome = lazy(() => import('./templates/economy-home'))
+
+type HomeProps = {
+  previewTemplate?: Exclude<HomePageTemplate, 'custom'>
+}
+
+export function Home({ previewTemplate }: HomeProps) {
   const { i18n, t } = useTranslation()
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const { resolvedTheme } = useTheme()
   const { auth } = useAuthStore()
   const isAuthenticated = !!auth.user
-  const { content, isLoaded, isUrl } = useHomePageContent()
+  const { content, isLoaded, isUrl, template } = useHomePageContent()
+  const activeTemplate = previewTemplate || template
 
   const syncIframePreferences = useCallback(() => {
     try {
@@ -68,7 +77,25 @@ export function Home() {
     )
   }
 
-  if (content) {
+  if (activeTemplate === 'quality' || activeTemplate === 'economy') {
+    const Template = activeTemplate === 'quality' ? QualityHome : EconomyHome
+    return (
+      <PublicLayout showMainContainer={false}>
+        <Suspense
+          fallback={
+            <main className='flex min-h-screen items-center justify-center'>
+              <div className='text-muted-foreground'>{t('Loading...')}</div>
+            </main>
+          }
+        >
+          <Template isAuthenticated={isAuthenticated} />
+          <Footer />
+        </Suspense>
+      </PublicLayout>
+    )
+  }
+
+  if (activeTemplate === 'custom' && content) {
     if (isUrl) {
       return (
         <PublicLayout showMainContainer={false}>

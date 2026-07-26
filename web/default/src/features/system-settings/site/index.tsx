@@ -31,6 +31,7 @@ const defaultSiteSettings: SiteSettings = {
   Logo: '',
   Footer: '',
   About: '',
+  HomePageTemplate: '',
   HomePageContent: '',
   ServerAddress: '',
   'legal.user_agreement': '',

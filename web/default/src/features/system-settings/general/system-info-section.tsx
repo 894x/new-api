@@ -17,10 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { Link } from '@tanstack/react-router'
+import { ExternalLink } from 'lucide-react'
 import type { Resolver } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
 
+import { Button } from '@/components/ui/button'
 import {
   Form,
   FormControl,
@@ -62,6 +65,7 @@ const _systemInfoSchema = z.object({
   Logo: z.string().url().optional().or(z.literal('')),
   Footer: z.string().optional(),
   About: z.string().optional(),
+  HomePageTemplate: z.enum(['system', 'quality', 'economy', 'custom']),
   HomePageContent: z.string().optional(),
   legal: z.object({
     user_agreement: z.string().optional(),
@@ -84,6 +88,18 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
 
+  const normalizedHomePageContent = normalizeValue(
+    defaultValues.HomePageContent
+  )
+  let normalizedHomePageTemplate = defaultValues.HomePageTemplate
+  if (
+    !['system', 'quality', 'economy', 'custom'].includes(
+      normalizedHomePageTemplate
+    )
+  ) {
+    normalizedHomePageTemplate = normalizedHomePageContent ? 'custom' : 'system'
+  }
+
   const normalizedDefaults: SystemInfoFormValues = {
     theme: {
       frontend:
@@ -94,7 +110,12 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
     Logo: normalizeValue(defaultValues.Logo),
     Footer: normalizeValue(defaultValues.Footer),
     About: normalizeValue(defaultValues.About),
-    HomePageContent: normalizeValue(defaultValues.HomePageContent),
+    HomePageTemplate: normalizedHomePageTemplate as
+      | 'system'
+      | 'quality'
+      | 'economy'
+      | 'custom',
+    HomePageContent: normalizedHomePageContent,
     legal: {
       user_agreement: normalizeValue(defaultValues.legal?.user_agreement),
       privacy_policy: normalizeValue(defaultValues.legal?.privacy_policy),
@@ -112,6 +133,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
     Logo: z.string().url().optional().or(z.literal('')),
     Footer: z.string().optional(),
     About: z.string().optional(),
+    HomePageTemplate: z.enum(['system', 'quality', 'economy', 'custom']),
     HomePageContent: z.string().optional(),
     legal: z.object({
       user_agreement: z.string().optional(),
@@ -342,20 +364,78 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
               <SettingsFormGridItem span='full'>
                 <FormField
                   control={form.control}
-                  name='HomePageContent'
+                  name='HomePageTemplate'
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{t('Home Page Content')}</FormLabel>
-                      <FormControl>
-                        <Textarea
-                          placeholder={t('Welcome to our New API...')}
-                          rows={6}
-                          {...field}
-                        />
-                      </FormControl>
+                      <div className='flex flex-wrap items-center justify-between gap-3'>
+                        <FormLabel>{t('Home Page Template')}</FormLabel>
+                        {field.value !== 'custom' && (
+                          <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            render={
+                              <Link
+                                to='/'
+                                search={{
+                                  preview_template: field.value,
+                                }}
+                                target='_blank'
+                              />
+                            }
+                          >
+                            {t('Preview selected template')}
+                            <ExternalLink className='ml-2 size-3.5' />
+                          </Button>
+                        )}
+                      </div>
+                      <Select
+                        items={[
+                          {
+                            value: 'system',
+                            label: t('System default'),
+                          },
+                          {
+                            value: 'quality',
+                            label: t('Quality and support'),
+                          },
+                          {
+                            value: 'economy',
+                            label: t('Low price and multiple routes'),
+                          },
+                          {
+                            value: 'custom',
+                            label: t('Custom content or URL'),
+                          },
+                        ]}
+                        onValueChange={field.onChange}
+                        value={field.value}
+                      >
+                        <FormControl>
+                          <SelectTrigger className='w-full'>
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            <SelectItem value='system'>
+                              {t('System default')}
+                            </SelectItem>
+                            <SelectItem value='quality'>
+                              {t('Quality and support')}
+                            </SelectItem>
+                            <SelectItem value='economy'>
+                              {t('Low price and multiple routes')}
+                            </SelectItem>
+                            <SelectItem value='custom'>
+                              {t('Custom content or URL')}
+                            </SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
                       <FormDescription>
                         {t(
-                          'Content displayed on the home page (supports Markdown)'
+                          'Choose a built-in homepage or keep using custom Markdown, HTML, or an external URL. Built-in templates do not execute administrator-provided scripts.'
                         )}
                       </FormDescription>
                       <FormMessage />
@@ -363,6 +443,33 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                   )}
                 />
               </SettingsFormGridItem>
+
+              {form.watch('HomePageTemplate') === 'custom' && (
+                <SettingsFormGridItem span='full'>
+                  <FormField
+                    control={form.control}
+                    name='HomePageContent'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Home Page Content')}</FormLabel>
+                        <FormControl>
+                          <Textarea
+                            placeholder={t('Welcome to our New API...')}
+                            rows={6}
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'Custom homepage content supports Markdown, HTML, or a complete URL embedded in a sandboxed iframe.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </SettingsFormGridItem>
+              )}
 
               <FormField
                 control={form.control}

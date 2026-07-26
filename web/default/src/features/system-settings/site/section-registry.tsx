@@ -43,6 +43,11 @@ const SITE_SECTIONS = [
           Logo: settings.Logo,
           Footer: settings.Footer,
           About: settings.About,
+          HomePageTemplate: settings.HomePageTemplate as
+            | 'system'
+            | 'quality'
+            | 'economy'
+            | 'custom',
           HomePageContent: settings.HomePageContent,
           ServerAddress: settings.ServerAddress,
           legal: {

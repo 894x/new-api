@@ -16,35 +16,26 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-// ============================================================================
-// Home Page Types
-// ============================================================================
+import { describe, expect, it } from 'vitest'
 
-export const HOME_PAGE_TEMPLATES = [
-  'system',
-  'quality',
-  'economy',
-  'custom',
-] as const
+import { resolveHomePageTemplate } from './use-home-page-content'
 
-export type HomePageTemplate = (typeof HOME_PAGE_TEMPLATES)[number]
-
-/**
- * Response from home page content API
- */
-export interface HomePageContentResponse {
-  success: boolean
-  message?: string
-  data?: string
-  template?: string
-}
-
-/**
- * Home page content result from hook
- */
-export interface HomePageContentResult {
-  content: string
-  isLoaded: boolean
-  isUrl: boolean
-  template: HomePageTemplate
-}
+describe('resolveHomePageTemplate', () => {
+  it.each([
+    ['system', '', 'system'],
+    ['quality', '', 'quality'],
+    ['economy', '', 'economy'],
+    ['custom', '# Welcome', 'custom'],
+    ['', '', 'system'],
+    ['', '# Legacy custom homepage', 'custom'],
+    ['unknown', '', 'system'],
+    ['unknown', '<h1>Legacy homepage</h1>', 'custom'],
+  ])(
+    'resolves configured template %s with content %s',
+    (configuredTemplate, content, expected) => {
+      expect(resolveHomePageTemplate(configuredTemplate, content)).toBe(
+        expected
+      )
+    }
+  )
+})

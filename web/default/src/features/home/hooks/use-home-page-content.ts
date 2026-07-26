@@ -23,9 +23,24 @@ import { toast } from 'sonner'
 import { isHttpUrl } from '@/lib/content-format'
 
 import { getHomePageContent } from '../api'
-import type { HomePageContentResult } from '../types'
+import {
+  HOME_PAGE_TEMPLATES,
+  type HomePageContentResult,
+  type HomePageTemplate,
+} from '../types'
 
-const STORAGE_KEY = 'home_page_content'
+const CONTENT_STORAGE_KEY = 'home_page_content'
+const TEMPLATE_STORAGE_KEY = 'home_page_template'
+
+export function resolveHomePageTemplate(
+  value: string | null | undefined,
+  content: string
+): HomePageTemplate {
+  if (value && HOME_PAGE_TEMPLATES.includes(value as HomePageTemplate)) {
+    return value as HomePageTemplate
+  }
+  return content ? 'custom' : 'system'
+}
 
 /**
  * Hook to load and manage custom home page content
@@ -33,6 +48,7 @@ const STORAGE_KEY = 'home_page_content'
  */
 export function useHomePageContent(): HomePageContentResult {
   const [content, setContent] = useState<string>('')
+  const [template, setTemplate] = useState<HomePageTemplate>('system')
   const [isLoaded, setIsLoaded] = useState(false)
 
   useEffect(() => {
@@ -40,24 +56,40 @@ export function useHomePageContent(): HomePageContentResult {
 
     const loadContent = async () => {
       // Load from localStorage first for immediate display
-      const cached = localStorage.getItem(STORAGE_KEY)
+      const cached = localStorage.getItem(CONTENT_STORAGE_KEY) || ''
+      const cachedTemplate = localStorage.getItem(TEMPLATE_STORAGE_KEY)
       if (cached && mounted) {
         setContent(cached)
+      }
+      if (mounted) {
+        setTemplate(resolveHomePageTemplate(cachedTemplate, cached))
       }
 
       try {
         const response = await getHomePageContent()
-        const { success, data } = response
+        const { success, data, template: configuredTemplate } = response
 
         if (!mounted) return
 
-        if (success && data) {
-          setContent(data)
-          localStorage.setItem(STORAGE_KEY, data)
+        if (success) {
+          const nextContent = data || ''
+          const nextTemplate = resolveHomePageTemplate(
+            configuredTemplate,
+            nextContent
+          )
+          setContent(nextContent)
+          setTemplate(nextTemplate)
+          localStorage.setItem(TEMPLATE_STORAGE_KEY, nextTemplate)
+          if (nextContent) {
+            localStorage.setItem(CONTENT_STORAGE_KEY, nextContent)
+          } else {
+            localStorage.removeItem(CONTENT_STORAGE_KEY)
+          }
         } else {
-          // Clear content if API returns empty
           setContent('')
-          localStorage.removeItem(STORAGE_KEY)
+          setTemplate('system')
+          localStorage.removeItem(CONTENT_STORAGE_KEY)
+          localStorage.removeItem(TEMPLATE_STORAGE_KEY)
         }
       } catch (error) {
         if (!mounted) return
@@ -80,5 +112,5 @@ export function useHomePageContent(): HomePageContentResult {
 
   const isUrl = isHttpUrl(content)
 
-  return { content, isLoaded, isUrl }
+  return { content, isLoaded, isUrl, template }
 }
