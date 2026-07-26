@@ -26,6 +26,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { Combobox } from '@/components/ui/combobox'
 import {
   Select,
   SelectContent,
@@ -35,8 +36,14 @@ import {
 } from '@/components/ui/select'
 
 import type { PricingData, PricingModel } from '../../pricing/types'
-import type { TokenCostInput } from '../lib'
+import {
+  TOKEN_VOLUME_PRESETS,
+  USAGE_SCENARIOS,
+  type TokenCostInput,
+} from '../lib'
 import { Field, NumberField } from './Fields'
+
+export type CalculatorMode = 'cost' | 'budget'
 
 type CalculatorFormProps = {
   models: PricingModel[]
@@ -44,21 +51,39 @@ type CalculatorFormProps = {
   groups: string[]
   group: string
   pricing: PricingData
+  mode: CalculatorMode
+  scenarioId: string
+  budget: number
   input: TokenCostInput
   onModelChange: (value: string) => void
   onGroupChange: (value: string) => void
+  onScenarioChange: (value: string) => void
   onInputChange: (key: keyof TokenCostInput, value: string) => void
+  onBudgetChange: (value: string) => void
 }
 
 export function CalculatorForm(props: CalculatorFormProps): ReactElement {
   const { t } = useTranslation()
-
+  const tokenVolumeOptions = TOKEN_VOLUME_PRESETS.map((preset) => ({
+    value: String(preset.value),
+    label: t(preset.labelKey),
+  }))
+  const selectedScenario =
+    USAGE_SCENARIOS.find(
+      (scenario) => scenario.labelKey === props.scenarioId
+    ) ?? USAGE_SCENARIOS[0]
   return (
-    <Card>
+    <Card className='overflow-visible'>
       <CardHeader>
-        <CardTitle>{t('Estimate usage cost')}</CardTitle>
+        <CardTitle>
+          {props.mode === 'cost'
+            ? t('Estimate usage cost')
+            : t('Budget estimate')}
+        </CardTitle>
         <CardDescription>
-          {t('Prices follow the platform currency and base recharge settings.')}
+          {props.mode === 'cost'
+            ? t('Enter expected usage to estimate customer payment.')
+            : t('Enter a budget to estimate the token volume it can cover.')}
         </CardDescription>
       </CardHeader>
       <CardContent className='grid gap-4 sm:grid-cols-2'>
@@ -96,37 +121,56 @@ export function CalculatorForm(props: CalculatorFormProps): ReactElement {
             </SelectContent>
           </Select>
         </Field>
-        <NumberField
-          label={t('Total tokens')}
-          value={props.input.totalTokens}
-          onChange={(value) => props.onInputChange('totalTokens', value)}
-        />
-        <div className='grid grid-cols-2 gap-3'>
+        <Field label={`${t('Usage scenario')} / ${t('Cache hit rate')}`}>
+          <Select
+            value={props.scenarioId}
+            onValueChange={(value) => props.onScenarioChange(value ?? '')}
+          >
+            <SelectTrigger className='w-full'>
+              <SelectValue>
+                <span className='flex w-full items-center justify-between gap-4'>
+                  <span>{t(selectedScenario.labelKey)}</span>
+                  <span className='text-muted-foreground ml-auto'>
+                    {selectedScenario.cacheHitRate}%
+                  </span>
+                </span>
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {USAGE_SCENARIOS.map((scenario) => (
+                <SelectItem key={scenario.id} value={scenario.labelKey}>
+                  <span className='flex w-full items-center justify-between gap-4'>
+                    <span>{t(scenario.labelKey)}</span>
+                    <span className='text-muted-foreground ml-auto'>
+                      {scenario.cacheHitRate}%
+                    </span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        {props.mode === 'cost' ? (
+          <Field label={t('Token volume')}>
+            <Combobox
+              options={tokenVolumeOptions}
+              value={String(props.input.totalTokens)}
+              onValueChange={(value) =>
+                props.onInputChange('totalTokens', value ?? '')
+              }
+              placeholder={t('Enter a token volume')}
+              emptyText={t('Custom value')}
+              allowCustomValue
+              showAllOptionsOnFocus
+            />
+          </Field>
+        ) : (
           <NumberField
-            label={t('Input ratio')}
-            value={props.input.inputRatio}
-            onChange={(value) => props.onInputChange('inputRatio', value)}
+            label={t('Budget')}
+            value={props.budget}
+            onChange={props.onBudgetChange}
           />
-          <NumberField
-            label={t('Output ratio')}
-            value={props.input.outputRatio}
-            onChange={(value) => props.onInputChange('outputRatio', value)}
-          />
-        </div>
-        <NumberField
-          label={t('Cache hit rate')}
-          suffix='%'
-          max={100}
-          value={props.input.cacheHitRate}
-          onChange={(value) => props.onInputChange('cacheHitRate', value)}
-        />
-        <NumberField
-          label={t('Cache write rate')}
-          suffix='%'
-          max={100 - props.input.cacheHitRate}
-          value={props.input.cacheWriteRate}
-          onChange={(value) => props.onInputChange('cacheWriteRate', value)}
-        />
+        )}
       </CardContent>
     </Card>
   )

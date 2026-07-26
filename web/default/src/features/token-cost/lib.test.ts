@@ -43,29 +43,32 @@ describe('token cost estimate', () => {
       inputRatio: 3,
       outputRatio: 1,
       cacheHitRate: 40,
-      cacheWriteRate: 10,
+      cacheReadWriteRatio: 4,
     })
 
-    expect(result.inputTokens).toBe(750_000)
-    expect(result.regularInputTokens).toBe(375_000)
-    expect(result.cacheReadTokens).toBe(300_000)
-    expect(result.cacheWriteTokens).toBe(75_000)
-    expect(result.outputTokens).toBe(250_000)
-    expect(result.costUSD).toBeCloseTo(2.0875)
-    expect(result.customerCostUSD).toBeCloseTo((2.0875 * 4) / 7)
+    expect(result.inputTokens).toBe(1_000_000)
+    expect(result.regularInputTokens).toBe(600_000)
+    expect(result.cacheReadTokens).toBe(400_000)
+    expect(result.cacheWriteTokens).toBe(100_000)
+    expect(result.outputTokens).toBeCloseTo(333_333.33)
+    expect(result.costUSD).toBeCloseTo(2.98333333)
+    expect(result.customerCostUSD).toBeCloseTo((2.98333333 * 4) / 7)
   })
 
-  it('does not allow cache reads and writes to exceed the input tokens', () => {
+  it('uses the token scale as input volume and applies the cache read-write ratio', () => {
     const result = estimateTokenCost(model, 1, 1, 1, {
       totalTokens: 1000,
       inputRatio: 1,
       outputRatio: 1,
       cacheHitRate: 80,
-      cacheWriteRate: 80,
+      cacheReadWriteRatio: 10,
     })
 
-    expect(result.regularInputTokens).toBe(0)
-    expect(result.cacheReadTokens + result.cacheWriteTokens).toBe(500)
+    expect(result.inputTokens).toBe(1000)
+    expect(result.regularInputTokens).toBe(200)
+    expect(result.cacheReadTokens).toBe(800)
+    expect(result.cacheWriteTokens).toBe(80)
+    expect(result.outputTokens).toBe(1000)
   })
 
   it('evaluates versioned dynamic pricing with the selected token mix', () => {
@@ -81,13 +84,13 @@ describe('token cost estimate', () => {
       inputRatio: 3,
       outputRatio: 1,
       cacheHitRate: 40,
-      cacheWriteRate: 10,
+      cacheReadWriteRatio: 4,
     })
 
     expect(isTokenPricedModel(dynamicModel)).toBe(true)
     expect(result.error).toBeNull()
     expect(result.matchedTier).toBe('long')
-    expect(result.costUSD).toBeCloseTo(2.32875)
+    expect(result.costUSD).toBeCloseTo(3.285)
   })
 
   it('calculates purchasable tokens independently of the usage token field', () => {
@@ -95,10 +98,10 @@ describe('token cost estimate', () => {
       inputRatio: 3,
       outputRatio: 1,
       cacheHitRate: 0,
-      cacheWriteRate: 0,
+      cacheReadWriteRatio: 1,
     })
 
-    expect(tokens).toBe(1_000_000)
+    expect(tokens).toBe(750_000)
   })
 
   it('respects dynamic tier boundaries in reverse budget calculation', () => {
@@ -113,7 +116,7 @@ describe('token cost estimate', () => {
       inputRatio: 1,
       outputRatio: 0,
       cacheHitRate: 0,
-      cacheWriteRate: 0,
+      cacheReadWriteRatio: 1,
     })
 
     expect(tokens).toBe(100)
@@ -131,7 +134,7 @@ describe('token cost estimate', () => {
       inputRatio: 1,
       outputRatio: 0,
       cacheHitRate: 0,
-      cacheWriteRate: 0,
+      cacheReadWriteRatio: 1,
     })
 
     expect(result.error).toBe('Invalid dynamic price result')

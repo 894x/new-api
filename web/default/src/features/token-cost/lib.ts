@@ -27,63 +27,80 @@ import {
 } from '../pricing/lib/tier-expr'
 import type { PricingModel } from '../pricing/types'
 
-export const BUSINESS_PRESETS = [
+export const USAGE_SCENARIOS = [
   {
+    id: 'simple-chat',
     labelKey: 'Simple chat',
-    totalTokens: 2000,
-    inputRatio: 3,
+    inputRatio: 1,
     outputRatio: 1,
-    cacheHitRate: 0,
-    cacheWriteRate: 0,
+    cacheHitRate: 5,
+    cacheReadWriteRatio: 1,
   },
   {
-    labelKey: 'Customer support',
-    totalTokens: 5000,
-    inputRatio: 8,
-    outputRatio: 1,
-    cacheHitRate: 70,
-    cacheWriteRate: 5,
-  },
-  {
-    labelKey: 'RAG knowledge base',
-    totalTokens: 15000,
-    inputRatio: 15,
-    outputRatio: 1,
-    cacheHitRate: 40,
-    cacheWriteRate: 5,
-  },
-  {
-    labelKey: 'Long document summary',
-    totalTokens: 50000,
+    id: 'multi-turn-chat',
+    labelKey: 'Multi-turn chat',
     inputRatio: 10,
     outputRatio: 1,
-    cacheHitRate: 10,
-    cacheWriteRate: 0,
+    cacheHitRate: 80,
+    cacheReadWriteRatio: 10,
   },
   {
-    labelKey: 'Coding assistant',
-    totalTokens: 12000,
-    inputRatio: 6,
-    outputRatio: 1,
-    cacheHitRate: 50,
-    cacheWriteRate: 5,
-  },
-  {
-    labelKey: 'Multi-step agent',
-    totalTokens: 80000,
+    id: 'customer-support',
+    labelKey: 'Customer support',
     inputRatio: 12,
     outputRatio: 1,
-    cacheHitRate: 60,
-    cacheWriteRate: 5,
+    cacheHitRate: 80,
+    cacheReadWriteRatio: 12,
+  },
+  {
+    id: 'rag-knowledge-base',
+    labelKey: 'RAG knowledge base',
+    inputRatio: 30,
+    outputRatio: 1,
+    cacheHitRate: 75,
+    cacheReadWriteRatio: 7.5,
+  },
+  {
+    id: 'long-document-summary',
+    labelKey: 'Long document summary',
+    inputRatio: 100,
+    outputRatio: 1,
+    cacheHitRate: 50,
+    cacheReadWriteRatio: 1,
+  },
+  {
+    id: 'coding-assistant',
+    labelKey: 'Coding assistant',
+    inputRatio: 285,
+    outputRatio: 1,
+    cacheHitRate: 95,
+    cacheReadWriteRatio: 11.7,
+  },
+  {
+    id: 'multi-step-agent',
+    labelKey: 'Multi-step agent',
+    inputRatio: 15,
+    outputRatio: 1,
+    cacheHitRate: 90,
+    cacheReadWriteRatio: 11.7,
   },
 ] as const
+
+export const TOKEN_VOLUME_PRESETS = [
+  { value: 1_000_000, labelKey: '1 million tokens' },
+  { value: 10_000_000, labelKey: '10 million tokens' },
+  { value: 100_000_000, labelKey: '100 million tokens' },
+  { value: 1_000_000_000, labelKey: '1 billion tokens' },
+] as const
+
+export type UsageScenario = (typeof USAGE_SCENARIOS)[number]
 
 export type TokenCostInput = {
   totalTokens: number
   inputRatio: number
   outputRatio: number
   cacheHitRate: number
-  cacheWriteRate: number
+  cacheReadWriteRatio: number
 }
 
 export type TokenLanePrices = {
@@ -150,20 +167,18 @@ function getTokenDistribution(
 > {
   const totalTokens = validNumber(value.totalTokens)
   const inputRatio = validNumber(value.inputRatio, 1)
-  const outputRatio = validNumber(value.outputRatio, 1)
-  const ratioTotal = Math.max(inputRatio + outputRatio, 1)
+  const outputRatio = validNumber(value.outputRatio)
   const cacheHitRate = Math.min(validNumber(value.cacheHitRate), 100) / 100
-  const cacheWriteRate =
-    Math.min(validNumber(value.cacheWriteRate), 100 - cacheHitRate * 100) / 100
-  const inputTokens = (totalTokens * inputRatio) / ratioTotal
-  const outputTokens = totalTokens - inputTokens
+  const cacheReadWriteRatio = validNumber(value.cacheReadWriteRatio, 1)
+  const inputTokens = totalTokens
+  const outputTokens = (inputTokens * outputRatio) / Math.max(inputRatio, 1)
   const cacheReadTokens = inputTokens * cacheHitRate
-  const cacheWriteTokens = inputTokens * cacheWriteRate
+  const cacheWriteTokens = cacheReadTokens / Math.max(cacheReadWriteRatio, 1)
 
   return {
     inputTokens,
     outputTokens,
-    regularInputTokens: inputTokens - cacheReadTokens - cacheWriteTokens,
+    regularInputTokens: inputTokens - cacheReadTokens,
     cacheReadTokens,
     cacheWriteTokens,
   }

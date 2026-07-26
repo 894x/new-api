@@ -23,12 +23,15 @@ import { useTranslation } from 'react-i18next'
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useStatus } from '@/hooks/use-status'
 import { convertBillingCurrencyToUSD } from '@/lib/currency'
 
 import { getTokenCostPricing } from './api'
-import { BusinessPresets } from './components/BusinessPresets'
-import { CalculatorForm } from './components/CalculatorForm'
+import {
+  CalculatorForm,
+  type CalculatorMode,
+} from './components/CalculatorForm'
 import { EstimateSummary } from './components/EstimateSummary'
 import { PriceBreakdown } from './components/PriceBreakdown'
 import {
@@ -36,15 +39,20 @@ import {
   estimateTokenCost,
   getTokenLanePrices,
   isTokenPricedModel,
+  USAGE_SCENARIOS,
   type TokenCostInput,
 } from './lib'
 
+const DEFAULT_SCENARIO =
+  USAGE_SCENARIOS.find((item) => item.id === 'multi-turn-chat') ??
+  USAGE_SCENARIOS[0]
+
 const DEFAULT_INPUT: TokenCostInput = {
-  totalTokens: 5000,
-  inputRatio: 4,
-  outputRatio: 1,
-  cacheHitRate: 0,
-  cacheWriteRate: 0,
+  totalTokens: 100_000_000,
+  inputRatio: DEFAULT_SCENARIO.inputRatio,
+  outputRatio: DEFAULT_SCENARIO.outputRatio,
+  cacheHitRate: DEFAULT_SCENARIO.cacheHitRate,
+  cacheReadWriteRatio: DEFAULT_SCENARIO.cacheReadWriteRatio,
 }
 
 function parseNumber(value: string, fallback: number): number {
@@ -62,6 +70,10 @@ export function TokenCost(): ReactElement {
   })
   const [modelName, setModelName] = useState('')
   const [groupName, setGroupName] = useState('')
+  const [mode, setMode] = useState<CalculatorMode>('cost')
+  const [scenarioId, setScenarioId] = useState<string>(
+    DEFAULT_SCENARIO.labelKey
+  )
   const [budget, setBudget] = useState(10)
   const [input, setInput] = useState<TokenCostInput>(DEFAULT_INPUT)
   const models = useMemo(
@@ -95,7 +107,6 @@ export function TokenCost(): ReactElement {
           groups[0] ?? ''
         )
   const group = groups.includes(groupName) ? groupName : defaultGroup
-
   if (isLoading) return <TokenCostLoading />
   if (isError || !model || !data) {
     return (
@@ -132,8 +143,15 @@ export function TokenCost(): ReactElement {
       inputRatio: input.inputRatio,
       outputRatio: input.outputRatio,
       cacheHitRate: input.cacheHitRate,
-      cacheWriteRate: input.cacheWriteRate,
+      cacheReadWriteRatio: input.cacheReadWriteRatio,
     }
+  )
+  const reverseEstimate = estimateTokenCost(
+    model,
+    groupRatio,
+    priceRate,
+    usdExchangeRate,
+    { ...input, totalTokens: purchasableTokens }
   )
   const lanePrices = getTokenLanePrices(model, groupRatio)
   const dynamic =
@@ -143,21 +161,23 @@ export function TokenCost(): ReactElement {
     setInput((current) => {
       const nextValue = parseNumber(value, current[key])
       if (key === 'cacheHitRate') {
-        const cacheHitRate = Math.min(nextValue, 100)
-        return {
-          ...current,
-          cacheHitRate,
-          cacheWriteRate: Math.min(current.cacheWriteRate, 100 - cacheHitRate),
-        }
-      }
-      if (key === 'cacheWriteRate') {
-        return {
-          ...current,
-          cacheWriteRate: Math.min(nextValue, 100 - current.cacheHitRate),
-        }
+        return { ...current, cacheHitRate: Math.min(nextValue, 100) }
       }
       return { ...current, [key]: nextValue }
     })
+  }
+
+  const updateScenario = (value: string): void => {
+    const nextScenario = USAGE_SCENARIOS.find((item) => item.labelKey === value)
+    if (!nextScenario) return
+    setScenarioId(nextScenario.labelKey)
+    setInput((current) => ({
+      ...current,
+      inputRatio: nextScenario.inputRatio,
+      outputRatio: nextScenario.outputRatio,
+      cacheHitRate: nextScenario.cacheHitRate,
+      cacheReadWriteRatio: nextScenario.cacheReadWriteRatio,
+    }))
   }
 
   return (
@@ -169,10 +189,20 @@ export function TokenCost(): ReactElement {
           </h1>
           <p className='text-muted-foreground mt-3 text-sm sm:text-base'>
             {t(
-              'Estimate customer-facing costs from your configured model prices, input/output mix, and cache usage.'
+              'Estimate customer-facing costs from configured prices, usage scenarios, and cache usage.'
             )}
           </p>
         </header>
+
+        <Tabs
+          value={mode}
+          onValueChange={(value) => setMode(value as CalculatorMode)}
+        >
+          <TabsList className='mx-auto'>
+            <TabsTrigger value='cost'>{t('Cost estimate')}</TabsTrigger>
+            <TabsTrigger value='budget'>{t('Budget estimate')}</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
         <div className='grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]'>
           <CalculatorForm
@@ -181,29 +211,32 @@ export function TokenCost(): ReactElement {
             groups={groups}
             group={group}
             pricing={data}
+            mode={mode}
+            scenarioId={scenarioId}
+            budget={budget}
             input={input}
             onModelChange={setModelName}
             onGroupChange={setGroupName}
+            onScenarioChange={updateScenario}
             onInputChange={updateInput}
+            onBudgetChange={(value) => setBudget(parseNumber(value, budget))}
           />
           <EstimateSummary
+            mode={mode}
             totalTokens={input.totalTokens}
-            budget={budget}
             purchasableTokens={purchasableTokens}
             estimate={estimate}
-            onBudgetChange={(value) => setBudget(parseNumber(value, budget))}
           />
         </div>
 
         <PriceBreakdown
           dynamic={dynamic}
-          totalTokens={input.totalTokens}
-          estimate={estimate}
+          totalTokens={mode === 'cost' ? input.totalTokens : purchasableTokens}
+          estimate={mode === 'cost' ? estimate : reverseEstimate}
           lanePrices={lanePrices}
           priceRate={priceRate}
           usdExchangeRate={usdExchangeRate}
         />
-        <BusinessPresets onSelect={setInput} />
       </PageTransition>
     </PublicLayout>
   )

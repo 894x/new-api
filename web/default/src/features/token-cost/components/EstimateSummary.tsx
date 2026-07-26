@@ -29,14 +29,14 @@ import {
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 
 import { formatTokenCount, type TokenCostEstimate } from '../lib'
-import { Metric, NumberField } from './Fields'
+import type { CalculatorMode } from './CalculatorForm'
+import { Metric } from './Fields'
 
 type EstimateSummaryProps = {
+  mode: CalculatorMode
   totalTokens: number
-  budget: number
   purchasableTokens: number
   estimate: TokenCostEstimate
-  onBudgetChange: (value: string) => void
 }
 
 export function EstimateSummary(props: EstimateSummaryProps): ReactElement {
@@ -45,44 +45,56 @@ export function EstimateSummary(props: EstimateSummaryProps): ReactElement {
   return (
     <Card className='border-primary/25 bg-primary/[0.03]'>
       <CardHeader>
-        <CardTitle>{t('Estimated customer payment')}</CardTitle>
+        <CardTitle>
+          {props.mode === 'cost'
+            ? t('Estimated customer payment')
+            : t('Estimated token capacity')}
+        </CardTitle>
         <CardDescription>
-          {t('For the token volume and usage mix above.')}
+          {props.mode === 'cost'
+            ? t('For the token volume and usage mix above.')
+            : t('For the budget and usage scenario above.')}
         </CardDescription>
       </CardHeader>
       <CardContent className='space-y-5'>
         <div>
           <div className='text-primary text-4xl font-semibold tracking-tight'>
-            {props.estimate.error
-              ? '-'
-              : formatBillingCurrencyFromUSD(props.estimate.customerCostUSD, {
-                  digitsLarge: 4,
-                  digitsSmall: 6,
-                  abbreviate: false,
-                })}
+            {props.mode === 'cost'
+              ? props.estimate.error
+                ? '-'
+                : formatBillingCurrencyFromUSD(props.estimate.customerCostUSD, {
+                    digitsLarge: 4,
+                    digitsSmall: 6,
+                    abbreviate: false,
+                  })
+              : formatTokenCount(props.purchasableTokens)}
           </div>
           <p className='text-muted-foreground mt-1 text-sm'>
-            {formatTokenCount(props.totalTokens)} {t('tokens')}
+            {props.mode === 'cost'
+              ? `${formatTokenCount(props.totalTokens)} ${t('tokens')}`
+              : t('tokens covered by this budget')}
           </p>
         </div>
-        <div className='grid grid-cols-2 gap-3 text-sm'>
-          <Metric
-            label={t('Regular input')}
-            value={formatTokenCount(props.estimate.regularInputTokens)}
-          />
-          <Metric
-            label={t('Cache read')}
-            value={formatTokenCount(props.estimate.cacheReadTokens)}
-          />
-          <Metric
-            label={t('Cache write')}
-            value={formatTokenCount(props.estimate.cacheWriteTokens)}
-          />
-          <Metric
-            label={t('Output')}
-            value={formatTokenCount(props.estimate.outputTokens)}
-          />
-        </div>
+        {props.mode === 'cost' && (
+          <div className='grid grid-cols-2 gap-3 text-sm'>
+            <Metric
+              label={t('Regular input')}
+              value={formatTokenCount(props.estimate.regularInputTokens)}
+            />
+            <Metric
+              label={t('Cache read')}
+              value={formatTokenCount(props.estimate.cacheReadTokens)}
+            />
+            <Metric
+              label={t('Cache write')}
+              value={formatTokenCount(props.estimate.cacheWriteTokens)}
+            />
+            <Metric
+              label={t('Output')}
+              value={formatTokenCount(props.estimate.outputTokens)}
+            />
+          </div>
+        )}
         {props.estimate.error && (
           <p className='text-destructive text-sm'>
             {t("Unable to calculate this model's dynamic price.")}
@@ -93,18 +105,6 @@ export function EstimateSummary(props: EstimateSummaryProps): ReactElement {
             {t('Request-specific pricing rules are not included.')}
           </p>
         )}
-        <div className='border-t pt-4'>
-          <NumberField
-            label={t('Budget')}
-            value={props.budget}
-            onChange={props.onBudgetChange}
-          />
-          <p className='text-muted-foreground mt-3 text-sm'>
-            {t('This budget buys approximately {{tokens}} tokens.', {
-              tokens: formatTokenCount(props.purchasableTokens),
-            })}
-          </p>
-        </div>
       </CardContent>
     </Card>
   )
