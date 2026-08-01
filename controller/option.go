@@ -224,10 +224,14 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "HomePageTemplate":
-		if option.Value != "system" && option.Value != "quality" && option.Value != "economy" && option.Value != "custom" {
+		if option.Value != "system" &&
+			option.Value != "quality" &&
+			option.Value != "economy" &&
+			option.Value != "business" &&
+			option.Value != "custom" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "无效的首页模板，可选值：system、quality、economy、custom",
+				"message": "无效的首页模板，可选值：system、quality、economy、business、custom",
 			})
 			return
 		}

@@ -65,7 +65,13 @@ const _systemInfoSchema = z.object({
   Logo: z.string().url().optional().or(z.literal('')),
   Footer: z.string().optional(),
   About: z.string().optional(),
-  HomePageTemplate: z.enum(['system', 'quality', 'economy', 'custom']),
+  HomePageTemplate: z.enum([
+    'system',
+    'quality',
+    'economy',
+    'business',
+    'custom',
+  ]),
   HomePageContent: z.string().optional(),
   legal: z.object({
     user_agreement: z.string().optional(),
@@ -93,7 +99,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
   )
   let normalizedHomePageTemplate = defaultValues.HomePageTemplate
   if (
-    !['system', 'quality', 'economy', 'custom'].includes(
+    !['system', 'quality', 'economy', 'business', 'custom'].includes(
       normalizedHomePageTemplate
     )
   ) {
@@ -114,6 +120,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
       | 'system'
       | 'quality'
       | 'economy'
+      | 'business'
       | 'custom',
     HomePageContent: normalizedHomePageContent,
     legal: {
@@ -133,7 +140,13 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
     Logo: z.string().url().optional().or(z.literal('')),
     Footer: z.string().optional(),
     About: z.string().optional(),
-    HomePageTemplate: z.enum(['system', 'quality', 'economy', 'custom']),
+    HomePageTemplate: z.enum([
+      'system',
+      'quality',
+      'economy',
+      'business',
+      'custom',
+    ]),
     HomePageContent: z.string().optional(),
     legal: z.object({
       user_agreement: z.string().optional(),
@@ -404,6 +417,10 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                             label: t('Low price and multiple routes'),
                           },
                           {
+                            value: 'business',
+                            label: t('Business promotion and support'),
+                          },
+                          {
                             value: 'custom',
                             label: t('Custom content or URL'),
                           },
@@ -426,6 +443,9 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                             </SelectItem>
                             <SelectItem value='economy'>
                               {t('Low price and multiple routes')}
+                            </SelectItem>
+                            <SelectItem value='business'>
+                              {t('Business promotion and support')}
                             </SelectItem>
                             <SelectItem value='custom'>
                               {t('Custom content or URL')}

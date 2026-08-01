@@ -32,6 +32,7 @@ import type { HomePageTemplate } from './types'
 
 const QualityHome = lazy(() => import('./templates/quality-home'))
 const EconomyHome = lazy(() => import('./templates/economy-home'))
+const BusinessHome = lazy(() => import('./templates/business-home'))
 
 type HomeProps = {
   previewTemplate?: Exclude<HomePageTemplate, 'custom'>
@@ -77,8 +78,17 @@ export function Home({ previewTemplate }: HomeProps) {
     )
   }
 
-  if (activeTemplate === 'quality' || activeTemplate === 'economy') {
-    const Template = activeTemplate === 'quality' ? QualityHome : EconomyHome
+  if (
+    activeTemplate === 'quality' ||
+    activeTemplate === 'economy' ||
+    activeTemplate === 'business'
+  ) {
+    let Template = QualityHome
+    if (activeTemplate === 'economy') {
+      Template = EconomyHome
+    } else if (activeTemplate === 'business') {
+      Template = BusinessHome
+    }
     return (
       <PublicLayout showMainContainer={false}>
         <Suspense
@@ -89,7 +99,11 @@ export function Home({ previewTemplate }: HomeProps) {
           }
         >
           <Template isAuthenticated={isAuthenticated} />
-          <Footer />
+          {activeTemplate === 'business' ? (
+            <Footer hideBrand reserveFixedCorner />
+          ) : (
+            <Footer />
+          )}
         </Suspense>
       </PublicLayout>
     )

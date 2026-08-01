@@ -25,6 +25,7 @@ describe('resolveHomePageTemplate', () => {
     ['system', '', 'system'],
     ['quality', '', 'quality'],
     ['economy', '', 'economy'],
+    ['business', '', 'business'],
     ['custom', '# Welcome', 'custom'],
     ['', '', 'system'],
     ['', '# Legacy custom homepage', 'custom'],

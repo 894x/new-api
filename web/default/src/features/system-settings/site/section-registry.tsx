@@ -47,6 +47,7 @@ const SITE_SECTIONS = [
             | 'system'
             | 'quality'
             | 'economy'
+            | 'business'
             | 'custom',
           HomePageContent: settings.HomePageContent,
           ServerAddress: settings.ServerAddress,

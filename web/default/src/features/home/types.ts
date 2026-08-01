@@ -24,6 +24,7 @@ export const HOME_PAGE_TEMPLATES = [
   'system',
   'quality',
   'economy',
+  'business',
   'custom',
 ] as const
 

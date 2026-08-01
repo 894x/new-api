@@ -24,7 +24,7 @@ import { Home } from '@/features/home'
 export const Route = createFileRoute('/')({
   validateSearch: z.object({
     preview_template: z
-      .enum(['system', 'quality', 'economy'])
+      .enum(['system', 'quality', 'economy', 'business'])
       .optional()
       .catch(undefined),
   }),
