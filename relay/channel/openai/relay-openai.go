@@ -135,7 +135,12 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				secondLastStreamData = lastStreamData
 			}
 
-			lastStreamData = data
+			clientData, isStreamError := service.StreamErrorDataForClient(c, data)
+			lastStreamData = clientData
+			if isStreamError {
+				sr.Error(fmt.Errorf("upstream stream error: %s", common.LocalLogPreview(data)))
+				return
+			}
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)

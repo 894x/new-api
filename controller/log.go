@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -49,6 +50,7 @@ func GetUserLogs(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	sanitizeUserErrorLogs(c, logs)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
@@ -88,11 +90,32 @@ func GetLogByKey(c *gin.Context) {
 		})
 		return
 	}
+	sanitizeUserErrorLogs(c, logs)
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "",
 		"data":    logs,
 	})
+}
+
+func sanitizeUserErrorLogs(c *gin.Context, logs []*model.Log) {
+	if !service.ShouldHideErrorDetails(c) {
+		return
+	}
+	for _, logItem := range logs {
+		if logItem.Type != model.LogTypeError {
+			continue
+		}
+		logItem.Content = service.PublicErrorMessage(logItem.RequestId)
+		logItem.UpstreamRequestId = ""
+		other, _ := common.StrToMap(logItem.Other)
+		delete(other, "error_type")
+		delete(other, "error_code")
+		delete(other, "channel_id")
+		delete(other, "channel_name")
+		delete(other, "channel_type")
+		logItem.Other = common.MapToJsonStr(other)
+	}
 }
 
 func GetLogsStat(c *gin.Context) {
