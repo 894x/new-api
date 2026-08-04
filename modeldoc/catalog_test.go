@@ -15,6 +15,8 @@ func TestCatalogDocumentsAreIndependentlyReadable(t *testing.T) {
 	seen := make(map[string]struct{}, len(documents))
 	for _, document := range documents {
 		assert.NotEmpty(t, document.Model)
+		assert.NotEmpty(t, document.InterfaceKey)
+		assert.NotEmpty(t, document.InterfaceName)
 		assert.NotEmpty(t, document.Vendor)
 		assert.NotEmpty(t, document.Category)
 		_, duplicate := seen[document.Slug]

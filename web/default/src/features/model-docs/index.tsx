@@ -28,6 +28,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { getModelDocumentCatalog } from './api'
 import { ModelDocSidebar } from './components/model-doc-sidebar'
 import { ModelDocViewer } from './components/model-doc-viewer'
+import type { ModelDocumentGroup } from './types'
 
 const ALL_FILTER_VALUE = 'all'
 
@@ -36,7 +37,7 @@ export function ModelDocs() {
   const [search, setSearch] = useState('')
   const [vendor, setVendor] = useState(ALL_FILTER_VALUE)
   const [category, setCategory] = useState(ALL_FILTER_VALUE)
-  const [selectedSlug, setSelectedSlug] = useState<string | null>(null)
+  const [selectedModel, setSelectedModel] = useState<string | null>(null)
 
   const catalogQuery = useQuery({
     queryKey: ['model-docs'],
@@ -48,23 +49,42 @@ export function ModelDocs() {
     () => catalogQuery.data?.data ?? [],
     [catalogQuery.data?.data]
   )
+  const documentGroups = useMemo(() => {
+    const groups = new Map<string, ModelDocumentGroup>()
+    for (const document of documents) {
+      const existing = groups.get(document.model)
+      if (existing) {
+        existing.variants.push(document)
+        continue
+      }
+      groups.set(document.model, {
+        model: document.model,
+        title: document.title,
+        vendor: document.vendor,
+        category: document.category,
+        summary: document.summary,
+        variants: [document],
+      })
+    }
+    return [...groups.values()]
+  }, [documents])
   const vendors = useMemo(
     () =>
-      [...new Set(documents.map((document) => document.vendor))].sort((a, b) =>
-        a.localeCompare(b)
+      [...new Set(documentGroups.map((document) => document.vendor))].sort(
+        (a, b) => a.localeCompare(b)
       ),
-    [documents]
+    [documentGroups]
   )
   const categories = useMemo(
     () =>
-      [...new Set(documents.map((document) => document.category))].sort(
+      [...new Set(documentGroups.map((document) => document.category))].sort(
         (a, b) => a.localeCompare(b)
       ),
-    [documents]
+    [documentGroups]
   )
   const filteredDocuments = useMemo(() => {
     const query = search.trim().toLowerCase()
-    return documents.filter((document) => {
+    return documentGroups.filter((document) => {
       if (vendor !== ALL_FILTER_VALUE && document.vendor !== vendor) {
         return false
       }
@@ -77,12 +97,13 @@ export function ModelDocs() {
         document.model,
         document.vendor,
         document.summary,
+        ...document.variants.map((variant) => variant.interface_name),
       ].some((value) => value.toLowerCase().includes(query))
     })
-  }, [category, documents, search, vendor])
+  }, [category, documentGroups, search, vendor])
 
   const selectedDocument =
-    filteredDocuments.find((document) => document.slug === selectedSlug) ??
+    filteredDocuments.find((document) => document.model === selectedModel) ??
     filteredDocuments[0]
 
   const clearFilters = () => {
@@ -143,16 +164,16 @@ export function ModelDocs() {
               search={search}
               vendor={vendor}
               category={category}
-              selectedSlug={selectedDocument?.slug ?? null}
+              selectedModel={selectedDocument?.model ?? null}
               onSearchChange={setSearch}
               onVendorChange={setVendor}
               onCategoryChange={setCategory}
-              onSelect={setSelectedSlug}
+              onSelect={setSelectedModel}
               onClearFilters={clearFilters}
             />
             <ModelDocViewer
-              key={selectedDocument?.slug ?? 'empty'}
-              document={selectedDocument}
+              key={selectedDocument?.model ?? 'empty'}
+              documentGroup={selectedDocument}
             />
           </div>
         )}

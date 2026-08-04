@@ -19,20 +19,26 @@ import (
 
 const maxModelDocumentRequestBytes = 2 * model.ModelDocumentMaxHTMLBytes
 
-var modelDocumentSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
+var (
+	modelDocumentSlugPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
+	modelDocumentInterfacePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+)
 
 type modelDocumentEditorRequest struct {
-	Slug     string `json:"slug"`
-	Title    string `json:"title"`
-	Vendor   string `json:"vendor"`
-	Category string `json:"category"`
-	Summary  string `json:"summary"`
-	HTML     string `json:"html"`
+	InterfaceName string `json:"interface_name"`
+	Slug          string `json:"slug"`
+	Title         string `json:"title"`
+	Vendor        string `json:"vendor"`
+	Category      string `json:"category"`
+	Summary       string `json:"summary"`
+	HTML          string `json:"html"`
 }
 
 type modelDocumentEditorData struct {
 	ModelID         int    `json:"model_id"`
 	Model           string `json:"model"`
+	InterfaceKey    string `json:"interface_key"`
+	InterfaceName   string `json:"interface_name"`
 	Source          string `json:"source"`
 	EffectiveSource string `json:"effective_source"`
 	HasBuiltin      bool   `json:"has_builtin"`
@@ -45,6 +51,17 @@ type modelDocumentEditorData struct {
 	Summary         string `json:"summary"`
 	HTML            string `json:"html"`
 	UpdatedTime     int64  `json:"updated_time"`
+}
+
+type modelDocumentEditorCollection struct {
+	ModelID  int                       `json:"model_id"`
+	Model    string                    `json:"model"`
+	Variants []modelDocumentEditorData `json:"variants"`
+}
+
+type modelDocumentVariantIdentity struct {
+	ModelID      int
+	InterfaceKey string
 }
 
 func GetModelDocsCatalog(c *gin.Context) {
@@ -66,33 +83,34 @@ func GetModelDocsCatalog(c *gin.Context) {
 		enabledByID[modelMeta.Id] = modelMeta
 		modelIDs = append(modelIDs, modelMeta.Id)
 	}
-	customDocuments, err := model.GetPublishedModelDocuments(modelIDs)
+	customDocuments, err := model.GetPublishedModelDocumentVariants(modelIDs)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	customByModelID := make(map[int]model.ModelDocument, len(customDocuments))
+	customByVariant := make(map[modelDocumentVariantIdentity]model.ModelDocumentVariant, len(customDocuments))
 	for _, document := range customDocuments {
-		customByModelID[document.ModelId] = document
+		customByVariant[modelDocumentVariantIdentity{ModelID: document.ModelId, InterfaceKey: document.InterfaceKey}] = document
 	}
 
 	result := make([]modeldoc.Document, 0, len(builtinDocuments)+len(customDocuments))
-	includedModelIDs := make(map[int]struct{}, len(customDocuments))
+	includedVariantIDs := make(map[int]struct{}, len(customDocuments))
 	for _, builtin := range builtinDocuments {
 		modelMeta, enabled := enabledByName[builtin.Model]
 		if !enabled {
 			continue
 		}
-		if custom, overridden := customByModelID[modelMeta.Id]; overridden {
+		identity := modelDocumentVariantIdentity{ModelID: modelMeta.Id, InterfaceKey: builtin.InterfaceKey}
+		if custom, overridden := customByVariant[identity]; overridden {
 			result = append(result, customDocumentCatalogItem(custom, modelMeta.ModelName))
-			includedModelIDs[modelMeta.Id] = struct{}{}
+			includedVariantIDs[custom.Id] = struct{}{}
 			continue
 		}
 		result = append(result, builtin)
 	}
 	remainingCustom := make([]modeldoc.Document, 0)
 	for _, custom := range customDocuments {
-		if _, included := includedModelIDs[custom.ModelId]; included {
+		if _, included := includedVariantIDs[custom.Id]; included {
 			continue
 		}
 		modelMeta, enabled := enabledByID[custom.ModelId]
@@ -102,6 +120,9 @@ func GetModelDocsCatalog(c *gin.Context) {
 		remainingCustom = append(remainingCustom, customDocumentCatalogItem(custom, modelMeta.ModelName))
 	}
 	sort.Slice(remainingCustom, func(i, j int) bool {
+		if remainingCustom[i].Title == remainingCustom[j].Title {
+			return remainingCustom[i].InterfaceName < remainingCustom[j].InterfaceName
+		}
 		return remainingCustom[i].Title < remainingCustom[j].Title
 	})
 	result = append(result, remainingCustom...)
@@ -110,7 +131,7 @@ func GetModelDocsCatalog(c *gin.Context) {
 
 func GetModelDoc(c *gin.Context) {
 	slug := c.Param("slug")
-	custom, customExists, err := model.GetPublishedModelDocumentBySlug(slug)
+	custom, customExists, err := model.GetPublishedModelDocumentVariantBySlug(slug)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -145,7 +166,7 @@ func GetModelDoc(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	override, overrideExists, err := model.GetModelDocumentByModelID(modelMeta.Id)
+	override, overrideExists, err := model.GetModelDocumentVariant(modelMeta.Id, builtin.InterfaceKey)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -162,12 +183,12 @@ func GetModelDoc(c *gin.Context) {
 	writeModelDocumentHTML(c, document)
 }
 
-func GetModelDocumentEditor(c *gin.Context) {
+func GetModelDocumentsEditor(c *gin.Context) {
 	modelMeta, ok := getModelDocumentModel(c)
 	if !ok {
 		return
 	}
-	data, err := buildModelDocumentEditorData(*modelMeta)
+	data, err := buildModelDocumentEditorCollection(*modelMeta)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -175,9 +196,14 @@ func GetModelDocumentEditor(c *gin.Context) {
 	common.ApiSuccess(c, data)
 }
 
-func SaveModelDocumentEditorDraft(c *gin.Context) {
+func SaveModelDocumentVariantDraft(c *gin.Context) {
 	modelMeta, ok := getModelDocumentModel(c)
 	if !ok {
+		return
+	}
+	interfaceKey := strings.TrimSpace(c.Param("interface_key"))
+	if !modelDocumentInterfacePattern.MatchString(interfaceKey) {
+		common.ApiErrorMsg(c, "接口标识只能包含字母、数字、点、下划线和连字符")
 		return
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxModelDocumentRequestBytes)
@@ -186,12 +212,17 @@ func SaveModelDocumentEditorDraft(c *gin.Context) {
 		common.ApiErrorMsg(c, "文档内容无效或超过 1 MB")
 		return
 	}
+	request.InterfaceName = strings.TrimSpace(request.InterfaceName)
 	request.Slug = strings.TrimSpace(request.Slug)
 	request.Title = strings.TrimSpace(request.Title)
 	request.Vendor = strings.TrimSpace(request.Vendor)
 	request.Category = strings.TrimSpace(request.Category)
 	request.Summary = strings.TrimSpace(request.Summary)
 	request.HTML = strings.TrimSpace(request.HTML)
+	if request.InterfaceName == "" {
+		common.ApiErrorMsg(c, "接口名称不能为空")
+		return
+	}
 	if request.Slug == "" || !modelDocumentSlugPattern.MatchString(request.Slug) {
 		common.ApiErrorMsg(c, "文档 Slug 只能包含字母、数字、点、下划线和连字符")
 		return
@@ -211,46 +242,44 @@ func SaveModelDocumentEditorDraft(c *gin.Context) {
 	if builtin, exists, err := modeldoc.Find(request.Slug); err != nil {
 		common.ApiError(c, err)
 		return
-	} else if exists && builtin.Model != modelMeta.ModelName {
+	} else if exists && (builtin.Model != modelMeta.ModelName || builtin.InterfaceKey != interfaceKey) {
 		common.ApiErrorMsg(c, "文档 Slug 已被内置文档使用")
 		return
 	}
-	duplicated, err := model.IsModelDocumentSlugDuplicated(modelMeta.Id, request.Slug)
+	duplicated, err := model.IsModelDocumentSlugDuplicated(modelMeta.Id, interfaceKey, request.Slug)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	if duplicated {
-		common.ApiErrorMsg(c, "文档 Slug 已被其他模型使用")
+		common.ApiErrorMsg(c, "文档 Slug 已被其他接口文档使用")
 		return
 	}
-	document := &model.ModelDocument{
-		ModelId:   modelMeta.Id,
-		Slug:      request.Slug,
-		Title:     request.Title,
-		Vendor:    request.Vendor,
-		Category:  request.Category,
-		Summary:   request.Summary,
-		DraftHTML: request.HTML,
+	document := &model.ModelDocumentVariant{
+		ModelId:       modelMeta.Id,
+		InterfaceKey:  interfaceKey,
+		InterfaceName: request.InterfaceName,
+		Slug:          request.Slug,
+		Title:         request.Title,
+		Vendor:        request.Vendor,
+		Category:      request.Category,
+		Summary:       request.Summary,
+		DraftHTML:     request.HTML,
 	}
-	if err := model.SaveModelDocumentDraft(document); err != nil {
+	if err := model.SaveModelDocumentVariantDraft(document); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	data, err := buildModelDocumentEditorData(*modelMeta)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	common.ApiSuccess(c, data)
+	writeModelDocumentEditorCollection(c, *modelMeta)
 }
 
-func PublishModelDocumentEditor(c *gin.Context) {
+func PublishModelDocumentVariant(c *gin.Context) {
 	modelMeta, ok := getModelDocumentModel(c)
 	if !ok {
 		return
 	}
-	document, exists, err := model.GetModelDocumentByModelID(modelMeta.Id)
+	interfaceKey := strings.TrimSpace(c.Param("interface_key"))
+	document, exists, err := model.GetModelDocumentVariant(modelMeta.Id, interfaceKey)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -263,42 +292,43 @@ func PublishModelDocumentEditor(c *gin.Context) {
 		common.ApiErrorMsg(c, "HTML 文档不能超过 1 MB")
 		return
 	}
-	if _, exists, err := model.PublishModelDocument(modelMeta.Id); err != nil {
+	if _, exists, err := model.PublishModelDocumentVariant(modelMeta.Id, interfaceKey); err != nil {
 		common.ApiError(c, err)
 		return
 	} else if !exists {
 		common.ApiErrorMsg(c, "请先保存 HTML 文档草稿")
 		return
 	}
-	data, err := buildModelDocumentEditorData(*modelMeta)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	common.ApiSuccess(c, data)
+	writeModelDocumentEditorCollection(c, *modelMeta)
 }
 
-func DeleteModelDocumentEditor(c *gin.Context) {
+func DeleteModelDocumentVariant(c *gin.Context) {
 	modelMeta, ok := getModelDocumentModel(c)
 	if !ok {
 		return
 	}
-	if err := model.DeleteModelDocument(modelMeta.Id); err != nil {
+	interfaceKey := strings.TrimSpace(c.Param("interface_key"))
+	if err := model.DeleteModelDocumentVariant(modelMeta.Id, interfaceKey); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if !modeldoc.HasModel(modelMeta.ModelName) {
+	builtinDocuments, err := modeldoc.ListByModel(modelMeta.ModelName)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	publishedDocuments, err := model.GetPublishedModelDocumentVariants([]int{modelMeta.Id})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if len(builtinDocuments) == 0 && len(publishedDocuments) == 0 {
 		if err := model.DB.Model(&model.Model{}).Where("id = ?", modelMeta.Id).Update("doc_enabled", 0).Error; err != nil {
 			common.ApiError(c, err)
 			return
 		}
 	}
-	data, err := buildModelDocumentEditorData(*modelMeta)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	common.ApiSuccess(c, data)
+	writeModelDocumentEditorCollection(c, *modelMeta)
 }
 
 func PreviewModelDocumentEditor(c *gin.Context) {
@@ -339,24 +369,61 @@ func getModelDocumentModel(c *gin.Context) (*model.Model, bool) {
 	return &modelMeta, true
 }
 
-func buildModelDocumentEditorData(modelMeta model.Model) (*modelDocumentEditorData, error) {
-	builtin, hasBuiltin, err := modeldoc.FindByModel(modelMeta.ModelName)
+func buildModelDocumentEditorCollection(modelMeta model.Model) (*modelDocumentEditorCollection, error) {
+	builtinDocuments, err := modeldoc.ListByModel(modelMeta.ModelName)
 	if err != nil {
 		return nil, err
 	}
-	data := &modelDocumentEditorData{
-		ModelID:    modelMeta.Id,
-		Model:      modelMeta.ModelName,
-		Source:     "empty",
-		HasBuiltin: hasBuiltin,
-		Slug:       "model-" + strconv.Itoa(modelMeta.Id),
-		Title:      modelMeta.ModelName,
+	customDocuments, err := model.GetModelDocumentVariants(modelMeta.Id)
+	if err != nil {
+		return nil, err
+	}
+	customByInterface := make(map[string]model.ModelDocumentVariant, len(customDocuments))
+	for _, document := range customDocuments {
+		customByInterface[document.InterfaceKey] = document
+	}
+	result := &modelDocumentEditorCollection{
+		ModelID:  modelMeta.Id,
+		Model:    modelMeta.ModelName,
+		Variants: make([]modelDocumentEditorData, 0, len(builtinDocuments)+len(customDocuments)),
+	}
+	for _, builtin := range builtinDocuments {
+		custom, hasCustom := customByInterface[builtin.InterfaceKey]
+		data, err := buildModelDocumentEditorData(modelMeta, builtin, true, custom, hasCustom)
+		if err != nil {
+			return nil, err
+		}
+		result.Variants = append(result.Variants, data)
+		delete(customByInterface, builtin.InterfaceKey)
+	}
+	for _, custom := range customDocuments {
+		if _, remaining := customByInterface[custom.InterfaceKey]; !remaining {
+			continue
+		}
+		data, err := buildModelDocumentEditorData(modelMeta, modeldoc.Document{}, false, custom, true)
+		if err != nil {
+			return nil, err
+		}
+		result.Variants = append(result.Variants, data)
+	}
+	return result, nil
+}
+
+func buildModelDocumentEditorData(modelMeta model.Model, builtin modeldoc.Document, hasBuiltin bool, custom model.ModelDocumentVariant, hasCustom bool) (modelDocumentEditorData, error) {
+	data := modelDocumentEditorData{
+		ModelID:         modelMeta.Id,
+		Model:           modelMeta.ModelName,
+		Source:          "empty",
+		EffectiveSource: "none",
+		HasBuiltin:      hasBuiltin,
 	}
 	if hasBuiltin {
 		html, _, err := modeldoc.Read(builtin.Slug)
 		if err != nil {
-			return nil, err
+			return modelDocumentEditorData{}, err
 		}
+		data.InterfaceKey = builtin.InterfaceKey
+		data.InterfaceName = builtin.InterfaceName
 		data.Source = "builtin"
 		data.EffectiveSource = "builtin"
 		data.Slug = builtin.Slug
@@ -366,16 +433,11 @@ func buildModelDocumentEditorData(modelMeta model.Model) (*modelDocumentEditorDa
 		data.Summary = builtin.Summary
 		data.HTML = string(html)
 	}
-	custom, hasCustom, err := model.GetModelDocumentByModelID(modelMeta.Id)
-	if err != nil {
-		return nil, err
-	}
 	if !hasCustom {
-		if data.EffectiveSource == "" {
-			data.EffectiveSource = "none"
-		}
 		return data, nil
 	}
+	data.InterfaceKey = custom.InterfaceKey
+	data.InterfaceName = custom.InterfaceName
 	data.Source = "custom"
 	data.HasCustom = true
 	data.Published = custom.Published == 1
@@ -388,23 +450,30 @@ func buildModelDocumentEditorData(modelMeta model.Model) (*modelDocumentEditorDa
 	data.UpdatedTime = custom.UpdatedTime
 	if custom.Published == 1 {
 		data.EffectiveSource = "custom"
-	} else if hasBuiltin {
-		data.EffectiveSource = "builtin"
-	} else {
-		data.EffectiveSource = "none"
 	}
 	return data, nil
 }
 
-func customDocumentCatalogItem(document model.ModelDocument, modelName string) modeldoc.Document {
+func writeModelDocumentEditorCollection(c *gin.Context, modelMeta model.Model) {
+	data, err := buildModelDocumentEditorCollection(modelMeta)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, data)
+}
+
+func customDocumentCatalogItem(document model.ModelDocumentVariant, modelName string) modeldoc.Document {
 	return modeldoc.Document{
-		Slug:      document.PublishedSlug,
-		Model:     modelName,
-		Title:     document.PublishedTitle,
-		Vendor:    document.PublishedVendor,
-		Category:  document.PublishedCategory,
-		Summary:   document.PublishedSummary,
-		UpdatedAt: time.Unix(document.PublishedTime, 0).Format("2006-01-02"),
+		Slug:          document.PublishedSlug,
+		Model:         modelName,
+		InterfaceKey:  document.InterfaceKey,
+		InterfaceName: document.PublishedInterfaceName,
+		Title:         document.PublishedTitle,
+		Vendor:        document.PublishedVendor,
+		Category:      document.PublishedCategory,
+		Summary:       document.PublishedSummary,
+		UpdatedAt:     time.Unix(document.PublishedTime, 0).Format("2006-01-02"),
 	}
 }
 

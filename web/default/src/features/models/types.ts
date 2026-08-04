@@ -134,6 +134,8 @@ export interface GetModelResponse {
 export interface ModelDocumentEditor {
   model_id: number
   model: string
+  interface_key: string
+  interface_name: string
   source: 'builtin' | 'custom' | 'empty'
   effective_source: 'builtin' | 'custom' | 'none'
   has_builtin: boolean
@@ -149,6 +151,7 @@ export interface ModelDocumentEditor {
 }
 
 export interface ModelDocumentEditorPayload {
+  interface_name: string
   slug: string
   title: string
   vendor: string
@@ -160,7 +163,13 @@ export interface ModelDocumentEditorPayload {
 export interface ModelDocumentEditorResponse {
   success: boolean
   message?: string
-  data?: ModelDocumentEditor
+  data?: ModelDocumentEditorCollection
+}
+
+export interface ModelDocumentEditorCollection {
+  model_id: number
+  model: string
+  variants: ModelDocumentEditor[]
 }
 
 /**

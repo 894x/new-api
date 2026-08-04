@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { RefreshCw } from 'lucide-react'
+import { Plus, RefreshCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -40,6 +40,14 @@ import {
   FieldLabel,
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -53,7 +61,7 @@ import {
 import { modelsQueryKeys } from '../../lib/query-keys'
 import type {
   Model,
-  ModelDocumentEditor,
+  ModelDocumentEditorCollection,
   ModelDocumentEditorPayload,
 } from '../../types'
 
@@ -63,7 +71,10 @@ type ModelDocumentEditorDialogProps = {
   model: Model | null
 }
 
+const NEW_INTERFACE_VALUE = '__new_interface__'
+
 const EMPTY_DOCUMENT: ModelDocumentEditorPayload = {
+  interface_name: '',
   slug: '',
   title: '',
   vendor: '',
@@ -77,6 +88,8 @@ export function ModelDocumentEditorDialog(
 ) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const [selectedInterfaceKey, setSelectedInterfaceKey] = useState('')
+  const [newInterfaceKey, setNewInterfaceKey] = useState('')
   const [form, setForm] = useState<ModelDocumentEditorPayload>(EMPTY_DOCUMENT)
   const [previewHTML, setPreviewHTML] = useState('')
   const [previewPending, setPreviewPending] = useState(false)
@@ -95,22 +108,57 @@ export function ModelDocumentEditorDialog(
     enabled: props.open && modelId > 0,
   })
 
+  const selectedDocument = documentQuery.data?.variants.find(
+    (document) => document.interface_key === selectedInterfaceKey
+  )
+  const isCreating = selectedInterfaceKey === NEW_INTERFACE_VALUE
+
   useEffect(() => {
-    const document = documentQuery.data
-    if (!props.open || modelId <= 0 || !document) return
-    const nextForm: ModelDocumentEditorPayload = {
-      slug: document.slug,
-      title: document.title,
-      vendor: document.vendor,
-      category: document.category,
-      summary: document.summary,
-      html: document.html,
+    const collection = documentQuery.data
+    if (!props.open || modelId <= 0 || !collection) return
+    if (
+      selectedInterfaceKey === NEW_INTERFACE_VALUE ||
+      collection.variants.some(
+        (document) => document.interface_key === selectedInterfaceKey
+      )
+    ) {
+      return
     }
-    setForm(nextForm)
-    setPreviewHTML(document.html)
+    setSelectedInterfaceKey(
+      collection.variants[0]?.interface_key ?? NEW_INTERFACE_VALUE
+    )
+  }, [documentQuery.data, modelId, props.open, selectedInterfaceKey])
+
+  useEffect(() => {
+    if (!props.open || modelId <= 0 || !documentQuery.data) return
+
+    if (isCreating) {
+      const template = documentQuery.data.variants[0]
+      setNewInterfaceKey('')
+      setForm({
+        ...EMPTY_DOCUMENT,
+        title: props.model?.model_name ?? '',
+        vendor: template?.vendor ?? '',
+        category: template?.category ?? '',
+      })
+      setPreviewHTML('')
+      return
+    }
+    if (!selectedDocument) return
+
+    setForm({
+      interface_name: selectedDocument.interface_name,
+      slug: selectedDocument.slug,
+      title: selectedDocument.title,
+      vendor: selectedDocument.vendor,
+      category: selectedDocument.category,
+      summary: selectedDocument.summary,
+      html: selectedDocument.html,
+    })
+    setPreviewHTML(selectedDocument.html)
     setPreviewPending(true)
     let cancelled = false
-    void previewModelDocument(modelId, document.html)
+    void previewModelDocument(modelId, selectedDocument.html)
       .then((response) => {
         if (cancelled) return
         if (response.success && response.data) {
@@ -123,36 +171,52 @@ export function ModelDocumentEditorDialog(
     return () => {
       cancelled = true
     }
-  }, [documentQuery.data, modelId, props.open])
+  }, [documentQuery.data, isCreating, modelId, props.model, props.open, selectedDocument])
 
   const savedForm = useMemo<ModelDocumentEditorPayload | null>(() => {
-    const document = documentQuery.data
-    if (!document) return null
+    if (!selectedDocument) return null
     return {
-      slug: document.slug,
-      title: document.title,
-      vendor: document.vendor,
-      category: document.category,
-      summary: document.summary,
-      html: document.html,
+      interface_name: selectedDocument.interface_name,
+      slug: selectedDocument.slug,
+      title: selectedDocument.title,
+      vendor: selectedDocument.vendor,
+      category: selectedDocument.category,
+      summary: selectedDocument.summary,
+      html: selectedDocument.html,
     }
-  }, [documentQuery.data])
+  }, [selectedDocument])
 
   const isDirty = savedForm
-    ? form.slug !== savedForm.slug ||
+    ? form.interface_name !== savedForm.interface_name ||
+      form.slug !== savedForm.slug ||
       form.title !== savedForm.title ||
       form.vendor !== savedForm.vendor ||
       form.category !== savedForm.category ||
       form.summary !== savedForm.summary ||
       form.html !== savedForm.html
-    : false
+    : isCreating &&
+      (newInterfaceKey !== '' || Object.values(form).some((value) => value !== ''))
   const htmlBytes = useMemo(
     () => new TextEncoder().encode(form.html).length,
     [form.html]
   )
+  const activeInterfaceKey = isCreating
+    ? newInterfaceKey.trim()
+    : selectedInterfaceKey
 
-  const updateCachedDocument = (document: ModelDocumentEditor) => {
-    queryClient.setQueryData(['model-document-editor', modelId], document)
+  const updateCachedCollection = (
+    collection: ModelDocumentEditorCollection,
+    preferredInterfaceKey: string
+  ) => {
+    queryClient.setQueryData(['model-document-editor', modelId], collection)
+    const preferredExists = collection.variants.some(
+      (document) => document.interface_key === preferredInterfaceKey
+    )
+    setSelectedInterfaceKey(
+      preferredExists
+        ? preferredInterfaceKey
+        : (collection.variants[0]?.interface_key ?? NEW_INTERFACE_VALUE)
+    )
     void queryClient.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
     if (modelId > 0) {
       void queryClient.invalidateQueries({
@@ -163,14 +227,18 @@ export function ModelDocumentEditorDialog(
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const response = await saveModelDocumentDraft(modelId, form)
+      const response = await saveModelDocumentDraft(
+        modelId,
+        activeInterfaceKey,
+        form
+      )
       if (!response.success || !response.data) {
         throw new Error(response.message || t('Failed to save document draft'))
       }
       return response.data
     },
-    onSuccess: (document) => {
-      updateCachedDocument(document)
+    onSuccess: (collection) => {
+      updateCachedCollection(collection, activeInterfaceKey)
       toast.success(t('Document draft saved'))
     },
     onError: (error: Error) => toast.error(error.message),
@@ -178,13 +246,20 @@ export function ModelDocumentEditorDialog(
 
   const publishMutation = useMutation({
     mutationFn: async () => {
-      const saveResponse = await saveModelDocumentDraft(modelId, form)
+      const saveResponse = await saveModelDocumentDraft(
+        modelId,
+        activeInterfaceKey,
+        form
+      )
       if (!saveResponse.success) {
         throw new Error(
           saveResponse.message || t('Failed to save document draft')
         )
       }
-      const publishResponse = await publishModelDocument(modelId)
+      const publishResponse = await publishModelDocument(
+        modelId,
+        activeInterfaceKey
+      )
       if (!publishResponse.success || !publishResponse.data) {
         throw new Error(
           publishResponse.message || t('Failed to publish model document')
@@ -192,8 +267,8 @@ export function ModelDocumentEditorDialog(
       }
       return publishResponse.data
     },
-    onSuccess: (document) => {
-      updateCachedDocument(document)
+    onSuccess: (collection) => {
+      updateCachedCollection(collection, activeInterfaceKey)
       toast.success(t('Model document published'))
     },
     onError: (error: Error) => toast.error(error.message),
@@ -201,7 +276,10 @@ export function ModelDocumentEditorDialog(
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
-      const response = await deleteModelDocumentOverride(modelId)
+      const response = await deleteModelDocumentOverride(
+        modelId,
+        selectedInterfaceKey
+      )
       if (!response.success || !response.data) {
         throw new Error(
           response.message || t('Failed to restore model document')
@@ -209,11 +287,11 @@ export function ModelDocumentEditorDialog(
       }
       return response.data
     },
-    onSuccess: (document) => {
-      updateCachedDocument(document)
+    onSuccess: (collection) => {
+      updateCachedCollection(collection, selectedInterfaceKey)
       setDeleteConfirmOpen(false)
       toast.success(
-        document.has_builtin
+        selectedDocument?.has_builtin
           ? t('Built-in model document restored')
           : t('Custom model document deleted')
       )
@@ -239,7 +317,7 @@ export function ModelDocumentEditorDialog(
     }
   }
 
-  const effectiveSource = documentQuery.data?.effective_source
+  const effectiveSource = selectedDocument?.effective_source
   let effectiveSourceLabel = ''
   if (effectiveSource === 'custom') {
     effectiveSourceLabel = t('Online document is live')
@@ -250,7 +328,19 @@ export function ModelDocumentEditorDialog(
   }
   const editorReady = documentQuery.isSuccess && modelId > 0
   const isBusy =
-    !editorReady || saveMutation.isPending || publishMutation.isPending
+    !editorReady ||
+    saveMutation.isPending ||
+    publishMutation.isPending ||
+    deleteMutation.isPending
+  const canSubmit =
+    activeInterfaceKey !== '' &&
+    form.interface_name.trim() !== '' &&
+    form.html.trim() !== ''
+  const interfaceItems =
+    documentQuery.data?.variants.map((document) => ({
+      label: document.interface_name,
+      value: document.interface_key,
+    })) ?? []
 
   return (
     <>
@@ -262,11 +352,14 @@ export function ModelDocumentEditorDialog(
               {effectiveSource && (
                 <Badge variant='secondary'>{effectiveSourceLabel}</Badge>
               )}
+              {isCreating && (
+                <Badge variant='secondary'>{t('New API mode')}</Badge>
+              )}
               {isDirty && <Badge variant='outline'>{t('Unsaved')}</Badge>}
             </div>
             <DialogDescription>
               {props.model?.model_name || ''} ·{' '}
-              {t('Paste a complete HTML document or an HTML fragment.')}
+              {t('Configure an independent HTML document for each API mode.')}
             </DialogDescription>
           </DialogHeader>
 
@@ -283,7 +376,81 @@ export function ModelDocumentEditorDialog(
           {documentQuery.isSuccess && (
             <div className='grid min-h-0 gap-4 overflow-y-auto lg:grid-cols-[minmax(420px,0.9fr)_minmax(480px,1.1fr)] lg:overflow-hidden'>
               <div className='flex min-h-0 flex-col gap-4 lg:overflow-y-auto lg:pr-1'>
+                <div className='bg-muted/30 flex flex-wrap items-end gap-3 rounded-lg border p-3'>
+                  <Field className='min-w-52 flex-1'>
+                    <FieldLabel>{t('API mode')}</FieldLabel>
+                    {documentQuery.data.variants.length > 0 && !isCreating ? (
+                      <Select
+                        items={interfaceItems}
+                        value={selectedInterfaceKey}
+                        onValueChange={(value) =>
+                          value !== null && setSelectedInterfaceKey(value)
+                        }
+                      >
+                        <SelectTrigger className='bg-background w-full'>
+                          <SelectValue>
+                            {selectedDocument?.interface_name ?? ''}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent align='start' alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {documentQuery.data.variants.map((document) => (
+                              <SelectItem
+                                key={document.interface_key}
+                                value={document.interface_key}
+                              >
+                                {document.interface_name}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <div className='bg-background flex h-9 items-center rounded-md border px-3 text-sm'>
+                        {t('New API mode')}
+                      </div>
+                    )}
+                  </Field>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    onClick={() => setSelectedInterfaceKey(NEW_INTERFACE_VALUE)}
+                  >
+                    <Plus data-icon='inline-start' />
+                    {t('Add API mode')}
+                  </Button>
+                </div>
+
                 <FieldGroup className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+                  <Field>
+                    <FieldLabel htmlFor='model-document-interface-name'>
+                      {t('API mode name')}
+                    </FieldLabel>
+                    <Input
+                      id='model-document-interface-name'
+                      value={form.interface_name}
+                      placeholder={t('For example: OpenAI compatible')}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          interface_name: event.target.value,
+                        }))
+                      }
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor='model-document-interface-key'>
+                      {t('API mode key')}
+                    </FieldLabel>
+                    <Input
+                      id='model-document-interface-key'
+                      value={isCreating ? newInterfaceKey : selectedInterfaceKey}
+                      disabled={!isCreating}
+                      placeholder='openai-compatible'
+                      className='font-mono'
+                      onChange={(event) => setNewInterfaceKey(event.target.value)}
+                    />
+                  </Field>
                   <Field>
                     <FieldLabel htmlFor='model-document-title'>
                       {t('Document title')}
@@ -417,23 +584,23 @@ export function ModelDocumentEditorDialog(
 
           <DialogFooter className='items-center sm:justify-between'>
             <div className='flex flex-1 items-center'>
-              {documentQuery.data?.has_custom && (
+              {selectedDocument?.has_custom && (
                 <Button
                   type='button'
                   variant='destructive'
-                  disabled={deleteMutation.isPending || isBusy}
+                  disabled={isBusy}
                   onClick={() => setDeleteConfirmOpen(true)}
                 >
-                  {documentQuery.data.has_builtin
+                  {selectedDocument.has_builtin
                     ? t('Restore built-in document')
-                    : t('Delete custom document')}
+                    : t('Delete API mode')}
                 </Button>
               )}
             </div>
             <Button
               type='button'
               variant='outline'
-              disabled={isBusy || !form.html.trim()}
+              disabled={isBusy || !canSubmit}
               onClick={() => saveMutation.mutate()}
             >
               {saveMutation.isPending && <Spinner data-icon='inline-start' />}
@@ -441,7 +608,7 @@ export function ModelDocumentEditorDialog(
             </Button>
             <Button
               type='button'
-              disabled={isBusy || !form.html.trim()}
+              disabled={isBusy || !canSubmit}
               onClick={() => publishMutation.mutate()}
             >
               {publishMutation.isPending && (
@@ -457,19 +624,21 @@ export function ModelDocumentEditorDialog(
         open={deleteConfirmOpen}
         onOpenChange={setDeleteConfirmOpen}
         title={
-          documentQuery.data?.has_builtin
+          selectedDocument?.has_builtin
             ? t('Restore built-in document')
-            : t('Delete custom document')
+            : t('Delete API mode')
         }
         desc={
-          documentQuery.data?.has_builtin
+          selectedDocument?.has_builtin
             ? t(
                 'The online version and its draft will be deleted. The built-in document will become active again.'
               )
-            : t('The online version and its draft will be permanently deleted.')
+            : t(
+                'This API mode, its online document, and its draft will be permanently deleted.'
+              )
         }
         confirmText={
-          documentQuery.data?.has_builtin ? t('Restore') : t('Delete')
+          selectedDocument?.has_builtin ? t('Restore') : t('Delete')
         }
         destructive
         handleConfirm={() => deleteMutation.mutate()}

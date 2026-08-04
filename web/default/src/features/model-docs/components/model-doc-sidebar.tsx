@@ -33,22 +33,22 @@ import {
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
-import type { ModelDocument } from '../types'
+import type { ModelDocumentGroup } from '../types'
 
 const ALL_FILTER_VALUE = 'all'
 
 type ModelDocSidebarProps = {
-  documents: ModelDocument[]
+  documents: ModelDocumentGroup[]
   vendors: string[]
   categories: string[]
   search: string
   vendor: string
   category: string
-  selectedSlug: string | null
+  selectedModel: string | null
   onSearchChange: (value: string) => void
   onVendorChange: (value: string) => void
   onCategoryChange: (value: string) => void
-  onSelect: (slug: string) => void
+  onSelect: (model: string) => void
   onClearFilters: () => void
 }
 
@@ -184,14 +184,14 @@ export function ModelDocSidebar(props: ModelDocSidebarProps) {
       <ScrollArea className='h-[340px] min-h-0 lg:h-auto lg:flex-1'>
         <nav aria-label={t('Model documentation')} className='space-y-1.5 p-2'>
           {props.documents.map((document) => {
-            const selected = props.selectedSlug === document.slug
+            const selected = props.selectedModel === document.model
             return (
               <button
-                key={document.slug}
+                key={document.model}
                 type='button'
-                data-testid={`model-doc-${document.slug}`}
+                data-testid={`model-doc-${document.model}`}
                 aria-pressed={selected}
-                onClick={() => props.onSelect(document.slug)}
+                onClick={() => props.onSelect(document.model)}
                 className={cn(
                   'group relative w-full rounded-lg border px-3 py-3 text-left transition-colors',
                   selected
@@ -218,6 +218,13 @@ export function ModelDocSidebar(props: ModelDocSidebarProps) {
                   <Badge variant='secondary' className='text-[10px]'>
                     {getCategoryLabel(document.category, t)}
                   </Badge>
+                  {document.variants.length > 1 && (
+                    <Badge variant='outline' className='text-[10px]'>
+                      {t('{{count}} API modes', {
+                        count: document.variants.length,
+                      })}
+                    </Badge>
+                  )}
                 </span>
               </button>
             )

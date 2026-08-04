@@ -117,29 +117,39 @@ export async function updateModelDocStatus(
 export async function getModelDocumentEditor(
   modelId: number
 ): Promise<ModelDocumentEditorResponse> {
-  const res = await api.get(`/api/models/${modelId}/document`)
+  const res = await api.get(`/api/models/${modelId}/documents`)
   return res.data
 }
 
 export async function saveModelDocumentDraft(
   modelId: number,
+  interfaceKey: string,
   data: ModelDocumentEditorPayload
 ): Promise<ModelDocumentEditorResponse> {
-  const res = await api.put(`/api/models/${modelId}/document`, data)
+  const res = await api.put(
+    `/api/models/${modelId}/documents/${encodeURIComponent(interfaceKey)}`,
+    data
+  )
   return res.data
 }
 
 export async function publishModelDocument(
-  modelId: number
+  modelId: number,
+  interfaceKey: string
 ): Promise<ModelDocumentEditorResponse> {
-  const res = await api.post(`/api/models/${modelId}/document/publish`)
+  const res = await api.post(
+    `/api/models/${modelId}/documents/${encodeURIComponent(interfaceKey)}/publish`
+  )
   return res.data
 }
 
 export async function deleteModelDocumentOverride(
-  modelId: number
+  modelId: number,
+  interfaceKey: string
 ): Promise<ModelDocumentEditorResponse> {
-  const res = await api.delete(`/api/models/${modelId}/document`)
+  const res = await api.delete(
+    `/api/models/${modelId}/documents/${encodeURIComponent(interfaceKey)}`
+  )
   return res.data
 }
 
@@ -147,7 +157,7 @@ export async function previewModelDocument(
   modelId: number,
   html: string
 ): Promise<{ success: boolean; message?: string; data?: string }> {
-  const res = await api.post(`/api/models/${modelId}/document/preview`, {
+  const res = await api.post(`/api/models/${modelId}/documents/preview`, {
     html,
   })
   return res.data

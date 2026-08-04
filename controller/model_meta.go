@@ -138,7 +138,7 @@ func UpdateModelMeta(c *gin.Context) {
 				return
 			}
 			var publishedDocumentCount int64
-			if err := model.DB.Model(&model.ModelDocument{}).Where("model_id = ? AND published = ?", m.Id, 1).Count(&publishedDocumentCount).Error; err != nil {
+			if err := model.DB.Model(&model.ModelDocumentVariant{}).Where("model_id = ? AND published = ?", m.Id, 1).Count(&publishedDocumentCount).Error; err != nil {
 				common.ApiError(c, err)
 				return
 			}
@@ -179,6 +179,9 @@ func DeleteModelMeta(c *gin.Context) {
 		return
 	}
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("model_id = ?", id).Delete(&model.ModelDocumentVariant{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("model_id = ?", id).Delete(&model.ModelDocument{}).Error; err != nil {
 			return err
 		}

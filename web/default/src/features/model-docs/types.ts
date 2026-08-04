@@ -19,11 +19,22 @@ For commercial licensing, please contact support@quantumnous.com
 export type ModelDocument = {
   slug: string
   model: string
+  interface_key: string
+  interface_name: string
   title: string
   vendor: string
   category: string
   summary: string
   updated_at: string
+}
+
+export type ModelDocumentGroup = {
+  model: string
+  title: string
+  vendor: string
+  category: string
+  summary: string
+  variants: ModelDocument[]
 }
 
 export type ModelDocumentCatalogResponse = {
