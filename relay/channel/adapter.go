@@ -81,3 +81,10 @@ type TaskAdaptor interface {
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
 }
+
+// NativeVideoConverter renders a stored task using its provider-native video
+// response contract. Provider-native routes require their selected adaptor to
+// implement this interface.
+type NativeVideoConverter interface {
+	ConvertToNativeVideo(originTask *model.Task) ([]byte, error)
+}

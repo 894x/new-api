@@ -292,6 +292,21 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		}
 		c.Set("platform", string(constant.TaskPlatformSuno))
 		c.Set("relay_mode", relayMode)
+	} else if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+		relayMode := relayconstant.RelayModeUnknown
+		if c.Request.Method == http.MethodPost {
+			req, requestErr := getModelFromRequest(c)
+			if requestErr != nil {
+				return nil, false, requestErr
+			}
+			modelRequest.Model = req.Model
+			relayMode = relayconstant.RelayModeVideoSubmit
+		} else if c.Request.Method == http.MethodGet {
+			relayMode = relayconstant.RelayModeVideoFetchByID
+			shouldSelectChannel = false
+			modelRequest.Model = getTaskOriginModelName(c)
+		}
+		c.Set("relay_mode", relayMode)
 	} else if strings.Contains(c.Request.URL.Path, "/v1/videos/") && strings.HasSuffix(c.Request.URL.Path, "/remix") {
 		relayMode := relayconstant.RelayModeVideoSubmit
 		c.Set("relay_mode", relayMode)
