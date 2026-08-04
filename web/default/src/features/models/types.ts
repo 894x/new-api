@@ -131,6 +131,38 @@ export interface GetModelResponse {
   data?: Model
 }
 
+export interface ModelDocumentEditor {
+  model_id: number
+  model: string
+  source: 'builtin' | 'custom' | 'empty'
+  effective_source: 'builtin' | 'custom' | 'none'
+  has_builtin: boolean
+  has_custom: boolean
+  published: boolean
+  slug: string
+  title: string
+  vendor: string
+  category: string
+  summary: string
+  html: string
+  updated_time: number
+}
+
+export interface ModelDocumentEditorPayload {
+  slug: string
+  title: string
+  vendor: string
+  category: string
+  summary: string
+  html: string
+}
+
+export interface ModelDocumentEditorResponse {
+  success: boolean
+  message?: string
+  data?: ModelDocumentEditor
+}
+
 /**
  * Get vendors response
  */

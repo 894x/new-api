@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/modeldoc"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // GetAllModelsMeta 获取模型列表（分页）
@@ -136,7 +137,12 @@ func UpdateModelMeta(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
-			if !modeldoc.HasModel(modelName) {
+			var publishedDocumentCount int64
+			if err := model.DB.Model(&model.ModelDocument{}).Where("model_id = ? AND published = ?", m.Id, 1).Count(&publishedDocumentCount).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			if !modeldoc.HasModel(modelName) && publishedDocumentCount == 0 {
 				common.ApiErrorMsg(c, "该模型没有可用的 HTML 文档")
 				return
 			}
@@ -172,7 +178,12 @@ func DeleteModelMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DB.Delete(&model.Model{}, id).Error; err != nil {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("model_id = ?", id).Delete(&model.ModelDocument{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&model.Model{}, id).Error
+	}); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -185,6 +196,13 @@ func enrichModels(models []*model.Model) {
 	if len(models) == 0 {
 		return
 	}
+	modelIDs := make([]int, 0, len(models))
+	for _, modelMeta := range models {
+		if modelMeta != nil {
+			modelIDs = append(modelIDs, modelMeta.Id)
+		}
+	}
+	publishedDocumentModelIDs, _ := model.GetPublishedModelDocumentModelIDs(modelIDs)
 
 	// 1) 拆分精确与规则匹配
 	exactNames := make([]string, 0)
@@ -194,7 +212,8 @@ func enrichModels(models []*model.Model) {
 		if m == nil {
 			continue
 		}
-		m.DocAvailable = modeldoc.HasModel(m.ModelName)
+		_, hasPublishedDocument := publishedDocumentModelIDs[m.Id]
+		m.DocAvailable = modeldoc.HasModel(m.ModelName) || hasPublishedDocument
 		if m.NameRule == model.NameRuleExact {
 			exactNames = append(exactNames, m.ModelName)
 			exactIdx[m.ModelName] = append(exactIdx[m.ModelName], i)

@@ -25,6 +25,8 @@ import type {
   GetVendorsResponse,
   GetVendorResponse,
   Model,
+  ModelDocumentEditorPayload,
+  ModelDocumentEditorResponse,
   Vendor,
   SearchModelsParams,
   SyncUpstreamResponse,
@@ -108,6 +110,45 @@ export async function updateModelDocStatus(
   const res = await api.put('/api/models/?doc_only=true', {
     id,
     doc_enabled: docEnabled,
+  })
+  return res.data
+}
+
+export async function getModelDocumentEditor(
+  modelId: number
+): Promise<ModelDocumentEditorResponse> {
+  const res = await api.get(`/api/models/${modelId}/document`)
+  return res.data
+}
+
+export async function saveModelDocumentDraft(
+  modelId: number,
+  data: ModelDocumentEditorPayload
+): Promise<ModelDocumentEditorResponse> {
+  const res = await api.put(`/api/models/${modelId}/document`, data)
+  return res.data
+}
+
+export async function publishModelDocument(
+  modelId: number
+): Promise<ModelDocumentEditorResponse> {
+  const res = await api.post(`/api/models/${modelId}/document/publish`)
+  return res.data
+}
+
+export async function deleteModelDocumentOverride(
+  modelId: number
+): Promise<ModelDocumentEditorResponse> {
+  const res = await api.delete(`/api/models/${modelId}/document`)
+  return res.data
+}
+
+export async function previewModelDocument(
+  modelId: number,
+  html: string
+): Promise<{ success: boolean; message?: string; data?: string }> {
+  const res = await api.post(`/api/models/${modelId}/document/preview`, {
+    html,
   })
   return res.data
 }

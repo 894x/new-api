@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
 import type { Row } from '@tanstack/react-table'
-import { Pencil, Power, PowerOff, Trash2 } from 'lucide-react'
+import { FileCode2, Pencil, Power, PowerOff, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -65,6 +65,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     handleToggleModelStatus(model.id, model.status, queryClient)
   }
 
+  const handleEditDocument = () => {
+    setCurrentRow(model)
+    setOpen('edit-document')
+  }
+
   const toggleLabel = isEnabled ? t('Disable') : t('Enable')
 
   return (
@@ -83,6 +88,22 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           <Pencil />
         </TooltipTrigger>
         <TooltipContent>{t('Edit')}</TooltipContent>
+      </Tooltip>
+
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant='ghost'
+              size='icon-sm'
+              onClick={handleEditDocument}
+              aria-label={t('Edit model document')}
+            />
+          }
+        >
+          <FileCode2 />
+        </TooltipTrigger>
+        <TooltipContent>{t('Edit model document')}</TooltipContent>
       </Tooltip>
 
       <Tooltip>

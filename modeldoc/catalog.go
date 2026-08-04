@@ -31,7 +31,7 @@ var (
 	catalogOnce    sync.Once
 	catalogDocs    []Document
 	catalogByID    map[string]Document
-	catalogByModel map[string]struct{}
+	catalogByModel map[string]Document
 	catalogErr     error
 )
 
@@ -49,7 +49,7 @@ func loadCatalog() {
 	}
 
 	catalogByID = make(map[string]Document, len(catalog.Documents))
-	catalogByModel = make(map[string]struct{}, len(catalog.Documents))
+	catalogByModel = make(map[string]Document, len(catalog.Documents))
 	for _, document := range catalog.Documents {
 		document.Slug = strings.TrimSpace(document.Slug)
 		if document.Slug == "" || path.Base(document.Slug) != document.Slug || strings.Contains(document.Slug, "..") {
@@ -66,7 +66,7 @@ func loadCatalog() {
 		}
 		catalogDocs = append(catalogDocs, document)
 		catalogByID[document.Slug] = document
-		catalogByModel[document.Model] = struct{}{}
+		catalogByModel[document.Model] = document
 	}
 }
 
@@ -86,6 +86,15 @@ func HasModel(modelName string) bool {
 	}
 	_, exists := catalogByModel[modelName]
 	return exists
+}
+
+func FindByModel(modelName string) (Document, bool, error) {
+	catalogOnce.Do(loadCatalog)
+	if catalogErr != nil {
+		return Document{}, false, catalogErr
+	}
+	document, exists := catalogByModel[modelName]
+	return document, exists, nil
 }
 
 func List() ([]Document, error) {

@@ -36,3 +36,11 @@ func TestReadRejectsUnknownDocument(t *testing.T) {
 	assert.False(t, exists)
 	assert.Nil(t, body)
 }
+
+func TestRenderWrapsHTMLFragmentAndInjectsSharedStyles(t *testing.T) {
+	rendered := string(Render([]byte("<main><h1>测试文档</h1></main>")))
+
+	assert.Contains(t, rendered, "<!doctype html>")
+	assert.Contains(t, rendered, "background: var(--background)")
+	assert.Contains(t, rendered, "<main><h1>测试文档</h1></main>")
+}
