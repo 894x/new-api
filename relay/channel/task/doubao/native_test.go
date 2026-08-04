@@ -86,7 +86,7 @@ func TestNativeSubmitResponseUsesPublicTaskID(t *testing.T) {
 	assert.JSONEq(t, `{"id":"task_public"}`, recorder.Body.String())
 }
 
-func TestConvertToNativeVideoPreservesUsageAndRewritesIdentity(t *testing.T) {
+func TestConvertToNativeVideoNormalizesOfficialResponse(t *testing.T) {
 	task := &model.Task{
 		TaskID:    "task_public",
 		Status:    model.TaskStatusSuccess,
@@ -100,29 +100,83 @@ func TestConvertToNativeVideoPreservesUsageAndRewritesIdentity(t *testing.T) {
 			"id":"upstream-task-id",
 			"model":"upstream-model",
 			"status":"succeeded",
-			"content":{"video_url":"https://example.com/output.mp4"},
+			"content":{
+				"video_url":"https://example.com/output.mp4",
+				"kz_video_url":"https://channel.example.com/output.mp4",
+				"last_frame_url":"https://example.com/frame.png"
+			},
+			"seed":93073,
+			"resolution":"480p",
+			"ratio":"16:9",
+			"duration":4,
+			"framespersecond":24,
 			"service_tier":"default",
-			"usage":{"completion_tokens":35000,"total_tokens":35000}
+			"execution_expires_after":172800,
+			"generate_audio":true,
+			"tools":[{"type":"web_search"}],
+			"safety_identifier":"user-123",
+			"priority":0,
+			"draft":false,
+			"draft_task_id":"task_draft",
+			"usage":{
+				"completion_tokens":35000,
+				"total_tokens":35000,
+				"tool_usage":{"web_search":1}
+			}
 		}`),
 	}
 
 	encoded, err := (&TaskAdaptor{}).ConvertToNativeVideo(task)
 	require.NoError(t, err)
-	var response struct {
-		ID          string `json:"id"`
-		Model       string `json:"model"`
-		Status      string `json:"status"`
-		ServiceTier string `json:"service_tier"`
-		Usage       struct {
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
-		} `json:"usage"`
+	assert.JSONEq(t, `{
+		"id":"task_public",
+		"model":"doubao-seedance-2-0-260128",
+		"status":"succeeded",
+		"created_at":100,
+		"updated_at":200,
+		"content":{
+			"video_url":"https://example.com/output.mp4",
+			"last_frame_url":"https://example.com/frame.png"
+		},
+		"seed":93073,
+		"resolution":"480p",
+		"ratio":"16:9",
+		"duration":4,
+		"framespersecond":24,
+		"generate_audio":true,
+		"tools":[{"type":"web_search"}],
+		"safety_identifier":"user-123",
+		"priority":0,
+		"draft":false,
+		"draft_task_id":"task_draft",
+		"service_tier":"default",
+		"execution_expires_after":172800,
+		"usage":{
+			"completion_tokens":35000,
+			"total_tokens":35000,
+			"tool_usage":{"web_search":1}
+		}
+	}`, string(encoded))
+}
+
+func TestConvertToNativeVideoReturnsOfficialFailureShape(t *testing.T) {
+	task := &model.Task{
+		TaskID:     "task_failed",
+		Status:     model.TaskStatusFailure,
+		CreatedAt:  100,
+		UpdatedAt:  200,
+		FailReason: "upstream generation failed",
+		Properties: model.Properties{OriginModelName: "doubao-seedance-2-0-260128"},
 	}
-	require.NoError(t, common.Unmarshal(encoded, &response))
-	assert.Equal(t, "task_public", response.ID)
-	assert.Equal(t, "doubao-seedance-2-0-260128", response.Model)
-	assert.Equal(t, "succeeded", response.Status)
-	assert.Equal(t, "default", response.ServiceTier)
-	assert.Equal(t, 35000, response.Usage.CompletionTokens)
-	assert.Equal(t, 35000, response.Usage.TotalTokens)
+
+	encoded, err := (&TaskAdaptor{}).ConvertToNativeVideo(task)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"id":"task_failed",
+		"model":"doubao-seedance-2-0-260128",
+		"status":"failed",
+		"created_at":100,
+		"updated_at":200,
+		"error":{"code":"","message":"upstream generation failed"}
+	}`, string(encoded))
 }

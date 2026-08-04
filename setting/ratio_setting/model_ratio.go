@@ -243,6 +243,10 @@ var defaultModelRatio = map[string]float64{
 	"deepseek-coder":             0.27 / 2,
 	"deepseek-reasoner":          0.55 / 2,    // 0.55 / 1k tokens
 	"doubao-seedance-2-0-260128": 0.046 * RMB, // ¥46 / 1M tokens
+
+	"doubao-seedance-2-0-fast-260128": 0.037 * RMB, // ¥37 / 1M tokens
+	"doubao-seedance-2-0-mini-260615": 0.023 * RMB, // ¥23 / 1M tokens
+
 	// Perplexity online 模型对搜索额外收费，有需要应自行调整，此处不计入搜索费用
 	"llama-3-sonar-small-32k-chat":   0.2 / 1000 * USD,
 	"llama-3-sonar-small-32k-online": 0.2 / 1000 * USD,
