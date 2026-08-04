@@ -108,6 +108,7 @@ const extendedModelFormSchema = z.object({
   endpoints: z.string(),
   name_rule: z.number(),
   status: z.boolean(),
+  doc_enabled: z.boolean(),
   sync_official: z.boolean(),
   price: z.string().optional(),
   ratio: z.string().optional(),
@@ -264,6 +265,7 @@ export function ModelMutateDrawer({
       endpoints: '',
       name_rule: 0,
       status: true,
+      doc_enabled: false,
       sync_official: true,
       price: '',
       ratio: '',
@@ -328,6 +330,7 @@ export function ModelMutateDrawer({
         endpoints: model.endpoints || '',
         name_rule: model.name_rule || 0,
         status: model.status === 1,
+        doc_enabled: model.doc_enabled === 1,
         sync_official: model.sync_official === 1,
         price: '',
         ratio: '',
@@ -440,6 +443,7 @@ export function ModelMutateDrawer({
         endpoints: '',
         name_rule: 0,
         status: true,
+        doc_enabled: false,
         sync_official: true,
         price: '',
         ratio: '',
@@ -470,6 +474,7 @@ export function ModelMutateDrawer({
           id: isEditing ? currentModelId : undefined,
           tags: Array.isArray(values.tags) ? values.tags.join(',') : '',
           status: values.status ? 1 : 0,
+          doc_enabled: values.doc_enabled ? 1 : 0,
           sync_official: values.sync_official ? 1 : 0,
         }
 
@@ -1415,6 +1420,34 @@ export function ModelMutateDrawer({
                       <Switch
                         checked={field.value}
                         onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='doc_enabled'
+                render={({ field }) => (
+                  <FormItem className={sideDrawerSwitchItemClassName()}>
+                    <div className='flex flex-col gap-0.5'>
+                      <FormLabel className='text-base'>
+                        {t('Model document')}
+                      </FormLabel>
+                      <FormDescription>
+                        {currentRow?.doc_available
+                          ? t(
+                              'Publish the independent HTML document for this model.'
+                            )
+                          : t('No HTML document is available for this model.')}
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        disabled={!currentRow?.doc_available}
                       />
                     </FormControl>
                   </FormItem>

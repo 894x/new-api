@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Seedance 2.0 · 模型文档</title>
+    <style>
+      body {
+        margin: 0;
+        background: #0f1115;
+        color: #e8eaf0;
+        font:
+          15px/1.65 system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 980px;
+        margin: auto;
+        padding: 48px 24px;
+      }
+      a {
+        color: #9dc1ff;
+      }
+      .back {
+        display: inline-block;
+        margin-bottom: 28px;
+      }
+      .eyebrow,
+      .lead {
+        color: #aeb6c5;
+      }
+      .id,
+      code {
+        font-family: ui-monospace, monospace;
+      }
+      h1 {
+        font-size: 36px;
+        margin: 4px 0;
+      }
+      .chips {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 22px 0;
+      }
+      .chip {
+        background: #202631;
+        border: 1px solid #343d4d;
+        border-radius: 999px;
+        padding: 4px 10px;
+      }
+      section {
+        margin-top: 34px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #171a20;
+        border: 1px solid #303640;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 13px;
+        border-bottom: 1px solid #303640;
+      }
+      th {
+        background: #20242b;
+      }
+      @media (max-width: 700px) {
+        main {
+          padding: 28px 14px;
+        }
+        h1 {
+          font-size: 28px;
+        }
+        table {
+          display: block;
+          overflow: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a class="back" href="/model-docs">← 返回模型文档</a>
+      <div class="eyebrow">Volcengine · 视频生成</div>
+      <h1>Seedance 2.0</h1>
+      <div class="id">doubao-seedance-2-0-260128</div>
+      <p class="lead">
+        Seedance 2.0 的独立调用文档。支持通过 metadata.content 传递接入层可识别的多媒体参考内容。
+      </p>
+      <div class="chips">
+        <span class="chip">文本输入</span><span class="chip">图片输入</span
+        ><span class="chip">视频参考</span><span class="chip">视频输出</span>
+      </div>
+      <section>
+        <h2>Endpoint</h2>
+        <p><code>POST /v1/video/generations</code></p>
+      </section>
+      <section>
+        <h2>关键参数</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>参数</th>
+              <th>类型</th>
+              <th>默认值 / 范围</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>model</code></td>
+              <td>string</td>
+              <td><code>doubao-seedance-2-0-260128</code></td>
+              <td>固定为本文模型 ID</td>
+            </tr>
+            <tr>
+              <td><code>prompt</code></td>
+              <td>string</td>
+              <td>必填</td>
+              <td>视频生成提示词</td>
+            </tr>
+            <tr>
+              <td><code>image</code></td>
+              <td>string</td>
+              <td>—</td>
+              <td>图片 URL 或 Base64 输入</td>
+            </tr>
+            <tr>
+              <td><code>duration</code></td>
+              <td>number</td>
+              <td>4–15 秒</td>
+              <td>生成时长（秒）</td>
+            </tr>
+            <tr>
+              <td><code>metadata.content</code></td>
+              <td>array</td>
+              <td>—</td>
+              <td>参考媒体数组</td>
+            </tr>
+            <tr>
+              <td><code>metadata.resolution</code></td>
+              <td>string</td>
+              <td>模型默认</td>
+              <td>480p、720p、1080p、4k 等输出档位；实际可用性由上游校验</td>
+            </tr>
+            <tr>
+              <td><code>metadata.ratio</code></td>
+              <td>string</td>
+              <td><code>16:9</code></td>
+              <td>输出宽高比</td>
+            </tr>
+            <tr>
+              <td><code>metadata.generate_audio</code></td>
+              <td>boolean</td>
+              <td><code>false</code></td>
+              <td>请求同步音频</td>
+            </tr>
+            <tr>
+              <td><code>metadata.seed</code></td>
+              <td>integer</td>
+              <td>随机</td>
+              <td>随机种子</td>
+            </tr>
+            <tr>
+              <td><code>metadata.frames</code></td>
+              <td>integer</td>
+              <td>—</td>
+              <td>目标帧数</td>
+            </tr>
+            <tr>
+              <td><code>metadata.camera_fixed</code></td>
+              <td>boolean</td>
+              <td><code>false</code></td>
+              <td>固定镜头</td>
+            </tr>
+            <tr>
+              <td><code>metadata.watermark</code></td>
+              <td>boolean</td>
+              <td><code>false</code></td>
+              <td>添加可见水印</td>
+            </tr>
+            <tr>
+              <td><code>metadata.draft</code></td>
+              <td>boolean</td>
+              <td><code>false</code></td>
+              <td>请求草稿模式</td>
+            </tr>
+            <tr>
+              <td><code>metadata.return_last_frame</code></td>
+              <td>boolean</td>
+              <td><code>false</code></td>
+              <td>请求返回尾帧</td>
+            </tr>
+            <tr>
+              <td><code>metadata.priority</code></td>
+              <td>integer</td>
+              <td>—</td>
+              <td>任务优先级</td>
+            </tr>
+            <tr>
+              <td><code>metadata.callback_url</code></td>
+              <td>string</td>
+              <td>—</td>
+              <td>任务完成回调 URL</td>
+            </tr>
+            <tr>
+              <td><code>metadata.service_tier</code></td>
+              <td>string</td>
+              <td>—</td>
+              <td>服务等级</td>
+            </tr>
+            <tr>
+              <td><code>metadata.execution_expires_after</code></td>
+              <td>integer</td>
+              <td>—</td>
+              <td>任务超时时间（秒）</td>
+            </tr>
+            <tr>
+              <td><code>metadata.tools</code></td>
+              <td>array</td>
+              <td>—</td>
+              <td>生成过程中使用的工具</td>
+            </tr>
+            <tr>
+              <td><code>metadata.safety_identifier</code></td>
+              <td>string</td>
+              <td>—</td>
+              <td>安全审核上下文标识符</td>
+            </tr>
+          </tbody>
+        </table>
+        <h3>content 元素结构</h3>
+        <p class="lead">
+          文本提示词请使用顶层 <code>prompt</code>；此处只列出会作为参考媒体转发的元素。
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>参数</th>
+              <th>类型</th>
+              <th>默认值 / 范围</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>metadata.content[].type</code></td>
+              <td>enum</td>
+              <td>每项必填</td>
+              <td><code>image_url</code>、<code>video_url</code> 或 <code>audio_url</code></td>
+            </tr>
+            <tr>
+              <td><code>metadata.content[].image_url.url</code></td>
+              <td>string</td>
+              <td>—</td>
+              <td><code>type=image_url</code> 时填写的图片 URL</td>
+            </tr>
+            <tr>
+              <td><code>metadata.content[].video_url.url</code></td>
+              <td>string</td>
+              <td>—</td>
+              <td><code>type=video_url</code> 时填写的视频 URL</td>
+            </tr>
+            <tr>
+              <td><code>metadata.content[].audio_url.url</code></td>
+              <td>string</td>
+              <td>—</td>
+              <td><code>type=audio_url</code> 时填写的音频 URL</td>
+            </tr>
+            <tr>
+              <td><code>metadata.content[].role</code></td>
+              <td>string</td>
+              <td>—</td>
+              <td>可选的内容角色，原样转发给上游</td>
+            </tr>
+          </tbody>
+        </table>
+        <h3>tools 元素结构</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>参数</th>
+              <th>类型</th>
+              <th>默认值 / 范围</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>metadata.tools[].type</code></td>
+              <td>string</td>
+              <td>每项必填</td>
+              <td>工具类型，例如 <code>web_search</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+      <section>
+        <h2>计费提示</h2>
+        <p class="lead">当前接入会根据输出分辨率以及参考内容中是否包含视频应用对应倍率。</p>
+      </section>
+      <section>
+        <h2>API 示例</h2>
+        <pre><code>curl --request POST \
+  "$NEW_API_BASE_URL/v1/video/generations" \
+  --header "Authorization: Bearer $NEW_API_KEY" \
+  --header "Content-Type: application/json" \
+  --data '{
+    "model": "doubao-seedance-2-0-260128",
+    "prompt": "电影感镜头，一只鲸鱼跃出海面",
+    "image": "https://example.com/reference.jpg",
+    "duration": 5,
+    "metadata": {
+      "resolution": "720p",
+      "ratio": "16:9"
+    }
+  }'</code></pre>
+      </section>
+    </main>
+  </body>
+</html>

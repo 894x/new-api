@@ -282,6 +282,8 @@ func migrateDB() error {
 		&QuotaData{},
 		&Task{},
 		&Model{},
+		&ModelDocument{},
+		&ModelDocumentVariant{},
 		&Vendor{},
 		&PrefillGroup{},
 		&Setup{},
@@ -301,6 +303,9 @@ func migrateDB() error {
 		&AuthzRole{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := MigrateLegacyModelDocuments(); err != nil {
 		return err
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
@@ -336,6 +341,8 @@ func migrateDBFast() error {
 		{&QuotaData{}, "QuotaData"},
 		{&Task{}, "Task"},
 		{&Model{}, "Model"},
+		{&ModelDocument{}, "ModelDocument"},
+		{&ModelDocumentVariant{}, "ModelDocumentVariant"},
 		{&Vendor{}, "Vendor"},
 		{&PrefillGroup{}, "PrefillGroup"},
 		{&Setup{}, "Setup"},
@@ -374,6 +381,9 @@ func migrateDBFast() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := MigrateLegacyModelDocuments(); err != nil {
+		return err
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {

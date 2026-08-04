@@ -30,6 +30,7 @@ type Model struct {
 	VendorID     int            `json:"vendor_id,omitempty" gorm:"index"`
 	Endpoints    string         `json:"endpoints,omitempty" gorm:"type:text"`
 	Status       int            `json:"status" gorm:"default:1"`
+	DocEnabled   int            `json:"doc_enabled"`
 	SyncOfficial int            `json:"sync_official" gorm:"default:1"`
 	CreatedTime  int64          `json:"created_time" gorm:"bigint"`
 	UpdatedTime  int64          `json:"updated_time" gorm:"bigint"`
@@ -42,9 +43,13 @@ type Model struct {
 
 	MatchedModels []string `json:"matched_models,omitempty" gorm:"-"`
 	MatchedCount  int      `json:"matched_count,omitempty" gorm:"-"`
+	DocAvailable  bool     `json:"doc_available" gorm:"-"`
 }
 
 func (mi *Model) Insert() error {
+	if mi.DocEnabled != 1 {
+		mi.DocEnabled = 0
+	}
 	now := common.GetTimestamp()
 	mi.CreatedTime = now
 	mi.UpdatedTime = now
@@ -75,11 +80,30 @@ func IsModelNameDuplicated(id int, name string) (bool, error) {
 }
 
 func (mi *Model) Update() error {
+	if mi.DocEnabled != 1 {
+		mi.DocEnabled = 0
+	}
 	mi.UpdatedTime = common.GetTimestamp()
 	// 使用 Select 强制更新所有字段，包括零值
 	return DB.Model(&Model{}).Where("id = ?", mi.Id).
-		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
+		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "doc_enabled", "sync_official", "name_rule", "updated_time").
 		Updates(mi).Error
+}
+
+func GetDocumentEnabledModelNames() ([]string, error) {
+	var modelNames []string
+	err := DB.Model(&Model{}).
+		Where("doc_enabled = ?", 1).
+		Pluck("model_name", &modelNames).Error
+	return modelNames, err
+}
+
+func IsModelDocumentEnabled(modelName string) (bool, error) {
+	var count int64
+	err := DB.Model(&Model{}).
+		Where("model_name = ? AND doc_enabled = ?", modelName, 1).
+		Count(&count).Error
+	return count > 0, err
 }
 
 func (mi *Model) Delete() error {

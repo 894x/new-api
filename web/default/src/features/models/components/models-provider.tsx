@@ -42,6 +42,7 @@ type DialogType =
   | 'upstream-conflict'
   | 'prefill-groups'
   | 'description'
+  | 'edit-document'
   | null
 
 type ModelsContextType = {
