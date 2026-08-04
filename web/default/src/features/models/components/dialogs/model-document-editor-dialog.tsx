@@ -95,6 +95,7 @@ export function ModelDocumentEditorDialog(
   const [previewPending, setPreviewPending] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const modelId = props.model?.id ?? 0
+  const modelName = props.model?.model_name ?? ''
 
   const documentQuery = useQuery({
     queryKey: ['model-document-editor', modelId],
@@ -134,10 +135,22 @@ export function ModelDocumentEditorDialog(
 
     if (isCreating) {
       const template = documentQuery.data.variants[0]
-      setNewInterfaceKey('')
+      const existingInterfaceKeys = new Set(
+        documentQuery.data.variants.map((document) => document.interface_key)
+      )
+      let interfaceIndex = 1
+      while (existingInterfaceKeys.has(`custom-${interfaceIndex}`)) {
+        interfaceIndex += 1
+      }
+      const suggestedInterfaceKey = `custom-${interfaceIndex}`
+      const suggestedSlug = modelName
+        ? `${modelName}-${suggestedInterfaceKey}`
+        : suggestedInterfaceKey
+      setNewInterfaceKey(suggestedInterfaceKey)
       setForm({
         ...EMPTY_DOCUMENT,
-        title: props.model?.model_name ?? '',
+        slug: suggestedSlug,
+        title: modelName,
         vendor: template?.vendor ?? '',
         category: template?.category ?? '',
       })
@@ -171,7 +184,14 @@ export function ModelDocumentEditorDialog(
     return () => {
       cancelled = true
     }
-  }, [documentQuery.data, isCreating, modelId, props.model, props.open, selectedDocument])
+  }, [
+    documentQuery.data,
+    isCreating,
+    modelId,
+    modelName,
+    props.open,
+    selectedDocument,
+  ])
 
   const savedForm = useMemo<ModelDocumentEditorPayload | null>(() => {
     if (!selectedDocument) return null
@@ -195,7 +215,8 @@ export function ModelDocumentEditorDialog(
       form.summary !== savedForm.summary ||
       form.html !== savedForm.html
     : isCreating &&
-      (newInterfaceKey !== '' || Object.values(form).some((value) => value !== ''))
+      (newInterfaceKey !== '' ||
+        Object.values(form).some((value) => value !== ''))
   const htmlBytes = useMemo(
     () => new TextEncoder().encode(form.html).length,
     [form.html]
@@ -335,7 +356,29 @@ export function ModelDocumentEditorDialog(
   const canSubmit =
     activeInterfaceKey !== '' &&
     form.interface_name.trim() !== '' &&
+    form.slug.trim() !== '' &&
+    form.title.trim() !== '' &&
     form.html.trim() !== ''
+  const missingRequiredFields: string[] = []
+  if (activeInterfaceKey === '') missingRequiredFields.push(t('API mode key'))
+  if (form.interface_name.trim() === '') {
+    missingRequiredFields.push(t('API mode name'))
+  }
+  if (form.title.trim() === '') missingRequiredFields.push(t('Document title'))
+  if (form.slug.trim() === '') missingRequiredFields.push('Slug')
+  if (form.html.trim() === '') missingRequiredFields.push(t('HTML source'))
+
+  const submitDocument = (publish: boolean) => {
+    if (!canSubmit) {
+      toast.error(`${t('Required')}: ${missingRequiredFields.join(', ')}`)
+      return
+    }
+    if (publish) {
+      publishMutation.mutate()
+      return
+    }
+    saveMutation.mutate()
+  }
   const interfaceItems =
     documentQuery.data?.variants.map((document) => ({
       label: document.interface_name,
@@ -358,7 +401,7 @@ export function ModelDocumentEditorDialog(
               {isDirty && <Badge variant='outline'>{t('Unsaved')}</Badge>}
             </div>
             <DialogDescription>
-              {props.model?.model_name || ''} ·{' '}
+              {modelName} ·{' '}
               {t('Configure an independent HTML document for each API mode.')}
             </DialogDescription>
           </DialogHeader>
@@ -392,7 +435,10 @@ export function ModelDocumentEditorDialog(
                             {selectedDocument?.interface_name ?? ''}
                           </SelectValue>
                         </SelectTrigger>
-                        <SelectContent align='start' alignItemWithTrigger={false}>
+                        <SelectContent
+                          align='start'
+                          alignItemWithTrigger={false}
+                        >
                           <SelectGroup>
                             {documentQuery.data.variants.map((document) => (
                               <SelectItem
@@ -444,11 +490,15 @@ export function ModelDocumentEditorDialog(
                     </FieldLabel>
                     <Input
                       id='model-document-interface-key'
-                      value={isCreating ? newInterfaceKey : selectedInterfaceKey}
+                      value={
+                        isCreating ? newInterfaceKey : selectedInterfaceKey
+                      }
                       disabled={!isCreating}
                       placeholder='openai-compatible'
                       className='font-mono'
-                      onChange={(event) => setNewInterfaceKey(event.target.value)}
+                      onChange={(event) =>
+                        setNewInterfaceKey(event.target.value)
+                      }
                     />
                   </Field>
                   <Field>
@@ -600,16 +650,16 @@ export function ModelDocumentEditorDialog(
             <Button
               type='button'
               variant='outline'
-              disabled={isBusy || !canSubmit}
-              onClick={() => saveMutation.mutate()}
+              disabled={isBusy}
+              onClick={() => submitDocument(false)}
             >
               {saveMutation.isPending && <Spinner data-icon='inline-start' />}
               {t('Save draft')}
             </Button>
             <Button
               type='button'
-              disabled={isBusy || !canSubmit}
-              onClick={() => publishMutation.mutate()}
+              disabled={isBusy}
+              onClick={() => submitDocument(true)}
             >
               {publishMutation.isPending && (
                 <Spinner data-icon='inline-start' />
@@ -637,9 +687,7 @@ export function ModelDocumentEditorDialog(
                 'This API mode, its online document, and its draft will be permanently deleted.'
               )
         }
-        confirmText={
-          selectedDocument?.has_builtin ? t('Restore') : t('Delete')
-        }
+        confirmText={selectedDocument?.has_builtin ? t('Restore') : t('Delete')}
         destructive
         handleConfirm={() => deleteMutation.mutate()}
       />
