@@ -184,6 +184,18 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
+	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+		payload := make(map[string]any, len(req.Metadata)+1)
+		for key, value := range req.Metadata {
+			payload[key] = value
+		}
+		payload["model"] = info.UpstreamModelName
+		data, err := common.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		return bytes.NewReader(data), nil
+	}
 
 	body, err := a.convertToRequestPayload(&req)
 	if err != nil {
@@ -227,13 +239,16 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return
 	}
 
-	ov := dto.NewOpenAIVideo()
-	ov.ID = info.PublicTaskID
-	ov.TaskID = info.PublicTaskID
-	ov.CreatedAt = time.Now().Unix()
-	ov.Model = info.OriginModelName
-
-	c.JSON(http.StatusOK, ov)
+	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+		c.JSON(http.StatusOK, responsePayload{ID: info.PublicTaskID})
+	} else {
+		ov := dto.NewOpenAIVideo()
+		ov.ID = info.PublicTaskID
+		ov.TaskID = info.PublicTaskID
+		ov.CreatedAt = time.Now().Unix()
+		ov.Model = info.OriginModelName
+		c.JSON(http.StatusOK, ov)
+	}
 	return dResp.ID, responseBody, nil
 }
 
@@ -368,4 +383,44 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	}
 
 	return common.Marshal(openAIVideo)
+}
+
+func (a *TaskAdaptor) ConvertToNativeVideo(originTask *model.Task) ([]byte, error) {
+	response := make(map[string]any)
+	if len(originTask.Data) > 0 {
+		if err := common.Unmarshal(originTask.Data, &response); err != nil {
+			return nil, errors.Wrap(err, "unmarshal doubao task data failed")
+		}
+	}
+
+	response["id"] = originTask.TaskID
+	response["model"] = originTask.Properties.OriginModelName
+	response["created_at"] = originTask.CreatedAt
+	response["updated_at"] = originTask.UpdatedAt
+	switch originTask.Status {
+	case model.TaskStatusInProgress:
+		response["status"] = "running"
+	case model.TaskStatusSuccess:
+		response["status"] = "succeeded"
+	case model.TaskStatusFailure:
+		response["status"] = "failed"
+		if _, ok := response["error"]; !ok && originTask.FailReason != "" {
+			response["error"] = map[string]any{"message": originTask.FailReason}
+		}
+	default:
+		response["status"] = "queued"
+	}
+
+	if originTask.Status == model.TaskStatusSuccess {
+		content, _ := response["content"].(map[string]any)
+		if content == nil {
+			content = make(map[string]any)
+		}
+		if _, ok := content["video_url"]; !ok && originTask.GetResultURL() != "" {
+			content["video_url"] = originTask.GetResultURL()
+		}
+		response["content"] = content
+	}
+
+	return common.Marshal(response)
 }

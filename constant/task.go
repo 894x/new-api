@@ -18,6 +18,8 @@ const (
 	TaskActionRemix             = "remixGenerate"
 )
 
+const TaskResponseFormatDoubaoVideo = "doubao_video"
+
 var SunoModel2Action = map[string]string{
 	"suno_music":  SunoActionMusic,
 	"suno_lyrics": SunoActionLyrics,

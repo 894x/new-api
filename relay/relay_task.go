@@ -154,6 +154,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if adaptor == nil {
 		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
 	}
+	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+		if _, ok := adaptor.(channel.NativeVideoConverter); !ok {
+			return nil, service.TaskErrorWrapperLocal(errors.New("selected channel does not support the Doubao video protocol"), "invalid_api_platform", http.StatusBadRequest)
+		}
+	}
 	adaptor.Init(info)
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
 		return nil, taskErr
@@ -383,6 +388,22 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	if !exist {
 		taskResp = service.TaskErrorWrapperLocal(errors.New("task_not_exist"), "task_not_exist", http.StatusBadRequest)
 		return
+	}
+
+	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+		adaptor := GetTaskAdaptor(originTask.Platform)
+		if adaptor == nil {
+			return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid channel id: %d", originTask.ChannelId), "invalid_channel_id", http.StatusBadRequest)
+		}
+		converter, ok := adaptor.(channel.NativeVideoConverter)
+		if !ok {
+			return nil, service.TaskErrorWrapperLocal(errors.New("task does not support the Doubao video protocol"), "not_implemented", http.StatusNotImplemented)
+		}
+		respBody, err = converter.ConvertToNativeVideo(originTask)
+		if err != nil {
+			return nil, service.TaskErrorWrapper(err, "convert_to_native_video_failed", http.StatusInternalServerError)
+		}
+		return respBody, nil
 	}
 
 	isOpenAIVideoAPI := strings.HasPrefix(c.Request.RequestURI, "/v1/videos/")
