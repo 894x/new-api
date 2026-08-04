@@ -42,6 +42,8 @@ export interface Model {
   vendor_id?: number
   endpoints?: string
   status: number
+  doc_enabled: number
+  doc_available?: boolean
   sync_official: number
   created_time: number
   updated_time: number
@@ -237,6 +239,7 @@ export const modelFormSchema = z.object({
   endpoints: z.string().default(''),
   name_rule: z.number().min(0).max(3).default(0),
   status: z.boolean().default(true),
+  doc_enabled: z.boolean().default(false),
   sync_official: z.boolean().default(true),
 })
 

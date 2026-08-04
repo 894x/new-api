@@ -86,6 +86,22 @@ func TestHeaderNavModuleAuthAllowsDefaultPublicAccess(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 }
 
+func TestHeaderNavModuleAuthDisablesModelDocsByDefault(t *testing.T) {
+	withHeaderNavModules(t, "")
+
+	recorder := performHeaderNavRequest(t, HeaderNavModuleAuth("model_docs"), false)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
+func TestHeaderNavModuleAuthAllowsEnabledModelDocs(t *testing.T) {
+	withHeaderNavModules(t, `{"model_docs":{"enabled":true,"requireAuth":false}}`)
+
+	recorder := performHeaderNavRequest(t, HeaderNavModuleAuth("model_docs"), false)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+}
+
 func TestHeaderNavModuleAuthRejectsDisabledPricing(t *testing.T) {
 	raw := `{"pricing":{"enabled":false,"requireAuth":false}}`
 	withHeaderNavModules(t, raw)

@@ -20,12 +20,17 @@ import { getStatus } from '@/lib/api'
 
 export type ModuleAccess = { enabled: boolean; requireAuth: boolean }
 
-export type HeaderNavModule = 'rankings' | 'pricing' | 'token_cost'
+export type HeaderNavModule =
+  | 'rankings'
+  | 'pricing'
+  | 'token_cost'
+  | 'model_docs'
 
 export type HeaderNavModules = {
   home: boolean
   console: boolean
   pricing: ModuleAccess
+  model_docs: ModuleAccess
   rankings: ModuleAccess
   token_cost: ModuleAccess
   docs: boolean
@@ -37,6 +42,7 @@ const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
   home: true,
   console: true,
   pricing: { enabled: true, requireAuth: false },
+  model_docs: { enabled: false, requireAuth: false },
   rankings: { enabled: true, requireAuth: false },
   token_cost: { enabled: true, requireAuth: false },
   docs: true,
@@ -45,6 +51,7 @@ const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
 
 const DEFAULTS: Record<HeaderNavModule, ModuleAccess> = {
   pricing: DEFAULT_HEADER_NAV_MODULES.pricing,
+  model_docs: DEFAULT_HEADER_NAV_MODULES.model_docs,
   rankings: DEFAULT_HEADER_NAV_MODULES.rankings,
   token_cost: DEFAULT_HEADER_NAV_MODULES.token_cost,
 }
@@ -53,6 +60,7 @@ function cloneHeaderNavDefaults(): HeaderNavModules {
   return {
     ...DEFAULT_HEADER_NAV_MODULES,
     pricing: { ...DEFAULT_HEADER_NAV_MODULES.pricing },
+    model_docs: { ...DEFAULT_HEADER_NAV_MODULES.model_docs },
     rankings: { ...DEFAULT_HEADER_NAV_MODULES.rankings },
     token_cost: { ...DEFAULT_HEADER_NAV_MODULES.token_cost },
   }
@@ -116,6 +124,10 @@ export function parseHeaderNavModules(raw: unknown): HeaderNavModules {
   Object.entries(parsed).forEach(([key, value]) => {
     if (key === 'pricing') {
       result.pricing = parseAccess(value, result.pricing)
+      return
+    }
+    if (key === 'model_docs') {
+      result.model_docs = parseAccess(value, result.model_docs)
       return
     }
     if (key === 'rankings') {

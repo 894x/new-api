@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/modeldoc"
 
 	"github.com/gin-gonic/gin"
 )
@@ -108,6 +109,7 @@ func CreateModelMeta(c *gin.Context) {
 // UpdateModelMeta 更新模型
 func UpdateModelMeta(c *gin.Context) {
 	statusOnly := c.Query("status_only") == "true"
+	docOnly := c.Query("doc_only") == "true"
 
 	var m model.Model
 	if err := c.ShouldBindJSON(&m); err != nil {
@@ -122,6 +124,24 @@ func UpdateModelMeta(c *gin.Context) {
 	if statusOnly {
 		// 只更新状态，防止误清空其他字段
 		if err := model.DB.Model(&model.Model{}).Where("id = ?", m.Id).Update("status", m.Status).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	} else if docOnly {
+		if m.DocEnabled != 1 {
+			m.DocEnabled = 0
+		} else {
+			var modelName string
+			if err := model.DB.Model(&model.Model{}).Where("id = ?", m.Id).Pluck("model_name", &modelName).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			if !modeldoc.HasModel(modelName) {
+				common.ApiErrorMsg(c, "该模型没有可用的 HTML 文档")
+				return
+			}
+		}
+		if err := model.DB.Model(&model.Model{}).Where("id = ?", m.Id).Update("doc_enabled", m.DocEnabled).Error; err != nil {
 			common.ApiError(c, err)
 			return
 		}
@@ -174,6 +194,7 @@ func enrichModels(models []*model.Model) {
 		if m == nil {
 			continue
 		}
+		m.DocAvailable = modeldoc.HasModel(m.ModelName)
 		if m.NameRule == model.NameRuleExact {
 			exactNames = append(exactNames, m.ModelName)
 			exactIdx[m.ModelName] = append(exactIdx[m.ModelName], i)

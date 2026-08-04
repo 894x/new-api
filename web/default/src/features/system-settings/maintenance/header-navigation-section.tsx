@@ -53,6 +53,7 @@ const headerNavSchema = z.object({
   console: z.boolean(),
   pricingEnabled: z.boolean(),
   pricingRequireAuth: z.boolean(),
+  modelDocsEnabled: z.boolean(),
   rankingsEnabled: z.boolean(),
   rankingsRequireAuth: z.boolean(),
   tokenCostEnabled: z.boolean(),
@@ -83,6 +84,10 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.pricing?.requireAuth === undefined
       ? HEADER_NAV_DEFAULT.pricing.requireAuth
       : Boolean(config.pricing.requireAuth),
+  modelDocsEnabled:
+    config.model_docs?.enabled === undefined
+      ? HEADER_NAV_DEFAULT.model_docs.enabled
+      : Boolean(config.model_docs.enabled),
   rankingsEnabled:
     config.rankings?.enabled === undefined
       ? HEADER_NAV_DEFAULT.rankings.enabled
@@ -136,6 +141,11 @@ export function HeaderNavigationSection({
         enabled: values.pricingEnabled,
         requireAuth: values.pricingRequireAuth,
       },
+      model_docs: {
+        ...(config.model_docs ?? HEADER_NAV_DEFAULT.model_docs),
+        enabled: values.modelDocsEnabled,
+        requireAuth: false,
+      },
       rankings: {
         ...(config.rankings ?? HEADER_NAV_DEFAULT.rankings),
         enabled: values.rankingsEnabled,
@@ -177,6 +187,13 @@ export function HeaderNavigationSection({
       key: 'console',
       title: t('Console'),
       description: t('User dashboard and quota controls.'),
+    },
+    {
+      key: 'modelDocsEnabled',
+      title: t('Model Docs'),
+      description: t(
+        'Standalone HTML model documents with provider and category filters.'
+      ),
     },
     {
       key: 'docs',

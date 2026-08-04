@@ -101,6 +101,17 @@ export async function updateModelStatus(
   return res.data
 }
 
+export async function updateModelDocStatus(
+  id: number,
+  docEnabled: number
+): Promise<{ success: boolean; message?: string }> {
+  const res = await api.put('/api/models/?doc_only=true', {
+    id,
+    doc_enabled: docEnabled,
+  })
+  return res.data
+}
+
 /**
  * Delete model
  */
