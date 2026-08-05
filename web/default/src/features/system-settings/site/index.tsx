@@ -33,6 +33,8 @@ const defaultSiteSettings: SiteSettings = {
   About: '',
   HomePageTemplate: '',
   HomePageContent: '',
+  BusinessContactEmail: 'ruiheng@rhcontact.cn',
+  BusinessContactQRCode: '/business-contact-wechat.jpg',
   ServerAddress: '',
   'legal.user_agreement': '',
   'legal.privacy_policy': '',

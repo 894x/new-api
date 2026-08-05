@@ -115,6 +115,8 @@ export type SiteSettings = {
   About: string
   HomePageTemplate: string
   HomePageContent: string
+  BusinessContactEmail: string
+  BusinessContactQRCode: string
   ServerAddress: string
   'legal.user_agreement': string
   'legal.privacy_policy': string

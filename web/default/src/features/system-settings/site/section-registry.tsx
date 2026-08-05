@@ -50,6 +50,8 @@ const SITE_SECTIONS = [
             | 'business'
             | 'custom',
           HomePageContent: settings.HomePageContent,
+          BusinessContactEmail: settings.BusinessContactEmail,
+          BusinessContactQRCode: settings.BusinessContactQRCode,
           ServerAddress: settings.ServerAddress,
           legal: {
             user_agreement: settings['legal.user_agreement'],

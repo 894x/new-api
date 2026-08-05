@@ -70,6 +70,8 @@ func InitOptionMap() {
 	common.OptionMap["About"] = ""
 	common.OptionMap["HomePageTemplate"] = ""
 	common.OptionMap["HomePageContent"] = ""
+	common.OptionMap["BusinessContactEmail"] = "ruiheng@rhcontact.cn"
+	common.OptionMap["BusinessContactQRCode"] = "/business-contact-wechat.jpg"
 	common.OptionMap["Footer"] = common.Footer
 	common.OptionMap["SystemName"] = common.SystemName
 	common.OptionMap["Logo"] = common.Logo

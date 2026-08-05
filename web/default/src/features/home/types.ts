@@ -30,6 +30,9 @@ export const HOME_PAGE_TEMPLATES = [
 
 export type HomePageTemplate = (typeof HOME_PAGE_TEMPLATES)[number]
 
+export const DEFAULT_BUSINESS_CONTACT_EMAIL = 'ruiheng@rhcontact.cn'
+export const DEFAULT_BUSINESS_CONTACT_QR_CODE = '/business-contact-wechat.jpg'
+
 /**
  * Response from home page content API
  */
@@ -38,6 +41,8 @@ export interface HomePageContentResponse {
   message?: string
   data?: string
   template?: string
+  business_contact_email?: string
+  business_contact_qr_code?: string
 }
 
 /**
@@ -48,4 +53,6 @@ export interface HomePageContentResult {
   isLoaded: boolean
   isUrl: boolean
   template: HomePageTemplate
+  businessContactEmail: string
+  businessContactQrCode: string
 }

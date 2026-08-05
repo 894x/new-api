@@ -1,8 +1,11 @@
 package controller
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/http"
+	"net/mail"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -234,6 +237,58 @@ func UpdateOption(c *gin.Context) {
 				"message": "无效的首页模板，可选值：system、quality、economy、business、custom",
 			})
 			return
+		}
+	case "BusinessContactEmail":
+		address, parseErr := mail.ParseAddress(option.Value.(string))
+		if parseErr != nil || address.Address != option.Value {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "无效的商务联系邮箱",
+			})
+			return
+		}
+	case "BusinessContactQRCode":
+		imageSource := option.Value.(string)
+		if len(imageSource) > 700*1024 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "商务联系二维码图片不能超过 512 KB",
+			})
+			return
+		}
+
+		if strings.HasPrefix(imageSource, "data:") {
+			allowedPrefix := strings.HasPrefix(imageSource, "data:image/png;base64,") ||
+				strings.HasPrefix(imageSource, "data:image/jpeg;base64,") ||
+				strings.HasPrefix(imageSource, "data:image/webp;base64,") ||
+				strings.HasPrefix(imageSource, "data:image/gif;base64,")
+			parts := strings.SplitN(imageSource, ",", 2)
+			if !allowedPrefix || len(parts) != 2 {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "商务联系二维码仅支持 PNG、JPEG、WebP 或 GIF 图片",
+				})
+				return
+			}
+			decoded, decodeErr := base64.StdEncoding.DecodeString(parts[1])
+			if decodeErr != nil || len(decoded) > 512*1024 {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "无效的商务联系二维码图片，或图片超过 512 KB",
+				})
+				return
+			}
+		} else {
+			parsedURL, parseErr := url.ParseRequestURI(imageSource)
+			isRelativePath := strings.HasPrefix(imageSource, "/") && !strings.HasPrefix(imageSource, "//")
+			isRemoteURL := parseErr == nil && (parsedURL.Scheme == "http" || parsedURL.Scheme == "https") && parsedURL.Host != ""
+			if !isRelativePath && !isRemoteURL {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "无效的商务联系二维码图片地址",
+				})
+				return
+			}
 		}
 	case "GroupRatio":
 		err = ratio_setting.CheckGroupRatio(option.Value.(string))

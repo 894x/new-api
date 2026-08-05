@@ -24,6 +24,8 @@ import { isHttpUrl } from '@/lib/content-format'
 
 import { getHomePageContent } from '../api'
 import {
+  DEFAULT_BUSINESS_CONTACT_EMAIL,
+  DEFAULT_BUSINESS_CONTACT_QR_CODE,
   HOME_PAGE_TEMPLATES,
   type HomePageContentResult,
   type HomePageTemplate,
@@ -49,6 +51,12 @@ export function resolveHomePageTemplate(
 export function useHomePageContent(): HomePageContentResult {
   const [content, setContent] = useState<string>('')
   const [template, setTemplate] = useState<HomePageTemplate>('system')
+  const [businessContactEmail, setBusinessContactEmail] = useState(
+    DEFAULT_BUSINESS_CONTACT_EMAIL
+  )
+  const [businessContactQrCode, setBusinessContactQrCode] = useState(
+    DEFAULT_BUSINESS_CONTACT_QR_CODE
+  )
   const [isLoaded, setIsLoaded] = useState(false)
 
   useEffect(() => {
@@ -67,7 +75,13 @@ export function useHomePageContent(): HomePageContentResult {
 
       try {
         const response = await getHomePageContent()
-        const { success, data, template: configuredTemplate } = response
+        const {
+          success,
+          data,
+          template: configuredTemplate,
+          business_contact_email: configuredBusinessContactEmail,
+          business_contact_qr_code: configuredBusinessContactQrCode,
+        } = response
 
         if (!mounted) return
 
@@ -79,6 +93,12 @@ export function useHomePageContent(): HomePageContentResult {
           )
           setContent(nextContent)
           setTemplate(nextTemplate)
+          setBusinessContactEmail(
+            configuredBusinessContactEmail || DEFAULT_BUSINESS_CONTACT_EMAIL
+          )
+          setBusinessContactQrCode(
+            configuredBusinessContactQrCode || DEFAULT_BUSINESS_CONTACT_QR_CODE
+          )
           localStorage.setItem(TEMPLATE_STORAGE_KEY, nextTemplate)
           if (nextContent) {
             localStorage.setItem(CONTENT_STORAGE_KEY, nextContent)
@@ -112,5 +132,12 @@ export function useHomePageContent(): HomePageContentResult {
 
   const isUrl = isHttpUrl(content)
 
-  return { content, isLoaded, isUrl, template }
+  return {
+    content,
+    isLoaded,
+    isUrl,
+    template,
+    businessContactEmail,
+    businessContactQrCode,
+  }
 }

@@ -19,8 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Link } from '@tanstack/react-router'
 import { ExternalLink } from 'lucide-react'
+import type { ChangeEvent } from 'react'
 import type { Resolver } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import * as z from 'zod'
 
 import { Button } from '@/components/ui/button'
@@ -56,6 +58,20 @@ import { SettingsSection } from '../components/settings-section'
 import { useSettingsForm } from '../hooks/use-settings-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 
+const BUSINESS_QR_CODE_MAX_FILE_BYTES = 512 * 1024
+
+function isBusinessContactImageSource(value: string): boolean {
+  if (value.startsWith('/') && !value.startsWith('//')) return true
+  if (/^https?:\/\/\S+$/i.test(value)) return true
+
+  return [
+    'data:image/png;base64,',
+    'data:image/jpeg;base64,',
+    'data:image/webp;base64,',
+    'data:image/gif;base64,',
+  ].some((prefix) => value.startsWith(prefix))
+}
+
 const _systemInfoSchema = z.object({
   theme: z.object({
     frontend: z.enum(['default', 'classic']),
@@ -73,6 +89,8 @@ const _systemInfoSchema = z.object({
     'custom',
   ]),
   HomePageContent: z.string().optional(),
+  BusinessContactEmail: z.string().email(),
+  BusinessContactQRCode: z.string().refine(isBusinessContactImageSource),
   legal: z.object({
     user_agreement: z.string().optional(),
     privacy_policy: z.string().optional(),
@@ -123,6 +141,8 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
       | 'business'
       | 'custom',
     HomePageContent: normalizedHomePageContent,
+    BusinessContactEmail: normalizeValue(defaultValues.BusinessContactEmail),
+    BusinessContactQRCode: normalizeValue(defaultValues.BusinessContactQRCode),
     legal: {
       user_agreement: normalizeValue(defaultValues.legal?.user_agreement),
       privacy_policy: normalizeValue(defaultValues.legal?.privacy_policy),
@@ -148,6 +168,12 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
       'custom',
     ]),
     HomePageContent: z.string().optional(),
+    BusinessContactEmail: z.string().email({
+      error: () => t('Please enter a valid business contact email'),
+    }),
+    BusinessContactQRCode: z.string().refine(isBusinessContactImageSource, {
+      error: () => t('Please enter a valid image URL or upload an image'),
+    }),
     legal: z.object({
       user_agreement: z.string().optional(),
       privacy_policy: z.string().optional(),
@@ -208,6 +234,39 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
         }
       },
     })
+
+  const handleBusinessQrCodeUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    const supportedTypes = new Set([
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+      'image/gif',
+    ])
+    if (!supportedTypes.has(file.type)) {
+      toast.error(t('Only PNG, JPEG, WebP, or GIF images are supported'))
+      event.target.value = ''
+      return
+    }
+    if (file.size > BUSINESS_QR_CODE_MAX_FILE_BYTES) {
+      toast.error(t('QR code image must be 512 KB or smaller'))
+      event.target.value = ''
+      return
+    }
+
+    const reader = new FileReader()
+    reader.addEventListener('load', () => {
+      if (typeof reader.result !== 'string') return
+      form.setValue('BusinessContactQRCode', reader.result, {
+        shouldDirty: true,
+        shouldValidate: true,
+      })
+    })
+    reader.readAsDataURL(file)
+    event.target.value = ''
+  }
 
   return (
     <>
@@ -489,6 +548,70 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                     )}
                   />
                 </SettingsFormGridItem>
+              )}
+
+              {form.watch('HomePageTemplate') === 'business' && (
+                <>
+                  <FormField
+                    control={form.control}
+                    name='BusinessContactEmail'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Business contact email')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='email'
+                            placeholder='business@example.com'
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'Displayed in the contact section of the business homepage.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name='BusinessContactQRCode'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Business contact QR code')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder='https://example.com/contact.png'
+                            {...field}
+                          />
+                        </FormControl>
+                        <Input
+                          type='file'
+                          accept='image/png,image/jpeg,image/webp,image/gif'
+                          onChange={handleBusinessQrCodeUpload}
+                          aria-label={t('Upload business contact QR code')}
+                        />
+                        {field.value && (
+                          <div className='border-border bg-muted/30 w-fit rounded-xl border p-2'>
+                            <img
+                              src={field.value}
+                              alt={t('Business contact QR code preview')}
+                              className='size-32 rounded-md bg-white object-contain'
+                            />
+                          </div>
+                        )}
+                        <FormDescription>
+                          {t(
+                            'Enter an image URL or upload a PNG, JPEG, WebP, or GIF image up to 512 KB.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </>
               )}
 
               <FormField

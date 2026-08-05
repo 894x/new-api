@@ -44,7 +44,14 @@ export function Home({ previewTemplate }: HomeProps) {
   const { resolvedTheme } = useTheme()
   const { auth } = useAuthStore()
   const isAuthenticated = !!auth.user
-  const { content, isLoaded, isUrl, template } = useHomePageContent()
+  const {
+    content,
+    isLoaded,
+    isUrl,
+    template,
+    businessContactEmail,
+    businessContactQrCode,
+  } = useHomePageContent()
   const activeTemplate = previewTemplate || template
 
   const syncIframePreferences = useCallback(() => {
@@ -86,8 +93,6 @@ export function Home({ previewTemplate }: HomeProps) {
     let Template = QualityHome
     if (activeTemplate === 'economy') {
       Template = EconomyHome
-    } else if (activeTemplate === 'business') {
-      Template = BusinessHome
     }
     return (
       <PublicLayout showMainContainer={false}>
@@ -98,7 +103,15 @@ export function Home({ previewTemplate }: HomeProps) {
             </main>
           }
         >
-          <Template isAuthenticated={isAuthenticated} />
+          {activeTemplate === 'business' ? (
+            <BusinessHome
+              isAuthenticated={isAuthenticated}
+              businessContactEmail={businessContactEmail}
+              businessContactQrCode={businessContactQrCode}
+            />
+          ) : (
+            <Template isAuthenticated={isAuthenticated} />
+          )}
           {activeTemplate === 'business' ? (
             <Footer hideBrand reserveFixedCorner />
           ) : (

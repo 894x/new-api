@@ -38,6 +38,8 @@ import { TemplateActions } from './template-actions'
 
 type BusinessHomeProps = {
   isAuthenticated: boolean
+  businessContactEmail?: string
+  businessContactQrCode?: string
 }
 
 const ECOSYSTEMS = [
@@ -59,9 +61,6 @@ const LOOPING_ECOSYSTEMS = [
   })),
   ...ECOSYSTEMS.map((name) => ({ key: `repeat-${name}`, name, hidden: true })),
 ]
-
-const BUSINESS_CONTACT_EMAIL = 'ruiheng@rhcontact.cn'
-const BUSINESS_WECHAT_QR_CODE_URL = '/business-contact-wechat.jpg'
 
 function PartnerMarquee() {
   const { t } = useTranslation()
@@ -96,23 +95,32 @@ function PartnerMarquee() {
   )
 }
 
-function BusinessWechatQrCode() {
+function BusinessWechatQrCode(props: { imageSource: string }) {
   const { t } = useTranslation()
+  const isLegacyContactImage =
+    props.imageSource === '/business-contact-wechat.jpg'
 
   return (
     <div className='size-32 shrink-0 rounded-xl border border-black/10 bg-white p-1.5 shadow-sm'>
       <div className='relative size-full overflow-hidden rounded-sm'>
         <img
-          src={BUSINESS_WECHAT_QR_CODE_URL}
+          src={props.imageSource}
           alt={t('Customer service QR code')}
-          className='absolute top-0 left-0 w-40 max-w-none -translate-x-[22px] -translate-y-[52px]'
+          className={
+            isLegacyContactImage
+              ? 'absolute top-0 left-0 w-40 max-w-none -translate-x-[22px] -translate-y-[52px]'
+              : 'size-full object-contain'
+          }
         />
       </div>
     </div>
   )
 }
 
-function ContactSection() {
+function ContactSection(props: {
+  businessContactEmail: string
+  businessContactQrCode: string
+}) {
   const { t } = useTranslation()
 
   return (
@@ -148,10 +156,10 @@ function ContactSection() {
               {t('Business email')}
             </h3>
             <a
-              href={`mailto:${BUSINESS_CONTACT_EMAIL}`}
+              href={`mailto:${props.businessContactEmail}`}
               className='mt-4 text-lg font-semibold break-all text-sky-500 underline-offset-4 transition-colors hover:text-sky-400 hover:underline focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-sky-500 md:text-xl'
             >
-              {BUSINESS_CONTACT_EMAIL}
+              {props.businessContactEmail}
             </a>
           </div>
           <div className='border-border/70 flex min-h-72 flex-col items-center justify-center border-t p-8 md:border-t-0 md:border-l md:p-10'>
@@ -166,7 +174,7 @@ function ContactSection() {
               {t('Business WeChat')}
             </h3>
             <div className='mt-4'>
-              <BusinessWechatQrCode />
+              <BusinessWechatQrCode imageSource={props.businessContactQrCode} />
             </div>
             <p className='text-primary/70 mt-3 text-sm'>
               {t('Scan to add a business consultant')}
@@ -178,7 +186,7 @@ function ContactSection() {
   )
 }
 
-function FloatingQrCode() {
+function FloatingQrCode(props: { businessContactQrCode: string }) {
   const { t } = useTranslation()
   const [isCollapsed, setIsCollapsed] = useState(false)
 
@@ -209,7 +217,7 @@ function FloatingQrCode() {
         >
           <span className='relative size-12 overflow-hidden rounded-md'>
             <span className='absolute top-0 left-0 origin-top-left scale-[0.375]'>
-              <BusinessWechatQrCode />
+              <BusinessWechatQrCode imageSource={props.businessContactQrCode} />
             </span>
           </span>
         </Button>
@@ -234,7 +242,7 @@ function FloatingQrCode() {
             strokeWidth={2}
           />
         </Button>
-        <BusinessWechatQrCode />
+        <BusinessWechatQrCode imageSource={props.businessContactQrCode} />
         <h2 className='mt-3 text-sm font-semibold'>{t('Business WeChat')}</h2>
         <p className='text-muted-foreground mt-1 text-center text-xs leading-5'>
           {t('Scan to add a business consultant')}
@@ -246,6 +254,10 @@ function FloatingQrCode() {
 
 export default function BusinessHome(props: BusinessHomeProps) {
   const { t } = useTranslation()
+  const businessContactEmail =
+    props.businessContactEmail || 'ruiheng@rhcontact.cn'
+  const businessContactQrCode =
+    props.businessContactQrCode || '/business-contact-wechat.jpg'
 
   return (
     <main className='overflow-hidden'>
@@ -443,8 +455,11 @@ export default function BusinessHome(props: BusinessHomeProps) {
         </div>
       </section>
 
-      <ContactSection />
-      <FloatingQrCode />
+      <ContactSection
+        businessContactEmail={businessContactEmail}
+        businessContactQrCode={businessContactQrCode}
+      />
+      <FloatingQrCode businessContactQrCode={businessContactQrCode} />
     </main>
   )
 }
