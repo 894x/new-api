@@ -32,6 +32,18 @@ type Adaptor interface {
 	ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error)
 }
 
+// ChatCompletionsOnlyAdaptor identifies providers whose upstream only accepts
+// the Chat Completions protocol. Responses and Messages requests must be
+// converted locally even when request pass-through is enabled.
+type ChatCompletionsOnlyAdaptor interface {
+	ChatCompletionsOnly() bool
+}
+
+func IsChatCompletionsOnly(adaptor Adaptor) bool {
+	chatAdaptor, ok := adaptor.(ChatCompletionsOnlyAdaptor)
+	return ok && chatAdaptor.ChatCompletionsOnly()
+}
+
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 

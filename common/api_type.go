@@ -83,6 +83,8 @@ func ChannelType2APIType(channelType int) (int, bool) {
 		apiType = constant.APITypeNewAPI
 	case constant.ChannelTypeTokenHub:
 		apiType = constant.APITypeTencentTokenHub
+	case constant.ChannelTypeXunfeiMaaS:
+		apiType = constant.APITypeXunfeiMaaS
 	}
 	if apiType == -1 {
 		return constant.APITypeOpenAI, false

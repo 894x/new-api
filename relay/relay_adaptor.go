@@ -50,6 +50,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/volcengine"
 	"github.com/QuantumNous/new-api/relay/channel/xai"
 	"github.com/QuantumNous/new-api/relay/channel/xunfei"
+	xunfeimaas "github.com/QuantumNous/new-api/relay/channel/xunfei_maas"
 	"github.com/QuantumNous/new-api/relay/channel/zhipu"
 	"github.com/QuantumNous/new-api/relay/channel/zhipu_4v"
 	"github.com/gin-gonic/gin"
@@ -133,6 +134,8 @@ func GetAdaptor(apiType int) channel.Adaptor {
 		return &newapi.Adaptor{}
 	case constant.APITypeTencentTokenHub:
 		return &tencenttokenhub.Adaptor{}
+	case constant.APITypeXunfeiMaaS:
+		return &xunfeimaas.Adaptor{}
 	}
 	return nil
 }

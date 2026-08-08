@@ -77,6 +77,7 @@ export function getChannelTypeIcon(type: number): string {
     18: 'Spark', // Xunfei
     23: 'Hunyuan', // Tencent
     100: 'Hunyuan', // Tencent TokenHub
+    101: 'Spark', // Xunfei MaaS
     19: 'Ai360', // 360
     25: 'Moonshot', // Moonshot
     31: 'Yi', // LingYiWanWu
@@ -122,6 +123,43 @@ export function getChannelTypeIcon(type: number): string {
   }
 
   return TYPE_TO_ICON[type] || 'OpenAI'
+}
+
+export type ChannelExternalAPI = 'chat' | 'responses' | 'messages'
+
+const CHAT_API_CHANNEL_TYPES = new Set([
+  1, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+  24, 25, 26, 27, 31, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 45, 46, 47, 48,
+  49, 53, 58, 101,
+])
+
+const RESPONSES_API_CHANNEL_TYPES = new Set([
+  1, 3, 6, 7, 8, 9, 10, 12, 13, 17, 19, 20, 21, 22, 24, 27, 31, 39, 45, 47, 48,
+  57, 58, 101,
+])
+
+const MESSAGES_API_CHANNEL_TYPES = new Set([
+  1, 3, 4, 6, 7, 8, 9, 10, 12, 13, 14, 17, 19, 20, 21, 22, 24, 25, 26, 27, 31,
+  33, 35, 40, 41, 43, 45, 46, 47, 58, 101,
+])
+
+/**
+ * Get the client-facing text API formats handled by a channel adaptor.
+ * Keep these sets aligned with the adaptor conversion methods for OpenAI chat,
+ * OpenAI responses, and Anthropic messages requests.
+ */
+export function getChannelExternalAPIs(type: number): ChannelExternalAPI[] {
+  const apiTypes: ChannelExternalAPI[] = []
+  if (CHAT_API_CHANNEL_TYPES.has(type)) {
+    apiTypes.push('chat')
+  }
+  if (RESPONSES_API_CHANNEL_TYPES.has(type)) {
+    apiTypes.push('responses')
+  }
+  if (MESSAGES_API_CHANNEL_TYPES.has(type)) {
+    apiTypes.push('messages')
+  }
+  return apiTypes
 }
 
 // ============================================================================

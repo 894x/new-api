@@ -18,6 +18,16 @@ type OpenAIError struct {
 	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
 
+// IsPresent reports whether an upstream response actually contains an error.
+// Some OpenAI-compatible providers omit the optional type field and return only
+// code/message, including inside an HTTP 200 response.
+func (e *OpenAIError) IsPresent() bool {
+	if e == nil {
+		return false
+	}
+	return e.Message != "" || e.Type != "" || e.Param != "" || e.Code != nil || len(e.Metadata) > 0
+}
+
 type ClaudeError struct {
 	Type    string `json:"type,omitempty"`
 	Message string `json:"message,omitempty"`
@@ -88,14 +98,15 @@ const (
 )
 
 type NewAPIError struct {
-	Err            error
-	RelayError     any
-	skipRetry      bool
-	recordErrorLog *bool
-	errorType      ErrorType
-	errorCode      ErrorCode
-	StatusCode     int
-	Metadata       json.RawMessage
+	Err               error
+	RelayError        any
+	skipRetry         bool
+	recordErrorLog    *bool
+	responseCommitted bool
+	errorType         ErrorType
+	errorCode         ErrorCode
+	StatusCode        int
+	Metadata          json.RawMessage
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -378,8 +389,23 @@ func IsSkipRetryError(err *NewAPIError) bool {
 	return err.skipRetry
 }
 
+// IsResponseCommittedError reports that response bytes have already been sent
+// to the client, so callers must not append a second JSON error response.
+func IsResponseCommittedError(err *NewAPIError) bool {
+	return err != nil && err.responseCommitted
+}
+
 func ErrOptionWithSkipRetry() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
+		e.skipRetry = true
+	}
+}
+
+// ErrOptionWithResponseCommitted marks a terminal stream error that happened
+// after output was sent. Such errors cannot be retried safely.
+func ErrOptionWithResponseCommitted() NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		e.responseCommitted = true
 		e.skipRetry = true
 	}
 }

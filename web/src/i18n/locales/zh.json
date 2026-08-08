@@ -5544,6 +5544,11 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Chat API": "聊天 API",
+    "Messages API": "消息 API",
+    "Responses API": "响应 API",
+    "Supported APIs": "支持的 API",
+    "Xunfei MaaS": "讯飞星辰 MaaS"
   }
 }

@@ -54,6 +54,11 @@ export const STATIC_I18N_KEYS = [
 
   // Channel brands resolved dynamically
   'Tencent TokenHub',
+  'Xunfei MaaS',
+  'Supported APIs',
+  'Chat API',
+  'Responses API',
+  'Messages API',
 
   // Pricing constants
   'Name',

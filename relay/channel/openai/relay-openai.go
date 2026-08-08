@@ -121,6 +121,8 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
 	seenStreamToolCalls := make(map[string]struct{})
 	var streamFunctionCallNames []string
+	var streamErr *types.NewAPIError
+	forwardedData := false
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
@@ -131,6 +133,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				common.SysLog("error handling stream format: " + err.Error())
 				sr.Error(err)
 			}
+			forwardedData = c.Writer.Written()
 		}
 		if len(data) > 0 {
 			// 对音频模型，保存倒数第二个stream data
@@ -139,10 +142,30 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 
 			collectStreamFunctionCallNames(data, seenStreamToolCalls, &streamFunctionCallNames)
+			var errorResponse dto.OpenAITextResponse
+			if err := common.UnmarshalJsonStr(data, &errorResponse); err == nil {
+				if oaiError := errorResponse.GetOpenAIError(); oaiError.IsPresent() {
+					var options []types.NewAPIErrorOptions
+					if forwardedData {
+						options = append(options, types.ErrOptionWithResponseCommitted())
+					}
+					streamErr = types.WithOpenAIError(*oaiError, resp.StatusCode, options...)
+					lastStreamData = ""
+					sr.Stop(streamErr)
+					return
+				}
+			}
+
 			clientData, isStreamError := service.StreamErrorDataForClient(c, data)
 			lastStreamData = clientData
 			if isStreamError {
-				sr.Error(fmt.Errorf("upstream stream error: %s", common.LocalLogPreview(data)))
+				var options []types.NewAPIErrorOptions
+				if forwardedData {
+					options = append(options, types.ErrOptionWithResponseCommitted())
+				}
+				streamErr = types.NewOpenAIError(fmt.Errorf("upstream stream error: %s", common.LocalLogPreview(data)), types.ErrorCodeBadResponse, http.StatusBadGateway, options...)
+				lastStreamData = ""
+				sr.Stop(streamErr)
 				return
 			}
 			if err := processTokenData(info.RelayMode, clientData, &responseTextBuilder, &toolCount); err != nil {
@@ -151,6 +174,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 		}
 	})
+	if streamErr != nil {
+		return nil, streamErr
+	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
 	if isAudioModel && secondLastStreamData != "" {
@@ -254,7 +280,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
-	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+	if oaiError := simpleResponse.GetOpenAIError(); oaiError.IsPresent() {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 

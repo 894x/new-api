@@ -5544,6 +5544,11 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Chat API": "チャット API",
+    "Messages API": "メッセージ API",
+    "Responses API": "レスポンス API",
+    "Supported APIs": "対応 API",
+    "Xunfei MaaS": "Xunfei MaaS"
   }
 }

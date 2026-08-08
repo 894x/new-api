@@ -69,6 +69,7 @@ function ChannelCardComponent({
 
   const selectCell = renderCell('select')
   const typeCell = renderCell('type')
+  const externalAPIsCell = renderCell('external_apis')
   const nameCell = renderCell('name')
   const statusCell = renderCell('status')
   const actionsCell = renderCell('actions')
@@ -100,7 +101,10 @@ function ChannelCardComponent({
             {!isTagRow && selectCell && (
               <span className='shrink-0'>{selectCell}</span>
             )}
-            <div className='min-w-0 overflow-hidden'>{typeCell}</div>
+            <div className='flex min-w-0 flex-col gap-1 overflow-hidden'>
+              <div className='min-w-0 overflow-hidden'>{typeCell}</div>
+              {!isTagRow && externalAPIsCell}
+            </div>
           </div>
           <div className='flex shrink-0 items-center gap-1.5'>
             {showStatusBadge && statusCell}

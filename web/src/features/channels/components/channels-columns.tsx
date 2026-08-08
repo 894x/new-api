@@ -61,6 +61,7 @@ import {
   formatRelativeTime,
   formatResponseTime,
   getBalanceVariant,
+  getChannelExternalAPIs,
   getChannelTypeIcon,
   getChannelTypeLabel,
   getResponseTimeConfig,
@@ -73,6 +74,7 @@ import {
   handleUpdateChannelBalance,
   createChannelFieldUpdateScheduler,
   isTagAggregateRow,
+  type ChannelExternalAPI,
   type TagRow,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
@@ -321,6 +323,11 @@ function TagWeightCell({ channel }: { channel: TagRow }) {
  */
 const MAX_INLINE_BALANCE_CHARS = 8
 const SENSITIVE_MASK = '••••'
+const EXTERNAL_API_LABEL_KEYS: Record<ChannelExternalAPI, string> = {
+  chat: 'Chat API',
+  responses: 'Responses API',
+  messages: 'Messages API',
+}
 
 /**
  * Balance cell component with click to update
@@ -852,6 +859,37 @@ export function useChannelsColumns(
           return value.includes(String(row.getValue(id)))
         },
         size: 220,
+        enableSorting: false,
+      },
+
+      // Supported client-facing API formats
+      {
+        id: 'external_apis',
+        header: t('Supported APIs'),
+        meta: { mobileHidden: true },
+        cell: ({ row }) => {
+          if (isTagAggregateRow(row.original)) {
+            return <span className='text-muted-foreground text-xs'>-</span>
+          }
+
+          return (
+            <BadgeListCell
+              max={3}
+              items={getChannelExternalAPIs(row.original.type).map(
+                (apiType) => (
+                  <StatusBadge
+                    key={apiType}
+                    label={t(EXTERNAL_API_LABEL_KEYS[apiType])}
+                    autoColor={apiType}
+                    size='sm'
+                    copyable={false}
+                  />
+                )
+              )}
+            />
+          )
+        },
+        size: 260,
         enableSorting: false,
       },
 

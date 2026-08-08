@@ -190,6 +190,18 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'Models exposed by this channel',
     },
   },
+  101: {
+    id: 101,
+    name: CHANNEL_TYPES[101],
+    icon: 'Spark',
+    defaultBaseUrl: 'https://maas-api.cn-huabei-1.xf-yun.com',
+    supportedModels: ['xopdeepseekv4flash'],
+    hints: {
+      baseUrl: 'Default: https://maas-api.cn-huabei-1.xf-yun.com',
+      key: 'Xunfei MaaS API key',
+      models: 'Models exposed by this channel',
+    },
+  },
 }
 
 /**
