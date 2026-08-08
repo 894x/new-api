@@ -98,3 +98,26 @@ func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(
 		})
 	}
 }
+
+func TestChannelValidateSettingsValidatesParameterCapabilities(t *testing.T) {
+	min := 0.0
+	max := 1.0
+	validChannel := &Channel{}
+	validChannel.SetOtherSettings(dto.ChannelOtherSettings{
+		ParameterCapabilities: &dto.ParameterCapabilityConfig{Defaults: map[string]dto.ParameterCapability{
+			"temperature": {Min: &min, Max: &max},
+		}},
+	})
+	require.NoError(t, validChannel.ValidateSettings())
+
+	invalidChannel := &Channel{}
+	invalidChannel.SetOtherSettings(dto.ChannelOtherSettings{
+		ParameterCapabilities: &dto.ParameterCapabilityConfig{Defaults: map[string]dto.ParameterCapability{
+			"temperature": {OnViolation: dto.ParameterCapabilityActionClamp},
+		}},
+	})
+
+	err := invalidChannel.ValidateSettings()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clamp")
+}

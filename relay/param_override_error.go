@@ -11,3 +11,10 @@ func newAPIErrorFromParamOverride(err error) *types.NewAPIError {
 	}
 	return types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid, types.ErrOptionWithSkipRetry())
 }
+
+func newAPIErrorFromRequestPolicy(err error) *types.NewAPIError {
+	if capabilityErr, ok := relaycommon.AsParameterCapabilityViolation(err); ok {
+		return relaycommon.NewAPIErrorFromParameterCapability(capabilityErr)
+	}
+	return newAPIErrorFromParamOverride(err)
+}

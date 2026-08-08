@@ -427,21 +427,26 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	//	}
 	//}
 
-	if len(info.ParamOverride) > 0 {
-		jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
-		if err != nil {
-			if fixedErr, ok := relaycommon.AsParamOverrideReturnError(err); ok {
-				return testResult{
-					context:     c,
-					localErr:    fixedErr,
-					newAPIError: relaycommon.NewAPIErrorFromParamOverride(fixedErr),
-				}
-			}
+	jsonData, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(jsonData, info)
+	if err != nil {
+		if capabilityErr, ok := relaycommon.AsParameterCapabilityViolation(err); ok {
 			return testResult{
 				context:     c,
-				localErr:    err,
-				newAPIError: types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid),
+				localErr:    capabilityErr,
+				newAPIError: relaycommon.NewAPIErrorFromParameterCapability(capabilityErr),
 			}
+		}
+		if fixedErr, ok := relaycommon.AsParamOverrideReturnError(err); ok {
+			return testResult{
+				context:     c,
+				localErr:    fixedErr,
+				newAPIError: relaycommon.NewAPIErrorFromParamOverride(fixedErr),
+			}
+		}
+		return testResult{
+			context:     c,
+			localErr:    err,
+			newAPIError: types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid),
 		}
 	}
 

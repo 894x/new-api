@@ -167,6 +167,7 @@ import {
   validateModelMappingJson,
   hasAdvancedSettingsErrors,
 } from '../../lib'
+import { parseParameterCapabilityConfig } from '../../lib/parameter-capabilities'
 import {
   collectInvalidStatusCodeEntries,
   collectNewDisallowedStatusCodeRedirects,
@@ -180,6 +181,7 @@ import {
   type MissingModelsAction,
 } from '../dialogs/missing-models-confirmation-dialog'
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
+import { ParameterCapabilityEditorDialog } from '../dialogs/parameter-capability-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
 import {
@@ -273,6 +275,7 @@ const SENSITIVE_FORM_FIELDS = [
   'other',
   'key_mode',
   'param_override',
+  'parameter_capabilities',
   'header_override',
   'settings',
   'setting',
@@ -648,6 +651,8 @@ export function ChannelMutateDrawer({
   >()
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false)
   const [paramOverrideEditorOpen, setParamOverrideEditorOpen] = useState(false)
+  const [parameterCapabilityEditorOpen, setParameterCapabilityEditorOpen] =
+    useState(false)
   const [advancedCustomEditorOpen, setAdvancedCustomEditorOpen] =
     useState(false)
   const [clipboardConnectionInfo, setClipboardConnectionInfo] =
@@ -742,6 +747,7 @@ export function ChannelMutateDrawer({
   const currentRemark = form.watch('remark')
   const currentStatusCodeMapping = form.watch('status_code_mapping')
   const currentParamOverride = form.watch('param_override')
+  const currentParameterCapabilities = form.watch('parameter_capabilities')
   const currentHeaderOverride = form.watch('header_override')
   const currentForceFormat = form.watch('force_format')
   const currentThinkingToContent = form.watch('thinking_to_content')
@@ -919,6 +925,24 @@ export function ChannelMutateDrawer({
     () => parseModelsString(currentModels),
     [currentModels]
   )
+
+  const parameterCapabilityStats = useMemo(() => {
+    const config = parseParameterCapabilityConfig(
+      currentParameterCapabilities || ''
+    )
+    const defaultCount = Object.keys(config.defaults || {}).length
+    const rules = config.rules || []
+    const overrideCount = rules.reduce(
+      (count, rule) => count + Object.keys(rule.parameters || {}).length,
+      0
+    )
+    return {
+      configured: defaultCount > 0 || rules.length > 0,
+      defaultCount,
+      ruleCount: rules.length,
+      overrideCount,
+    }
+  }, [currentParameterCapabilities])
 
   const currentTypeLabel = useMemo(
     () =>
@@ -1138,6 +1162,11 @@ export function ChannelMutateDrawer({
   const redirectModelKeyList = useMemo(
     () => extractMappingSourceModels(currentModelMapping || ''),
     [currentModelMapping]
+  )
+
+  const capabilityModelOptions = useMemo(
+    () => [...new Set([...currentModelsArray, ...redirectModelList])],
+    [currentModelsArray, redirectModelList]
   )
 
   // Transform models to multi-select options
@@ -3439,6 +3468,84 @@ export function ChannelMutateDrawer({
                           <div className='border-border/60 rounded-lg border p-4'>
                             <FormField
                               control={form.control}
+                              name='parameter_capabilities'
+                              render={() => (
+                                <FormItem className='space-y-3'>
+                                  <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+                                    <div className='space-y-1'>
+                                      <FormLabel>
+                                        {t('Model Parameter Capabilities')}
+                                      </FormLabel>
+                                      <FormDescription>
+                                        {t(
+                                          'Define channel defaults and model-specific parameter constraints used before sending requests upstream.'
+                                        )}
+                                      </FormDescription>
+                                    </div>
+                                    <Button
+                                      type='button'
+                                      variant='outline'
+                                      size='sm'
+                                      onClick={() =>
+                                        setParameterCapabilityEditorOpen(true)
+                                      }
+                                      disabled={sensitiveLocked || isSubmitting}
+                                    >
+                                      <SlidersHorizontal className='mr-2 h-4 w-4' />
+                                      {parameterCapabilityStats.configured
+                                        ? t('Edit capabilities')
+                                        : t('Configure capabilities')}
+                                    </Button>
+                                  </div>
+                                  <div className='flex flex-wrap gap-2'>
+                                    {parameterCapabilityStats.configured ? (
+                                      <>
+                                        <Badge variant='secondary'>
+                                          {t('{{count}} channel default(s)', {
+                                            count:
+                                              parameterCapabilityStats.defaultCount,
+                                          })}
+                                        </Badge>
+                                        <Badge variant='outline'>
+                                          {t('{{count}} model rule(s)', {
+                                            count:
+                                              parameterCapabilityStats.ruleCount,
+                                          })}
+                                        </Badge>
+                                        <Badge variant='outline'>
+                                          {t(
+                                            '{{count}} parameter override(s)',
+                                            {
+                                              count:
+                                                parameterCapabilityStats.overrideCount,
+                                            }
+                                          )}
+                                        </Badge>
+                                      </>
+                                    ) : (
+                                      <span className='text-muted-foreground text-sm'>
+                                        {t(
+                                          'No parameter capabilities configured. Requests keep the channel adaptor defaults.'
+                                        )}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {sensitiveLocked && (
+                                    <FormDescription>
+                                      {t(
+                                        'No permission to perform this action'
+                                      )}
+                                    </FormDescription>
+                                  )}
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+
+                          <div className='border-border/60 rounded-lg border p-4'>
+                            <FormField
+                              control={form.control}
                               name='model_mapping'
                               render={({ field }) => (
                                 <FormItem className='space-y-3'>
@@ -4233,9 +4340,7 @@ export function ChannelMutateDrawer({
                                         <SelectValue />
                                       </SelectTrigger>
                                     </FormControl>
-                                    <SelectContent
-                                      alignItemWithTrigger={false}
-                                    >
+                                    <SelectContent alignItemWithTrigger={false}>
                                       <SelectGroup>
                                         <SelectItem value='auto'>
                                           {t('Auto')}
@@ -4780,6 +4885,22 @@ export function ChannelMutateDrawer({
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      {parameterCapabilityEditorOpen && !sensitiveLocked && (
+        <ParameterCapabilityEditorDialog
+          open={parameterCapabilityEditorOpen}
+          value={form.watch('parameter_capabilities') || ''}
+          models={capabilityModelOptions}
+          paramOverrideConfigured={Boolean(currentParamOverride?.trim())}
+          onOpenChange={setParameterCapabilityEditorOpen}
+          onSave={(nextValue) => {
+            form.setValue('parameter_capabilities', nextValue, {
+              shouldDirty: true,
+              shouldValidate: true,
+            })
+          }}
+        />
+      )}
 
       {paramOverrideEditorOpen && !sensitiveLocked && (
         <ParamOverrideEditorDialog

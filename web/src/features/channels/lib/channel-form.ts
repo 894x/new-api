@@ -234,6 +234,10 @@ export const channelFormSchema = z
       .string()
       .optional()
       .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
+    parameter_capabilities: z
+      .string()
+      .optional()
+      .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
     header_override: z
       .string()
       .optional()
@@ -417,6 +421,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   remark: '',
   setting: '',
   param_override: '',
+  parameter_capabilities: '',
   header_override: '',
   settings: '{}',
   other: '',
@@ -516,6 +521,7 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
+  let parameterCapabilities = ''
 
   if (channel.settings) {
     try {
@@ -544,6 +550,13 @@ export function transformChannelToFormDefaults(
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
+      if (parsed.parameter_capabilities) {
+        parameterCapabilities = JSON.stringify(
+          parsed.parameter_capabilities,
+          null,
+          2
+        )
+      }
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse channel settings:', error)
@@ -569,6 +582,7 @@ export function transformChannelToFormDefaults(
     remark: channel.remark || '',
     setting: channel.setting || '',
     param_override: channel.param_override || '',
+    parameter_capabilities: parameterCapabilities,
     header_override: channel.header_override || '',
     settings: channel.settings || '{}',
     other: channel.other || '',
@@ -754,6 +768,14 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     }
   } else if ('advanced_custom' in settingsObj) {
     delete settingsObj.advanced_custom
+  }
+
+  if (formData.parameter_capabilities?.trim()) {
+    settingsObj.parameter_capabilities = JSON.parse(
+      formData.parameter_capabilities
+    )
+  } else if ('parameter_capabilities' in settingsObj) {
+    delete settingsObj.parameter_capabilities
   }
 
   return JSON.stringify(settingsObj)

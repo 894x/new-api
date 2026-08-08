@@ -109,6 +109,31 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_check_time?: number
   upstream_model_update_last_detected_models?: string[]
   advanced_custom?: AdvancedCustomConfig
+  parameter_capabilities?: ParameterCapabilityConfig
+}
+
+export type ParameterCapabilityAction = 'reject' | 'drop' | 'clamp'
+
+export interface ParameterCapability {
+  supported?: boolean
+  min?: number
+  max?: number
+  allowed_values?: string[]
+  on_violation?: ParameterCapabilityAction
+}
+
+export interface ModelParameterCapabilityRule {
+  name?: string
+  selector: {
+    type: 'pattern' | 'exact'
+    value: string
+  }
+  parameters: Record<string, ParameterCapability>
+}
+
+export interface ParameterCapabilityConfig {
+  defaults?: Record<string, ParameterCapability>
+  rules?: ModelParameterCapabilityRule[]
 }
 
 export interface AdvancedCustomConfig {
