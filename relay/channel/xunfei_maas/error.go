@@ -2,6 +2,7 @@ package xunfei_maas
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
@@ -23,7 +24,6 @@ var transientErrorCodes = map[types.ErrorCode]struct{}{
 	"10009": {},
 	"10010": {},
 	"10011": {},
-	"10012": {},
 	"10110": {},
 	"10222": {},
 	"10223": {},
@@ -60,8 +60,19 @@ func classifyError(err *types.NewAPIError) *types.NewAPIError {
 	if types.IsResponseCommittedError(err) {
 		options = append(options, types.ErrOptionWithResponseCommitted())
 	}
+	if err.StatusCode == http.StatusUnauthorized || err.StatusCode == http.StatusForbidden {
+		options = append(options, types.ErrOptionWithSkipRetry())
+		return types.WithOpenAIError(openAIError, err.StatusCode, options...)
+	}
 	if _, ok := rateLimitErrorCodes[code]; ok {
 		return types.WithOpenAIError(openAIError, http.StatusTooManyRequests, options...)
+	}
+	if code == "10012" {
+		if isContextLengthError(openAIError.Message) {
+			options = append(options, types.ErrOptionWithSkipRetry())
+			return types.WithOpenAIError(openAIError, http.StatusBadRequest, options...)
+		}
+		return types.WithOpenAIError(openAIError, http.StatusServiceUnavailable, options...)
 	}
 	if _, ok := transientErrorCodes[code]; ok {
 		return types.WithOpenAIError(openAIError, http.StatusServiceUnavailable, options...)
@@ -78,4 +89,24 @@ func classifyError(err *types.NewAPIError) *types.NewAPIError {
 		return types.WithOpenAIError(openAIError, http.StatusBadGateway, options...)
 	}
 	return err
+}
+
+func isContextLengthError(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	patterns := []string{
+		"上下文超长",
+		"上下文过长",
+		"上下文长度超过",
+		"context_length_exceeded",
+		"context length exceeded",
+		"maximum context length",
+		"context window exceeded",
+		"prompt is too long",
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(message, pattern) {
+			return true
+		}
+	}
+	return false
 }

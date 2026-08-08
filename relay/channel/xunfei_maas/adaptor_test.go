@@ -145,6 +145,52 @@ func TestClassifyErrorRetryPolicy(t *testing.T) {
 	}
 }
 
+func TestClassifyError10012UsesMessageSemantics(t *testing.T) {
+	tests := []struct {
+		name       string
+		message    string
+		wantStatus int
+		wantSkip   bool
+	}{
+		{name: "Chinese context overflow", message: "引擎内部错误：上下文长度超过模型限制", wantStatus: http.StatusBadRequest, wantSkip: true},
+		{name: "English context overflow", message: "This model's maximum context length is exceeded", wantStatus: http.StatusBadRequest, wantSkip: true},
+		{name: "structured context overflow", message: "context_length_exceeded", wantStatus: http.StatusBadRequest, wantSkip: true},
+		{name: "engine queue", message: "引擎处于排队状态，建议切换模型重试", wantStatus: http.StatusServiceUnavailable},
+		{name: "empty message", wantStatus: http.StatusServiceUnavailable},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := types.WithOpenAIError(types.OpenAIError{
+				Message: test.message,
+				Code:    "10012",
+			}, http.StatusOK)
+
+			got := classifyError(err)
+
+			require.NotNil(t, got)
+			assert.Equal(t, test.wantStatus, got.StatusCode)
+			assert.Equal(t, test.wantSkip, types.IsSkipRetryError(got))
+		})
+	}
+}
+
+func TestClassifyErrorHTTPAuthorizationSkipsRetry(t *testing.T) {
+	for _, statusCode := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			err := types.WithOpenAIError(types.OpenAIError{
+				Message: http.StatusText(statusCode),
+			}, statusCode)
+
+			got := classifyError(err)
+
+			require.NotNil(t, got)
+			assert.Equal(t, statusCode, got.StatusCode)
+			assert.True(t, types.IsSkipRetryError(got))
+		})
+	}
+}
+
 func TestClassifyErrorPreservesCommittedResponse(t *testing.T) {
 	err := types.WithOpenAIError(types.OpenAIError{
 		Message: "upstream failed",
