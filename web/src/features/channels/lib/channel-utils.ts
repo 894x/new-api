@@ -127,19 +127,104 @@ export function getChannelTypeIcon(type: number): string {
 
 export type ChannelExternalAPI = 'chat' | 'responses' | 'messages'
 
-const CHANNEL_EXTERNAL_APIS: Readonly<
-  Record<number, readonly ChannelExternalAPI[]>
-> = {
+const ALL_EXTERNAL_APIS = ['chat', 'responses', 'messages'] as const
+
+const BUILT_IN_CHANNEL_EXTERNAL_APIS = {
+  0: [],
+  1: ALL_EXTERNAL_APIS,
+  2: [],
+  3: ALL_EXTERNAL_APIS,
+  4: ['chat', 'messages'],
+  5: [],
+  7: ALL_EXTERNAL_APIS,
+  8: ALL_EXTERNAL_APIS,
+  14: ['chat', 'messages'],
+  15: ['chat'],
+  16: ['chat'],
+  17: ALL_EXTERNAL_APIS,
+  18: ['chat'],
+  19: ALL_EXTERNAL_APIS,
+  20: ALL_EXTERNAL_APIS,
+  22: ALL_EXTERNAL_APIS,
+  23: ['chat'],
+  24: ALL_EXTERNAL_APIS,
+  25: ['chat', 'messages'],
+  26: ['chat', 'messages'],
+  27: ALL_EXTERNAL_APIS,
+  31: ALL_EXTERNAL_APIS,
+  33: ['chat', 'messages'],
+  34: ['chat'],
+  35: ['chat', 'messages'],
+  36: [],
+  37: ['chat'],
+  38: [],
+  39: ['chat', 'responses'],
+  40: ['chat', 'messages'],
+  41: ['chat', 'messages'],
+  42: ['chat'],
+  43: ALL_EXTERNAL_APIS,
+  44: [],
+  45: ALL_EXTERNAL_APIS,
+  46: ['chat', 'messages'],
+  47: ALL_EXTERNAL_APIS,
+  48: ['chat', 'responses'],
+  49: ['chat'],
+  50: [],
+  51: [],
+  52: [],
+  53: ['chat'],
+  54: [],
+  55: [],
+  56: [],
+  57: ['responses'],
+  58: [],
+  59: ALL_EXTERNAL_APIS,
+  60: ALL_EXTERNAL_APIS,
+  100: [],
   101: ['chat', 'responses', 'messages'],
-}
+} as const satisfies Record<
+  keyof typeof CHANNEL_TYPES,
+  readonly ChannelExternalAPI[]
+>
+
+const ADVANCED_CUSTOM_EXTERNAL_API_BY_PATH = new Map<
+  string,
+  ChannelExternalAPI
+>([
+  ['/v1/chat/completions', 'chat'],
+  ['/v1/responses', 'responses'],
+  ['/v1/responses/compact', 'responses'],
+  ['/v1/messages', 'messages'],
+])
 
 /**
- * Get explicitly verified client-facing text API formats for custom channels.
- * Unlisted channels intentionally omit badges until their adaptor contract is
- * represented by a shared backend capability registry.
+ * Get verified client-facing text API formats for a channel. Advanced Custom
+ * capabilities come from its configured incoming routes; built-in channels
+ * use the adaptor capabilities audited in the backend.
  */
-export function getChannelExternalAPIs(type: number): ChannelExternalAPI[] {
-  return [...(CHANNEL_EXTERNAL_APIS[type] ?? [])]
+export function getChannelExternalAPIs(
+  channel: Pick<Channel, 'type' | 'settings'>
+): ChannelExternalAPI[] {
+  if (channel.type === 58) {
+    const routes =
+      parseChannelOtherSettings(channel.settings).advanced_custom
+        ?.advanced_routes ?? []
+    const configuredAPIs = new Set<ChannelExternalAPI>()
+
+    for (const route of routes) {
+      const api = ADVANCED_CUSTOM_EXTERNAL_API_BY_PATH.get(
+        route.incoming_path?.trim() ?? ''
+      )
+      if (api) {
+        configuredAPIs.add(api)
+      }
+    }
+
+    return ALL_EXTERNAL_APIS.filter((api) => configuredAPIs.has(api))
+  }
+
+  const type = channel.type as keyof typeof BUILT_IN_CHANNEL_EXTERNAL_APIS
+  return [...(BUILT_IN_CHANNEL_EXTERNAL_APIS[type] ?? [])]
 }
 
 // ============================================================================

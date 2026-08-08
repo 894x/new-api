@@ -875,17 +875,15 @@ export function useChannelsColumns(
           return (
             <BadgeListCell
               max={3}
-              items={getChannelExternalAPIs(row.original.type).map(
-                (apiType) => (
-                  <StatusBadge
-                    key={apiType}
-                    label={t(EXTERNAL_API_LABEL_KEYS[apiType])}
-                    autoColor={apiType}
-                    size='sm'
-                    copyable={false}
-                  />
-                )
-              )}
+              items={getChannelExternalAPIs(row.original).map((apiType) => (
+                <StatusBadge
+                  key={apiType}
+                  label={t(EXTERNAL_API_LABEL_KEYS[apiType])}
+                  autoColor={apiType}
+                  size='sm'
+                  copyable={false}
+                />
+              ))}
             />
           )
         },
