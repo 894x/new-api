@@ -25,7 +25,9 @@ export type HeaderNavModulesConfig = {
   home: boolean
   console: boolean
   pricing: HeaderNavAccessConfig
+  model_docs: HeaderNavAccessConfig
   rankings: HeaderNavAccessConfig
+  token_cost: HeaderNavAccessConfig
   docs: boolean
   about: boolean
   [key: string]: boolean | HeaderNavAccessConfig
@@ -45,7 +47,15 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
     enabled: true,
     requireAuth: false,
   },
+  model_docs: {
+    enabled: false,
+    requireAuth: false,
+  },
   rankings: {
+    enabled: true,
+    requireAuth: false,
+  },
+  token_cost: {
     enabled: true,
     requireAuth: false,
   },
@@ -97,7 +107,9 @@ const toBoolean = (value: unknown, fallback: boolean): boolean => {
 const cloneHeaderNavDefault = (): HeaderNavModulesConfig => ({
   ...HEADER_NAV_DEFAULT,
   pricing: { ...HEADER_NAV_DEFAULT.pricing },
+  model_docs: { ...HEADER_NAV_DEFAULT.model_docs },
   rankings: { ...HEADER_NAV_DEFAULT.rankings },
+  token_cost: { ...HEADER_NAV_DEFAULT.token_cost },
 })
 
 const parseAccessModule = (
@@ -145,7 +157,9 @@ export function parseHeaderNavModules(
     const result: HeaderNavModulesConfig = {
       ...base,
       pricing: { ...base.pricing },
+      model_docs: { ...base.model_docs },
       rankings: { ...base.rankings },
+      token_cost: { ...base.token_cost },
     }
 
     Object.entries(parsed).forEach(([key, raw]) => {
@@ -153,8 +167,16 @@ export function parseHeaderNavModules(
         result.pricing = parseAccessModule(raw, base.pricing)
         return
       }
+      if (key === 'model_docs') {
+        result.model_docs = parseAccessModule(raw, base.model_docs)
+        return
+      }
       if (key === 'rankings') {
         result.rankings = parseAccessModule(raw, base.rankings)
+        return
+      }
+      if (key === 'token_cost') {
+        result.token_cost = parseAccessModule(raw, base.token_cost)
         return
       }
 

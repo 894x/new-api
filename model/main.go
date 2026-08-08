@@ -275,6 +275,8 @@ func migrateDB() error {
 		&QuotaData{},
 		&Task{},
 		&Model{},
+		&ModelDocument{},
+		&ModelDocumentVariant{},
 		&Vendor{},
 		&PrefillGroup{},
 		&Setup{},
@@ -300,6 +302,9 @@ func migrateDB() error {
 		return err
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {
+		return err
+	}
+	if err := MigrateLegacyModelDocuments(); err != nil {
 		return err
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
@@ -338,6 +343,8 @@ func migrateDBFast() error {
 		{&QuotaData{}, "QuotaData"},
 		{&Task{}, "Task"},
 		{&Model{}, "Model"},
+		{&ModelDocument{}, "ModelDocument"},
+		{&ModelDocumentVariant{}, "ModelDocumentVariant"},
 		{&Vendor{}, "Vendor"},
 		{&PrefillGroup{}, "PrefillGroup"},
 		{&Setup{}, "Setup"},
@@ -381,6 +388,9 @@ func migrateDBFast() error {
 		return err
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {
+		return err
+	}
+	if err := MigrateLegacyModelDocuments(); err != nil {
 		return err
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {

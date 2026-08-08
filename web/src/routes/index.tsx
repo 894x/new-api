@@ -17,9 +17,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute } from '@tanstack/react-router'
+import * as z from 'zod'
 
 import { Home } from '@/features/home'
 
 export const Route = createFileRoute('/')({
-  component: Home,
+  validateSearch: z.object({
+    preview_template: z
+      .enum(['system', 'quality', 'economy', 'business'])
+      .optional()
+      .catch(undefined),
+  }),
+  component: HomeRoute,
 })
+
+function HomeRoute() {
+  const { preview_template: previewTemplate } = Route.useSearch()
+  return <Home previewTemplate={previewTemplate} />
+}

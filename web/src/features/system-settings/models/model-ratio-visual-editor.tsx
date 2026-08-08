@@ -49,6 +49,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
 import { useMediaQuery } from '@/hooks'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { safeJsonParse } from '../utils/json-parser'
 import type { PricingMode } from './model-pricing-core'
@@ -136,6 +137,15 @@ const ModelRatioVisualEditorComponent = forwardRef<
   ref
 ) {
   const { t } = useTranslation()
+  const quotaDisplayType = useSystemConfigStore(
+    (state) => state.config.currency.quotaDisplayType
+  )
+  const configuredUsdExchangeRate = useSystemConfigStore(
+    (state) => state.config.currency.usdExchangeRate
+  )
+  const isCnyPricing = quotaDisplayType === 'CNY'
+  const priceSummaryCurrencySymbol = isCnyPricing ? '¥' : '$'
+  const priceSummaryExchangeRate = isCnyPricing ? configuredUsdExchangeRate : 1
   const isMobile = useMediaQuery('(max-width: 767px)')
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
@@ -289,8 +299,8 @@ const ModelRatioVisualEditorComponent = forwardRef<
   )
 
   const handleEdit = useCallback(
-    (model: ModelRow) => {
-      const editableModel = model.draft ?? model.saved ?? model
+      (model: ModelRow) => {
+        const editableModel = model.draft ?? model.saved ?? model
       let editBillingMode: PricingMode = 'per-token'
       if (editableModel.billingMode === 'tiered_expr') {
         editBillingMode = 'tiered_expr'
@@ -440,9 +450,20 @@ const ModelRatioVisualEditorComponent = forwardRef<
         onDelete: handleDelete,
         onEdit: handleEdit,
         deleteDisabled: filterMode === 'unset',
+        priceDisplay: {
+          currencySymbol: priceSummaryCurrencySymbol,
+          exchangeRate: priceSummaryExchangeRate,
+        },
         t,
       }),
-    [handleEdit, handleDelete, filterMode, t]
+    [
+      handleEdit,
+      handleDelete,
+      filterMode,
+      priceSummaryCurrencySymbol,
+      priceSummaryExchangeRate,
+      t,
+    ]
   )
 
   const ensurePageInRange = useCallback((pageCount: number) => {
@@ -527,7 +548,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
         value: string | undefined
       ) => {
         if (!value || value === '') return
-        const parsed = parseFloat(value)
+        const parsed = Number.parseFloat(value)
         if (Number.isFinite(parsed)) target[name] = parsed
       }
 

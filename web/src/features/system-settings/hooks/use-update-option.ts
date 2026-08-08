@@ -25,6 +25,7 @@ import type { UpdateOptionRequest } from '../types'
 
 // Configuration keys that require status refresh
 const STATUS_RELATED_KEYS = new Set([
+  'theme.frontend',
   'HeaderNavModules',
   'SidebarModulesAdmin',
   'Notice',
@@ -48,6 +49,18 @@ export function useUpdateOption() {
       if (data.success) {
         // Always refresh system-options
         queryClient.invalidateQueries({ queryKey: ['system-options'] })
+
+        if (
+          variables.key === 'HomePageTemplate' ||
+          variables.key === 'HomePageContent'
+        ) {
+          try {
+            window.localStorage.removeItem('home_page_content')
+            window.localStorage.removeItem('home_page_template')
+          } catch {
+            /* empty */
+          }
+        }
 
         // If updating frontend-display-related config, also refresh status
         if (STATUS_RELATED_KEYS.has(variables.key)) {

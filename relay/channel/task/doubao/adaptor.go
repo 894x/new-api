@@ -68,35 +68,53 @@ type responsePayload struct {
 	ID string `json:"id"` // task_id
 }
 
+type responseTaskContent struct {
+	VideoURL     string `json:"video_url,omitempty"`
+	LastFrameURL string `json:"last_frame_url,omitempty"`
+}
+
+type responseTaskTool struct {
+	Type string `json:"type"`
+}
+
+type responseTaskToolUsage struct {
+	WebSearch int `json:"web_search"`
+}
+
+type responseTaskUsage struct {
+	CompletionTokens int                    `json:"completion_tokens"`
+	TotalTokens      int                    `json:"total_tokens"`
+	ToolUsage        *responseTaskToolUsage `json:"tool_usage,omitempty"`
+}
+
+type responseTaskError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type responseTask struct {
-	ID      string `json:"id"`
-	Model   string `json:"model"`
-	Status  string `json:"status"`
-	Content struct {
-		VideoURL string `json:"video_url"`
-	} `json:"content"`
-	Seed            int    `json:"seed"`
-	Resolution      string `json:"resolution"`
-	Duration        int    `json:"duration"`
-	Ratio           string `json:"ratio"`
-	FramesPerSecond int    `json:"framespersecond"`
-	ServiceTier     string `json:"service_tier"`
-	Tools           []struct {
-		Type string `json:"type"`
-	} `json:"tools"`
-	Usage struct {
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-		ToolUsage        struct {
-			WebSearch int `json:"web_search"`
-		} `json:"tool_usage"`
-	} `json:"usage"`
-	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-	CreatedAt int64 `json:"created_at"`
-	UpdatedAt int64 `json:"updated_at"`
+	ID                    string               `json:"id"`
+	Model                 string               `json:"model"`
+	Status                string               `json:"status"`
+	Error                 *responseTaskError   `json:"error,omitempty"`
+	CreatedAt             int64                `json:"created_at"`
+	UpdatedAt             int64                `json:"updated_at"`
+	Content               *responseTaskContent `json:"content,omitempty"`
+	Seed                  *int                 `json:"seed,omitempty"`
+	Resolution            string               `json:"resolution,omitempty"`
+	Ratio                 string               `json:"ratio,omitempty"`
+	Duration              *int                 `json:"duration,omitempty"`
+	Frames                *int                 `json:"frames,omitempty"`
+	FramesPerSecond       *int                 `json:"framespersecond,omitempty"`
+	GenerateAudio         *bool                `json:"generate_audio,omitempty"`
+	Tools                 []responseTaskTool   `json:"tools,omitempty"`
+	SafetyIdentifier      string               `json:"safety_identifier,omitempty"`
+	Priority              *int                 `json:"priority,omitempty"`
+	Draft                 *bool                `json:"draft,omitempty"`
+	DraftTaskID           string               `json:"draft_task_id,omitempty"`
+	ServiceTier           string               `json:"service_tier,omitempty"`
+	ExecutionExpiresAfter *int                 `json:"execution_expires_after,omitempty"`
+	Usage                 *responseTaskUsage   `json:"usage,omitempty"`
 }
 
 // ============================
@@ -185,6 +203,18 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
+	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+		payload := make(map[string]any, len(req.Metadata)+1)
+		for key, value := range req.Metadata {
+			payload[key] = value
+		}
+		payload["model"] = info.UpstreamModelName
+		data, err := common.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		return bytes.NewReader(data), nil
+	}
 
 	body, err := a.convertToRequestPayload(&req)
 	if err != nil {
@@ -228,13 +258,16 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return
 	}
 
-	ov := dto.NewOpenAIVideo()
-	ov.ID = info.PublicTaskID
-	ov.TaskID = info.PublicTaskID
-	ov.CreatedAt = time.Now().Unix()
-	ov.Model = info.OriginModelName
-
-	c.JSON(http.StatusOK, ov)
+	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+		c.JSON(http.StatusOK, responsePayload{ID: info.PublicTaskID})
+	} else {
+		ov := dto.NewOpenAIVideo()
+		ov.ID = info.PublicTaskID
+		ov.TaskID = info.PublicTaskID
+		ov.CreatedAt = time.Now().Unix()
+		ov.Model = info.OriginModelName
+		c.JSON(http.StatusOK, ov)
+	}
 	return dResp.ID, responseBody, nil
 }
 
@@ -328,14 +361,20 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	case "succeeded":
 		taskResult.Status = model.TaskStatusSuccess
 		taskResult.Progress = "100%"
-		taskResult.Url = resTask.Content.VideoURL
-		// 解析 usage 信息用于按倍率计费
-		taskResult.CompletionTokens = resTask.Usage.CompletionTokens
-		taskResult.TotalTokens = resTask.Usage.TotalTokens
+		if resTask.Content != nil {
+			taskResult.Url = resTask.Content.VideoURL
+		}
+		if resTask.Usage != nil {
+			// 解析 usage 信息用于按倍率计费
+			taskResult.CompletionTokens = resTask.Usage.CompletionTokens
+			taskResult.TotalTokens = resTask.Usage.TotalTokens
+		}
 	case "failed":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
-		taskResult.Reason = resTask.Error.Message
+		if resTask.Error != nil {
+			taskResult.Reason = resTask.Error.Message
+		}
 	default:
 		// Unknown status, treat as processing
 		taskResult.Status = model.TaskStatusInProgress
@@ -356,12 +395,14 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.TaskID = originTask.TaskID
 	openAIVideo.Status = originTask.Status.ToVideoStatus()
 	openAIVideo.SetProgressStr(originTask.Progress)
-	openAIVideo.SetMetadata("url", dResp.Content.VideoURL)
+	if dResp.Content != nil {
+		openAIVideo.SetMetadata("url", dResp.Content.VideoURL)
+	}
 	openAIVideo.CreatedAt = originTask.CreatedAt
 	openAIVideo.CompletedAt = originTask.UpdatedAt
 	openAIVideo.Model = originTask.Properties.OriginModelName
 
-	if dResp.Status == "failed" {
+	if dResp.Status == "failed" && dResp.Error != nil {
 		openAIVideo.Error = &dto.OpenAIVideoError{
 			Message: dResp.Error.Message,
 			Code:    dResp.Error.Code,
@@ -369,4 +410,42 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	}
 
 	return common.Marshal(openAIVideo)
+}
+
+func (a *TaskAdaptor) ConvertToNativeVideo(originTask *model.Task) ([]byte, error) {
+	var response responseTask
+	if len(originTask.Data) > 0 {
+		if err := common.Unmarshal(originTask.Data, &response); err != nil {
+			return nil, errors.Wrap(err, "unmarshal doubao task data failed")
+		}
+	}
+
+	response.ID = originTask.TaskID
+	response.Model = originTask.Properties.OriginModelName
+	response.CreatedAt = originTask.CreatedAt
+	response.UpdatedAt = originTask.UpdatedAt
+	switch originTask.Status {
+	case model.TaskStatusInProgress:
+		response.Status = "running"
+	case model.TaskStatusSuccess:
+		response.Status = "succeeded"
+	case model.TaskStatusFailure:
+		response.Status = "failed"
+		if response.Error == nil && originTask.FailReason != "" {
+			response.Error = &responseTaskError{Message: originTask.FailReason}
+		}
+	default:
+		response.Status = "queued"
+	}
+
+	if originTask.Status == model.TaskStatusSuccess {
+		if response.Content == nil {
+			response.Content = &responseTaskContent{}
+		}
+		if response.Content.VideoURL == "" {
+			response.Content.VideoURL = originTask.GetResultURL()
+		}
+	}
+
+	return common.Marshal(response)
 }

@@ -39,6 +39,7 @@ interface ComboboxInputProps {
   id?: string
   allowCustomValue?: boolean
   openOnFocus?: boolean
+  showAllOptionsOnFocus?: boolean
 }
 
 export function ComboboxInput({
@@ -51,10 +52,12 @@ export function ComboboxInput({
   id,
   allowCustomValue = false,
   openOnFocus = true,
+  showAllOptionsOnFocus = false,
 }: ComboboxInputProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
   const [searchValue, setSearchValue] = React.useState('')
+  const [showAllOptions, setShowAllOptions] = React.useState(false)
   const [highlightedIndex, setHighlightedIndex] = React.useState(-1)
   const containerRef = React.useRef<HTMLDivElement>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
@@ -64,9 +67,11 @@ export function ComboboxInput({
     () => options.find((option) => option.value === value),
     [options, value]
   )
-  const displayValue = open ? searchValue : (selectedOption?.label ?? value)
+  const displayValue =
+    open && searchValue ? searchValue : (selectedOption?.label ?? value)
 
   const filteredOptions = React.useMemo(() => {
+    if (showAllOptions) return options
     if (!searchValue.trim()) return options
     const search = searchValue.toLowerCase().trim()
     return options.filter(
@@ -74,7 +79,7 @@ export function ComboboxInput({
         option.label.toLowerCase().includes(search) ||
         option.value.toLowerCase().includes(search)
     )
-  }, [options, searchValue])
+  }, [options, searchValue, showAllOptions])
 
   // Reset highlight when filtered options change
   React.useEffect(() => {
@@ -92,6 +97,7 @@ export function ComboboxInput({
       ) {
         setOpen(false)
         setSearchValue('')
+        setShowAllOptions(false)
       }
     }
 
@@ -103,6 +109,7 @@ export function ComboboxInput({
     onValueChange(selectedValue)
     setOpen(false)
     setSearchValue('')
+    setShowAllOptions(false)
     inputRef.current?.focus()
   }
 
@@ -178,6 +185,7 @@ export function ComboboxInput({
             onValueChange(nextValue)
           }
           if (!open) setOpen(true)
+          setShowAllOptions(false)
         }}
         onPointerDown={() => {
           pointerFocusRef.current = true
@@ -187,6 +195,7 @@ export function ComboboxInput({
         }}
         onFocus={() => {
           setSearchValue(allowCustomValue && !selectedOption ? value : '')
+          setShowAllOptions(showAllOptionsOnFocus)
           if (openOnFocus || pointerFocusRef.current) {
             setOpen(true)
           }

@@ -1,0 +1,132 @@
+{
+  "extracted_at": "2026-07-22",
+  "source": "Tencent Cloud TokenHub model pricing",
+  "source_url": "https://cloud.tencent.com/document/product/1823/130055#4a0c9877-d405-4d32-85d5-84fdce938813",
+  "model_list_url": "https://cloud.tencent.com/document/product/1823/130051",
+  "source_currency": "CNY",
+  "usd_exchange_rate": 7.3,
+  "models": {
+    "hy-video-1.5": {
+      "display_name": "HY-Video-1.5",
+      "billing": "per_call",
+      "base_price_cny": 1.5,
+      "model_price_usd": 0.20547945205479454
+    },
+    "yt-video-2.0": {
+      "display_name": "YT-Video-2.0",
+      "billing": "per_call_by_resolution",
+      "base_variant": "480p",
+      "base_price_cny": 2,
+      "model_price_usd": 0.273972602739726,
+      "prices_cny": {
+        "480p": 2,
+        "720p": 5,
+        "1080p": 5
+      }
+    },
+    "yt-video-fx": {
+      "display_name": "YT-Video-FX",
+      "billing": "per_call_by_resolution",
+      "base_variant": "360p",
+      "base_price_cny": 1,
+      "model_price_usd": 0.136986301369863,
+      "prices_cny": {
+        "360p": 1,
+        "720p": 2
+      },
+      "pricing_detail_url": "https://cloud.tencent.com/document/product/1616/119194"
+    },
+    "yt-video-humanactor": {
+      "display_name": "YT-Video-HumanActor",
+      "billing": "per_second_by_resolution",
+      "base_variant": "720p",
+      "base_price_cny": 1,
+      "model_price_usd": 0.136986301369863,
+      "billing_duration_field": "metadata.billing_duration_seconds",
+      "prices_cny_per_second": {
+        "720p": 1,
+        "1080p": 2
+      }
+    },
+    "kl-video-v3": {
+      "display_name": "Kling-Video-v3",
+      "billing": "per_second_by_resolution_and_audio",
+      "base_variant": "720p",
+      "base_price_cny": 0.6,
+      "model_price_usd": 0.0821917808219178,
+      "prices_cny_per_second": {
+        "720p": 0.6,
+        "720p_audio": 0.9,
+        "1080p": 0.8,
+        "1080p_audio": 1.2,
+        "4k": 3
+      }
+    },
+    "kl-video-v2-6": {
+      "display_name": "Kling-Video-v2.6",
+      "billing": "per_second_by_resolution_and_audio",
+      "base_variant": "720p",
+      "base_price_cny": 0.3,
+      "model_price_usd": 0.0410958904109589,
+      "prices_cny_per_second": {
+        "720p": 0.3,
+        "1080p": 0.5,
+        "1080p_audio": 1,
+        "1080p_audio_specified_voice": 1.2,
+        "4k": 3
+      }
+    },
+    "kl-video-v2-5-turbo": {
+      "display_name": "Kling-Video-v2.5-turbo",
+      "billing": "per_second_by_resolution",
+      "base_variant": "720p",
+      "base_price_cny": 0.3,
+      "model_price_usd": 0.0410958904109589,
+      "prices_cny_per_second": {
+        "720p": 0.3,
+        "1080p": 0.5
+      }
+    },
+    "kl-video-v2-1-master": {
+      "display_name": "Kling-Video-v2.1-master",
+      "billing": "per_second",
+      "base_price_cny": 2,
+      "model_price_usd": 0.273972602739726
+    },
+    "kl-video-v2-1": {
+      "display_name": "Kling-Video-v2.1",
+      "billing": "per_second_by_resolution",
+      "base_variant": "720p",
+      "base_price_cny": 0.4,
+      "model_price_usd": 0.05479452054794521,
+      "prices_cny_per_second": {
+        "720p": 0.4,
+        "1080p": 0.7
+      }
+    },
+    "vd-video-q3-pro": {
+      "display_name": "Vidu-Video-q3-pro",
+      "billing": "per_second_by_resolution",
+      "base_variant": "540p",
+      "base_price_cny": 0.28125,
+      "model_price_usd": 0.038527397260273974,
+      "prices_cny_per_second": {
+        "540p": 0.28125,
+        "720p": 0.625,
+        "1080p": 0.75
+      }
+    },
+    "vd-video-q3-turbo": {
+      "display_name": "Vidu-Video-q3-turbo",
+      "billing": "per_second_by_resolution",
+      "base_variant": "540p",
+      "base_price_cny": 0.21875,
+      "model_price_usd": 0.029965753424657536,
+      "prices_cny_per_second": {
+        "540p": 0.21875,
+        "720p": 0.375,
+        "1080p": 0.40625
+      }
+    }
+  }
+}

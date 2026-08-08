@@ -42,6 +42,8 @@ export interface Model {
   vendor_id?: number
   endpoints?: string
   status: number
+  doc_enabled: number
+  doc_available?: boolean
   sync_official: number
   created_time: number
   updated_time: number
@@ -127,6 +129,47 @@ export interface GetModelResponse {
   success: boolean
   message?: string
   data?: Model
+}
+
+export interface ModelDocumentEditor {
+  model_id: number
+  model: string
+  interface_key: string
+  interface_name: string
+  source: 'builtin' | 'custom' | 'empty'
+  effective_source: 'builtin' | 'custom' | 'none'
+  has_builtin: boolean
+  has_custom: boolean
+  published: boolean
+  slug: string
+  title: string
+  vendor: string
+  category: string
+  summary: string
+  html: string
+  updated_time: number
+}
+
+export interface ModelDocumentEditorPayload {
+  interface_name: string
+  slug: string
+  title: string
+  vendor: string
+  category: string
+  summary: string
+  html: string
+}
+
+export interface ModelDocumentEditorResponse {
+  success: boolean
+  message?: string
+  data?: ModelDocumentEditorCollection
+}
+
+export interface ModelDocumentEditorCollection {
+  model_id: number
+  model: string
+  variants: ModelDocumentEditor[]
 }
 
 /**
@@ -237,6 +280,7 @@ export const modelFormSchema = z.object({
   endpoints: z.string().default(''),
   name_rule: z.number().min(0).max(3).default(0),
   status: z.boolean().default(true),
+  doc_enabled: z.boolean().default(false),
   sync_official: z.boolean().default(true),
 })
 

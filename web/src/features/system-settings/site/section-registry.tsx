@@ -40,7 +40,15 @@ const SITE_SECTIONS = [
           Logo: settings.Logo,
           Footer: settings.Footer,
           About: settings.About,
+          HomePageTemplate: settings.HomePageTemplate as
+            | 'system'
+            | 'quality'
+            | 'economy'
+            | 'business'
+            | 'custom',
           HomePageContent: settings.HomePageContent,
+          BusinessContactEmail: settings.BusinessContactEmail,
+          BusinessContactQRCode: settings.BusinessContactQRCode,
           ServerAddress: settings.ServerAddress,
           legal: {
             user_agreement: settings['legal.user_agreement'],

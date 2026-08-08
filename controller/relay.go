@@ -69,8 +69,6 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 }
 
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
-
-	requestId := c.GetString(common.RequestIdKey)
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
@@ -83,7 +81,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		var err error
 		ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
-			helper.WssError(c, ws, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry()).ToOpenAIError())
+			newAPIError := types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			helper.WssError(c, ws, service.OpenAIErrorForClient(c, newAPIError))
 			return
 		}
 		defer ws.Close()
@@ -92,18 +91,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
-			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
-				helper.WssError(c, ws, newAPIError.ToOpenAIError())
+				helper.WssError(c, ws, service.OpenAIErrorForClient(c, newAPIError))
 			case types.RelayFormatClaude:
 				c.JSON(newAPIError.StatusCode, gin.H{
 					"type":  "error",
-					"error": newAPIError.ToClaudeError(),
+					"error": service.ClaudeErrorForClient(c, newAPIError),
 				})
 			default:
 				c.JSON(newAPIError.StatusCode, gin.H{
-					"error": newAPIError.ToOpenAIError(),
+					"error": service.OpenAIErrorForClient(c, newAPIError),
 				})
 			}
 		}
@@ -411,8 +409,12 @@ func RelayMidjourney(c *gin.Context) {
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatMjProxy, nil, nil)
 
 	if err != nil {
+		description := common.MessageWithRequestId(fmt.Sprintf("failed to generate relay info: %s", err.Error()), c.GetString(common.RequestIdKey))
+		if service.ShouldHideErrorDetails(c) {
+			description = service.PublicErrorMessage(c.GetString(common.RequestIdKey))
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"description": fmt.Sprintf("failed to generate relay info: %s", err.Error()),
+			"description": description,
 			"type":        "upstream_error",
 			"code":        4,
 		})
@@ -440,44 +442,45 @@ func RelayMidjourney(c *gin.Context) {
 			mjErr.Result = "当前分组负载已饱和，请稍后再试，或升级账户以提升服务质量。"
 			statusCode = http.StatusTooManyRequests
 		}
+		description := fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result)
+		logger.LogError(c, fmt.Sprintf("relay error (channel #%d, status code %d): %s", c.GetInt("channel_id"), statusCode, description))
+		code := mjErr.Code
+		if service.ShouldHideErrorDetails(c) {
+			description = service.PublicErrorMessage(c.GetString(common.RequestIdKey))
+			code = 4
+		} else {
+			description = common.MessageWithRequestId(description, c.GetString(common.RequestIdKey))
+		}
 		c.JSON(statusCode, gin.H{
-			"description": fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result),
+			"description": description,
 			"type":        "upstream_error",
-			"code":        mjErr.Code,
+			"code":        code,
 		})
-		channelId := c.GetInt("channel_id")
-		logger.LogError(c, fmt.Sprintf("relay error (channel #%d, status code %d): %s", channelId, statusCode, fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result)))
 	}
 }
 
 func RelayNotImplemented(c *gin.Context) {
-	err := types.OpenAIError{
-		Message: "API not implemented",
-		Type:    "new_api_error",
-		Param:   "",
-		Code:    "api_not_implemented",
-	}
+	err := types.NewOpenAIError(errors.New("API not implemented"), "api_not_implemented", http.StatusNotImplemented)
 	c.JSON(http.StatusNotImplemented, gin.H{
-		"error": err,
+		"error": service.OpenAIErrorForClient(c, err),
 	})
 }
 
 func RelayNotFound(c *gin.Context) {
-	err := types.OpenAIError{
-		Message: fmt.Sprintf("Invalid URL (%s %s)", c.Request.Method, c.Request.URL.Path),
-		Type:    "invalid_request_error",
-		Param:   "",
-		Code:    "",
-	}
+	err := types.NewOpenAIError(
+		fmt.Errorf("Invalid URL (%s %s)", c.Request.Method, c.Request.URL.Path),
+		"invalid_request_error",
+		http.StatusNotFound,
+	)
 	c.JSON(http.StatusNotFound, gin.H{
-		"error": err,
+		"error": service.OpenAIErrorForClient(c, err),
 	})
 }
 
 func RelayTaskFetch(c *gin.Context) {
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatTask, nil, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, &taskdto.TaskError{
+		respondTaskError(c, &taskdto.TaskError{
 			Code:       "gen_relay_info_failed",
 			Message:    err.Error(),
 			StatusCode: http.StatusInternalServerError,
@@ -492,7 +495,7 @@ func RelayTaskFetch(c *gin.Context) {
 func RelayTask(c *gin.Context) {
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatTask, nil, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, &taskdto.TaskError{
+		respondTaskError(c, &taskdto.TaskError{
 			Code:       "gen_relay_info_failed",
 			Message:    err.Error(),
 			StatusCode: http.StatusInternalServerError,
@@ -616,7 +619,7 @@ func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		taskErr.Message = "当前分组上游负载已饱和，请稍后再试"
 	}
-	c.JSON(taskErr.StatusCode, taskErr)
+	c.JSON(taskErr.StatusCode, service.TaskErrorForClient(c, taskErr))
 }
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskError, retryTimes int) bool {

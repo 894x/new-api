@@ -19,7 +19,20 @@ For commercial licensing, please contact support@quantumnous.com
 import { splitBillingExprAndRequestRules } from '@/features/pricing/lib/billing-expr'
 
 import { safeJsonParse } from '../utils/json-parser'
-import { formatPricingNumber } from './pricing-format'
+import {
+  formatDisplayPriceFromUSD,
+  formatPricingNumber,
+} from './pricing-format'
+
+export type PriceDisplayConfig = {
+  currencySymbol: string
+  exchangeRate: number
+}
+
+const USD_PRICE_DISPLAY_CONFIG: PriceDisplayConfig = {
+  currencySymbol: '$',
+  exchangeRate: 1,
+}
 
 export type ModelPricingSnapshotInput = {
   modelPrice: string
@@ -80,6 +93,14 @@ const ratioToPrice = (ratio?: string, denominator?: string) => {
   return formatPricingNumber(ratioNumber * denominatorNumber)
 }
 
+const formatPriceForDisplay = (
+  usdPrice: string,
+  config: PriceDisplayConfig
+) => {
+  const displayPrice = formatDisplayPriceFromUSD(usdPrice, config.exchangeRate)
+  return `${config.currencySymbol}${displayPrice || '—'}`
+}
+
 export const getModeLabel = (mode?: string) => {
   if (mode === 'per-request') return 'Per-request'
   if (mode === 'tiered_expr') return 'Expression'
@@ -107,13 +128,16 @@ const getExpressionSummary = (
 
 export const getPriceSummary = (
   row: ModelPricingSnapshot,
-  t: (key: string) => string
+  t: (key: string) => string,
+  priceDisplay: PriceDisplayConfig = USD_PRICE_DISPLAY_CONFIG
 ) => {
   if (row.billingMode === 'tiered_expr') {
     return getExpressionSummary(row, t)
   }
   if (row.billingMode === 'per-request') {
-    return row.price ? `$${row.price} / ${t('request')}` : t('Unset price')
+    return row.price
+      ? `${formatPriceForDisplay(row.price, priceDisplay)} / ${t('request')}`
+      : t('Unset price')
   }
 
   const inputPrice = ratioToPrice(row.ratio)
@@ -129,13 +153,14 @@ export const getPriceSummary = (
   ].filter(hasPricingValue).length
 
   return extraCount > 0
-    ? `${t('Input')} $${inputPrice} · ${extraCount} ${t('extras')}`
-    : `${t('Input')} $${inputPrice}`
+    ? `${t('Input')} ${formatPriceForDisplay(inputPrice, priceDisplay)} · ${extraCount} ${t('extras')}`
+    : `${t('Input')} ${formatPriceForDisplay(inputPrice, priceDisplay)}`
 }
 
 export const getPriceDetail = (
   row: ModelPricingSnapshot,
-  t: (key: string) => string
+  t: (key: string) => string,
+  priceDisplay: PriceDisplayConfig = USD_PRICE_DISPLAY_CONFIG
 ) => {
   if (row.billingMode === 'tiered_expr') {
     return row.requestRuleExpr
@@ -151,11 +176,20 @@ export const getPriceDetail = (
 
   const details = [
     row.completionRatio &&
-      `${t('Output')} $${ratioToPrice(row.completionRatio, inputPrice)}`,
+      `${t('Output')} ${formatPriceForDisplay(
+        ratioToPrice(row.completionRatio, inputPrice),
+        priceDisplay
+      )}`,
     row.cacheRatio &&
-      `${t('Cache')} $${ratioToPrice(row.cacheRatio, inputPrice)}`,
+      `${t('Cache')} ${formatPriceForDisplay(
+        ratioToPrice(row.cacheRatio, inputPrice),
+        priceDisplay
+      )}`,
     row.createCacheRatio &&
-      `${t('Cache write')} $${ratioToPrice(row.createCacheRatio, inputPrice)}`,
+      `${t('Cache write')} ${formatPriceForDisplay(
+        ratioToPrice(row.createCacheRatio, inputPrice),
+        priceDisplay
+      )}`,
   ]
     .filter(Boolean)
     .slice(0, 2)
@@ -229,7 +263,7 @@ export const buildModelSnapshots = ({
     ...Object.keys(billingExprMap),
   ])
 
-  return Array.from(modelNames).map((name) => {
+  return [...modelNames].map((name) => {
     const price = priceMap[name]?.toString() || ''
     const ratio = ratioMap[name]?.toString() || ''
     const cache = cacheMap[name]?.toString() || ''

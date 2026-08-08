@@ -76,6 +76,7 @@ export function getChannelTypeIcon(type: number): string {
     17: 'Qwen', // Ali
     18: 'Spark', // Xunfei
     23: 'Hunyuan', // Tencent
+    100: 'Hunyuan', // Tencent TokenHub
     19: 'Ai360', // 360
     25: 'Moonshot', // Moonshot
     31: 'Yi', // LingYiWanWu

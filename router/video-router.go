@@ -8,6 +8,14 @@ import (
 )
 
 func SetVideoRouter(router *gin.Engine) {
+	doubaoVideoRouter := router.Group("/api/v3/contents/generations")
+	doubaoVideoRouter.Use(middleware.RouteTag("relay"))
+	doubaoVideoRouter.Use(middleware.DoubaoVideoRequestConvert(), middleware.TokenAuth(), middleware.Distribute())
+	{
+		doubaoVideoRouter.POST("/tasks", controller.RelayTask)
+		doubaoVideoRouter.GET("/tasks/:task_id", controller.RelayTaskFetch)
+	}
+
 	// Video proxy: accepts either session auth (dashboard) or token auth (API clients)
 	videoProxyRouter := router.Group("/v1")
 	videoProxyRouter.Use(middleware.RouteTag("relay"))

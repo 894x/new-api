@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 const DISPLAY_DECIMALS = 12
 const SNAP_DECIMALS = 8
-const SNAP_EPSILON = 1e-12
+const SNAP_EPSILON = 1e-10
 
 function toNumberOrNull(value: unknown): number | null {
   if (
@@ -58,4 +58,29 @@ export function formatPricingNumber(value: unknown): string {
 
   const normalized = snapFloatDrift(num)
   return Number.parseFloat(normalized.toFixed(DISPLAY_DECIMALS)).toString()
+}
+
+function normalizeExchangeRate(exchangeRate: unknown): number | null {
+  const num = toNumberOrNull(exchangeRate)
+  return num !== null && num > 0 ? num : null
+}
+
+export function formatDisplayPriceFromUSD(
+  value: unknown,
+  exchangeRate: unknown = 1
+): string {
+  const num = toNumberOrNull(value)
+  const rate = normalizeExchangeRate(exchangeRate)
+  if (num === null || rate === null) return ''
+  return formatPricingNumber(num * rate)
+}
+
+export function formatUSDPriceFromDisplay(
+  value: unknown,
+  exchangeRate: unknown = 1
+): string {
+  const num = toNumberOrNull(value)
+  const rate = normalizeExchangeRate(exchangeRate)
+  if (num === null || rate === null) return ''
+  return formatPricingNumber(num / rate)
 }

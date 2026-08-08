@@ -486,6 +486,26 @@ export function formatBillingCurrencyFromUSD(
 }
 
 /**
+ * Convert an amount entered in the configured billing currency back to USD.
+ *
+ * Billing displays intentionally fall back to USD when balances are configured
+ * to display as tokens, matching formatBillingCurrencyFromUSD().
+ */
+export function convertBillingCurrencyToUSD(amount: number): number {
+  if (!Number.isFinite(amount)) return 0
+
+  const { config } = getCurrencyDisplay()
+  const meta = getBillingDisplayMeta(config)
+  if (
+    (meta.kind === 'currency' || meta.kind === 'custom') &&
+    meta.exchangeRate > 0
+  ) {
+    return amount / meta.exchangeRate
+  }
+  return amount
+}
+
+/**
  * Format raw quota values (token units) to display currency.
  *
  * Converts raw quota/token amounts to USD first, then formats according

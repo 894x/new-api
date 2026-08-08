@@ -1,3 +1,4 @@
+import { ErrorDetailSection } from '../request-limits/error-detail-section'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -37,6 +38,18 @@ const SECURITY_SECTIONS = [
           ModelRequestRateLimitDurationMinutes:
             settings.ModelRequestRateLimitDurationMinutes,
           ModelRequestRateLimitGroup: settings.ModelRequestRateLimitGroup,
+        }}
+      />
+    ),
+  },
+  {
+    id: 'error-details',
+    titleKey: 'Error Details',
+    build: (settings: SecuritySettings) => (
+      <ErrorDetailSection
+        defaultValues={{
+          'error_setting.hide_error_details':
+            settings['error_setting.hide_error_details'],
         }}
       />
     ),

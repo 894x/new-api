@@ -164,6 +164,32 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'Models',
     },
   },
+  100: {
+    id: 100,
+    name: CHANNEL_TYPES[100],
+    icon: 'hunyuan',
+    defaultBaseUrl: 'https://tokenhub.tencentmaas.com',
+    supportedModels: [
+      'hy-image-lite',
+      'hy-image-v3.0',
+      'hy-video-1.5',
+      'yt-video-2.0',
+      'yt-video-fx',
+      'yt-video-humanactor',
+      'kl-video-v3',
+      'kl-video-v2-6',
+      'kl-video-v2-5-turbo',
+      'kl-video-v2-1-master',
+      'kl-video-v2-1',
+      'vd-video-q3-pro',
+      'vd-video-q3-turbo',
+    ],
+    hints: {
+      baseUrl: 'Default: https://tokenhub.tencentmaas.com',
+      key: 'API key from the provider',
+      models: 'Models exposed by this channel',
+    },
+  },
 }
 
 /**

@@ -234,7 +234,7 @@ export function tryParseVisualConfig(
 
     const cfg = normalizeVisualConfig({ tiers })
     const regenerated = generateExprFromVisualConfig(cfg)
-    if (regenerated.replace(/\s+/g, '') !== body.replace(/\s+/g, '')) {
+    if (regenerated.replaceAll(/\s+/g, '') !== body.replaceAll(/\s+/g, '')) {
       return null
     }
     return cfg
@@ -278,6 +278,7 @@ export function evalExprLocally(
     if (!exprStr || !exprStr.trim()) {
       return { cost: 0, matchedTier: '', error: null }
     }
+    const expression = exprStr.trim().replace(/^v\d+:/, '')
     let matchedTier = ''
     const tierFn = (name: string, value: number) => {
       matchedTier = name
@@ -304,7 +305,7 @@ export function evalExprLocally(
     }
     const fn = new Function(
       ...Object.keys(env),
-      `"use strict"; return (${exprStr});`
+      `"use strict"; return (${expression});`
     )
     const cost = Number(fn(...Object.values(env))) || 0
     return { cost, matchedTier, error: null }

@@ -25,6 +25,8 @@ import type {
   GetVendorsResponse,
   GetVendorResponse,
   Model,
+  ModelDocumentEditorPayload,
+  ModelDocumentEditorResponse,
   Vendor,
   SearchModelsParams,
   SyncUpstreamResponse,
@@ -98,6 +100,66 @@ export async function updateModelStatus(
   status: number
 ): Promise<{ success: boolean; message?: string }> {
   const res = await api.put('/api/models/?status_only=true', { id, status })
+  return res.data
+}
+
+export async function updateModelDocStatus(
+  id: number,
+  docEnabled: number
+): Promise<{ success: boolean; message?: string }> {
+  const res = await api.put('/api/models/?doc_only=true', {
+    id,
+    doc_enabled: docEnabled,
+  })
+  return res.data
+}
+
+export async function getModelDocumentEditor(
+  modelId: number
+): Promise<ModelDocumentEditorResponse> {
+  const res = await api.get(`/api/models/${modelId}/documents`)
+  return res.data
+}
+
+export async function saveModelDocumentDraft(
+  modelId: number,
+  interfaceKey: string,
+  data: ModelDocumentEditorPayload
+): Promise<ModelDocumentEditorResponse> {
+  const res = await api.put(
+    `/api/models/${modelId}/documents/${encodeURIComponent(interfaceKey)}`,
+    data
+  )
+  return res.data
+}
+
+export async function publishModelDocument(
+  modelId: number,
+  interfaceKey: string
+): Promise<ModelDocumentEditorResponse> {
+  const res = await api.post(
+    `/api/models/${modelId}/documents/${encodeURIComponent(interfaceKey)}/publish`
+  )
+  return res.data
+}
+
+export async function deleteModelDocumentOverride(
+  modelId: number,
+  interfaceKey: string
+): Promise<ModelDocumentEditorResponse> {
+  const res = await api.delete(
+    `/api/models/${modelId}/documents/${encodeURIComponent(interfaceKey)}`
+  )
+  return res.data
+}
+
+export async function previewModelDocument(
+  modelId: number,
+  html: string
+): Promise<{ success: boolean; message?: string; data?: string }> {
+  const res = await api.post(`/api/models/${modelId}/documents/preview`, {
+    html,
+  })
   return res.data
 }
 

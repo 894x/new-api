@@ -43,6 +43,7 @@ import { parseModelTags, formatEndpointsDisplay } from '../lib'
 import type { Model, Vendor } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DescriptionCell } from './description-cell'
+import { ModelDocSwitch } from './model-doc-switch'
 
 function getCompactModelIcon(iconKey: string) {
   const baseIconKey = iconKey.split('.')[0]
@@ -235,6 +236,16 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       enableSorting: false,
     },
 
+    // Model document column
+    {
+      accessorKey: 'doc_enabled',
+      header: t('Model document'),
+      meta: { mobileHidden: true },
+      cell: ({ row }) => <ModelDocSwitch model={row.original} />,
+      size: 120,
+      enableSorting: false,
+    },
+
     // Vendor column
     {
       accessorKey: 'vendor_id',
@@ -306,9 +317,9 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       cell: ({ row }) => {
         const endpoints = row.getValue('endpoints') as string
         const endpointArray = formatEndpointsDisplay(endpoints)
-        return (
-          <BadgeListCell
-            max={3}
+          return (
+            <BadgeListCell
+              max={3}
             items={endpointArray.map((ep) => (
               <StatusBadge key={ep} label={ep} autoColor={ep} size='sm' />
             ))}
@@ -334,8 +345,8 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
         return (
           <BadgeListCell
             items={(channels ?? []).map((c) => (
-              <StatusBadge
-                key={c.id}
+                <StatusBadge
+                  key={`${c.id}-${c.type}`}
                 label={`${c.name} (${c.type})`}
                 autoColor={c.name}
                 size='sm'

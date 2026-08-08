@@ -9,8 +9,10 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/modeldoc"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // GetAllModelsMeta 获取模型列表（分页）
@@ -117,6 +119,7 @@ func CreateModelMeta(c *gin.Context) {
 // UpdateModelMeta 更新模型
 func UpdateModelMeta(c *gin.Context) {
 	statusOnly := c.Query("status_only") == "true"
+	docOnly := c.Query("doc_only") == "true"
 
 	var m model.Model
 	if err := c.ShouldBindJSON(&m); err != nil {
@@ -131,6 +134,29 @@ func UpdateModelMeta(c *gin.Context) {
 	if statusOnly {
 		// 只更新状态，防止误清空其他字段
 		if err := model.DB.Model(&model.Model{}).Where("id = ?", m.Id).Update("status", m.Status).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	} else if docOnly {
+		if m.DocEnabled != 1 {
+			m.DocEnabled = 0
+		} else {
+			var modelName string
+			if err := model.DB.Model(&model.Model{}).Where("id = ?", m.Id).Pluck("model_name", &modelName).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			var publishedDocumentCount int64
+			if err := model.DB.Model(&model.ModelDocumentVariant{}).Where("model_id = ? AND published = ?", m.Id, 1).Count(&publishedDocumentCount).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			if !modeldoc.HasModel(modelName) && publishedDocumentCount == 0 {
+				common.ApiErrorMsg(c, "该模型没有可用的 HTML 文档")
+				return
+			}
+		}
+		if err := model.DB.Model(&model.Model{}).Where("id = ?", m.Id).Update("doc_enabled", m.DocEnabled).Error; err != nil {
 			common.ApiError(c, err)
 			return
 		}
@@ -161,7 +187,15 @@ func DeleteModelMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DB.Delete(&model.Model{}, id).Error; err != nil {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("model_id = ?", id).Delete(&model.ModelDocumentVariant{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("model_id = ?", id).Delete(&model.ModelDocument{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&model.Model{}, id).Error
+	}); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -174,6 +208,13 @@ func enrichModels(models []*model.Model) {
 	if len(models) == 0 {
 		return
 	}
+	modelIDs := make([]int, 0, len(models))
+	for _, modelMeta := range models {
+		if modelMeta != nil {
+			modelIDs = append(modelIDs, modelMeta.Id)
+		}
+	}
+	publishedDocumentModelIDs, _ := model.GetPublishedModelDocumentModelIDs(modelIDs)
 
 	// 1) 拆分精确与规则匹配
 	exactNames := make([]string, 0)
@@ -183,6 +224,8 @@ func enrichModels(models []*model.Model) {
 		if m == nil {
 			continue
 		}
+		_, hasPublishedDocument := publishedDocumentModelIDs[m.Id]
+		m.DocAvailable = modeldoc.HasModel(m.ModelName) || hasPublishedDocument
 		if m.NameRule == model.NameRuleExact {
 			exactNames = append(exactNames, m.ModelName)
 			exactIdx[m.ModelName] = append(exactIdx[m.ModelName], i)

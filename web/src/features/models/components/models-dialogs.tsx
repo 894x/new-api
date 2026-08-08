@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { DescriptionDialog } from './dialogs/description-dialog'
 import { MissingModelsDialog } from './dialogs/missing-models-dialog'
+import { ModelDocumentEditorDialog } from './dialogs/model-document-editor-dialog'
 import { PrefillGroupManagement } from './dialogs/prefill-group-management'
 import { SyncWizardDialog } from './dialogs/sync-wizard-dialog'
 import { UpstreamConflictDialog } from './dialogs/upstream-conflict-dialog'
@@ -42,6 +43,12 @@ export function ModelsDialogs() {
         open={open === 'create-model' || open === 'update-model'}
         onOpenChange={(v) => !v && setOpen(null)}
         currentRow={currentRow}
+      />
+
+      <ModelDocumentEditorDialog
+        open={open === 'edit-document'}
+        onOpenChange={(v) => !v && setOpen(null)}
+        model={currentRow}
       />
 
       {/* Vendor Create/Update Dialog */}

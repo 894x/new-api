@@ -20,6 +20,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/relay"
+	tasktencenttokenhub "github.com/QuantumNous/new-api/relay/channel/task/tencent_tokenhub"
+	tencenttokenhub "github.com/QuantumNous/new-api/relay/channel/tencent_tokenhub"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -112,6 +114,11 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
+	if channel.Type == constant.ChannelTypeTokenHub && tasktencenttokenhub.IsVideoModel(testModel) {
+		return testResult{
+			localErr: fmt.Errorf("%s video channel test is not supported", constant.GetChannelTypeName(channel.Type)),
+		}
+	}
 
 	requestPath := "/v1/chat/completions"
 
@@ -138,6 +145,9 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 
 		// VolcEngine 图像生成模型
 		if channel.Type == constant.ChannelTypeVolcEngine && strings.Contains(testModel, "seedream") {
+			requestPath = "/v1/images/generations"
+		}
+		if channel.Type == constant.ChannelTypeTokenHub && tencenttokenhub.IsImageModel(testModel) {
 			requestPath = "/v1/images/generations"
 		}
 
