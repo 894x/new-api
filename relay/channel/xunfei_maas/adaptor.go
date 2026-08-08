@@ -113,9 +113,13 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		usage, newAPIError = a.openaiAdaptor.DoResponse(c, resp, info)
 	}
 	if newAPIError != nil {
-		return nil, classifyError(newAPIError)
+		return nil, a.NormalizeUpstreamError(newAPIError)
 	}
 	return usage, nil
+}
+
+func (a *Adaptor) NormalizeUpstreamError(err *types.NewAPIError) *types.NewAPIError {
+	return classifyError(err)
 }
 
 func (a *Adaptor) GetModelList() []string {

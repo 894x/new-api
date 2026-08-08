@@ -21,3 +21,17 @@ func TestResponseCommittedErrorCannotRetry(t *testing.T) {
 	assert.True(t, IsResponseCommittedError(err))
 	assert.True(t, IsSkipRetryError(err))
 }
+
+func TestMarkResponseCommittedUpdatesExistingError(t *testing.T) {
+	err := NewOpenAIError(
+		errors.New("late stream failure"),
+		ErrorCodeBadResponse,
+		http.StatusBadGateway,
+	)
+
+	got := MarkResponseCommitted(err)
+
+	require.Same(t, err, got)
+	assert.True(t, IsResponseCommittedError(got))
+	assert.True(t, IsSkipRetryError(got))
+}

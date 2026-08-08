@@ -91,7 +91,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
-			if types.IsResponseCommittedError(newAPIError) {
+			if types.IsResponseCommittedError(newAPIError) || c.Writer.Written() {
 				return
 			}
 			switch relayFormat {
@@ -175,9 +175,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil {
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
-			if relayInfo.Billing != nil {
-				relayInfo.Billing.Refund(c)
-			}
+			refundRelayBillingOnFailure(c, relayInfo, newAPIError)
 			service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
 		}
 	}()
@@ -232,6 +230,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError == nil {
 			relayInfo.LastError = nil
 			return
+		}
+		if c.Writer.Written() {
+			newAPIError = types.MarkResponseCommitted(newAPIError)
 		}
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
@@ -333,6 +334,9 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	if openaiErr == nil {
 		return false
 	}
+	if c.Writer.Written() {
+		return false
+	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}
@@ -359,6 +363,13 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 	return operation_setting.ShouldRetryByStatusCode(code)
+}
+
+func refundRelayBillingOnFailure(c *gin.Context, info *relaycommon.RelayInfo, err *types.NewAPIError) {
+	if err == nil || info == nil || info.Billing == nil {
+		return
+	}
+	info.Billing.Refund(c)
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {

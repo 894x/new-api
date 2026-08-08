@@ -23,7 +23,7 @@ import {
   getPriceDetail,
   getPriceSummary,
   type ModelPricingSnapshot,
-} from './model-pricing-snapshots'
+} from '../model-pricing-snapshots'
 
 const t = (key: string) => key
 const cnyDisplay = { currencySymbol: '¥', exchangeRate: 7.3 }

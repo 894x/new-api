@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -82,6 +83,21 @@ func TestOpenAIChatHandlersRejectHTTP200BusinessError(t *testing.T) {
 		require.Contains(t, recorder.Body.String(), "partial")
 		require.NotContains(t, recorder.Body.String(), "NotEnoughCvError")
 	})
+
+	t.Run("stream after keepalive ping", func(t *testing.T) {
+		body := "data: " + xunfeiHTTP200Error + "\n\n"
+		c, recorder, resp, info := newHTTP200ErrorTestContext(t, body, "text/event-stream", true)
+		require.NoError(t, helper.PingData(c))
+
+		usage, err := OaiStreamHandler(c, info, resp)
+
+		require.Nil(t, usage)
+		require.NotNil(t, err)
+		require.True(t, types.IsResponseCommittedError(err))
+		require.True(t, types.IsSkipRetryError(err))
+		require.Contains(t, recorder.Body.String(), ": PING")
+		require.NotContains(t, recorder.Body.String(), "NotEnoughCvError")
+	})
 }
 
 func TestChatToResponsesHandlersRejectHTTP200BusinessError(t *testing.T) {
@@ -129,6 +145,21 @@ func TestChatToResponsesHandlersRejectHTTP200BusinessError(t *testing.T) {
 		require.True(t, types.IsResponseCommittedError(err))
 		require.True(t, types.IsSkipRetryError(err))
 		require.Contains(t, recorder.Body.String(), "partial")
+		require.NotContains(t, recorder.Body.String(), "NotEnoughCvError")
+	})
+
+	t.Run("stream after keepalive ping", func(t *testing.T) {
+		body := "data: " + xunfeiHTTP200Error + "\n\n"
+		c, recorder, resp, info := newHTTP200ErrorTestContext(t, body, "text/event-stream", true)
+		require.NoError(t, helper.PingData(c))
+
+		usage, err := OaiChatToResponsesStreamHandler(c, info, resp)
+
+		require.Nil(t, usage)
+		require.NotNil(t, err)
+		require.True(t, types.IsResponseCommittedError(err))
+		require.True(t, types.IsSkipRetryError(err))
+		require.Contains(t, recorder.Body.String(), ": PING")
 		require.NotContains(t, recorder.Body.String(), "NotEnoughCvError")
 	})
 }

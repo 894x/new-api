@@ -101,10 +101,17 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 	return helper.ObjectData(c, lastStreamResponse)
 }
 
+func markStreamErrorIfCommitted(c *gin.Context, err *types.NewAPIError) *types.NewAPIError {
+	if err != nil && c != nil && c.Writer != nil && c.Writer.Written() {
+		return types.MarkResponseCommitted(err)
+	}
+	return err
+}
+
 func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
-		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, markStreamErrorIfCommitted(c, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError))
 	}
 
 	defer service.CloseResponseBodyGracefully(resp)
@@ -122,7 +129,6 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	seenStreamToolCalls := make(map[string]struct{})
 	var streamFunctionCallNames []string
 	var streamErr *types.NewAPIError
-	forwardedData := false
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
@@ -133,7 +139,6 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				common.SysLog("error handling stream format: " + err.Error())
 				sr.Error(err)
 			}
-			forwardedData = c.Writer.Written()
 		}
 		if len(data) > 0 {
 			// 对音频模型，保存倒数第二个stream data
@@ -145,11 +150,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			var errorResponse dto.OpenAITextResponse
 			if err := common.UnmarshalJsonStr(data, &errorResponse); err == nil {
 				if oaiError := errorResponse.GetOpenAIError(); oaiError.IsPresent() {
-					var options []types.NewAPIErrorOptions
-					if forwardedData {
-						options = append(options, types.ErrOptionWithResponseCommitted())
-					}
-					streamErr = types.WithOpenAIError(*oaiError, resp.StatusCode, options...)
+					streamErr = markStreamErrorIfCommitted(c, types.WithOpenAIError(*oaiError, resp.StatusCode))
 					lastStreamData = ""
 					sr.Stop(streamErr)
 					return
@@ -159,11 +160,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			clientData, isStreamError := service.StreamErrorDataForClient(c, data)
 			lastStreamData = clientData
 			if isStreamError {
-				var options []types.NewAPIErrorOptions
-				if forwardedData {
-					options = append(options, types.ErrOptionWithResponseCommitted())
-				}
-				streamErr = types.NewOpenAIError(fmt.Errorf("upstream stream error: %s", common.LocalLogPreview(data)), types.ErrorCodeBadResponse, http.StatusBadGateway, options...)
+				streamErr = markStreamErrorIfCommitted(c, types.NewOpenAIError(fmt.Errorf("upstream stream error: %s", common.LocalLogPreview(data)), types.ErrorCodeBadResponse, http.StatusBadGateway))
 				lastStreamData = ""
 				sr.Stop(streamErr)
 				return
@@ -175,7 +172,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 	})
 	if streamErr != nil {
-		return nil, streamErr
+		return nil, markStreamErrorIfCommitted(c, streamErr)
 	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息

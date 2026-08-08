@@ -44,6 +44,20 @@ func IsChatCompletionsOnly(adaptor Adaptor) bool {
 	return ok && chatAdaptor.ChatCompletionsOnly()
 }
 
+// UpstreamErrorNormalizer lets provider adaptors normalize errors independently
+// of whether the upstream reported them through HTTP status, JSON, or SSE.
+type UpstreamErrorNormalizer interface {
+	NormalizeUpstreamError(err *types.NewAPIError) *types.NewAPIError
+}
+
+func NormalizeUpstreamError(adaptor Adaptor, err *types.NewAPIError) *types.NewAPIError {
+	normalizer, ok := adaptor.(UpstreamErrorNormalizer)
+	if !ok {
+		return err
+	}
+	return normalizer.NormalizeUpstreamError(err)
+}
+
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 

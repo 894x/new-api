@@ -1,6 +1,7 @@
 package xunfei_maas
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,10 +10,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -154,6 +157,23 @@ func TestClassifyErrorPreservesCommittedResponse(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, got.StatusCode)
 	assert.True(t, types.IsResponseCommittedError(got))
 	assert.True(t, types.IsSkipRetryError(got))
+}
+
+func TestNormalizeUpstreamErrorAppliesToNonOKHTTPResponses(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Body: io.NopCloser(strings.NewReader(
+			`{"error":{"code":10907,"message":"context too long"}}`,
+		)),
+	}
+	err := service.RelayErrorHandler(context.Background(), resp, false)
+
+	got := channel.NormalizeUpstreamError(&Adaptor{}, err)
+
+	require.NotNil(t, got)
+	assert.Equal(t, http.StatusBadRequest, got.StatusCode)
+	assert.True(t, types.IsSkipRetryError(got))
+	assert.Equal(t, types.ErrorCode("10907"), got.GetErrorCode())
 }
 
 func TestDoResponseRejectsHTTP200BusinessErrorBeforeBilling(t *testing.T) {

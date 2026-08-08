@@ -395,6 +395,17 @@ func IsResponseCommittedError(err *NewAPIError) bool {
 	return err != nil && err.responseCommitted
 }
 
+// MarkResponseCommitted updates an existing relay error after response bytes
+// have already been sent. It is idempotent and also disables retries.
+func MarkResponseCommitted(err *NewAPIError) *NewAPIError {
+	if err == nil {
+		return nil
+	}
+	err.responseCommitted = true
+	err.skipRetry = true
+	return err
+}
+
 func ErrOptionWithSkipRetry() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.skipRetry = true
@@ -405,8 +416,7 @@ func ErrOptionWithSkipRetry() NewAPIErrorOptions {
 // after output was sent. Such errors cannot be retried safely.
 func ErrOptionWithResponseCommitted() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
-		e.responseCommitted = true
-		e.skipRetry = true
+		MarkResponseCommitted(e)
 	}
 }
 

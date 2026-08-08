@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { resolveHomePageTemplate } from './use-home-page-content'
+import { resolveHomePageTemplate } from '../use-home-page-content'
 
 describe('resolveHomePageTemplate', () => {
   const cases = [

@@ -127,39 +127,19 @@ export function getChannelTypeIcon(type: number): string {
 
 export type ChannelExternalAPI = 'chat' | 'responses' | 'messages'
 
-const CHAT_API_CHANNEL_TYPES = new Set([
-  1, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-  24, 25, 26, 27, 31, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 45, 46, 47, 48,
-  49, 53, 58, 101,
-])
-
-const RESPONSES_API_CHANNEL_TYPES = new Set([
-  1, 3, 6, 7, 8, 9, 10, 12, 13, 17, 19, 20, 21, 22, 24, 27, 31, 39, 45, 47, 48,
-  57, 58, 101,
-])
-
-const MESSAGES_API_CHANNEL_TYPES = new Set([
-  1, 3, 4, 6, 7, 8, 9, 10, 12, 13, 14, 17, 19, 20, 21, 22, 24, 25, 26, 27, 31,
-  33, 35, 40, 41, 43, 45, 46, 47, 58, 101,
-])
+const CHANNEL_EXTERNAL_APIS: Readonly<
+  Record<number, readonly ChannelExternalAPI[]>
+> = {
+  101: ['chat', 'responses', 'messages'],
+}
 
 /**
- * Get the client-facing text API formats handled by a channel adaptor.
- * Keep these sets aligned with the adaptor conversion methods for OpenAI chat,
- * OpenAI responses, and Anthropic messages requests.
+ * Get explicitly verified client-facing text API formats for custom channels.
+ * Unlisted channels intentionally omit badges until their adaptor contract is
+ * represented by a shared backend capability registry.
  */
 export function getChannelExternalAPIs(type: number): ChannelExternalAPI[] {
-  const apiTypes: ChannelExternalAPI[] = []
-  if (CHAT_API_CHANNEL_TYPES.has(type)) {
-    apiTypes.push('chat')
-  }
-  if (RESPONSES_API_CHANNEL_TYPES.has(type)) {
-    apiTypes.push('responses')
-  }
-  if (MESSAGES_API_CHANNEL_TYPES.has(type)) {
-    apiTypes.push('messages')
-  }
-  return apiTypes
+  return [...(CHANNEL_EXTERNAL_APIS[type] ?? [])]
 }
 
 // ============================================================================

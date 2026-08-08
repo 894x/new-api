@@ -25,7 +25,7 @@ import {
   deriveModelRatioFromDisplayPrice,
   EMPTY_LANE_ENABLED,
   EMPTY_LANE_PRICES,
-} from './model-pricing-core'
+} from '../model-pricing-core'
 
 describe('model pricing currency-aware state', () => {
   it('derives the canonical model ratio from the display currency price', () => {

@@ -19,12 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import type { PricingModel } from '../pricing/types'
+import type { PricingModel } from '../../pricing/types'
 import {
   estimatePurchasableTokens,
   estimateTokenCost,
   isTokenPricedModel,
-} from './lib'
+} from '../lib'
 
 const model: PricingModel = {
   id: 1,

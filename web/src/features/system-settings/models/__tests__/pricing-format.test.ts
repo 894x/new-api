@@ -22,7 +22,7 @@ import { describe, it } from 'node:test'
 import {
   formatDisplayPriceFromUSD,
   formatUSDPriceFromDisplay,
-} from './pricing-format'
+} from '../pricing-format'
 
 describe('model pricing display currency conversion', () => {
   it('converts stored USD prices to CNY and back', () => {
