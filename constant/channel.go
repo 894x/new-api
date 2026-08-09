@@ -60,6 +60,7 @@ const (
 	ChannelTypeNewAPI         = 60
 	ChannelTypeTokenHub       = 100
 	ChannelTypeXunfeiMaaS     = 101
+	ChannelTypeAstraFlowImage = 102
 	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
@@ -128,9 +129,10 @@ var ChannelBaseURLs = func() []string {
 		"",                                          //59
 		"",                                          //60
 	}
-	baseURLs = append(baseURLs, make([]string, ChannelTypeXunfeiMaaS-len(baseURLs)+1)...)
+	baseURLs = append(baseURLs, make([]string, ChannelTypeAstraFlowImage-len(baseURLs)+1)...)
 	baseURLs[ChannelTypeTokenHub] = "https://tokenhub.tencentmaas.com"
 	baseURLs[ChannelTypeXunfeiMaaS] = "https://maas-api.cn-huabei-1.xf-yun.com"
+	baseURLs[ChannelTypeAstraFlowImage] = "https://api.modelverse.cn"
 	return baseURLs
 }()
 
@@ -194,6 +196,7 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeNewAPI:         "New API",
 	ChannelTypeTokenHub:       "Tencent TokenHub",
 	ChannelTypeXunfeiMaaS:     "Xunfei MaaS",
+	ChannelTypeAstraFlowImage: "AstraFlow Image",
 }
 
 func GetChannelTypeName(channelType int) string {

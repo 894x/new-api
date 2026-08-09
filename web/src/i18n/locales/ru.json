@@ -485,6 +485,7 @@
     "Ask anything": "Спросите что угодно",
     "Assigned by administrator only": "Назначается только администратором",
     "Assigned by administrators and used to represent a user level, such as default or vip.": "Назначается администраторами и обозначает уровень пользователя, например default или vip.",
+    "AstraFlow Image": "Изображения AstraFlow",
     "Async task polling": "Опрос асинхронных задач",
     "Async task refund": "Возврат асинхронной задачи",
     "At least one model regex pattern is required": "Требуется хотя бы один шаблон регулярного выражения модели",

@@ -544,6 +544,7 @@ export const STATIC_I18N_KEYS = [
   'OpenAI Models route must use native forwarding',
   'OpenAI Models upstream path must not contain {model}',
   'OpenAI Models route is required to enable upstream model checks',
+  'AstraFlow Image',
 
   // Dashboard flow stages (labels/descriptions passed to t at runtime)
   'User',

@@ -158,13 +158,16 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	if i.N != nil && *i.N > 0 {
 		imageN = *i.N
 	}
+	if imageN > MaxImageN {
+		imageN = MaxImageN
+	}
 
 	// Keep n separate from ImagePriceRatio so size/quality and count remain
 	// independent billing dimensions. Fixed-price pre-consume stores this on
 	// PriceData, and image settlement reuses or replaces the same "n" ratio.
 	return &types.TokenCountMeta{
 		CombineText:     i.Prompt,
-		MaxTokens:       1584,
+		MaxTokens:       1584 * int(imageN),
 		ImagePriceRatio: sizeRatio * qualityRatio,
 		BillingRatios:   map[string]float64{"n": float64(imageN)},
 	}

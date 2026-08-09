@@ -22,6 +22,7 @@ For commercial licensing, please contact support@quantumnous.com
 // ============================================================================
 
 export const CHANNEL_TYPE_NEW_API = 60
+export const CHANNEL_TYPE_ASTRAFLOW_IMAGE = 102
 
 export const CHANNEL_TYPES = {
   0: 'Unknown',
@@ -83,12 +84,13 @@ export const CHANNEL_TYPES = {
   60: 'New API',
   100: 'Tencent TokenHub',
   101: 'Xunfei MaaS',
+  102: 'AstraFlow Image',
 } as const
 
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
-  1, 14, 33, 24, 43, 3, 41, 48, 60, 58, 42, 34, 20, 4, 40, 27, 25, 17, 26, 15,
-  46, 23, 100, 101, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 59, 22,
-  21, 44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
+  1, 14, 33, 24, 43, 3, 41, 48, 60, 58, 102, 42, 34, 20, 4, 40, 27, 25, 17, 26,
+  15, 46, 23, 100, 101, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 59,
+  22, 21, 44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
 ]
 
 export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
@@ -405,6 +407,7 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
   57: 'Paste Codex OAuth JSON credential (access_token / refresh_token / account_id)',
   59: 'Enter API key for this channel',
   60: 'Enter API key for this channel',
+  102: 'Enter API key for this channel',
 }
 
 export const CHANNEL_TYPE_WARNINGS: Record<number, string> = {

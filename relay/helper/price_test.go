@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -140,6 +141,43 @@ func TestModelPriceHelperTieredPreConsumeMaxTokensFallback(t *testing.T) {
 			require.Equal(t, tc.expected, priceData.QuotaToPreConsume)
 		})
 	}
+}
+
+func TestModelPriceHelperTieredPreConsumesImageOutputTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode":    `{"tiered-image-model":"tiered_expr"}`,
+		"billing_setting.billing_expr":    `{"tiered-image-model":"tier(\"base\", p * 2 + c * 8 + img_o * 40)"}`,
+		"group_ratio_setting.group_ratio": `{"default":1}`,
+	}))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "tiered-image-model",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		RelayMode:       relayconstant.RelayModeImagesGenerations,
+		BillingRequestInput: &billingexpr.RequestInput{
+			Body: []byte(`{}`),
+		},
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 100, &types.TokenCountMeta{MaxTokens: 200})
+	require.NoError(t, err)
+	// p*2 + img_o*40 = 100*2 + 200*40 = 8200; /1e6 * 500000 = 4100.
+	require.Equal(t, 4100, priceData.QuotaToPreConsume)
 }
 
 func TestModelPriceHelperTieredRejectsPreConsumeOverflow(t *testing.T) {

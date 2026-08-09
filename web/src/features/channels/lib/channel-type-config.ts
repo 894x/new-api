@@ -202,6 +202,23 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'Models exposed by this channel',
     },
   },
+  102: {
+    id: 102,
+    name: CHANNEL_TYPES[102],
+    icon: 'openai',
+    defaultBaseUrl: 'https://api.modelverse.cn',
+    supportedModels: [
+      'gpt-image-1',
+      'gpt-image-2',
+      'gpt-image-1-mini',
+      'gpt-image-1.5',
+    ],
+    hints: {
+      baseUrl: 'Default: https://api.modelverse.cn',
+      key: 'AstraFlow API key',
+      models: 'AstraFlow GPT image models',
+    },
+  },
 }
 
 /**

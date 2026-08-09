@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/advancedcustom"
 	"github.com/QuantumNous/new-api/relay/channel/ali"
+	astraflowimage "github.com/QuantumNous/new-api/relay/channel/astraflow_image"
 	"github.com/QuantumNous/new-api/relay/channel/aws"
 	"github.com/QuantumNous/new-api/relay/channel/baidu"
 	"github.com/QuantumNous/new-api/relay/channel/baidu_v2"
@@ -132,6 +133,8 @@ func GetAdaptor(apiType int) channel.Adaptor {
 		return &sub2api.Adaptor{}
 	case constant.APITypeNewAPI:
 		return &newapi.Adaptor{}
+	case constant.APITypeAstraFlowImage:
+		return &astraflowimage.Adaptor{}
 	case constant.APITypeTencentTokenHub:
 		return &tencenttokenhub.Adaptor{}
 	case constant.APITypeXunfeiMaaS:

@@ -54,6 +54,7 @@ export function getChannelTypeIcon(type: number): string {
     58: 'NewAPI', // Advanced Custom
     59: 'Sub2API', // Sub2API
     60: 'NewAPI', // New API
+    102: 'OpenAI', // AstraFlow Image
     3: 'Azure', // Azure
 
     // Anthropic
@@ -182,6 +183,7 @@ const BUILT_IN_CHANNEL_EXTERNAL_APIS = {
   60: ALL_EXTERNAL_APIS,
   100: [],
   101: ['chat', 'responses', 'messages'],
+  102: [],
 } as const satisfies Record<
   keyof typeof CHANNEL_TYPES,
   readonly ChannelExternalAPI[]

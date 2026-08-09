@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -282,11 +283,17 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		return hosttypes.PriceData{}, err
 	}
 
-	rawCost, trace, err := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{
+	estimatedParams := billingexpr.TokenParams{
 		P:   float64(promptTokens),
 		C:   float64(estimatedCompletionTokens),
 		Len: float64(promptTokens),
-	}, requestInput)
+	}
+	usedVars := billingexpr.UsedVars(exprStr)
+	if usedVars["img_o"] && (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) {
+		estimatedParams.C = 0
+		estimatedParams.ImgO = float64(estimatedCompletionTokens)
+	}
+	rawCost, trace, err := billingexpr.RunExprWithRequest(exprStr, estimatedParams, requestInput)
 	if err != nil {
 		return hosttypes.PriceData{}, fmt.Errorf("model %s tiered expr run failed: %w", info.OriginModelName, err)
 	}

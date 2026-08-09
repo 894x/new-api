@@ -95,6 +95,21 @@ func TestNewAPIChannelRegistration(t *testing.T) {
 	assert.Empty(t, constant.ChannelBaseURLs[constant.ChannelTypeNewAPI])
 }
 
+func TestAstraFlowImageChannelRegistration(t *testing.T) {
+	apiType, ok := common.ChannelType2APIType(constant.ChannelTypeAstraFlowImage)
+
+	require.True(t, ok)
+	assert.Equal(t, constant.APITypeAstraFlowImage, apiType)
+	assert.Equal(t, "AstraFlow Image", constant.GetChannelTypeName(constant.ChannelTypeAstraFlowImage))
+	require.Greater(t, len(constant.ChannelBaseURLs), constant.ChannelTypeAstraFlowImage)
+	assert.Equal(t, "https://api.modelverse.cn", constant.ChannelBaseURLs[constant.ChannelTypeAstraFlowImage])
+	assert.Equal(t, string(constant.EndpointTypeImageGeneration), normalizeChannelTestEndpoint(
+		&model.Channel{Type: constant.ChannelTypeAstraFlowImage},
+		"gpt-image-2",
+		"",
+	))
+}
+
 func TestResponsesCompactAPITypeSupport(t *testing.T) {
 	tests := []struct {
 		name    string
