@@ -486,6 +486,7 @@
     "Assigned by administrator only": "Assigned by administrator only",
     "Assigned by administrators and used to represent a user level, such as default or vip.": "Assigned by administrators and used to represent a user level, such as default or vip.",
     "AstraFlow Image": "AstraFlow Image",
+    "AstraFlow Gemini": "AstraFlow Gemini",
     "Async task polling": "Async task polling",
     "Async task refund": "Async task refund",
     "At least one model regex pattern is required": "At least one model regex pattern is required",

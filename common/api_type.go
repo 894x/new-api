@@ -83,6 +83,8 @@ func ChannelType2APIType(channelType int) (int, bool) {
 		apiType = constant.APITypeNewAPI
 	case constant.ChannelTypeAstraFlowImage:
 		apiType = constant.APITypeAstraFlowImage
+	case constant.ChannelTypeAstraFlowGemini:
+		apiType = constant.APITypeAstraFlowGemini
 	case constant.ChannelTypeTokenHub:
 		apiType = constant.APITypeTencentTokenHub
 	case constant.ChannelTypeXunfeiMaaS:

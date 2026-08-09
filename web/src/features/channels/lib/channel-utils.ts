@@ -62,6 +62,7 @@ export function getChannelTypeIcon(type: number): string {
 
     // Google family
     24: 'Gemini', // Gemini
+    103: 'Gemini', // AstraFlow Gemini
     11: 'Google', // PaLM
     41: 'Gemini', // Vertex AI
 
@@ -184,6 +185,7 @@ const BUILT_IN_CHANNEL_EXTERNAL_APIS = {
   100: [],
   101: ['chat', 'responses', 'messages'],
   102: [],
+  103: ['chat'],
 } as const satisfies Record<
   keyof typeof CHANNEL_TYPES,
   readonly ChannelExternalAPI[]

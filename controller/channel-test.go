@@ -58,6 +58,9 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if channel != nil && channel.Type == constant.ChannelTypeAstraFlowImage {
 		return string(constant.EndpointTypeImageGeneration)
 	}
+	if channel != nil && channel.Type == constant.ChannelTypeAstraFlowGemini {
+		return string(constant.EndpointTypeImageGeneration)
+	}
 	return normalized
 }
 

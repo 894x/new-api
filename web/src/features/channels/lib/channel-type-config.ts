@@ -219,6 +219,18 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'AstraFlow GPT image models',
     },
   },
+  103: {
+    id: 103,
+    name: CHANNEL_TYPES[103],
+    icon: 'google',
+    defaultBaseUrl: 'https://api.modelverse.cn',
+    supportedModels: ['gemini-2.5-flash-image'],
+    hints: {
+      baseUrl: 'Default: https://api.modelverse.cn',
+      key: 'AstraFlow API key',
+      models: 'AstraFlow Gemini image model',
+    },
+  },
 }
 
 /**
