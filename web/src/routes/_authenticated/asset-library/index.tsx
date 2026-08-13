@@ -16,10 +16,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-export * from './channel-advanced-section'
-export * from './channel-api-access-section'
-export * from './channel-asset-library-section'
-export * from './channel-auth-section'
-export * from './channel-basic-section'
-export * from './channel-editor-loading-state'
-export * from './channel-models-section'
+import { createFileRoute } from '@tanstack/react-router'
+import z from 'zod'
+
+import { AssetLibrary } from '@/features/asset-library'
+
+const assetLibrarySearchSchema = z.object({
+  tab: z.enum(['assets', 'groups']).optional().catch('assets'),
+  page: z.number().optional().catch(1),
+  pageSize: z.number().optional().catch(undefined),
+  filter: z.string().optional().catch(''),
+  assetType: z
+    .array(z.enum(['Image', 'Video', 'Audio']))
+    .optional()
+    .catch([]),
+  groupId: z.array(z.string()).optional().catch([]),
+})
+
+export const Route = createFileRoute('/_authenticated/asset-library/')({
+  validateSearch: assetLibrarySearchSchema,
+  component: AssetLibrary,
+})

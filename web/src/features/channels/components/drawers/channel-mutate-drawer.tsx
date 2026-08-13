@@ -27,6 +27,7 @@ import {
   ClipboardPaste,
   HelpCircle,
   KeyRound,
+  Library,
   Loader2,
   Server,
   Sparkles,
@@ -107,6 +108,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { getChannelAssetLibraryConfig } from '@/features/asset-library/api'
+import { assetLibraryQueryKeys } from '@/features/asset-library/lib'
 import {
   SecureVerificationDialog,
   useSecureVerification,
@@ -187,6 +190,7 @@ import { ModelMappingEditor } from '../model-mapping-editor'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
+  ChannelAssetLibrarySection,
   ChannelAuthSection,
   ChannelBasicSection,
   ChannelEditorLoadingState,
@@ -245,12 +249,14 @@ const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
 const CHANNEL_EDITOR_SECTION_IDS = {
   identity: 'channel-section-identity',
   credentials: 'channel-section-credentials',
+  assetLibrary: 'channel-section-asset-library',
   models: 'channel-section-models',
   advanced: 'channel-section-advanced',
 } as const
 const CHANNEL_EDITOR_MAIN_SECTION_IDS = [
   CHANNEL_EDITOR_SECTION_IDS.identity,
   CHANNEL_EDITOR_SECTION_IDS.credentials,
+  CHANNEL_EDITOR_SECTION_IDS.assetLibrary,
   CHANNEL_EDITOR_SECTION_IDS.models,
   CHANNEL_EDITOR_SECTION_IDS.advanced,
 ]
@@ -667,6 +673,12 @@ export function ChannelMutateDrawer({
     queryKey: channelsQueryKeys.detail(channelId || 0),
     queryFn: () => getChannel(channelId || 0),
     enabled: isEditing && Boolean(channelId),
+  })
+
+  const { data: assetLibraryConfig } = useQuery({
+    queryKey: assetLibraryQueryKeys.channelConfig(channelId || 0),
+    queryFn: () => getChannelAssetLibraryConfig(channelId || 0),
+    enabled: open && isEditing && Boolean(channelId),
   })
 
   // Fetch available groups
@@ -1131,6 +1143,15 @@ export function ChannelMutateDrawer({
       statusLabel: getSectionStatusLabel(credentialsStatus, t),
       status: credentialsStatus,
       icon: <KeyRound className='h-4 w-4' aria-hidden='true' />,
+    },
+    {
+      id: CHANNEL_EDITOR_SECTION_IDS.assetLibrary,
+      title: t('Asset Library'),
+      description: assetLibraryConfig?.enabled ? t('Enabled') : t('Optional'),
+      statusLabel: assetLibraryConfig?.enabled ? t('Enabled') : t('Optional'),
+      status: assetLibraryConfig?.enabled ? 'configured' : 'idle',
+      configured: assetLibraryConfig?.enabled,
+      icon: <Library className='h-4 w-4' aria-hidden='true' />,
     },
     {
       id: CHANNEL_EDITOR_SECTION_IDS.models,
@@ -3270,6 +3291,17 @@ export function ChannelMutateDrawer({
                           </fieldset>
                         </div>
                       </ChannelApiAccessSection>
+                    </div>
+
+                    {/* ── Asset Library ── */}
+                    <div
+                      id={CHANNEL_EDITOR_SECTION_IDS.assetLibrary}
+                      className='scroll-mt-4'
+                    >
+                      <ChannelAssetLibrarySection
+                        channelId={channelId}
+                        disabled={sensitiveLocked}
+                      />
                     </div>
 
                     {/* ── Models & Groups ── */}
