@@ -1,0 +1,16 @@
+{
+  "id": "T033",
+  "name": "参数边界三件套",
+  "dimension": "boundary",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要分别执行 max_tokens、采样参数和 tool_choice 三组边界请求，单次工具调用不足以判定"
+  }
+}

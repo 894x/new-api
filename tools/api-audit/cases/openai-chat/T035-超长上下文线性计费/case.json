@@ -1,0 +1,16 @@
+{
+  "id": "T035",
+  "name": "超长上下文线性计费",
+  "dimension": "billing",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要模型专属 tokenizer、上下文上限和 8K/32K 账单基线"
+  }
+}

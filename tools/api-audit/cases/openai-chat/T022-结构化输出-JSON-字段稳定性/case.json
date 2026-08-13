@@ -1,0 +1,16 @@
+{
+  "id": "T022",
+  "name": "结构化输出 JSON 字段稳定性",
+  "dimension": "stability",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要多次执行并比较 JSON 字段和值稳定性，单次 schema 检查不足以判定"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "T008",
+  "name": "流式分片异常判定",
+  "dimension": "billing",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要目标模型 tokenizer 与流式分片 token 映射才能判定异常分片"
+  }
+}

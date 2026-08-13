@@ -8,13 +8,14 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -100,10 +101,17 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 	return helper.ObjectData(c, lastStreamResponse)
 }
 
+func markStreamErrorIfCommitted(c *gin.Context, err *types.NewAPIError) *types.NewAPIError {
+	if err != nil && c != nil && c.Writer != nil && c.Writer.Written() {
+		return types.MarkResponseCommitted(err)
+	}
+	return err
+}
+
 func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
-		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, markStreamErrorIfCommitted(c, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError))
 	}
 
 	defer service.CloseResponseBodyGracefully(resp)
@@ -118,6 +126,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var usage = &dto.Usage{}
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
+	seenStreamToolCalls := make(map[string]struct{})
+	var streamFunctionCallNames []string
+	var streamErr *types.NewAPIError
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
@@ -135,13 +146,34 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				secondLastStreamData = lastStreamData
 			}
 
-			lastStreamData = data
-			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
+			collectStreamFunctionCallNames(data, seenStreamToolCalls, &streamFunctionCallNames)
+			var errorResponse dto.OpenAITextResponse
+			if err := common.UnmarshalJsonStr(data, &errorResponse); err == nil {
+				if oaiError := errorResponse.GetOpenAIError(); oaiError.IsPresent() {
+					streamErr = markStreamErrorIfCommitted(c, types.WithOpenAIError(*oaiError, resp.StatusCode))
+					lastStreamData = ""
+					sr.Stop(streamErr)
+					return
+				}
+			}
+
+			clientData, isStreamError := service.StreamErrorDataForClient(c, data)
+			lastStreamData = clientData
+			if isStreamError {
+				streamErr = markStreamErrorIfCommitted(c, types.NewOpenAIError(fmt.Errorf("upstream stream error: %s", common.LocalLogPreview(data)), types.ErrorCodeBadResponse, http.StatusBadGateway))
+				lastStreamData = ""
+				sr.Stop(streamErr)
+				return
+			}
+			if err := processTokenData(info.RelayMode, clientData, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
 			}
 		}
 	})
+	if streamErr != nil {
+		return nil, markStreamErrorIfCommitted(c, streamErr)
+	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
 	if isAudioModel && secondLastStreamData != "" {
@@ -181,9 +213,38 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
 
+	for _, name := range streamFunctionCallNames {
+		info.CountBillableToolCall(dto.BuildInCallFunctionCall, name)
+	}
+
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
 
 	return usage, nil
+}
+
+func collectStreamFunctionCallNames(data string, seen map[string]struct{}, names *[]string) {
+	var streamResponse dto.ChatCompletionsStreamResponse
+	if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+		return
+	}
+	for _, choice := range streamResponse.Choices {
+		for i, tc := range choice.Delta.ToolCalls {
+			name := tc.Function.Name
+			if name == "" {
+				continue
+			}
+			toolIdx := i
+			if tc.Index != nil {
+				toolIdx = *tc.Index
+			}
+			key := fmt.Sprintf("%d-%d", choice.Index, toolIdx)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			*names = append(*names, name)
+		}
+	}
 }
 
 func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -216,7 +277,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
-	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+	if oaiError := simpleResponse.GetOpenAIError(); oaiError.IsPresent() {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
@@ -224,6 +285,12 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		if choice.FinishReason == constant.FinishReasonContentFilter {
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "openai_finish_reason=content_filter")
 			break
+		}
+	}
+
+	for _, choice := range simpleResponse.Choices {
+		for _, tc := range choice.Message.ParseToolCalls() {
+			info.CountBillableToolCall(dto.BuildInCallFunctionCall, tc.Function.Name)
 		}
 	}
 
@@ -271,15 +338,21 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 			break
 		}
 	case types.RelayFormatClaude:
-		claudeResp := service.ResponseOpenAI2Claude(&simpleResponse, info)
-		claudeRespStr, err := common.Marshal(claudeResp)
+		convertResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatClaude, &simpleResponse)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+		claudeRespStr, err := common.Marshal(convertResult.Value)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 		responseBody = claudeRespStr
 	case types.RelayFormatGemini:
-		geminiResp := service.ResponseOpenAI2Gemini(&simpleResponse, info)
-		geminiRespStr, err := common.Marshal(geminiResp)
+		convertResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatGemini, &simpleResponse)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+		geminiRespStr, err := common.Marshal(convertResult.Value)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 		}

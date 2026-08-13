@@ -1,0 +1,16 @@
+{
+  "id": "T024",
+  "name": "TTFT 首 Token 延迟",
+  "dimension": "stability",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要逐帧读取响应以记录首个 Token 时间，缓冲式 HTTP 采集无法可信测量 TTFT"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "T036",
+  "name": "大海捞针 NIAH",
+  "dimension": "quality",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "critical",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要按模型上下文窗口生成 6 组约 32K token 的定位测试"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "T027",
+  "name": "缓存生效检测",
+  "dimension": "billing",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "critical",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要两轮长 system 输入并按供应商 usage 字段映射 cached_tokens"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "T021",
+  "name": "多轮对话一致性与重复计费",
+  "dimension": "billing",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要模型专属 tokenizer 和模板开销基线，当前仅保留目录化测试入口"
+  }
+}

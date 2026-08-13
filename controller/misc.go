@@ -63,7 +63,7 @@ func GetStatus(c *gin.Context) {
 		"linuxdo_minimum_trust_level": common.LinuxDOMinimumTrustLevel,
 		"telegram_oauth":              common.TelegramOAuthEnabled,
 		"telegram_bot_name":           common.TelegramBotName,
-		"theme":                       system_setting.GetThemeSettings().Frontend,
+		"theme":                       "default",
 		"system_name":                 common.SystemName,
 		"logo":                        common.Logo,
 		"footer_html":                 common.Footer,
@@ -111,6 +111,7 @@ func GetStatus(c *gin.Context) {
 		"oidc_enabled":                system_setting.GetOIDCSettings().Enabled,
 		"oidc_client_id":              system_setting.GetOIDCSettings().ClientId,
 		"oidc_authorization_endpoint": system_setting.GetOIDCSettings().AuthorizationEndpoint,
+		"oidc_display_name":           system_setting.GetOIDCSettings().GetEffectiveDisplayName(),
 		"passkey_login":               passkeySetting.Enabled,
 		"passkey_display_name":        passkeySetting.RPDisplayName,
 		"passkey_rp_id":               passkeySetting.RPID,
@@ -226,10 +227,12 @@ func GetHomePageContent(c *gin.Context) {
 	common.OptionMapRWMutex.RLock()
 	defer common.OptionMapRWMutex.RUnlock()
 	c.JSON(http.StatusOK, gin.H{
-		"success":  true,
-		"message":  "",
-		"data":     common.OptionMap["HomePageContent"],
-		"template": common.OptionMap["HomePageTemplate"],
+		"success":                  true,
+		"message":                  "",
+		"data":                     common.OptionMap["HomePageContent"],
+		"template":                 common.OptionMap["HomePageTemplate"],
+		"business_contact_email":   common.OptionMap["BusinessContactEmail"],
+		"business_contact_qr_code": common.OptionMap["BusinessContactQRCode"],
 	})
 	return
 }

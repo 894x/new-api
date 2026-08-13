@@ -1,8 +1,11 @@
 package controller
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/http"
+	"net/mail"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -11,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -80,6 +84,9 @@ func GetOptions(c *gin.Context) {
 	optionValues := make(map[string]string)
 	common.OptionMapRWMutex.Lock()
 	for k, v := range common.OptionMap {
+		if k == "theme.frontend" {
+			continue
+		}
 		value := common.Interface2String(v)
 		isSensitiveKey := strings.HasSuffix(k, "Token") ||
 			strings.HasSuffix(k, "Secret") ||
@@ -216,23 +223,106 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "theme.frontend":
-		if option.Value != "default" && option.Value != "classic" {
+		if option.Value != "default" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "无效的主题值，可选值：default（新版前端）、classic（经典前端）",
+				"message": "Classic 前端已移除，主题只能设置为 default",
 			})
 			return
 		}
 	case "HomePageTemplate":
-		if option.Value != "system" && option.Value != "quality" && option.Value != "economy" && option.Value != "custom" {
+		if option.Value != "system" &&
+			option.Value != "quality" &&
+			option.Value != "economy" &&
+			option.Value != "business" &&
+			option.Value != "custom" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "无效的首页模板，可选值：system、quality、economy、custom",
+				"message": "无效的首页模板，可选值：system、quality、economy、business、custom",
 			})
 			return
 		}
+	case "BusinessContactEmail":
+		address, parseErr := mail.ParseAddress(option.Value.(string))
+		if parseErr != nil || address.Address != option.Value {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "无效的商务联系邮箱",
+			})
+			return
+		}
+	case "BusinessContactQRCode":
+		imageSource := option.Value.(string)
+		if len(imageSource) > 700*1024 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "商务联系二维码图片不能超过 512 KB",
+			})
+			return
+		}
+
+		if strings.HasPrefix(imageSource, "data:") {
+			allowedPrefix := strings.HasPrefix(imageSource, "data:image/png;base64,") ||
+				strings.HasPrefix(imageSource, "data:image/jpeg;base64,") ||
+				strings.HasPrefix(imageSource, "data:image/webp;base64,") ||
+				strings.HasPrefix(imageSource, "data:image/gif;base64,")
+			parts := strings.SplitN(imageSource, ",", 2)
+			if !allowedPrefix || len(parts) != 2 {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "商务联系二维码仅支持 PNG、JPEG、WebP 或 GIF 图片",
+				})
+				return
+			}
+			decoded, decodeErr := base64.StdEncoding.DecodeString(parts[1])
+			if decodeErr != nil || len(decoded) > 512*1024 {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "无效的商务联系二维码图片，或图片超过 512 KB",
+				})
+				return
+			}
+		} else {
+			parsedURL, parseErr := url.ParseRequestURI(imageSource)
+			isRelativePath := strings.HasPrefix(imageSource, "/") && !strings.HasPrefix(imageSource, "//")
+			isRemoteURL := parseErr == nil && (parsedURL.Scheme == "http" || parsedURL.Scheme == "https") && parsedURL.Host != ""
+			if !isRelativePath && !isRemoteURL {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "无效的商务联系二维码图片地址",
+				})
+				return
+			}
+		}
 	case "GroupRatio":
 		err = ratio_setting.CheckGroupRatio(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	case "gemini.safety_settings":
+		err = model_setting.ValidateGeminiSafetySettings(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	case "claude.default_max_tokens":
+		err = model_setting.ValidateClaudeDefaultMaxTokens(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	case operation_setting.ToolPriceOptionKey:
+		err = operation_setting.ValidateToolPricesJSON(option.Value.(string))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,

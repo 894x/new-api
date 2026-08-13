@@ -1,0 +1,67 @@
+{
+  "documents": [
+    {
+      "slug": "doubao-seedance-1-0-pro-250528",
+      "model": "doubao-seedance-1-0-pro-250528",
+      "title": "Seedance 1.0 Pro",
+      "vendor": "VolcEngine",
+      "category": "video",
+      "summary": "Seedance 1.0 Pro 视频生成模型接入说明与扩展参数。",
+      "updated_at": "2026-08-04"
+    },
+    {
+      "slug": "doubao-seedance-1-0-lite-t2v",
+      "model": "doubao-seedance-1-0-lite-t2v",
+      "title": "Seedance 1.0 Lite T2V",
+      "vendor": "VolcEngine",
+      "category": "video",
+      "summary": "Seedance 1.0 Lite 文生视频模型接入说明与扩展参数。",
+      "updated_at": "2026-08-04"
+    },
+    {
+      "slug": "doubao-seedance-1-0-lite-i2v",
+      "model": "doubao-seedance-1-0-lite-i2v",
+      "title": "Seedance 1.0 Lite I2V",
+      "vendor": "VolcEngine",
+      "category": "video",
+      "summary": "Seedance 1.0 Lite 图生视频模型接入说明与扩展参数。",
+      "updated_at": "2026-08-04"
+    },
+    {
+      "slug": "doubao-seedance-1-5-pro-251215",
+      "model": "doubao-seedance-1-5-pro-251215",
+      "title": "Seedance 1.5 Pro",
+      "vendor": "VolcEngine",
+      "category": "video",
+      "summary": "Seedance 1.5 Pro 视频生成模型接入说明与扩展参数。",
+      "updated_at": "2026-08-04"
+    },
+    {
+      "slug": "doubao-seedance-2-0-260128",
+      "model": "doubao-seedance-2-0-260128",
+      "title": "Seedance 2.0",
+      "vendor": "VolcEngine",
+      "category": "video",
+      "summary": "Seedance 2.0 多模态视频生成模型接入说明与扩展参数。",
+      "updated_at": "2026-08-04"
+    },
+    {
+      "slug": "doubao-seedance-2-0-fast-260128",
+      "model": "doubao-seedance-2-0-fast-260128",
+      "title": "Seedance 2.0 Fast",
+      "vendor": "VolcEngine",
+      "category": "video",
+      "summary": "Seedance 2.0 Fast 视频生成模型接入说明与扩展参数。",
+      "updated_at": "2026-08-04"
+    },
+    {
+      "slug": "doubao-seedance-2-0-mini-260615",
+      "model": "doubao-seedance-2-0-mini-260615",
+      "title": "Seedance 2.0 Mini",
+      "vendor": "VolcEngine",
+      "category": "video",
+      "summary": "Seedance 2.0 Mini 视频生成模型接入说明与扩展参数。",
+      "updated_at": "2026-08-04"
+    }
+  ]
+}

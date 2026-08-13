@@ -1,0 +1,16 @@
+{
+  "id": "T007",
+  "name": "流式与非流式计费一致性",
+  "dimension": "billing",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要对同一请求执行流式与非流式双调用并比较 usage，目前通用请求检查不足以判定计费一致性"
+  }
+}

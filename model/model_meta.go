@@ -30,6 +30,7 @@ type Model struct {
 	VendorID     int            `json:"vendor_id,omitempty" gorm:"index"`
 	Endpoints    string         `json:"endpoints,omitempty" gorm:"type:text"`
 	Status       int            `json:"status" gorm:"default:1"`
+	DocEnabled   int            `json:"doc_enabled"`
 	SyncOfficial int            `json:"sync_official" gorm:"default:1"`
 	CreatedTime  int64          `json:"created_time" gorm:"bigint"`
 	UpdatedTime  int64          `json:"updated_time" gorm:"bigint"`
@@ -42,9 +43,13 @@ type Model struct {
 
 	MatchedModels []string `json:"matched_models,omitempty" gorm:"-"`
 	MatchedCount  int      `json:"matched_count,omitempty" gorm:"-"`
+	DocAvailable  bool     `json:"doc_available" gorm:"-"`
 }
 
 func (mi *Model) Insert() error {
+	if mi.DocEnabled != 1 {
+		mi.DocEnabled = 0
+	}
 	now := common.GetTimestamp()
 	mi.CreatedTime = now
 	mi.UpdatedTime = now
@@ -75,11 +80,30 @@ func IsModelNameDuplicated(id int, name string) (bool, error) {
 }
 
 func (mi *Model) Update() error {
+	if mi.DocEnabled != 1 {
+		mi.DocEnabled = 0
+	}
 	mi.UpdatedTime = common.GetTimestamp()
 	// 使用 Select 强制更新所有字段，包括零值
 	return DB.Model(&Model{}).Where("id = ?", mi.Id).
-		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
+		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "doc_enabled", "sync_official", "name_rule", "updated_time").
 		Updates(mi).Error
+}
+
+func GetDocumentEnabledModelNames() ([]string, error) {
+	var modelNames []string
+	err := DB.Model(&Model{}).
+		Where("doc_enabled = ?", 1).
+		Pluck("model_name", &modelNames).Error
+	return modelNames, err
+}
+
+func IsModelDocumentEnabled(modelName string) (bool, error) {
+	var count int64
+	err := DB.Model(&Model{}).
+		Where("model_name = ? AND doc_enabled = ?", modelName, 1).
+		Count(&count).Error
+	return count > 0, err
 }
 
 func (mi *Model) Delete() error {
@@ -105,8 +129,7 @@ func GetVendorModelCounts() (map[int64]int64, error) {
 }
 
 func GetAllModels(offset int, limit int) ([]*Model, error) {
-	var models []*Model
-	err := DB.Order("id DESC").Offset(offset).Limit(limit).Find(&models).Error
+	models, _, err := SearchModels("", "", "", "", offset, limit)
 	return models, err
 }
 
@@ -192,7 +215,7 @@ func GetPreferredModelOwnerChannelTypes(modelNames []string, groups []string) (m
 	return result, nil
 }
 
-func SearchModels(keyword string, vendor string, offset int, limit int) ([]*Model, int64, error) {
+func SearchModels(keyword string, vendor string, status string, syncOfficial string, offset int, limit int) ([]*Model, int64, error) {
 	var models []*Model
 	db := DB.Model(&Model{})
 	if keyword != "" {
@@ -206,6 +229,12 @@ func SearchModels(keyword string, vendor string, offset int, limit int) ([]*Mode
 			db = db.Joins("JOIN vendors ON vendors.id = models.vendor_id").Where("vendors.name LIKE ?", "%"+vendor+"%")
 		}
 	}
+	if statusValue, ok := parseModelStatusFilter(status); ok {
+		db = db.Where("models.status = ?", statusValue)
+	}
+	if syncValue, ok := parseModelSyncFilter(syncOfficial); ok {
+		db = db.Where("models.sync_official = ?", syncValue)
+	}
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -214,4 +243,42 @@ func SearchModels(keyword string, vendor string, offset int, limit int) ([]*Mode
 		return nil, 0, err
 	}
 	return models, total, nil
+}
+
+// parseModelStatusFilter maps UI/API status values to the models.status column.
+// Returns ok=false when no status filter should be applied.
+func parseModelStatusFilter(status string) (value int, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "all":
+		return 0, false
+	case "enabled", "1":
+		return 1, true
+	case "disabled", "0":
+		return 0, true
+	default:
+		n, err := strconv.Atoi(status)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	}
+}
+
+// parseModelSyncFilter maps UI/API sync values to the models.sync_official column.
+// Returns ok=false when no sync filter should be applied.
+func parseModelSyncFilter(syncOfficial string) (value int, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(syncOfficial)) {
+	case "", "all":
+		return 0, false
+	case "yes", "1":
+		return 1, true
+	case "no", "0":
+		return 0, true
+	default:
+		n, err := strconv.Atoi(syncOfficial)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	}
 }

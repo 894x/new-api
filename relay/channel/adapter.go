@@ -4,10 +4,11 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/QuantumNous/new-api/dto"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -31,10 +32,36 @@ type Adaptor interface {
 	ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error)
 }
 
+// ChatCompletionsOnlyAdaptor identifies providers whose upstream only accepts
+// the Chat Completions protocol. Responses and Messages requests must be
+// converted locally even when request pass-through is enabled.
+type ChatCompletionsOnlyAdaptor interface {
+	ChatCompletionsOnly() bool
+}
+
+func IsChatCompletionsOnly(adaptor Adaptor) bool {
+	chatAdaptor, ok := adaptor.(ChatCompletionsOnlyAdaptor)
+	return ok && chatAdaptor.ChatCompletionsOnly()
+}
+
+// UpstreamErrorNormalizer lets provider adaptors normalize errors independently
+// of whether the upstream reported them through HTTP status, JSON, or SSE.
+type UpstreamErrorNormalizer interface {
+	NormalizeUpstreamError(err *types.NewAPIError) *types.NewAPIError
+}
+
+func NormalizeUpstreamError(adaptor Adaptor, err *types.NewAPIError) *types.NewAPIError {
+	normalizer, ok := adaptor.(UpstreamErrorNormalizer)
+	if !ok {
+		return err
+	}
+	return normalizer.NormalizeUpstreamError(err)
+}
+
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 
-	ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError
+	ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *taskdto.TaskError
 
 	// ── Billing ──────────────────────────────────────────────────────
 
@@ -67,7 +94,7 @@ type TaskAdaptor interface {
 	BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error)
 
 	DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error)
-	DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, err *dto.TaskError)
+	DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, err *taskdto.TaskError)
 
 	GetModelList() []string
 	GetChannelName() string
@@ -80,4 +107,11 @@ type TaskAdaptor interface {
 
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
+}
+
+// NativeVideoConverter renders a stored task using its provider-native video
+// response contract. Provider-native routes require their selected adaptor to
+// implement this interface.
+type NativeVideoConverter interface {
+	ConvertToNativeVideo(originTask *model.Task) ([]byte, error)
 }

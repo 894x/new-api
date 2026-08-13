@@ -1,0 +1,16 @@
+{
+  "id": "T023",
+  "name": "速率限制、并发与 429",
+  "dimension": "stability",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "并发数量和允许的 429 比例需要按被测渠道的 SLA 配置"
+  }
+}
