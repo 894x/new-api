@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { getGroups as getUserGroups } from '@/features/users/api'
 import { api, type ApiRequestConfig } from '@/lib/api'
 
+import { ensureSuccessfulModelRoutingOverridesResponse } from './lib/model-routing-overrides'
 import type {
   AddChannelRequest,
   BatchDeleteParams,
@@ -35,6 +36,8 @@ import type {
   GetChannelsResponse,
   MultiKeyManageParams,
   MultiKeyStatusResponse,
+  ModelRoutingOverridePatch,
+  ModelRoutingOverridesResponse,
   SearchChannelsParams,
   SearchChannelsResponse,
   TagOperationParams,
@@ -102,6 +105,50 @@ export async function searchChannels(
  */
 export async function getChannel(id: number): Promise<GetChannelResponse> {
   const res = await api.get(`/api/channel/${id}`)
+  return res.data
+}
+
+export async function getChannelModelRoutingOverrides(
+  channelId: number
+): Promise<ModelRoutingOverridesResponse> {
+  const res = await api.get(
+    `/api/channel/${channelId}/model-routing-overrides`,
+    channelActionConfig()
+  )
+  return ensureSuccessfulModelRoutingOverridesResponse(res.data)
+}
+
+export async function getModelChannelRoutingOverrides(
+  model: string
+): Promise<ModelRoutingOverridesResponse> {
+  const res = await api.get(
+    '/api/channel/model-routing-overrides',
+    channelActionConfig({ params: { model } })
+  )
+  return ensureSuccessfulModelRoutingOverridesResponse(res.data)
+}
+
+export async function patchChannelModelRoutingOverrides(
+  channelId: number,
+  overrides: ModelRoutingOverridePatch[]
+): Promise<ModelRoutingOverridesResponse> {
+  const res = await api.patch(
+    `/api/channel/${channelId}/model-routing-overrides`,
+    { overrides },
+    channelActionConfig()
+  )
+  return res.data
+}
+
+export async function patchModelChannelRoutingOverrides(
+  model: string,
+  overrides: ModelRoutingOverridePatch[]
+): Promise<ModelRoutingOverridesResponse> {
+  const res = await api.patch(
+    '/api/channel/model-routing-overrides',
+    { overrides },
+    channelActionConfig({ params: { model } })
+  )
   return res.data
 }
 

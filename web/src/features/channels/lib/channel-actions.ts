@@ -54,6 +54,16 @@ export const channelsQueryKeys = {
     [...channelsQueryKeys.lists(), params] as const,
   details: () => [...channelsQueryKeys.all, 'detail'] as const,
   detail: (id: number) => [...channelsQueryKeys.details(), id] as const,
+  modelRoutingOverrides: () =>
+    [...channelsQueryKeys.all, 'model-routing-overrides'] as const,
+  modelRoutingOverridesByChannel: (channelId: number) =>
+    [
+      ...channelsQueryKeys.modelRoutingOverrides(),
+      'channel',
+      channelId,
+    ] as const,
+  modelRoutingOverridesByModel: (model: string) =>
+    [...channelsQueryKeys.modelRoutingOverrides(), 'model', model] as const,
 }
 
 function getChannelTestResponseTime(
