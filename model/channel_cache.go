@@ -3,9 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
-	"math/rand"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,8 +14,14 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
-var group2model2channels map[string]map[string][]int // enabled channel
-var channelsIDM map[int]*Channel                     // all channels include disabled
+type cachedChannelRouting struct {
+	ChannelId int
+	Priority  int64
+	Weight    uint
+}
+
+var group2model2channels map[string]map[string][]cachedChannelRouting // enabled channel routing
+var channelsIDM map[int]*Channel                                      // all channels include disabled
 // channel2advancedCustomConfig caches parsed Advanced Custom (type 58) configs so
 // path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
@@ -31,7 +35,10 @@ func InitChannelCache() {
 	newChannelId2channel := make(map[int]*Channel)
 	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
 	var channels []*Channel
-	DB.Find(&channels)
+	if err := DB.Find(&channels).Error; err != nil {
+		common.SysLog(fmt.Sprintf("failed to sync channels from database: %v", err))
+		return
+	}
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
 		if channel.Type == constant.ChannelTypeAdvancedCustom {
@@ -41,38 +48,42 @@ func InitChannelCache() {
 		}
 	}
 	var abilities []*Ability
-	DB.Find(&abilities)
+	if err := DB.Where("enabled = ?", true).Find(&abilities).Error; err != nil {
+		common.SysLog(fmt.Sprintf("failed to sync channel abilities from database: %v", err))
+		return
+	}
 	groups := make(map[string]bool)
 	for _, ability := range abilities {
 		groups[ability.Group] = true
 	}
-	newGroup2model2channels := make(map[string]map[string][]int)
+	newGroup2model2channels := make(map[string]map[string][]cachedChannelRouting)
 	for group := range groups {
-		newGroup2model2channels[group] = make(map[string][]int)
+		newGroup2model2channels[group] = make(map[string][]cachedChannelRouting)
 	}
-	for _, channel := range channels {
-		if channel.Status != common.ChannelStatusEnabled {
-			continue // skip disabled channels
+	for _, ability := range abilities {
+		if _, ok := newChannelId2channel[ability.ChannelId]; !ok {
+			continue
 		}
-		groups := strings.Split(channel.Group, ",")
-		for _, group := range groups {
-			models := strings.Split(channel.Models, ",")
-			for _, model := range models {
-				if _, ok := newGroup2model2channels[group][model]; !ok {
-					newGroup2model2channels[group][model] = make([]int, 0)
-				}
-				newGroup2model2channels[group][model] = append(newGroup2model2channels[group][model], channel.Id)
-			}
+		if _, ok := newGroup2model2channels[ability.Group]; !ok {
+			newGroup2model2channels[ability.Group] = make(map[string][]cachedChannelRouting)
 		}
+		newGroup2model2channels[ability.Group][ability.Model] = append(
+			newGroup2model2channels[ability.Group][ability.Model],
+			cachedChannelRouting{
+				ChannelId: ability.ChannelId,
+				Priority:  effectiveAbilityPriority(ability),
+				Weight:    ability.Weight,
+			},
+		)
 	}
 
 	// sort by priority
 	for group, model2channels := range newGroup2model2channels {
-		for model, channels := range model2channels {
-			sort.Slice(channels, func(i, j int) bool {
-				return newChannelId2channel[channels[i]].GetPriority() > newChannelId2channel[channels[j]].GetPriority()
+		for model, routings := range model2channels {
+			sort.Slice(routings, func(i, j int) bool {
+				return routings[i].Priority > routings[j].Priority
 			})
-			newGroup2model2channels[group][model] = channels
+			newGroup2model2channels[group][model] = routings
 		}
 	}
 
@@ -121,91 +132,64 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	defer channelSyncLock.RUnlock()
 
 	// First, try to find channels with the exact model name.
-	channels := filterChannelsByRequestPathAndModel(group2model2channels[group][model], requestPath, model)
+	routings := filterChannelsByRequestPathAndModel(group2model2channels[group][model], requestPath, model)
 
 	// If no channels found, try to find channels with the normalized model name.
-	if len(channels) == 0 {
+	if len(routings) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
+		routings = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
 	}
 
-	if len(channels) == 0 {
+	if len(routings) == 0 {
 		return nil, nil
 	}
 
-	if len(channels) == 1 {
-		if channel, ok := channelsIDM[channels[0]]; ok {
+	if len(routings) == 1 {
+		if channel, ok := channelsIDM[routings[0].ChannelId]; ok {
 			return channel, nil
 		}
-		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
+		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", routings[0].ChannelId)
 	}
 
-	uniquePriorities := make(map[int]bool)
-	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			uniquePriorities[int(channel.GetPriority())] = true
-		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+	uniquePriorities := make(map[int64]bool)
+	for _, routing := range routings {
+		if _, ok := channelsIDM[routing.ChannelId]; !ok {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", routing.ChannelId)
 		}
+		uniquePriorities[routing.Priority] = true
 	}
-	var sortedUniquePriorities []int
+	var sortedUniquePriorities []int64
 	for priority := range uniquePriorities {
 		sortedUniquePriorities = append(sortedUniquePriorities, priority)
 	}
-	sort.Sort(sort.Reverse(sort.IntSlice(sortedUniquePriorities)))
+	sort.Slice(sortedUniquePriorities, func(i, j int) bool { return sortedUniquePriorities[i] > sortedUniquePriorities[j] })
 
 	if retry >= len(uniquePriorities) {
 		retry = len(uniquePriorities) - 1
 	}
-	targetPriority := int64(sortedUniquePriorities[retry])
+	targetPriority := sortedUniquePriorities[retry]
 
 	// get the priority for the given retry number
-	var sumWeight = 0
-	var targetChannels []*Channel
-	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			if channel.GetPriority() == targetPriority {
-				sumWeight += channel.GetWeight()
-				targetChannels = append(targetChannels, channel)
-			}
-		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+	var targetRoutings []cachedChannelRouting
+	for _, routing := range routings {
+		if routing.Priority == targetPriority {
+			targetRoutings = append(targetRoutings, routing)
 		}
 	}
 
-	if len(targetChannels) == 0 {
+	if len(targetRoutings) == 0 {
 		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
 	}
 
-	// smoothing factor and adjustment
-	smoothingFactor := 1
-	smoothingAdjustment := 0
-
-	if sumWeight == 0 {
-		// when all channels have weight 0, set sumWeight to the number of channels and set smoothing adjustment to 100
-		// each channel's effective weight = 100
-		sumWeight = len(targetChannels) * 100
-		smoothingAdjustment = 100
-	} else if sumWeight/len(targetChannels) < 10 {
-		// when the average weight is less than 10, set smoothing factor to 100
-		smoothingFactor = 100
+	abilities := make([]Ability, 0, len(targetRoutings))
+	for _, routing := range targetRoutings {
+		abilities = append(abilities, Ability{ChannelId: routing.ChannelId, Weight: routing.Weight})
 	}
-
-	// Calculate the total weight of all channels up to endIdx
-	totalWeight := sumWeight * smoothingFactor
-
-	// Generate a random value in the range [0, totalWeight)
-	randomWeight := rand.Intn(totalWeight)
-
-	// Find a channel based on its weight
-	for _, channel := range targetChannels {
-		randomWeight -= channel.GetWeight()*smoothingFactor + smoothingAdjustment
-		if randomWeight < 0 {
-			return channel, nil
-		}
+	channelId := chooseChannelIdByWeight(abilities, common.GetRandomInt)
+	if channel, ok := channelsIDM[channelId]; ok {
+		return channel, nil
 	}
-	// return null if no channel is not found
-	return nil, errors.New("channel not found")
+	return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
 }
 
 // filterChannelsByRequestPathAndModel restricts candidates by request path and
@@ -213,24 +197,24 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 // only when one of their configured routes matches requestPath and model. All
 // other channel types always pass. When requestPath is empty, filtering is skipped.
 // Caller must hold channelSyncLock (read lock). The cached slice is never mutated.
-func filterChannelsByRequestPathAndModel(channels []int, requestPath string, model string) []int {
-	if requestPath == "" || len(channels) == 0 {
-		return channels
+func filterChannelsByRequestPathAndModel(routings []cachedChannelRouting, requestPath string, model string) []cachedChannelRouting {
+	if requestPath == "" || len(routings) == 0 {
+		return routings
 	}
-	filtered := make([]int, 0, len(channels))
-	for _, channelId := range channels {
-		channel, ok := channelsIDM[channelId]
+	filtered := make([]cachedChannelRouting, 0, len(routings))
+	for _, routing := range routings {
+		channel, ok := channelsIDM[routing.ChannelId]
 		if !ok {
 			// keep it so the downstream consistency error is raised as before
-			filtered = append(filtered, channelId)
+			filtered = append(filtered, routing)
 			continue
 		}
 		if channel.Type != constant.ChannelTypeAdvancedCustom {
-			filtered = append(filtered, channelId)
+			filtered = append(filtered, routing)
 			continue
 		}
-		if config := channel2advancedCustomConfig[channelId]; config != nil && config.SupportsPathForModel(requestPath, model) {
-			filtered = append(filtered, channelId)
+		if config := channel2advancedCustomConfig[routing.ChannelId]; config != nil && config.SupportsPathForModel(requestPath, model) {
+			filtered = append(filtered, routing)
 		}
 	}
 	return filtered
@@ -280,11 +264,11 @@ func CacheUpdateChannelStatus(id int, status int) {
 	if status != common.ChannelStatusEnabled {
 		// delete the channel from group2model2channels
 		for group, model2channels := range group2model2channels {
-			for model, channels := range model2channels {
-				for i, channelId := range channels {
-					if channelId == id {
+			for model, routings := range model2channels {
+				for i, routing := range routings {
+					if routing.ChannelId == id {
 						// remove the channel from the slice
-						group2model2channels[group][model] = append(channels[:i], channels[i+1:]...)
+						group2model2channels[group][model] = append(routings[:i], routings[i+1:]...)
 						break
 					}
 				}

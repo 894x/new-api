@@ -416,6 +416,108 @@ func GetChannel(c *gin.Context) {
 	return
 }
 
+type channelModelOverridePatchRequest struct {
+	Overrides []model.ChannelModelOverridePatch `json:"overrides"`
+}
+
+func GetChannelModelRoutingOverrides(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	routings, err := model.ListChannelModelRoutings(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, routings)
+}
+
+func GetModelChannelRoutingOverrides(c *gin.Context) {
+	modelName := strings.TrimSpace(c.Query("model"))
+	if modelName == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	routings, err := model.ListModelChannelRoutings(modelName)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, routings)
+}
+
+func PatchChannelModelRoutingOverrides(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	var request channelModelOverridePatchRequest
+	if err := c.ShouldBindJSON(&request); err != nil || len(request.Overrides) == 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	for i := range request.Overrides {
+		if request.Overrides[i].ChannelId != 0 && request.Overrides[i].ChannelId != id {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		request.Overrides[i].ChannelId = id
+	}
+	if err := model.PatchChannelModelOverrides(request.Overrides); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.InitChannelCache()
+	recordManageAudit(c, "channel.model_routing_override", map[string]interface{}{
+		"id":    id,
+		"count": len(request.Overrides),
+	})
+	routings, err := model.ListChannelModelRoutings(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, routings)
+}
+
+func PatchModelChannelRoutingOverrides(c *gin.Context) {
+	modelName := strings.TrimSpace(c.Query("model"))
+	if modelName == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	var request channelModelOverridePatchRequest
+	if err := c.ShouldBindJSON(&request); err != nil || len(request.Overrides) == 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	for i := range request.Overrides {
+		if strings.TrimSpace(request.Overrides[i].Model) != "" && strings.TrimSpace(request.Overrides[i].Model) != modelName {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		request.Overrides[i].Model = modelName
+	}
+	if err := model.PatchChannelModelOverrides(request.Overrides); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.InitChannelCache()
+	recordManageAudit(c, "model.channel_routing_override", map[string]interface{}{
+		"model": modelName,
+		"count": len(request.Overrides),
+	})
+	routings, err := model.ListModelChannelRoutings(modelName)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, routings)
+}
+
 // GetChannelKey 获取渠道密钥（需要通过安全验证中间件）
 // 此函数依赖 SecureVerificationRequired 中间件，确保用户已通过安全验证
 func GetChannelKey(c *gin.Context) {
@@ -485,17 +587,16 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("New API channel base URL cannot be empty")
 	}
 
+	for _, modelName := range channel.GetModels() {
+		if len(modelName) > 255 {
+			return fmt.Errorf("模型名称过长: %s", modelName)
+		}
+	}
+
 	// 如果是添加操作，检查 channel 和 key 是否为空
 	if isAdd {
 		if channel.Key == "" {
 			return fmt.Errorf("channel cannot be empty")
-		}
-
-		// 检查模型名称长度是否超过 255
-		for _, m := range channel.GetModels() {
-			if len(m) > 255 {
-				return fmt.Errorf("模型名称过长: %s", m)
-			}
 		}
 	}
 
@@ -1443,8 +1544,8 @@ func CopyChannel(c *gin.Context) {
 		return
 	}
 
-	// insert
-	if err := clone.Insert(); err != nil {
+	// insert together with the sparse per-model routing overrides
+	if err := model.CloneChannelWithModelOverrides(origin.Id, &clone); err != nil {
 		common.SysError("failed to clone channel: " + err.Error())
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "复制渠道失败，请稍后重试"})
 		return

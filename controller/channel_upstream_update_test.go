@@ -469,6 +469,61 @@ func TestApplySelectedModelChanges(t *testing.T) {
 	})
 }
 
+func TestApplyChannelUpstreamModelUpdatesPrunesOnlyRemovedModelOverride(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	priority := int64(1)
+	weight := uint(2)
+	channel := &model.Channel{
+		Id:       6301,
+		Type:     1,
+		Key:      "key",
+		Status:   common.ChannelStatusEnabled,
+		Name:     "upstream-routing",
+		Models:   "model-a,model-b",
+		Group:    "default",
+		Priority: &priority,
+		Weight:   &weight,
+	}
+	settings := dto.ChannelOtherSettings{
+		UpstreamModelUpdateLastDetectedModels: []string{"model-c"},
+		UpstreamModelUpdateLastRemovedModels:  []string{"model-b"},
+	}
+	channel.SetOtherSettings(settings)
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+	overridePriority := int64(9)
+	require.NoError(t, model.PatchChannelModelOverrides([]model.ChannelModelOverridePatch{
+		{ChannelId: channel.Id, Model: "model-a", Priority: &overridePriority},
+		{ChannelId: channel.Id, Model: "model-b", Priority: &overridePriority},
+	}))
+
+	added, removed, _, _, changed, err := applyChannelUpstreamModelUpdates(
+		channel,
+		[]string{"model-c"},
+		nil,
+		[]string{"model-b"},
+	)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Equal(t, []string{"model-c"}, added)
+	assert.Equal(t, []string{"model-b"}, removed)
+	assert.Equal(t, "model-a,model-c", channel.Models)
+
+	var overrides []model.ChannelModelOverride
+	require.NoError(t, db.Where("channel_id = ?", channel.Id).Order("model").Find(&overrides).Error)
+	require.Len(t, overrides, 1)
+	assert.Equal(t, "model-a", overrides[0].Model)
+	var abilities []model.Ability
+	require.NoError(t, db.Where("channel_id = ?", channel.Id).Order("model").Find(&abilities).Error)
+	require.Len(t, abilities, 2)
+	assert.Equal(t, "model-a", abilities[0].Model)
+	require.NotNil(t, abilities[0].Priority)
+	assert.Equal(t, int64(9), *abilities[0].Priority)
+	assert.Equal(t, "model-c", abilities[1].Model)
+	require.NotNil(t, abilities[1].Priority)
+	assert.Equal(t, int64(1), *abilities[1].Priority)
+}
+
 func TestCollectPendingApplyUpstreamModelChanges(t *testing.T) {
 	settings := dto.ChannelOtherSettings{
 		UpstreamModelUpdateLastDetectedModels: []string{" gpt-4o ", "gpt-4o", "gpt-4.1"},
