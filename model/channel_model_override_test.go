@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -235,16 +237,25 @@ func TestChannelDeletionRemovesModelRoutingOverrides(t *testing.T) {
 func TestCloneChannelWithModelOverridesCopiesSparseState(t *testing.T) {
 	clearChannelModelRoutingTables(t)
 	source := createChannelModelRoutingTestChannel(t, 5301, "model-a", 1, 2, common.ChannelStatusEnabled)
+	source.Name = "current-source"
+	source.Balance = 12.5
+	source.UsedQuota = 99
+	require.NoError(t, DB.Model(&Channel{}).Where("id = ?", source.Id).Updates(map[string]any{
+		"name":       source.Name,
+		"balance":    source.Balance,
+		"used_quota": source.UsedQuota,
+	}).Error)
 	priority := int64(8)
 	require.NoError(t, PatchChannelModelOverrides([]ChannelModelOverridePatch{
 		{ChannelId: source.Id, Model: "model-a", Priority: &priority},
 	}))
 
-	clone := *source
-	clone.Id = 0
-	clone.Name = "clone"
-	require.NoError(t, CloneChannelWithModelOverrides(source.Id, &clone))
+	clone, err := CloneChannelWithModelOverrides(source.Id, "-clone", true)
+	require.NoError(t, err)
 	require.NotZero(t, clone.Id)
+	assert.Equal(t, "current-source-clone", clone.Name)
+	assert.Zero(t, clone.Balance)
+	assert.Zero(t, clone.UsedQuota)
 
 	var override ChannelModelOverride
 	require.NoError(t, DB.Where("channel_id = ? AND model = ?", clone.Id, "model-a").First(&override).Error)
@@ -254,6 +265,80 @@ func TestCloneChannelWithModelOverridesCopiesSparseState(t *testing.T) {
 	require.NoError(t, DB.Where("channel_id = ? AND model = ?", clone.Id, "model-a").First(&ability).Error)
 	require.NotNil(t, ability.Priority)
 	assert.Equal(t, int64(8), *ability.Priority)
+}
+
+func TestCloneChannelWithModelOverridesRollsBackAllState(t *testing.T) {
+	clearChannelModelRoutingTables(t)
+	source := createChannelModelRoutingTestChannel(t, 5302, "model-a", 1, 2, common.ChannelStatusEnabled)
+	priority := int64(8)
+	require.NoError(t, PatchChannelModelOverrides([]ChannelModelOverridePatch{
+		{ChannelId: source.Id, Model: "model-a", Priority: &priority},
+	}))
+
+	callbackName := "test:fail_cloned_ability_create"
+	require.NoError(t, DB.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == "abilities" {
+			tx.AddError(errors.New("injected cloned ability failure"))
+		}
+	}))
+	t.Cleanup(func() {
+		DB.Callback().Create().Remove(callbackName)
+	})
+
+	clone, err := CloneChannelWithModelOverrides(source.Id, "-clone", false)
+	require.Error(t, err)
+	assert.Nil(t, clone)
+
+	var channelCount int64
+	require.NoError(t, DB.Model(&Channel{}).Count(&channelCount).Error)
+	assert.Equal(t, int64(1), channelCount)
+	var overrideCount int64
+	require.NoError(t, DB.Model(&ChannelModelOverride{}).Count(&overrideCount).Error)
+	assert.Equal(t, int64(1), overrideCount)
+}
+
+func TestChannelDefaultWeightLimitRollsBackWrites(t *testing.T) {
+	clearChannelModelRoutingTables(t)
+	oversized := MaxChannelWeight + 1
+
+	t.Run("insert", func(t *testing.T) {
+		channel := &Channel{
+			Id: 5310, Type: constant.ChannelTypeOpenAI, Key: "key", Status: common.ChannelStatusEnabled,
+			Name: "oversized", Models: "model-a", Group: "default", Weight: &oversized,
+		}
+		require.Error(t, channel.Insert())
+		var count int64
+		require.NoError(t, DB.Model(&Channel{}).Where("id = ?", channel.Id).Count(&count).Error)
+		assert.Zero(t, count)
+	})
+
+	t.Run("update", func(t *testing.T) {
+		channel := createChannelModelRoutingTestChannel(t, 5311, "model-a", 1, 2, common.ChannelStatusEnabled)
+		channel.Weight = &oversized
+		require.Error(t, channel.Update())
+
+		var persisted Channel
+		require.NoError(t, DB.First(&persisted, channel.Id).Error)
+		assert.Equal(t, 2, persisted.GetWeight())
+		var ability Ability
+		require.NoError(t, DB.Where("channel_id = ?", channel.Id).First(&ability).Error)
+		assert.Equal(t, uint(2), ability.Weight)
+	})
+
+	t.Run("override inheritance", func(t *testing.T) {
+		channel := &Channel{
+			Id: 5312, Type: constant.ChannelTypeOpenAI, Key: "key", Status: common.ChannelStatusEnabled,
+			Name: "legacy-oversized", Models: "model-a", Group: "default", Weight: &oversized,
+		}
+		require.NoError(t, DB.Create(channel).Error)
+		priority := int64(9)
+		require.Error(t, PatchChannelModelOverrides([]ChannelModelOverridePatch{
+			{ChannelId: channel.Id, Model: "model-a", Priority: &priority},
+		}))
+		var count int64
+		require.NoError(t, DB.Model(&ChannelModelOverride{}).Where("channel_id = ?", channel.Id).Count(&count).Error)
+		assert.Zero(t, count)
+	})
 }
 
 func TestInitChannelCacheUsesEffectiveModelPriority(t *testing.T) {
@@ -330,6 +415,82 @@ func TestChannelSelectionMatchesEffectivePriorityWithAndWithoutCache(t *testing.
 				require.NotNil(t, selected)
 				assert.Equal(t, test.expected, selected.Id)
 			}
+		})
+	}
+}
+
+func TestChannelSelectionNormalizesModelWithAndWithoutCache(t *testing.T) {
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "database", true: "memory cache"}[memoryCacheEnabled], func(t *testing.T) {
+			clearChannelModelRoutingTables(t)
+			originalMemoryCacheEnabled := common.MemoryCacheEnabled
+			common.MemoryCacheEnabled = memoryCacheEnabled
+			t.Cleanup(func() {
+				common.MemoryCacheEnabled = originalMemoryCacheEnabled
+				if originalMemoryCacheEnabled {
+					InitChannelCache()
+				}
+			})
+
+			channel := createChannelModelRoutingTestChannel(t, 5701, "gpt-4o-gizmo-*", 1, 100, common.ChannelStatusEnabled)
+			if memoryCacheEnabled {
+				InitChannelCache()
+			}
+
+			selected, err := GetRandomSatisfiedChannel("default", "gpt-4o-gizmo-customer-model", 0, "")
+			require.NoError(t, err)
+			require.NotNil(t, selected)
+			assert.Equal(t, channel.Id, selected.Id)
+		})
+	}
+}
+
+func TestChannelSelectionFiltersPathBeforePriorityWithAndWithoutCache(t *testing.T) {
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "database", true: "memory cache"}[memoryCacheEnabled], func(t *testing.T) {
+			clearChannelModelRoutingTables(t)
+			originalMemoryCacheEnabled := common.MemoryCacheEnabled
+			common.MemoryCacheEnabled = memoryCacheEnabled
+			t.Cleanup(func() {
+				common.MemoryCacheEnabled = originalMemoryCacheEnabled
+				if originalMemoryCacheEnabled {
+					InitChannelCache()
+				}
+			})
+
+			high := createChannelModelRoutingTestChannel(t, 5801, "model-a", 9, 100, common.ChannelStatusEnabled)
+			low := createChannelModelRoutingTestChannel(t, 5802, "model-a", 5, 100, common.ChannelStatusEnabled)
+			for _, configured := range []struct {
+				channel *Channel
+				path    string
+			}{
+				{channel: high, path: "/v1/embeddings"},
+				{channel: low, path: "/v1/chat/completions"},
+			} {
+				configured.channel.Type = constant.ChannelTypeAdvancedCustom
+				configured.channel.SetOtherSettings(dto.ChannelOtherSettings{
+					AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{
+						{
+							IncomingPath: configured.path,
+							UpstreamPath: configured.path,
+							Converter:    "none",
+							Models:       []string{"model-a"},
+						},
+					}},
+				})
+				require.NoError(t, DB.Model(&Channel{}).Where("id = ?", configured.channel.Id).Updates(map[string]any{
+					"type":     configured.channel.Type,
+					"settings": configured.channel.OtherSettings,
+				}).Error)
+			}
+			if memoryCacheEnabled {
+				InitChannelCache()
+			}
+
+			selected, err := GetRandomSatisfiedChannel("default", "model-a", 0, "/v1/chat/completions")
+			require.NoError(t, err)
+			require.NotNil(t, selected)
+			assert.Equal(t, low.Id, selected.Id)
 		})
 	}
 }

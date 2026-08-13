@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -577,6 +578,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel == nil {
 		return fmt.Errorf("channel cannot be empty")
 	}
+	if err := model.ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
 
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
@@ -947,6 +951,13 @@ func EditTagChannels(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "tag不能为空",
+		})
+		return
+	}
+	if err := model.ValidateChannelWeight(channelTag.Weight); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
 		})
 		return
 	}
@@ -1518,35 +1529,13 @@ func CopyChannel(c *gin.Context) {
 		}
 	}
 
-	// fetch original channel with key
-	origin, err := model.GetChannelById(id, true)
+	clone, err := model.CloneChannelWithModelOverrides(id, suffix, resetBalance)
 	if err != nil {
-		common.SysError("failed to get channel by id: " + err.Error())
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道信息失败，请稍后重试"})
-		return
-	}
-
-	// clone channel
-	clone := *origin // shallow copy is sufficient as we will overwrite primitives
-	clone.Id = 0     // let DB auto-generate
-	clone.CreatedTime = common.GetTimestamp()
-	clone.Name = origin.Name + suffix
-	clone.TestTime = 0
-	clone.ResponseTime = 0
-	if resetBalance {
-		clone.Balance = 0
-		clone.UsedQuota = 0
-	}
-
-	if err := clone.ValidateSettings(); err != nil {
-		common.SysError("failed to validate cloned channel: " + err.Error())
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Failed to copy channel: invalid channel settings"})
-		return
-	}
-
-	// insert together with the sparse per-model routing overrides
-	if err := model.CloneChannelWithModelOverrides(origin.Id, &clone); err != nil {
 		common.SysError("failed to clone channel: " + err.Error())
+		if errors.Is(err, model.ErrInvalidChannelSettings) {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "Failed to copy channel: invalid channel settings"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "复制渠道失败，请稍后重试"})
 		return
 	}
@@ -1780,6 +1769,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = 2 // disabled
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1822,6 +1812,7 @@ func ManageMultiKeys(c *gin.Context) {
 		if channel.ChannelInfo.MultiKeyDisabledReason != nil {
 			delete(channel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
 		}
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1846,6 +1837,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
 		channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
 		channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1893,6 +1885,7 @@ func ManageMultiKeys(c *gin.Context) {
 			})
 			return
 		}
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1973,6 +1966,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyStatusList = newStatusList
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -2034,6 +2028,13 @@ func ManageMultiKeys(c *gin.Context) {
 			})
 			return
 		}
+		if len(remainingKeys) == 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "不能删除最后一个密钥",
+			})
+			return
+		}
 
 		// Update channel with remaining keys
 		channel.Key = strings.Join(remainingKeys, "\n")
@@ -2041,6 +2042,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyStatusList = newStatusList
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {

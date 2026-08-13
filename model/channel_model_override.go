@@ -1,14 +1,17 @@
 package model
 
 import (
+	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+var ErrInvalidChannelSettings = errors.New("invalid channel settings")
 
 // ChannelModelOverride stores sparse routing overrides for one model on one
 // channel. A nil field inherits the channel-level default; an all-nil record is
@@ -180,6 +183,9 @@ func ListModelChannelRoutings(modelName string) ([]ChannelModelRouting, error) {
 }
 
 func validateChannelModelOverridePatch(channel *Channel, patch ChannelModelOverridePatch) (ChannelModelOverride, error) {
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return ChannelModelOverride{}, err
+	}
 	patch.Model = strings.TrimSpace(patch.Model)
 	if patch.Model == "" {
 		return ChannelModelOverride{}, fmt.Errorf("model cannot be empty")
@@ -197,8 +203,8 @@ func validateChannelModelOverridePatch(channel *Channel, patch ChannelModelOverr
 	if !supported {
 		return ChannelModelOverride{}, fmt.Errorf("channel %d does not support model %s", channel.Id, patch.Model)
 	}
-	if patch.Weight != nil && uint64(*patch.Weight) > uint64(math.MaxInt32) {
-		return ChannelModelOverride{}, fmt.Errorf("weight override exceeds %d", math.MaxInt32)
+	if patch.Weight != nil && *patch.Weight > MaxChannelWeight {
+		return ChannelModelOverride{}, fmt.Errorf("weight override exceeds %d", MaxChannelWeight)
 	}
 	return ChannelModelOverride{
 		ChannelId: channel.Id,
@@ -297,24 +303,44 @@ func pruneChannelModelOverrides(tx *gorm.DB, channel *Channel) error {
 	return query.Delete(&ChannelModelOverride{}).Error
 }
 
-func CloneChannelWithModelOverrides(sourceChannelId int, clone *Channel) error {
+func CloneChannelWithModelOverrides(sourceChannelId int, suffix string, resetBalance bool) (*Channel, error) {
 	tx := DB.Begin()
 	if tx.Error != nil {
-		return tx.Error
+		return nil, tx.Error
 	}
 	var sourceChannel Channel
-	if err := lockForUpdate(tx).Select("id").First(&sourceChannel, sourceChannelId).Error; err != nil {
+	if err := lockForUpdate(tx).First(&sourceChannel, sourceChannelId).Error; err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
+	}
+	if err := ValidateChannelWeight(sourceChannel.Weight); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	clone := sourceChannel
+	clone.Id = 0
+	clone.CreatedTime = common.GetTimestamp()
+	clone.Name = sourceChannel.Name + suffix
+	clone.TestTime = 0
+	clone.ResponseTime = 0
+	clone.Keys = nil
+	if resetBalance {
+		clone.Balance = 0
+		clone.UsedQuota = 0
+	}
+	if err := clone.ValidateSettings(); err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("%w: %v", ErrInvalidChannelSettings, err)
 	}
 	var sourceOverrides []ChannelModelOverride
 	if err := tx.Where("channel_id = ?", sourceChannelId).Find(&sourceOverrides).Error; err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
-	if err := tx.Create(clone).Error; err != nil {
+	if err := tx.Create(&clone).Error; err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 	for i := range sourceOverrides {
 		sourceOverrides[i].ChannelId = clone.Id
@@ -322,12 +348,15 @@ func CloneChannelWithModelOverrides(sourceChannelId int, clone *Channel) error {
 	if len(sourceOverrides) > 0 {
 		if err := tx.Create(&sourceOverrides).Error; err != nil {
 			tx.Rollback()
-			return err
+			return nil, err
 		}
 	}
 	if err := clone.AddAbilities(tx); err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+	return &clone, nil
 }

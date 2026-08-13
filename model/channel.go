@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"strings"
 	"sync"
@@ -73,6 +74,17 @@ type ChannelSortOptions struct {
 	SortBy    string
 	SortOrder string
 	IDSort    bool
+}
+
+// MaxChannelWeight keeps each effective weight plus the compatibility baseline
+// within a signed int on all supported architectures.
+const MaxChannelWeight uint = math.MaxInt32 - 10
+
+func ValidateChannelWeight(weight *uint) error {
+	if weight != nil && *weight > MaxChannelWeight {
+		return fmt.Errorf("channel weight exceeds %d", MaxChannelWeight)
+	}
+	return nil
 }
 
 var channelSortColumns = map[string]string{
@@ -427,6 +439,11 @@ func BatchInsertChannels(channels []Channel) error {
 	if len(channels) == 0 {
 		return nil
 	}
+	for i := range channels {
+		if err := ValidateChannelWeight(channels[i].Weight); err != nil {
+			return err
+		}
+	}
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return tx.Error
@@ -524,6 +541,9 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return tx.Error
@@ -540,6 +560,9 @@ func (channel *Channel) Insert() error {
 }
 
 func (channel *Channel) Update() error {
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string
@@ -590,6 +613,10 @@ func (channel *Channel) Update() error {
 		tx.Rollback()
 		return err
 	}
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		tx.Rollback()
+		return err
+	}
 	if err := channel.UpdateAbilities(tx); err != nil {
 		tx.Rollback()
 		return err
@@ -598,6 +625,9 @@ func (channel *Channel) Update() error {
 }
 
 func (channel *Channel) UpdateModelsAndSettings(models string, settings string) error {
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return tx.Error
@@ -611,6 +641,10 @@ func (channel *Channel) UpdateModelsAndSettings(models string, settings string) 
 	}
 	channel.Models = models
 	channel.OtherSettings = settings
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		tx.Rollback()
+		return err
+	}
 	if err := channel.UpdateAbilities(tx); err != nil {
 		tx.Rollback()
 		return err
@@ -734,16 +768,29 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 			channel.ChannelInfo.MultiKeyDisabledReason[keyIndex] = reason
 			channel.ChannelInfo.MultiKeyDisabledTime[keyIndex] = common.GetTimestamp()
 		}
-		if !hasEnabledMultiKey(keys, channel.ChannelInfo.MultiKeyStatusList) {
-			channel.Status = common.ChannelStatusAutoDisabled
-			info := channel.GetOtherInfo()
-			info["status_reason"] = "All keys are disabled"
-			info["status_time"] = common.GetTimestamp()
-			channel.SetOtherInfo(info)
-		} else if status == common.ChannelStatusEnabled {
+		channel.NormalizeMultiKeyStatus()
+	}
+}
+
+// NormalizeMultiKeyStatus derives the channel's routable status from its key
+// states. Manual channel disablement is preserved while at least one key is
+// usable; only an auto-disabled channel is restored by enabling a key.
+func (channel *Channel) NormalizeMultiKeyStatus() {
+	if channel == nil || !channel.ChannelInfo.IsMultiKey {
+		return
+	}
+	if hasEnabledMultiKey(channel.GetKeys(), channel.ChannelInfo.MultiKeyStatusList) {
+		if channel.Status == common.ChannelStatusAutoDisabled {
 			channel.Status = common.ChannelStatusEnabled
 		}
+		return
 	}
+
+	channel.Status = common.ChannelStatusAutoDisabled
+	info := channel.GetOtherInfo()
+	info["status_reason"] = "All keys are disabled"
+	info["status_time"] = common.GetTimestamp()
+	channel.SetOtherInfo(info)
 }
 
 func hasEnabledMultiKey(keys []string, statusList map[int]int) bool {
@@ -838,24 +885,35 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 }
 
 func EnableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
-	if err != nil {
-		return err
-	}
-	err = UpdateAbilityStatusByTag(tag, true)
-	return err
+	return updateChannelStatusByTag(tag, common.ChannelStatusEnabled)
 }
 
 func DisableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
-	if err != nil {
+	return updateChannelStatusByTag(tag, common.ChannelStatusManuallyDisabled)
+}
+
+func updateChannelStatusByTag(tag string, status int) error {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := tx.Model(&Channel{}).Where("tag = ?", tag).Update("status", status).Error; err != nil {
+		tx.Rollback()
 		return err
 	}
-	err = UpdateAbilityStatusByTag(tag, false)
-	return err
+	channelIds := tx.Model(&Channel{}).Select("id").Where("tag = ?", tag)
+	if err := tx.Model(&Ability{}).Where("channel_id IN (?)", channelIds).
+		Select("enabled").Update("enabled", status == common.ChannelStatusEnabled).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
 }
 
 func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+	if err := ValidateChannelWeight(weight); err != nil {
+		return err
+	}
 	updateData := Channel{}
 	shouldReCreateAbilities := false
 	// 如果 newTag 不为空且不等于 tag，则更新 tag
@@ -911,6 +969,10 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 			return err
 		}
 		for _, channel := range channels {
+			if err := ValidateChannelWeight(channel.Weight); err != nil {
+				tx.Rollback()
+				return err
+			}
 			if err := channel.UpdateAbilities(tx); err != nil {
 				tx.Rollback()
 				return err
