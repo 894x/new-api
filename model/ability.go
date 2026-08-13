@@ -60,12 +60,15 @@ func GetAllEnableAbilities() []Ability {
 	return abilities
 }
 
-func getPriority(group string, model string, retry int) (int, error) {
-
+func getPriority(group string, model string, retry int, allowedChannelIds map[int]struct{}) (int, error) {
 	var priorities []int
-	err := DB.Model(&Ability{}).
+	query := DB.Model(&Ability{}).
 		Select("DISTINCT(priority)").
-		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
+		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
+	if ids, constrained := assetAllowedChannelIdSlice(allowedChannelIds); constrained {
+		query = query.Where("channel_id IN ?", ids)
+	}
+	err := query.
 		Order("priority DESC").              // 按优先级降序排序
 		Pluck("priority", &priorities).Error // Pluck用于将查询的结果直接扫描到一个切片中
 
@@ -90,15 +93,22 @@ func getPriority(group string, model string, retry int) (int, error) {
 	return priorityToUse, nil
 }
 
-func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
+func getChannelQuery(group string, model string, retry int, allowedChannelIds map[int]struct{}) (*gorm.DB, error) {
 	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
 	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
+	if ids, constrained := assetAllowedChannelIdSlice(allowedChannelIds); constrained {
+		maxPrioritySubQuery = maxPrioritySubQuery.Where("channel_id IN ?", ids)
+		channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and channel_id IN ? and priority = (?)", group, model, true, ids, maxPrioritySubQuery)
+	}
 	if retry != 0 {
-		priority, err := getPriority(group, model, retry)
+		priority, err := getPriority(group, model, retry, allowedChannelIds)
 		if err != nil {
 			return nil, err
 		} else {
 			channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
+			if ids, constrained := assetAllowedChannelIdSlice(allowedChannelIds); constrained {
+				channelQuery = channelQuery.Where("channel_id IN ?", ids)
+			}
 		}
 	}
 
@@ -106,18 +116,23 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 }
 
 func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetChannelWithFilter(group, model, retry, requestPath, nil)
+}
+
+// GetChannelWithFilter selects a DB-backed channel from the supplied allowed
+// set. A nil set preserves the ordinary unconstrained selection behavior.
+func GetChannelWithFilter(group string, model string, retry int, requestPath string, allowedChannelIds map[int]struct{}) (*Channel, error) {
 	var abilities []Ability
+	if ids, constrained := assetAllowedChannelIdSlice(allowedChannelIds); constrained && len(ids) == 0 {
+		return nil, nil
+	}
 
 	var err error = nil
-	channelQuery, err := getChannelQuery(group, model, retry)
+	channelQuery, err := getChannelQuery(group, model, retry, allowedChannelIds)
 	if err != nil {
 		return nil, err
 	}
-	if common.UsingMainDatabase(common.DatabaseTypeSQLite) || common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	} else {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	}
+	err = channelQuery.Order("weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +159,17 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+func assetAllowedChannelIdSlice(allowedChannelIds map[int]struct{}) ([]int, bool) {
+	if allowedChannelIds == nil {
+		return nil, false
+	}
+	ids := make([]int, 0, len(allowedChannelIds))
+	for channelId := range allowedChannelIds {
+		ids = append(ids, channelId)
+	}
+	return ids, true
 }
 
 // filterAbilitiesByRequestPathAndModel restricts candidates by request path and

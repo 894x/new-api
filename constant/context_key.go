@@ -38,6 +38,9 @@ const (
 	ContextKeyChannelIsMultiKey        ContextKey = "channel_is_multi_key"
 	ContextKeyChannelMultiKeyIndex     ContextKey = "channel_multi_key_index"
 	ContextKeyChannelKey               ContextKey = "channel_key"
+	// ContextKeyAssetAllowedChannelIds limits video routing to channels that
+	// have upstream mappings for every local asset referenced by the request.
+	ContextKeyAssetAllowedChannelIds ContextKey = "asset_allowed_channel_ids"
 
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"
