@@ -1,0 +1,16 @@
+{
+  "id": "T004",
+  "name": "输入 Token 基准（含模板开销标定）",
+  "dimension": "billing",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要模型专用 tokenizer、模板开销标定值和多轮样本才能核验输入 Token 基准"
+  }
+}

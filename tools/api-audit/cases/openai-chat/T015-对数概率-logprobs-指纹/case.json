@@ -1,0 +1,16 @@
+{
+  "id": "T015",
+  "name": "对数概率 logprobs 指纹",
+  "dimension": "identity",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "缺少官方 logprobs 指纹数据，不能可靠判定"
+  }
+}

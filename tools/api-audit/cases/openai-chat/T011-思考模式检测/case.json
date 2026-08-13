@@ -1,0 +1,16 @@
+{
+  "id": "T011",
+  "name": "思考模式检测",
+  "dimension": "identity",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要为被测模型提供明确的思考开关字段和 reasoning token 字段映射"
+  }
+}

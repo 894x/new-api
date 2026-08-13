@@ -1,0 +1,16 @@
+{
+  "id": "T041",
+  "name": "批量随机 Prompt 平均注水率",
+  "dimension": "stability",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要模型专属 tokenizer 和短中长批量采样的回归拟合"
+  }
+}

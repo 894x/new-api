@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>API 准入审计报告 - kimi-k3</title><style>
+body{font-family:Inter,"Segoe UI",sans-serif;margin:0;background:#f5f7fb;color:#18212f}.wrap{max-width:1180px;margin:36px auto;padding:0 20px}.hero,.card{background:#fff;border:1px solid #e5e9f0;border-radius:14px;padding:22px;margin-bottom:18px}.hero h1{margin:0 0 8px}.meta{color:#687385}.verdict{font-size:18px;font-weight:700;margin-top:14px}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric{padding:16px;border-radius:10px;background:#f7f9fc}.metric strong{display:block;font-size:28px}.pass{color:#16803a}.warning{color:#a15c00}.fail{color:#c62828}.unknown{color:#596579}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:11px;border-bottom:1px solid #edf0f5;vertical-align:top}th{background:#f7f9fc}.tag{font-weight:700;text-transform:uppercase}.evidence{max-width:560px;white-space:pre-wrap;word-break:break-word}@media(max-width:700px){.summary{grid-template-columns:repeat(2,1fr)}table{font-size:13px}}
+</style></head><body><main class="wrap">
+<section class="hero"><h1>API 准入审计报告</h1><div class="meta">地址：https://oneapi.xunlitec.com　模型：kimi-k3　套件：openai-chat　生成时间：2026-08-13 10:42:15.2957939 &#43;0800 CST m=&#43;10.515665301</div><div class="verdict qualified">合格：所有已执行测试通过</div></section>
+<section class="card"><h2>测试总结</h2><div class="summary"><div class="metric pass"><strong>1</strong>通过</div><div class="metric warning"><strong>0</strong>警告</div><div class="metric fail"><strong>0</strong>失败</div><div class="metric unknown"><strong>0</strong>无法判定</div></div></section>
+<section class="card"><h2>维度统计</h2><table><thead><tr><th>维度</th><th>通过</th><th>警告</th><th>失败</th><th>无法判定</th></tr></thead><tbody><tr><td>boundary</td><td>1</td><td>0</td><td>0</td><td>0</td></tr></tbody></table></section>
+
+
+<section class="card"><h2>测试明细</h2><table><thead><tr><th>测试</th><th>名称</th><th>模型</th><th>维度</th><th>判定</th><th>HTTP</th><th>耗时</th><th>usage</th><th>依据</th><th>原始记录</th></tr></thead><tbody><tr><td>T001</td><td>同步响应检测</td><td>kimi-k3</td><td>boundary</td><td><span class="tag pass">pass</span></td><td>200</td><td>10507ms</td><td class="evidence">map[completion_tokens:35 prompt_tokens:91 total_tokens:126]</td><td class="evidence">HTTP 200, 1 content bytes, finish_reason=stop</td><td><a href="raw/T001/">raw/T001</a></td></tr></tbody></table></section>
+</main></body></html>

@@ -1,0 +1,16 @@
+{
+  "id": "T038",
+  "name": "异常报错计费",
+  "dimension": "billing",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要同时读取 new-api 账单日志，单独的上游 HTTP 响应不足以判定"
+  }
+}

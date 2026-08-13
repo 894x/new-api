@@ -1,0 +1,16 @@
+{
+  "id": "T032",
+  "name": "采样参数透传",
+  "dimension": "stability",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "采样差异具有随机性，需要多次配对采样与模型专属阈值"
+  }
+}

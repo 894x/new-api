@@ -1,0 +1,16 @@
+{
+  "id": "T025",
+  "name": "长流式断连率",
+  "dimension": "stability",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要多轮长流式请求和断连率统计，单次请求不足以判定"
+  }
+}

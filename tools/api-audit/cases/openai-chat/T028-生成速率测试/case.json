@@ -1,0 +1,16 @@
+{
+  "id": "T028",
+  "name": "生成速率测试",
+  "dimension": "stability",
+  "protocol": "openai-chat",
+  "kind": "manual_unknown",
+  "default": false,
+  "severity": "normal",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "options": {
+    "reason": "需要目标模型 tokenizer、逐帧时间戳和重复样本才能计算生成速率"
+  }
+}

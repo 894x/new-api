@@ -1,0 +1,23 @@
+{
+  "id": "T012",
+  "name": "响应 id 协议 schema 校验",
+  "dimension": "identity",
+  "protocol": "openai-chat",
+  "kind": "response_id",
+  "default": false,
+  "severity": "critical",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "body": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "仅输出 ID_OK"
+        }
+      ],
+      "temperature": 0,
+      "max_tokens": 16
+    }
+  }
+}
