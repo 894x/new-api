@@ -15,6 +15,7 @@ import (
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -26,8 +27,9 @@ import (
 )
 
 type ModelRequest struct {
-	Model string `json:"model"`
-	Group string `json:"group,omitempty"`
+	Model           string `json:"model"`
+	Group           string `json:"group,omitempty"`
+	VideoResolution string `json:"-"`
 }
 
 func Distribute() func(c *gin.Context) {
@@ -39,6 +41,7 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}
+		common.SetContextKey(c, constant.ContextKeyVideoResolution, modelRequest.VideoResolution)
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -52,6 +55,10 @@ func Distribute() func(c *gin.Context) {
 			}
 			if channel.Status != common.ChannelStatusEnabled {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
+				return
+			}
+			if !channel.SupportsVideoResolution(modelRequest.Model, modelRequest.VideoResolution) {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": fmt.Sprintf("model %s does not support video resolution %s on channel %d", modelRequest.Model, modelRequest.VideoResolution, channel.Id)}))
 				return
 			}
 		} else {
@@ -106,7 +113,8 @@ func Distribute() func(c *gin.Context) {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
+						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) &&
+						preferred.SupportsVideoResolution(modelRequest.Model, modelRequest.VideoResolution) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetRequestAutoGroups(c, userGroup)
@@ -134,13 +142,18 @@ func Distribute() func(c *gin.Context) {
 
 				if channel == nil {
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:         c,
-						ModelName:   modelRequest.Model,
-						TokenGroup:  usingGroup,
-						RequestPath: c.Request.URL.Path,
-						Retry:       common.GetPointer(0),
+						Ctx:             c,
+						ModelName:       modelRequest.Model,
+						TokenGroup:      usingGroup,
+						RequestPath:     c.Request.URL.Path,
+						VideoResolution: modelRequest.VideoResolution,
+						Retry:           common.GetPointer(0),
 					})
 					if err != nil {
+						if errors.Is(err, model.ErrVideoResolutionUnsupported) {
+							abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
+							return
+						}
 						showGroup := usingGroup
 						if usingGroup == "auto" {
 							showGroup = fmt.Sprintf("auto(%s)", selectGroup)
@@ -253,6 +266,7 @@ func getJSONStringValue(result gjson.Result, field string) (string, error) {
 func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	var modelRequest ModelRequest
 	shouldSelectChannel := true
+	videoSubmitRequest := false
 	var err error
 	if strings.Contains(c.Request.URL.Path, "/mj/") {
 		relayMode := relayconstant.Path2RelayModeMidjourney(c.Request.URL.Path)
@@ -296,6 +310,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	} else if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
 		relayMode := relayconstant.RelayModeUnknown
 		if c.Request.Method == http.MethodPost {
+			videoSubmitRequest = true
 			req, requestErr := getModelFromRequest(c)
 			if requestErr != nil {
 				return nil, false, requestErr
@@ -320,6 +335,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		//	-F input_reference="@image.jpg"
 		relayMode := relayconstant.RelayModeUnknown
 		if c.Request.Method == http.MethodPost {
+			videoSubmitRequest = true
 			relayMode = relayconstant.RelayModeVideoSubmit
 			req, err := getModelFromRequest(c)
 			if err != nil {
@@ -337,6 +353,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	} else if strings.Contains(c.Request.URL.Path, "/v1/video/generations") {
 		relayMode := relayconstant.RelayModeUnknown
 		if c.Request.Method == http.MethodPost {
+			videoSubmitRequest = true
 			req, err := getModelFromRequest(c)
 			if err != nil {
 				return nil, false, err
@@ -428,7 +445,38 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/responses/compact") && modelRequest.Model != "" {
 		modelRequest.Model = ratio_setting.WithCompactModelSuffix(modelRequest.Model)
 	}
+	if videoSubmitRequest {
+		if err := setVideoRequestResolution(c, &modelRequest); err != nil {
+			return nil, false, err
+		}
+	}
 	return &modelRequest, shouldSelectChannel, nil
+}
+
+func setVideoRequestResolution(c *gin.Context, modelRequest *ModelRequest) error {
+	var request relaycommon.TaskSubmitReq
+	if err := common.UnmarshalBodyReusable(c, &request); err != nil {
+		return err
+	}
+	resolution := request.Size
+	if metadataResolution, ok := request.Metadata["resolution"]; ok {
+		value, isString := metadataResolution.(string)
+		if !isString {
+			return fmt.Errorf("video resolution must be a string")
+		}
+		if value != "" {
+			resolution = value
+		}
+	}
+	if resolution == "" {
+		return nil
+	}
+	normalized, err := dto.NormalizeVideoResolution(resolution)
+	if err != nil {
+		return err
+	}
+	modelRequest.VideoResolution = normalized
+	return nil
 }
 
 // 修复 #4834: GET /v1/video/generations/:task_id && /v1/video/:task_id 此前不解析 model，

@@ -110,6 +110,15 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_detected_models?: string[]
   advanced_custom?: AdvancedCustomConfig
   parameter_capabilities?: ParameterCapabilityConfig
+  video_capabilities?: VideoCapabilityConfig
+}
+
+export interface VideoCapabilityConfig {
+  models?: Record<string, VideoModelCapability>
+}
+
+export interface VideoModelCapability {
+  resolutions?: string[]
 }
 
 export type ParameterCapabilityAction = 'reject' | 'drop' | 'clamp'

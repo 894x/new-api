@@ -21,6 +21,7 @@ var channelsIDM map[int]*Channel                     // all channels include dis
 // channel2advancedCustomConfig caches parsed Advanced Custom (type 58) configs so
 // path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
+var channel2videoCapabilityConfig map[int]*dto.VideoCapabilityConfig
 var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
@@ -30,6 +31,7 @@ func InitChannelCache() {
 	}
 	newChannelId2channel := make(map[int]*Channel)
 	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
+	newChannel2videoCapabilityConfig := make(map[int]*dto.VideoCapabilityConfig)
 	var channels []*Channel
 	DB.Find(&channels)
 	for _, channel := range channels {
@@ -38,6 +40,9 @@ func InitChannelCache() {
 			if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
 				newChannel2advancedCustomConfig[channel.Id] = config
 			}
+		}
+		if config := channel.GetOtherSettings().VideoCapabilities; config != nil {
+			newChannel2videoCapabilityConfig[channel.Id] = config
 		}
 	}
 	var abilities []*Ability
@@ -94,6 +99,7 @@ func InitChannelCache() {
 	}
 	channelsIDM = newChannelId2channel
 	channel2advancedCustomConfig = newChannel2advancedCustomConfig
+	channel2videoCapabilityConfig = newChannel2videoCapabilityConfig
 	channelSyncLock.Unlock()
 	// Lock ordering: InvalidatePricingCache acquires updatePricingLock, and
 	// GetPricing (holding updatePricingLock) nests channelSyncLock.RLock via
@@ -111,10 +117,10 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string, videoResolution string) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannel(group, model, retry, requestPath, videoResolution)
 	}
 
 	channelSyncLock.RLock()
@@ -127,6 +133,11 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
+	}
+	resolutionCandidates := channels
+	channels = filterChannelIDsByVideoResolution(channels, channel2videoCapabilityConfig, model, videoResolution)
+	if videoResolution != "" && len(resolutionCandidates) > 0 && len(channels) == 0 {
+		return nil, newVideoResolutionUnsupportedError(model, videoResolution)
 	}
 
 	if len(channels) == 0 {
@@ -313,11 +324,18 @@ func CacheUpdateChannel(channel *Channel) {
 	if channel2advancedCustomConfig == nil {
 		channel2advancedCustomConfig = make(map[int]*dto.AdvancedCustomConfig)
 	}
+	if channel2videoCapabilityConfig == nil {
+		channel2videoCapabilityConfig = make(map[int]*dto.VideoCapabilityConfig)
+	}
 	delete(channel2advancedCustomConfig, channel.Id)
 	if channel.Type == constant.ChannelTypeAdvancedCustom {
 		if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
 			channel2advancedCustomConfig[channel.Id] = config
 		}
+	}
+	delete(channel2videoCapabilityConfig, channel.Id)
+	if config := channel.GetOtherSettings().VideoCapabilities; config != nil {
+		channel2videoCapabilityConfig[channel.Id] = config
 	}
 	logger.LogDebug(nil, "CacheUpdateChannel after: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, channel.ChannelInfo.MultiKeyPollingIndex)
 	// Lock ordering: do NOT hold channelSyncLock while calling

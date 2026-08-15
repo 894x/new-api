@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -62,6 +64,16 @@ func setupChannelSelectAutoGroupsTest(t *testing.T) *gorm.DB {
 	})
 
 	return db
+}
+
+func setChannelSelectVideoResolutions(t *testing.T, db *gorm.DB, channelID int, modelName string, resolutions ...string) {
+	t.Helper()
+	var channel model.Channel
+	require.NoError(t, db.First(&channel, "id = ?", channelID).Error)
+	channel.SetOtherSettings(dto.ChannelOtherSettings{VideoCapabilities: &dto.VideoCapabilityConfig{
+		Models: map[string]dto.VideoModelCapability{modelName: {Resolutions: resolutions}},
+	}})
+	require.NoError(t, db.Model(&channel).Update("settings", channel.OtherSettings).Error)
 }
 
 func createChannelSelectAutoGroupsChannel(t *testing.T, db *gorm.DB, id int, group, modelName string) {
@@ -126,4 +138,60 @@ func TestCacheGetRandomSatisfiedChannelUsesTokenAutoGroupsWhenGlobalAutoIsEmpty(
 	assert.Equal(t, 2102, second.Id)
 	assert.Equal(t, "default", selectedGroup)
 	assert.Equal(t, "default", common.GetContextKeyString(ctx, constant.ContextKeyAutoGroup))
+}
+
+func TestCacheGetRandomSatisfiedChannelSkipsAutoGroupWithUnsupportedVideoResolution(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	const modelName = "auto-groups-video-model"
+	createChannelSelectAutoGroupsChannel(t, db, 2201, "vip", modelName)
+	createChannelSelectAutoGroupsChannel(t, db, 2202, "default", modelName)
+	setChannelSelectVideoResolutions(t, db, 2201, modelName, "720p")
+	setChannelSelectVideoResolutions(t, db, 2202, modelName, "1080p")
+	model.InitChannelCache()
+
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyTokenAutoGroups, []string{"vip", "default"})
+
+	retry := 0
+	selected, selectedGroup, err := CacheGetRandomSatisfiedChannel(&RetryParam{
+		Ctx:             ctx,
+		TokenGroup:      "auto",
+		ModelName:       modelName,
+		RequestPath:     "/v1/video/generations",
+		VideoResolution: "1080p",
+		Retry:           &retry,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, 2202, selected.Id)
+	assert.Equal(t, "default", selectedGroup)
+}
+
+func TestCacheGetRandomSatisfiedChannelReportsUnsupportedResolutionAcrossAutoGroups(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	const modelName = "auto-groups-video-model"
+	createChannelSelectAutoGroupsChannel(t, db, 2301, "vip", modelName)
+	createChannelSelectAutoGroupsChannel(t, db, 2302, "default", modelName)
+	setChannelSelectVideoResolutions(t, db, 2301, modelName, "720p")
+	setChannelSelectVideoResolutions(t, db, 2302, modelName, "720p")
+	model.InitChannelCache()
+
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyTokenAutoGroups, []string{"vip", "default"})
+
+	retry := 0
+	selected, _, err := CacheGetRandomSatisfiedChannel(&RetryParam{
+		Ctx:             ctx,
+		TokenGroup:      "auto",
+		ModelName:       modelName,
+		RequestPath:     "/v1/video/generations",
+		VideoResolution: "1080p",
+		Retry:           &retry,
+	})
+	assert.Nil(t, selected)
+	assert.True(t, errors.Is(err, model.ErrVideoResolutionUnsupported))
 }
