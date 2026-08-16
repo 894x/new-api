@@ -112,9 +112,15 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetRandomSatisfiedChannelWithFilter(group, model, retry, requestPath, nil)
+}
+
+// GetRandomSatisfiedChannelWithFilter selects a channel from the supplied
+// allowed set. A nil set preserves the ordinary unconstrained selection path.
+func GetRandomSatisfiedChannelWithFilter(group string, model string, retry int, requestPath string, allowedChannelIds map[int]struct{}) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannelWithFilter(group, model, retry, requestPath, allowedChannelIds)
 	}
 
 	channelSyncLock.RLock()
@@ -122,11 +128,13 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 
 	// First, try to find channels with the exact model name.
 	channels := filterChannelsByRequestPathAndModel(group2model2channels[group][model], requestPath, model)
+	channels = filterChannelsByAllowedIds(channels, allowedChannelIds)
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
+		channels = filterChannelsByAllowedIds(channels, allowedChannelIds)
 	}
 
 	if len(channels) == 0 {
@@ -206,6 +214,19 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	}
 	// return null if no channel is not found
 	return nil, errors.New("channel not found")
+}
+
+func filterChannelsByAllowedIds(channels []int, allowedChannelIds map[int]struct{}) []int {
+	if allowedChannelIds == nil {
+		return channels
+	}
+	filtered := make([]int, 0, len(channels))
+	for _, channelId := range channels {
+		if _, ok := allowedChannelIds[channelId]; ok {
+			filtered = append(filtered, channelId)
+		}
+	}
+	return filtered
 }
 
 // filterChannelsByRequestPathAndModel restricts candidates by request path and

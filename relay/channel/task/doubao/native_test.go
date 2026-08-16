@@ -2,6 +2,7 @@ package doubao
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,8 +14,10 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestNativeRequestUsesExistingDoubaoBillingAndPreservesPayload(t *testing.T) {
@@ -60,6 +63,86 @@ func TestNativeRequestUsesExistingDoubaoBillingAndPreservesPayload(t *testing.T)
 	content, ok := payload["content"].([]any)
 	require.True(t, ok)
 	assert.Len(t, content, 2)
+}
+
+func TestNativeRequestRewritesLogicalAssetForCurrentChannel(t *testing.T) {
+	originalDB := model.DB
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.UserAsset{}, &model.UserAssetReplica{}))
+	model.DB = db
+	t.Cleanup(func() {
+		model.DB = originalDB
+		sqlDB, dbErr := db.DB()
+		if dbErr == nil {
+			require.NoError(t, sqlDB.Close())
+		}
+	})
+
+	assetId := "asset-na-0123456789abcdef0123456789abcdef"
+	require.NoError(t, db.Create(&model.UserAsset{
+		Id: assetId, UserId: 7, GroupId: "group-na-test", AssetType: "Image",
+		SourceURL: "https://example.com/a.png", ProjectName: "default",
+	}).Error)
+	require.NoError(t, db.Create(&model.UserAssetReplica{
+		AssetId: assetId, ChannelId: 11, UpstreamAssetId: "asset-upstream-11",
+		State: model.AssetReplicaStateReady,
+	}).Error)
+
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(ctx, constant.ContextKeyTaskResponseFormat, constant.TaskResponseFormatDoubaoVideo)
+	ctx.Set("task_request", relaycommon.TaskSubmitReq{
+		Model: "doubao-seedance-2-0-260128",
+		Metadata: map[string]any{
+			"content": []any{map[string]any{
+				"type": "image_url", "image_url": map[string]any{"url": "asset://" + assetId},
+			}},
+		},
+	})
+	info := &relaycommon.RelayInfo{UserId: 7, ChannelMeta: &relaycommon.ChannelMeta{
+		ChannelId: 11, UpstreamModelName: "mapped-model",
+	}}
+
+	requestBody, err := (&TaskAdaptor{}).BuildRequestBody(ctx, info)
+	require.NoError(t, err)
+	encoded, err := io.ReadAll(requestBody)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"url":"asset://asset-upstream-11"`)
+	assert.NotContains(t, string(encoded), assetId)
+}
+
+func TestCompatibleRequestRejectsRawAssetURI(t *testing.T) {
+	for _, request := range []relaycommon.TaskSubmitReq{
+		{
+			Model:  "doubao-seedance-2-0-260128",
+			Prompt: "Generate a tracking shot",
+			Images: []string{"asset://Asset-upstream-owned-by-another-user"},
+		},
+		{
+			Model:  "doubao-seedance-2-0-260128",
+			Prompt: "Generate a tracking shot",
+			Images: []string{"asset://asset-na-0123456789abcdef0123456789abcdef"},
+		},
+		{
+			Model:  "doubao-seedance-2-0-260128",
+			Prompt: "Generate a tracking shot",
+			Metadata: map[string]any{"content": []any{map[string]any{
+				"type": "image_url", "image_url": map[string]any{"url": "ASSET://Asset-upstream"},
+			}}},
+		},
+	} {
+		gin.SetMode(gin.TestMode)
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Set("task_request", request)
+		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "mapped-model",
+		}}
+
+		_, err := (&TaskAdaptor{}).BuildRequestBody(ctx, info)
+
+		require.ErrorContains(t, err, "only supported by the native asset-library endpoint")
+	}
 }
 
 func TestNativeSubmitResponseUsesPublicTaskID(t *testing.T) {

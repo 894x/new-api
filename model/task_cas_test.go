@@ -46,6 +46,11 @@ func TestMain(m *testing.M) {
 		&TwoFABackupCode{},
 		&Log{},
 		&Channel{},
+		&ChannelAssetConfig{},
+		&UserAssetGroup{},
+		&UserAsset{},
+		&UserAssetGroupReplica{},
+		&UserAssetReplica{},
 		&QuotaData{},
 		&Ability{},
 		&TopUp{},
@@ -76,6 +81,10 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM two_fas")
 		DB.Exec("DELETE FROM tokens")
 		DB.Exec("DELETE FROM user_oauth_bindings")
+		DB.Exec("DELETE FROM user_asset_replicas")
+		DB.Exec("DELETE FROM user_asset_group_replicas")
+		DB.Exec("DELETE FROM user_assets")
+		DB.Exec("DELETE FROM user_asset_groups")
 		DB.Exec("DELETE FROM users")
 		DB.Exec("DELETE FROM logs")
 		DB.Exec("DELETE FROM channels")

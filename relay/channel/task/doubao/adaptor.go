@@ -209,6 +209,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			payload[key] = value
 		}
 		payload["model"] = info.UpstreamModelName
+		payload, err = service.RewriteAssetReferences(info.UserId, info.ChannelId, payload)
+		if err != nil {
+			return nil, errors.Wrap(err, "rewrite asset references failed")
+		}
 		data, err := common.Marshal(payload)
 		if err != nil {
 			return nil, err
@@ -228,6 +232,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	data, err := common.Marshal(body)
 	if err != nil {
 		return nil, err
+	}
+	var payload any
+	if err := common.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	if err := service.RejectAssetReferences(payload); err != nil {
+		return nil, errors.Wrap(err, "asset references are only supported by the native asset-library endpoint")
 	}
 	return bytes.NewReader(data), nil
 }

@@ -10,7 +10,7 @@ import (
 func SetVideoRouter(router *gin.Engine) {
 	doubaoVideoRouter := router.Group("/api/v3/contents/generations")
 	doubaoVideoRouter.Use(middleware.RouteTag("relay"))
-	doubaoVideoRouter.Use(middleware.DoubaoVideoRequestConvert(), middleware.TokenAuth(), middleware.Distribute())
+	doubaoVideoRouter.Use(middleware.DoubaoVideoRequestConvert(), middleware.TokenAuth(), middleware.AssetLibraryRouting(), middleware.Distribute())
 	{
 		doubaoVideoRouter.POST("/tasks", controller.RelayTask)
 		doubaoVideoRouter.GET("/tasks/:task_id", controller.RelayTaskFetch)
