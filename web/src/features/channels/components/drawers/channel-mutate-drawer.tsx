@@ -284,6 +284,9 @@ const SENSITIVE_FORM_FIELDS = [
   'vertex_key_type',
   'aws_key_type',
   'azure_responses_version',
+  'doubao_video_api_mode',
+  'doubao_video_submit_path',
+  'doubao_video_fetch_path',
   'force_format',
   'thinking_to_content',
   'proxy',
@@ -734,6 +737,7 @@ export function ChannelMutateDrawer({
   const currentModelMapping = form.watch('model_mapping')
   const awsKeyType = form.watch('aws_key_type')
   const vertexKeyType = form.watch('vertex_key_type')
+  const doubaoVideoAPIMode = form.watch('doubao_video_api_mode')
   const upstreamModelUpdateCheckEnabled = form.watch(
     'upstream_model_update_check_enabled'
   )
@@ -983,7 +987,10 @@ export function ChannelMutateDrawer({
     formErrors.key_mode ||
     formErrors.vertex_key_type ||
     formErrors.aws_key_type ||
-    formErrors.azure_responses_version
+    formErrors.azure_responses_version ||
+    formErrors.doubao_video_api_mode ||
+    formErrors.doubao_video_submit_path ||
+    formErrors.doubao_video_fetch_path
   )
   const modelsHaveErrors = Boolean(
     formErrors.models || formErrors.group || formErrors.model_mapping
@@ -2820,6 +2827,114 @@ export function ChannelMutateDrawer({
                                   </FormItem>
                                 )}
                               />
+                            )}
+
+                            {/* DoubaoVideo (type 54) */}
+                            {currentType === 54 && (
+                              <>
+                                <FormField
+                                  control={form.control}
+                                  name='doubao_video_api_mode'
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>
+                                        {t('Upstream task API')}
+                                      </FormLabel>
+                                      <Select
+                                        items={[
+                                          {
+                                            value: 'v3',
+                                            label: t('Doubao V3'),
+                                          },
+                                          {
+                                            value: 'video_generations',
+                                            label: t('Video Generations'),
+                                          },
+                                          {
+                                            value: 'custom',
+                                            label: t('Custom'),
+                                          },
+                                        ]}
+                                        onValueChange={field.onChange}
+                                        value={field.value || 'v3'}
+                                      >
+                                        <FormControl>
+                                          <SelectTrigger>
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                        </FormControl>
+                                        <SelectContent
+                                          alignItemWithTrigger={false}
+                                        >
+                                          <SelectGroup>
+                                            <SelectItem value='v3'>
+                                              {t('Doubao V3')}
+                                            </SelectItem>
+                                            <SelectItem value='video_generations'>
+                                              {t('Video Generations')}
+                                            </SelectItem>
+                                            <SelectItem value='custom'>
+                                              {t('Custom')}
+                                            </SelectItem>
+                                          </SelectGroup>
+                                        </SelectContent>
+                                      </Select>
+                                      <FormDescription>
+                                        {t(
+                                          'Choose a built-in API format or configure custom paths'
+                                        )}
+                                      </FormDescription>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+
+                                {doubaoVideoAPIMode === 'custom' && (
+                                  <>
+                                    <FormField
+                                      control={form.control}
+                                      name='doubao_video_submit_path'
+                                      render={({ field }) => (
+                                        <FormItem>
+                                          <FormLabel>
+                                            {t('Submit task path')}
+                                          </FormLabel>
+                                          <FormControl>
+                                            <Input
+                                              placeholder='/v1/video/generations'
+                                              {...field}
+                                            />
+                                          </FormControl>
+                                          <FormMessage />
+                                        </FormItem>
+                                      )}
+                                    />
+                                    <FormField
+                                      control={form.control}
+                                      name='doubao_video_fetch_path'
+                                      render={({ field }) => (
+                                        <FormItem>
+                                          <FormLabel>
+                                            {t('Query task path')}
+                                          </FormLabel>
+                                          <FormControl>
+                                            <Input
+                                              placeholder='/v1/video/generations/{id}'
+                                              {...field}
+                                            />
+                                          </FormControl>
+                                          <FormDescription>
+                                            {t(
+                                              'Query task path must include {id}'
+                                            )}
+                                          </FormDescription>
+                                          <FormMessage />
+                                        </FormItem>
+                                      )}
+                                    />
+                                  </>
+                                )}
+                              </>
                             )}
 
                             {currentType === CHANNEL_TYPE_ADVANCED_CUSTOM && (

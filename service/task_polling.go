@@ -410,13 +410,15 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	if adaptor == nil {
 		return fmt.Errorf("video adaptor not found")
 	}
+	channelOtherSettings := cacheGetChannel.GetOtherSettings()
 	info := &relaycommon.RelayInfo{}
 	info.ChannelMeta = &relaycommon.ChannelMeta{
-		ChannelBaseUrl: cacheGetChannel.GetBaseURL(),
+		ChannelBaseUrl:       cacheGetChannel.GetBaseURL(),
+		ChannelOtherSettings: channelOtherSettings,
 	}
 	info.ApiKey = cacheGetChannel.Key
 	adaptor.Init(info)
-	disablePollingSleep := cacheGetChannel.GetOtherSettings().DisableTaskPollingSleep
+	disablePollingSleep := channelOtherSettings.DisableTaskPollingSleep
 	for i, taskId := range taskIds {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -489,6 +491,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		taskResult.Progress = t.Progress
 		taskResult.Reason = t.FailReason
 		task.Data = t.Data
+		// Compatibility bridge: some video_generations upstreams wrap provider results in a New API task envelope.
+		// Keep the outer task state, but recover nested usage for settlement. Move this unwrapping into the
+		// selected upstream video protocol adaptor before adding another response format here.
+		if nestedResult, nestedErr := adaptor.ParseTaskResult(t.Data); nestedErr == nil && nestedResult != nil {
+			taskResult.CompletionTokens = nestedResult.CompletionTokens
+			taskResult.TotalTokens = nestedResult.TotalTokens
+		}
 	} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
 		return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
 	}

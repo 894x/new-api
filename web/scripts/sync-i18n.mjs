@@ -49,6 +49,7 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'Cohere',
   'DeepSeek',
   'Discord',
+  'Doubao V3',
   'DoubaoVideo',
   'FastGPT',
   'Gemini',

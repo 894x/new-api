@@ -70,6 +70,11 @@ function isOptionalProxyURL(value: string | undefined): boolean {
   }
 }
 
+function isRelativeAPIPath(value: string | undefined): boolean {
+  const path = value?.trim() || ''
+  return path.startsWith('/') && !path.startsWith('//') && !path.includes('://')
+}
+
 export const HTTP_PROTOCOL_AUTO = 'auto'
 export const HTTP_PROTOCOL_HTTP1 = 'http1'
 export const MAX_HTTP2_CONNECTION_SHARDS = 8
@@ -270,6 +275,11 @@ export const channelFormSchema = z
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
     aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
     azure_responses_version: z.string().optional(), // Azure specific
+    doubao_video_api_mode: z
+      .enum(['v3', 'video_generations', 'custom'])
+      .optional(),
+    doubao_video_submit_path: z.string().optional(),
+    doubao_video_fetch_path: z.string().optional(),
     // Field passthrough controls (stored in settings JSON)
     allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
     disable_store: z.boolean().optional(), // OpenAI only
@@ -378,6 +388,26 @@ export const channelFormSchema = z
       )
     }
 
+    if (data.type === 54 && data.doubao_video_api_mode === 'custom') {
+      if (!isRelativeAPIPath(data.doubao_video_submit_path)) {
+        addRequiredIssue(
+          ctx,
+          'doubao_video_submit_path',
+          'Submit task path must be a relative path starting with /'
+        )
+      }
+      if (
+        !isRelativeAPIPath(data.doubao_video_fetch_path) ||
+        !data.doubao_video_fetch_path?.includes('{id}')
+      ) {
+        addRequiredIssue(
+          ctx,
+          'doubao_video_fetch_path',
+          'Query task path must be a relative path containing {id}'
+        )
+      }
+    }
+
     const protocol = normalizeHttpProtocol(data.http_protocol)
     const shards = data.http2_connection_shards ?? 1
     if (shards < 1 || shards > MAX_HTTP2_CONNECTION_SHARDS) {
@@ -443,6 +473,9 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   vertex_key_type: 'json',
   aws_key_type: 'ak_sk',
   azure_responses_version: '',
+  doubao_video_api_mode: 'v3',
+  doubao_video_submit_path: '',
+  doubao_video_fetch_path: '',
   // Field passthrough controls
   allow_service_tier: false,
   disable_store: false,
@@ -492,8 +525,7 @@ export function transformChannelToFormDefaults(
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
         http_protocol: protocol,
-        http2_connection_shards:
-          protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
+        http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
@@ -509,6 +541,9 @@ export function transformChannelToFormDefaults(
   let azureResponsesVersion = ''
   let isEnterpriseAccount = false
   let awsKeyType: 'ak_sk' | 'api_key' = 'ak_sk'
+  let doubaoVideoAPIMode: 'v3' | 'video_generations' | 'custom' = 'v3'
+  let doubaoVideoSubmitPath = ''
+  let doubaoVideoFetchPath = ''
   let allowServiceTier = false
   let disableStore = false
   let allowSafetyIdentifier = false
@@ -530,6 +565,15 @@ export function transformChannelToFormDefaults(
       azureResponsesVersion = parsed.azure_responses_version || ''
       isEnterpriseAccount = parsed.openrouter_enterprise === true
       awsKeyType = parsed.aws_key_type || 'ak_sk'
+      if (
+        ['v3', 'video_generations', 'custom'].includes(
+          parsed.doubao_video_api_mode
+        )
+      ) {
+        doubaoVideoAPIMode = parsed.doubao_video_api_mode
+      }
+      doubaoVideoSubmitPath = parsed.doubao_video_submit_path || ''
+      doubaoVideoFetchPath = parsed.doubao_video_fetch_path || ''
       allowServiceTier = parsed.allow_service_tier === true
       disableStore = parsed.disable_store === true
       allowSafetyIdentifier = parsed.allow_safety_identifier === true
@@ -597,6 +641,9 @@ export function transformChannelToFormDefaults(
     vertex_key_type: vertexKeyType,
     azure_responses_version: azureResponsesVersion,
     aws_key_type: awsKeyType,
+    doubao_video_api_mode: doubaoVideoAPIMode,
+    doubao_video_submit_path: doubaoVideoSubmitPath,
+    doubao_video_fetch_path: doubaoVideoFetchPath,
     allow_service_tier: allowServiceTier,
     disable_store: disableStore,
     allow_include_obfuscation: allowIncludeObfuscation,
@@ -683,6 +730,23 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     settingsObj.aws_key_type = formData.aws_key_type || 'ak_sk'
   } else if ('aws_key_type' in settingsObj) {
     delete settingsObj.aws_key_type
+  }
+
+  if (formData.type === 54) {
+    settingsObj.doubao_video_api_mode = formData.doubao_video_api_mode || 'v3'
+    if (settingsObj.doubao_video_api_mode === 'custom') {
+      settingsObj.doubao_video_submit_path =
+        formData.doubao_video_submit_path?.trim() || ''
+      settingsObj.doubao_video_fetch_path =
+        formData.doubao_video_fetch_path?.trim() || ''
+    } else {
+      delete settingsObj.doubao_video_submit_path
+      delete settingsObj.doubao_video_fetch_path
+    }
+  } else {
+    delete settingsObj.doubao_video_api_mode
+    delete settingsObj.doubao_video_submit_path
+    delete settingsObj.doubao_video_fetch_path
   }
 
   // Field passthrough controls:

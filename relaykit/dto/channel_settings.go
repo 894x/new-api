@@ -65,6 +65,14 @@ const (
 	AwsKeyTypeApiKey AwsKeyType = "api_key"
 )
 
+type DoubaoVideoAPIMode string
+
+const (
+	DoubaoVideoAPIModeV3               DoubaoVideoAPIMode = "v3"
+	DoubaoVideoAPIModeVideoGenerations DoubaoVideoAPIMode = "video_generations"
+	DoubaoVideoAPIModeCustom           DoubaoVideoAPIMode = "custom"
+)
+
 type ChannelOtherSettings struct {
 	AzureResponsesVersion                 string                     `json:"azure_responses_version,omitempty"`
 	VertexKeyType                         VertexKeyType              `json:"vertex_key_type,omitempty"` // "json" or "api_key"
@@ -77,6 +85,9 @@ type ChannelOtherSettings struct {
 	DisableStore                          bool                       `json:"disable_store,omitempty"`              // 是否禁用 store 透传（默认允许透传，禁用后可能导致 Codex 无法使用）
 	AllowIncludeObfuscation               bool                       `json:"allow_include_obfuscation,omitempty"`  // 是否允许 stream_options.include_obfuscation 透传（默认过滤以避免关闭流混淆保护）
 	DisableTaskPollingSleep               bool                       `json:"disable_task_polling_sleep,omitempty"` // 是否跳过异步任务轮询间隔
+	DoubaoVideoAPIMode                    DoubaoVideoAPIMode         `json:"doubao_video_api_mode,omitempty"`
+	DoubaoVideoSubmitPath                 string                     `json:"doubao_video_submit_path,omitempty"`
+	DoubaoVideoFetchPath                  string                     `json:"doubao_video_fetch_path,omitempty"`
 	AwsKeyType                            AwsKeyType                 `json:"aws_key_type,omitempty"`
 	UpstreamModelUpdateCheckEnabled       bool                       `json:"upstream_model_update_check_enabled,omitempty"`        // 是否检测上游模型更新
 	UpstreamModelUpdateAutoSyncEnabled    bool                       `json:"upstream_model_update_auto_sync_enabled,omitempty"`    // 是否自动同步上游模型更新
