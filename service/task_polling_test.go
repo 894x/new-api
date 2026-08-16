@@ -15,23 +15,30 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type taskPollingFetchAdaptor struct {
-	mu           sync.Mutex
-	taskIDs      []string
-	fetched      chan string
-	blockTaskID  string
-	blockStarted chan struct{}
-	releaseBlock chan struct{}
-	blockOnce    sync.Once
+	mu                  sync.Mutex
+	taskIDs             []string
+	initializedSettings dto.ChannelOtherSettings
+	fetched             chan string
+	blockTaskID         string
+	blockStarted        chan struct{}
+	releaseBlock        chan struct{}
+	blockOnce           sync.Once
 }
 
 type sunoFailurePollingAdaptor struct {
 	failReason string
+}
+
+type nestedUsagePollingAdaptor struct {
+	taskResult   *relaycommon.TaskInfo
+	parsedBodies [][]byte
 }
 
 func (a *sunoFailurePollingAdaptor) Init(_ *relaycommon.RelayInfo) {}
@@ -69,7 +76,46 @@ func (a *sunoFailurePollingAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *re
 	return 0
 }
 
-func (a *taskPollingFetchAdaptor) Init(_ *relaycommon.RelayInfo) {}
+func (a *nestedUsagePollingAdaptor) Init(_ *relaycommon.RelayInfo) {}
+
+func (a *nestedUsagePollingAdaptor) FetchTask(_ string, _ string, body map[string]any, _ string) (*http.Response, error) {
+	taskID, _ := body["task_id"].(string)
+	responseBody, err := common.Marshal(taskdto.TaskResponse[model.Task]{
+		Code: taskdto.TaskSuccessCode,
+		Data: model.Task{
+			TaskID:   taskID,
+			Status:   model.TaskStatusSuccess,
+			Progress: "100%",
+			Quota:    5000000,
+			Data:     []byte(`{"provider":"opaque-payload"}`),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(responseBody)),
+	}, nil
+}
+
+func (a *nestedUsagePollingAdaptor) ParseTaskResult(body []byte) (*relaycommon.TaskInfo, error) {
+	a.parsedBodies = append(a.parsedBodies, bytes.Clone(body))
+	return a.taskResult, nil
+}
+
+func (a *nestedUsagePollingAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *relaycommon.TaskInfo) int {
+	return 0
+}
+
+func (a *taskPollingFetchAdaptor) Init(info *relaycommon.RelayInfo) {
+	if info == nil || info.ChannelMeta == nil {
+		return
+	}
+	a.mu.Lock()
+	a.initializedSettings = info.ChannelMeta.ChannelOtherSettings
+	a.mu.Unlock()
+}
 
 func (a *taskPollingFetchAdaptor) FetchTask(_ string, _ string, body map[string]any, _ string) (*http.Response, error) {
 	taskID, _ := body["task_id"].(string)
@@ -128,6 +174,12 @@ func (a *taskPollingFetchAdaptor) fetchedTaskIDs() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]string(nil), a.taskIDs...)
+}
+
+func (a *taskPollingFetchAdaptor) initializedVideoAPIMode() dto.DoubaoVideoAPIMode {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.initializedSettings.DoubaoVideoAPIMode
 }
 
 func seedTaskPollingChannel(t *testing.T, id int, disableSleep bool) {
@@ -223,6 +275,102 @@ func TestUpdateVideoTasksCanSkipPollingSleepPerChannel(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, adaptor.fetchCount())
+}
+
+func TestUpdateVideoSingleTaskRefundsFromNestedNewAPIUsage(t *testing.T) {
+	truncate(t)
+
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"test-model":3.1506849315068495}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
+	})
+
+	seedUser(t, 1, 1000000)
+	seedToken(t, 1, 1, "test-key", 212329)
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", 1).Update("used_quota", 787671).Error)
+	seedChannel(t, 1)
+
+	task := makeTask(1, 1, 787671, 1, BillingSourceWallet, 0)
+	task.TaskID = "task_nested_usage_refund"
+	task.Platform = constant.TaskPlatform("doubao")
+	task.Action = constant.TaskActionGenerate
+	task.PrivateData.UpstreamTaskID = "upstream_nested_usage"
+	task.PrivateData.NodeName = "test-node"
+	require.NoError(t, model.DB.Create(task).Error)
+
+	channel := &model.Channel{
+		Id:     1,
+		Type:   constant.ChannelTypeDoubaoVideo,
+		Name:   "nested_usage_channel",
+		Key:    "sk-test",
+		Status: common.ChannelStatusEnabled,
+	}
+	adaptor := &nestedUsagePollingAdaptor{taskResult: &relaycommon.TaskInfo{
+		Status:           "succeeded",
+		Url:              "https://example.com/video.mp4",
+		CompletionTokens: 87300,
+		TotalTokens:      87300,
+	}}
+	err := updateVideoSingleTask(context.Background(), adaptor, channel,
+		task.GetUpstreamTaskID(), map[string]*model.Task{task.GetUpstreamTaskID(): task})
+
+	require.NoError(t, err)
+	assert.Equal(t, 275054, getTaskQuota(t, task.ID))
+	assert.Equal(t, 1512617, getUserQuota(t, 1))
+	assert.Equal(t, 724946, getTokenRemainQuota(t, 1))
+	assert.Equal(t, 275054, getTokenUsedQuota(t, 1))
+	refundLog := getLastLog(t)
+	require.NotNil(t, refundLog)
+	assert.Equal(t, model.LogTypeRefund, refundLog.Type)
+	assert.Equal(t, 512617, refundLog.Quota)
+	assert.EqualValues(t, 1, countLogs(t))
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	err = updateVideoSingleTask(context.Background(), adaptor, channel,
+		reloaded.GetUpstreamTaskID(), map[string]*model.Task{reloaded.GetUpstreamTaskID(): &reloaded})
+
+	require.NoError(t, err)
+	assert.Equal(t, 275054, getTaskQuota(t, task.ID))
+	assert.Equal(t, 1512617, getUserQuota(t, 1))
+	assert.Equal(t, 724946, getTokenRemainQuota(t, 1))
+	assert.Equal(t, 275054, getTokenUsedQuota(t, 1))
+	assert.EqualValues(t, 1, countLogs(t))
+	require.Len(t, adaptor.parsedBodies, 2)
+	for _, parsedBody := range adaptor.parsedBodies {
+		assert.JSONEq(t, `{"provider":"opaque-payload"}`, string(parsedBody))
+	}
+}
+
+func TestUpdateVideoTasksPassesChannelOtherSettingsToAdaptor(t *testing.T) {
+	truncate(t)
+
+	const channelID = 103
+	channel := &model.Channel{
+		Id:            channelID,
+		Type:          constant.ChannelTypeDoubaoVideo,
+		Name:          "doubao_polling_channel",
+		Key:           "sk-test",
+		Status:        common.ChannelStatusEnabled,
+		OtherSettings: `{"doubao_video_api_mode":"video_generations"}`,
+	}
+	require.NoError(t, model.DB.Create(channel).Error)
+	task := seedPollingTask(t, channelID, "task_public_settings", "upstream_settings")
+
+	adaptor := &taskPollingFetchAdaptor{}
+	previousFactory := GetTaskAdaptorFunc
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
+
+	err := updateVideoTasks(context.Background(), constant.TaskPlatform("doubao"), channelID, []string{
+		task.GetUpstreamTaskID(),
+	}, map[string]*model.Task{
+		task.GetUpstreamTaskID(): task,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, dto.DoubaoVideoAPIModeVideoGenerations, adaptor.initializedVideoAPIMode())
 }
 
 func TestUpdateVideoTasksDefaultSleepDoesNotBlockOtherChannels(t *testing.T) {

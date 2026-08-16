@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -123,15 +125,21 @@ type responseTask struct {
 
 type TaskAdaptor struct {
 	taskcommon.BaseBilling
-	ChannelType int
-	apiKey      string
-	baseURL     string
+	ChannelType      int
+	apiKey           string
+	baseURL          string
+	videoAPIMode     dto.DoubaoVideoAPIMode
+	customSubmitPath string
+	customFetchPath  string
 }
 
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl
 	a.apiKey = info.ApiKey
+	a.videoAPIMode = info.ChannelOtherSettings.DoubaoVideoAPIMode
+	a.customSubmitPath = info.ChannelOtherSettings.DoubaoVideoSubmitPath
+	a.customFetchPath = info.ChannelOtherSettings.DoubaoVideoFetchPath
 }
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
@@ -142,7 +150,11 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 
 // BuildRequestURL constructs the upstream URL.
 func (a *TaskAdaptor) BuildRequestURL(_ *relaycommon.RelayInfo) (string, error) {
-	return fmt.Sprintf("%s/api/v3/contents/generations/tasks", a.baseURL), nil
+	submitPath, _, err := a.resolveUpstreamPaths()
+	if err != nil {
+		return "", err
+	}
+	return buildUpstreamURL(a.baseURL, submitPath), nil
 }
 
 // BuildRequestHeader sets required headers.
@@ -278,7 +290,12 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 		return nil, fmt.Errorf("invalid task_id")
 	}
 
-	uri := fmt.Sprintf("%s/api/v3/contents/generations/tasks/%s", baseUrl, taskID)
+	_, fetchPath, err := a.resolveUpstreamPaths()
+	if err != nil {
+		return nil, err
+	}
+	fetchPath = strings.ReplaceAll(fetchPath, "{id}", url.PathEscape(taskID))
+	uri := buildUpstreamURL(baseUrl, fetchPath)
 
 	req, err := http.NewRequest(http.MethodGet, uri, nil)
 	if err != nil {
@@ -294,6 +311,44 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
 	return client.Do(req)
+}
+
+func (a *TaskAdaptor) resolveUpstreamPaths() (string, string, error) {
+	switch a.videoAPIMode {
+	case "", dto.DoubaoVideoAPIModeV3:
+		return "/api/v3/contents/generations/tasks", "/api/v3/contents/generations/tasks/{id}", nil
+	case dto.DoubaoVideoAPIModeVideoGenerations:
+		return "/v1/video/generations", "/v1/video/generations/{id}", nil
+	case dto.DoubaoVideoAPIModeCustom:
+		submitPath := strings.TrimSpace(a.customSubmitPath)
+		fetchPath := strings.TrimSpace(a.customFetchPath)
+		if err := validateUpstreamPath("submit", submitPath, false); err != nil {
+			return "", "", err
+		}
+		if err := validateUpstreamPath("fetch", fetchPath, true); err != nil {
+			return "", "", err
+		}
+		return submitPath, fetchPath, nil
+	default:
+		return "", "", fmt.Errorf("unsupported doubao video api mode: %s", a.videoAPIMode)
+	}
+}
+
+func validateUpstreamPath(name, path string, requireTaskID bool) error {
+	if path == "" {
+		return fmt.Errorf("doubao video %s path is required", name)
+	}
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.Contains(path, "://") {
+		return fmt.Errorf("doubao video %s path must be a relative path starting with /", name)
+	}
+	if requireTaskID && !strings.Contains(path, "{id}") {
+		return fmt.Errorf("doubao video %s path must contain {id}", name)
+	}
+	return nil
+}
+
+func buildUpstreamURL(baseURL, path string) string {
+	return strings.TrimRight(baseURL, "/") + path
 }
 
 func (a *TaskAdaptor) GetModelList() []string {
