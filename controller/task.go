@@ -83,6 +83,16 @@ func tasksToDto(c *gin.Context, tasks []*model.Task, fillUser bool) []*dto.TaskD
 			}
 		}
 		result[i] = relay.TaskModel2Dto(c, task)
+		if c.GetInt("role") < common.RoleAdminUser {
+			switch task.Action {
+			case constant.TaskActionGenerate,
+				constant.TaskActionTextGenerate,
+				constant.TaskActionFirstTailGenerate,
+				constant.TaskActionReferenceGenerate,
+				constant.TaskActionRemix:
+				result[i].Data = nil
+			}
+		}
 	}
 	return result
 }

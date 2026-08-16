@@ -121,3 +121,16 @@ func TestChannelValidateSettingsValidatesParameterCapabilities(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "clamp")
 }
+
+func TestChannelValidateSettingsValidatesVideoCapabilities(t *testing.T) {
+	channel := &Channel{}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		VideoCapabilities: &dto.VideoCapabilityConfig{Models: map[string]dto.VideoModelCapability{
+			"video-model": {Resolutions: []string{"720p", "1280x720"}},
+		}},
+	})
+
+	err := channel.ValidateSettings()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate resolution")
+}
