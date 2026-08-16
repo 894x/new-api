@@ -200,6 +200,29 @@ export function getThroughputColor(
   return 'danger'
 }
 
+export function calculateGenerationTokensPerSecond(
+  completionTokens: number,
+  useTimeSec: number,
+  frtMs?: number
+): number | null {
+  if (
+    !Number.isFinite(completionTokens) ||
+    completionTokens <= 1 ||
+    !Number.isFinite(useTimeSec) ||
+    useTimeSec <= 0 ||
+    frtMs == null ||
+    !Number.isFinite(frtMs) ||
+    frtMs <= 0
+  ) {
+    return null
+  }
+
+  const generationTimeSec = useTimeSec - frtMs / 1000
+  if (generationTimeSec <= 0) return null
+
+  return (completionTokens - 1) / generationTimeSec
+}
+
 /**
  * Get response color using throughput only when enough output tokens exist.
  */

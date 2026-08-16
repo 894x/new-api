@@ -301,6 +301,9 @@ function MobileStreamTimingField({ log }: { log: UsageLog }) {
       <StreamTpsCell
         isStream={log.is_stream}
         tokensPerSecond={tokensPerSecond}
+        completionTokens={log.completion_tokens}
+        useTimeSec={useTime}
+        frtMs={other?.frt}
         streamStatus={other?.stream_status}
         className='shrink-0'
       />

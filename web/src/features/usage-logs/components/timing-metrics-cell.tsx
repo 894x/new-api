@@ -33,7 +33,11 @@ import {
 import { formatUseTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-import { getFirstResponseTimeColor, getResponseTimeColor } from '../lib/format'
+import {
+  calculateGenerationTokensPerSecond,
+  getFirstResponseTimeColor,
+  getResponseTimeColor,
+} from '../lib/format'
 import type { LogOtherData } from '../types'
 
 /**
@@ -152,6 +156,9 @@ export function TimingMetricsCell(props: TimingMetricsCellProps) {
 interface StreamTpsCellProps {
   isStream: boolean
   tokensPerSecond?: number | null
+  completionTokens: number
+  useTimeSec: number
+  frtMs?: number
   streamStatus?: LogOtherData['stream_status']
   className?: string
 }
@@ -164,6 +171,18 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
     props.tokensPerSecond != null
       ? `${Math.round(props.tokensPerSecond)} t/s`
       : '—'
+  const generationTokensPerSecond = props.isStream
+    ? calculateGenerationTokensPerSecond(
+        props.completionTokens,
+        props.useTimeSec,
+        props.frtMs
+      )
+    : null
+  const generationTpsLabel =
+    generationTokensPerSecond != null
+      ? `${Math.round(generationTokensPerSecond)} t/s`
+      : '—'
+  const showGenerationSpeed = generationTokensPerSecond != null
   const streamLabel = props.isStream ? t('Stream') : t('Non-stream')
 
   return (
@@ -206,6 +225,11 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
       <span className='text-muted-foreground/60 px-0.5 tabular-nums'>
         {tpsLabel}
       </span>
+      {showGenerationSpeed ? (
+        <span className='text-muted-foreground/60 px-0.5 tabular-nums'>
+          {t('Generation')} {generationTpsLabel}
+        </span>
+      ) : null}
     </div>
   )
 }
