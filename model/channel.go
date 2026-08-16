@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"strings"
 	"sync"
@@ -73,6 +74,17 @@ type ChannelSortOptions struct {
 	SortBy    string
 	SortOrder string
 	IDSort    bool
+}
+
+// MaxChannelWeight keeps each effective weight plus the compatibility baseline
+// within a signed int on all supported architectures.
+const MaxChannelWeight uint = math.MaxInt32 - 10
+
+func ValidateChannelWeight(weight *uint) error {
+	if weight != nil && *weight > MaxChannelWeight {
+		return fmt.Errorf("channel weight exceeds %d", MaxChannelWeight)
+	}
+	return nil
 }
 
 var channelSortColumns = map[string]string{
@@ -427,6 +439,11 @@ func BatchInsertChannels(channels []Channel) error {
 	if len(channels) == 0 {
 		return nil
 	}
+	for i := range channels {
+		if err := ValidateChannelWeight(channels[i].Weight); err != nil {
+			return err
+		}
+	}
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return tx.Error
@@ -477,6 +494,10 @@ func BatchDeleteChannels(ids []int) (int64, error) {
 			tx.Rollback()
 			return 0, err
 		}
+		if err := tx.Where("channel_id in (?)", chunk).Delete(&ChannelModelOverride{}).Error; err != nil {
+			tx.Rollback()
+			return 0, err
+		}
 	}
 	if err := tx.Commit().Error; err != nil {
 		return 0, err
@@ -524,16 +545,28 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
-	var err error
-	err = DB.Create(channel).Error
-	if err != nil {
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
 		return err
 	}
-	err = channel.AddAbilities(nil)
-	return err
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := tx.Create(channel).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := channel.AddAbilities(tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
 }
 
 func (channel *Channel) Update() error {
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string
@@ -572,14 +605,55 @@ func (channel *Channel) Update() error {
 			}
 		}
 	}
-	var err error
-	err = DB.Model(channel).Updates(channel).Error
-	if err != nil {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := tx.Model(channel).Updates(channel).Error; err != nil {
+		tx.Rollback()
 		return err
 	}
-	DB.Model(channel).First(channel, "id = ?", channel.Id)
-	err = channel.UpdateAbilities(nil)
-	return err
+	if err := tx.Model(channel).First(channel, "id = ?", channel.Id).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := channel.UpdateAbilities(tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
+}
+
+func (channel *Channel) UpdateModelsAndSettings(models string, settings string) error {
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(map[string]interface{}{
+		"models":   models,
+		"settings": settings,
+	}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	channel.Models = models
+	channel.OtherSettings = settings
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := channel.UpdateAbilities(tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
 }
 
 func (channel *Channel) UpdateResponseTime(responseTime int64) {
@@ -610,7 +684,10 @@ func (channel *Channel) Delete() error {
 		if err := tx.Delete(channel).Error; err != nil {
 			return err
 		}
-		return tx.Where("channel_id = ?", channel.Id).Delete(&Ability{}).Error
+		if err := tx.Where("channel_id = ?", channel.Id).Delete(&Ability{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("channel_id = ?", channel.Id).Delete(&ChannelModelOverride{}).Error
 	})
 }
 
@@ -690,16 +767,29 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 			channel.ChannelInfo.MultiKeyDisabledReason[keyIndex] = reason
 			channel.ChannelInfo.MultiKeyDisabledTime[keyIndex] = common.GetTimestamp()
 		}
-		if !hasEnabledMultiKey(keys, channel.ChannelInfo.MultiKeyStatusList) {
-			channel.Status = common.ChannelStatusAutoDisabled
-			info := channel.GetOtherInfo()
-			info["status_reason"] = "All keys are disabled"
-			info["status_time"] = common.GetTimestamp()
-			channel.SetOtherInfo(info)
-		} else if status == common.ChannelStatusEnabled {
+		channel.NormalizeMultiKeyStatus()
+	}
+}
+
+// NormalizeMultiKeyStatus derives the channel's routable status from its key
+// states. Manual channel disablement is preserved while at least one key is
+// usable; only an auto-disabled channel is restored by enabling a key.
+func (channel *Channel) NormalizeMultiKeyStatus() {
+	if channel == nil || !channel.ChannelInfo.IsMultiKey {
+		return
+	}
+	if hasEnabledMultiKey(channel.GetKeys(), channel.ChannelInfo.MultiKeyStatusList) {
+		if channel.Status == common.ChannelStatusAutoDisabled {
 			channel.Status = common.ChannelStatusEnabled
 		}
+		return
 	}
+
+	channel.Status = common.ChannelStatusAutoDisabled
+	info := channel.GetOtherInfo()
+	info["status_reason"] = "All keys are disabled"
+	info["status_time"] = common.GetTimestamp()
+	channel.SetOtherInfo(info)
 }
 
 func hasEnabledMultiKey(keys []string, statusList map[int]int) bool {
@@ -719,47 +809,13 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	if common.MemoryCacheEnabled {
 		channelStatusLock.Lock()
 		defer channelStatusLock.Unlock()
-
-		channelCache, _ := CacheGetChannel(channelId)
-		if channelCache == nil {
-			return false
-		}
-		if channelCache.ChannelInfo.IsMultiKey {
-			// Use per-channel lock to prevent concurrent map read/write with GetNextEnabledKey
-			beforeStatus := channelCache.Status
-			pollingLock := GetChannelPollingLock(channelId)
-			pollingLock.Lock()
-			// 如果是多Key模式，更新缓存中的状态
-			handlerMultiKeyUpdate(channelCache, usingKey, status, reason)
-			pollingLock.Unlock()
-			if beforeStatus != channelCache.Status {
-				CacheUpdateChannelStatus(channelId, channelCache.Status)
-			}
-			//CacheUpdateChannel(channelCache)
-			//return true
-		} else {
-			// 如果缓存渠道存在，且状态已是目标状态，直接返回
-			if channelCache.Status == status {
-				return false
-			}
-			CacheUpdateChannelStatus(channelId, status)
-		}
 	}
 
-	shouldUpdateAbilities := false
-	defer func() {
-		if shouldUpdateAbilities {
-			err := UpdateAbilityStatus(channelId, status == common.ChannelStatusEnabled)
-			if err != nil {
-				common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
-			}
-		}
-	}()
 	channel, err := GetChannelById(channelId, true)
 	if err != nil {
 		return false
 	} else {
-		if channel.Status == status {
+		if !channel.ChannelInfo.IsMultiKey && channel.Status == status {
 			return false
 		}
 
@@ -770,52 +826,98 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			pollingLock.Lock()
 			handlerMultiKeyUpdate(channel, usingKey, status, reason)
 			pollingLock.Unlock()
-			if beforeStatus != channel.Status {
-				shouldUpdateAbilities = true
+			statusChanged := beforeStatus != channel.Status
+			tx := DB.Begin()
+			if tx.Error != nil {
+				return false
 			}
+			if err = tx.Omit("key").Save(channel).Error; err != nil {
+				tx.Rollback()
+				common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
+				return false
+			}
+			if statusChanged {
+				if err = tx.Model(&Ability{}).Where("channel_id = ?", channelId).
+					Select("enabled").Update("enabled", channel.Status == common.ChannelStatusEnabled).Error; err != nil {
+					tx.Rollback()
+					common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
+					return false
+				}
+			}
+			if err = tx.Commit().Error; err != nil {
+				return false
+			}
+			if common.MemoryCacheEnabled {
+				InitChannelCache()
+			}
+			return true
 		} else {
 			info := channel.GetOtherInfo()
 			info["status_reason"] = reason
 			info["status_time"] = common.GetTimestamp()
 			channel.SetOtherInfo(info)
 			channel.Status = status
-			shouldUpdateAbilities = true
 		}
-		err = channel.SaveWithoutKey()
-		if err != nil {
+		tx := DB.Begin()
+		if tx.Error != nil {
+			return false
+		}
+		if err = tx.Omit("key").Save(channel).Error; err != nil {
+			tx.Rollback()
 			common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
 			return false
+		}
+		if err = tx.Model(&Ability{}).Where("channel_id = ?", channelId).
+			Select("enabled").Update("enabled", channel.Status == common.ChannelStatusEnabled).Error; err != nil {
+			tx.Rollback()
+			common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
+			return false
+		}
+		if err = tx.Commit().Error; err != nil {
+			return false
+		}
+		if common.MemoryCacheEnabled {
+			InitChannelCache()
 		}
 	}
 	return true
 }
 
 func EnableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
-	if err != nil {
-		return err
-	}
-	err = UpdateAbilityStatusByTag(tag, true)
-	return err
+	return updateChannelStatusByTag(tag, common.ChannelStatusEnabled)
 }
 
 func DisableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
-	if err != nil {
+	return updateChannelStatusByTag(tag, common.ChannelStatusManuallyDisabled)
+}
+
+func updateChannelStatusByTag(tag string, status int) error {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := tx.Model(&Channel{}).Where("tag = ?", tag).Update("status", status).Error; err != nil {
+		tx.Rollback()
 		return err
 	}
-	err = UpdateAbilityStatusByTag(tag, false)
-	return err
+	channelIds := tx.Model(&Channel{}).Select("id").Where("tag = ?", tag)
+	if err := tx.Model(&Ability{}).Where("channel_id IN (?)", channelIds).
+		Select("enabled").Update("enabled", status == common.ChannelStatusEnabled).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
 }
 
 func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+	if err := ValidateChannelWeight(weight); err != nil {
+		return err
+	}
 	updateData := Channel{}
 	shouldReCreateAbilities := false
-	updatedTag := tag
 	// 如果 newTag 不为空且不等于 tag，则更新 tag
 	if newTag != nil && *newTag != tag {
 		updateData.Tag = newTag
-		updatedTag = *newTag
 	}
 	if modelMapping != nil {
 		updateData.ModelMapping = modelMapping
@@ -829,9 +931,11 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		updateData.Group = *group
 	}
 	if priority != nil {
+		shouldReCreateAbilities = true
 		updateData.Priority = priority
 	}
 	if weight != nil {
+		shouldReCreateAbilities = true
 		updateData.Weight = weight
 	}
 	if paramOverride != nil {
@@ -841,27 +945,49 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		updateData.HeaderOverride = headerOverride
 	}
 
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
-	if err != nil {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	var channelIds []int
+	if err := tx.Model(&Channel{}).Where("tag = ?", tag).Pluck("id", &channelIds).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if len(channelIds) == 0 {
+		return tx.Commit().Error
+	}
+	if err := tx.Model(&Channel{}).Where("id IN ?", channelIds).Updates(updateData).Error; err != nil {
+		tx.Rollback()
 		return err
 	}
 	if shouldReCreateAbilities {
-		channels, err := GetChannelsByTag(updatedTag, false, false)
-		if err == nil {
-			for _, channel := range channels {
-				err = channel.UpdateAbilities(nil)
-				if err != nil {
-					common.SysLog(fmt.Sprintf("failed to update abilities: channel_id=%d, tag=%s, error=%v", channel.Id, channel.GetTag(), err))
-				}
+		var channels []*Channel
+		if err := tx.Where("id IN ?", channelIds).Find(&channels).Error; err != nil {
+			tx.Rollback()
+			return err
+		}
+		for _, channel := range channels {
+			if err := ValidateChannelWeight(channel.Weight); err != nil {
+				tx.Rollback()
+				return err
+			}
+			if err := channel.UpdateAbilities(tx); err != nil {
+				tx.Rollback()
+				return err
 			}
 		}
 	} else {
-		err := UpdateAbilityByTag(tag, newTag, priority, weight)
-		if err != nil {
+		ability := Ability{}
+		if newTag != nil {
+			ability.Tag = newTag
+		}
+		if err := tx.Model(&Ability{}).Where("channel_id IN ?", channelIds).Updates(ability).Error; err != nil {
+			tx.Rollback()
 			return err
 		}
 	}
-	return nil
+	return tx.Commit().Error
 }
 
 func UpdateChannelUsedQuota(id int, quota int) {
@@ -880,22 +1006,19 @@ func updateChannelUsedQuota(id int, quota int) {
 }
 
 func DeleteChannelByStatus(status int64) (int64, error) {
-	return deleteChannelsByQuery(DB.Where("status = ?", status))
+	return deleteChannelsByStatuses([]int64{status})
 }
 
 func DeleteDisabledChannel() (int64, error) {
-	return deleteChannelsByQuery(DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled))
+	return deleteChannelsByStatuses([]int64{common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled})
 }
 
-func deleteChannelsByQuery(query *gorm.DB) (int64, error) {
-	var channelIds []int
-	if err := query.Model(&Channel{}).Pluck("id", &channelIds).Error; err != nil {
+func deleteChannelsByStatuses(statuses []int64) (int64, error) {
+	var ids []int
+	if err := DB.Model(&Channel{}).Where("status IN ?", statuses).Pluck("id", &ids).Error; err != nil {
 		return 0, err
 	}
-	if len(channelIds) == 0 {
-		return 0, nil
-	}
-	return BatchDeleteChannels(channelIds)
+	return BatchDeleteChannels(ids)
 }
 
 func GetPaginatedTags(offset int, limit int) ([]*string, error) {
@@ -1089,7 +1212,8 @@ func BatchSetChannelTag(ids []int, tag *string) error {
 	}
 
 	// update ability status
-	channels, err := GetChannelsByIds(ids)
+	var channels []*Channel
+	err = tx.Where("id IN ?", ids).Find(&channels).Error
 	if err != nil {
 		tx.Rollback()
 		return err

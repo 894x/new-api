@@ -124,7 +124,8 @@ func TestAssetLibraryRoutingRejectsRawUpstreamAssetURI(t *testing.T) {
 
 			assert.True(t, ctx.IsAborted())
 			assert.Equal(t, http.StatusBadRequest, recorder.Code)
-			assert.Contains(t, recorder.Body.String(), "use an account asset ID")
+			assert.Contains(t, recorder.Body.String(), `"code":"request_failed"`)
+			assert.NotContains(t, recorder.Body.String(), "use an account asset ID")
 		})
 	}
 }

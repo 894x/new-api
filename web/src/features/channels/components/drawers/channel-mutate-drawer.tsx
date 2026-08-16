@@ -187,6 +187,7 @@ import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dial
 import { ParameterCapabilityEditorDialog } from '../dialogs/parameter-capability-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
+import { ModelRoutingOverridesEditor } from '../model-routing-overrides-editor'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
@@ -1592,7 +1593,7 @@ export function ChannelMutateDrawer({
   // Handle model selection change from MultiSelect
   const handleModelsChange = useCallback(
     (selected: string[]) => {
-      form.setValue('models', selected.join(','))
+      form.setValue('models', selected.join(','), { shouldDirty: true })
     },
     [form]
   )
@@ -3745,6 +3746,20 @@ export function ChannelMutateDrawer({
                               )}
                             />
                           </div>
+
+                          {isEditing && channelId && (
+                            <div className='border-border/60 rounded-lg border p-4'>
+                              <ModelRoutingOverridesEditor
+                                channelId={channelId}
+                                disabled={Boolean(
+                                  form.formState.dirtyFields.models
+                                )}
+                                disabledReason={t(
+                                  'Save model list changes before editing routing overrides.'
+                                )}
+                              />
+                            </div>
+                          )}
                         </div>
                       </ChannelModelsSection>
                     </div>

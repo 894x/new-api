@@ -3,12 +3,15 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -28,6 +31,35 @@ type Ability struct {
 type AbilityWithChannel struct {
 	Ability
 	ChannelType int `json:"channel_type"`
+}
+
+func effectiveAbilityPriority(ability *Ability) int64 {
+	if ability == nil || ability.Priority == nil {
+		return 0
+	}
+	return *ability.Priority
+}
+
+func chooseChannelIdByWeight(abilities []Ability, randomInt func(int) int) int {
+	if len(abilities) == 0 {
+		return 0
+	}
+	weightSum := 0
+	for _, ability := range abilities {
+		effectiveWeight := int(ability.Weight) + 10
+		if effectiveWeight <= 0 || weightSum > math.MaxInt-effectiveWeight {
+			return abilities[0].ChannelId
+		}
+		weightSum += effectiveWeight
+	}
+	randomWeight := randomInt(weightSum)
+	for _, ability := range abilities {
+		randomWeight -= int(ability.Weight) + 10
+		if randomWeight < 0 {
+			return ability.ChannelId
+		}
+	}
+	return abilities[len(abilities)-1].ChannelId
 }
 
 func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
@@ -60,61 +92,6 @@ func GetAllEnableAbilities() []Ability {
 	return abilities
 }
 
-func getPriority(group string, model string, retry int, allowedChannelIds map[int]struct{}) (int, error) {
-	var priorities []int
-	query := DB.Model(&Ability{}).
-		Select("DISTINCT(priority)").
-		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
-	if ids, constrained := assetAllowedChannelIdSlice(allowedChannelIds); constrained {
-		query = query.Where("channel_id IN ?", ids)
-	}
-	err := query.
-		Order("priority DESC").              // 按优先级降序排序
-		Pluck("priority", &priorities).Error // Pluck用于将查询的结果直接扫描到一个切片中
-
-	if err != nil {
-		// 处理错误
-		return 0, err
-	}
-
-	if len(priorities) == 0 {
-		// 如果没有查询到优先级，则返回错误
-		return 0, errors.New("数据库一致性被破坏")
-	}
-
-	// 确定要使用的优先级
-	var priorityToUse int
-	if retry >= len(priorities) {
-		// 如果重试次数大于优先级数，则使用最小的优先级
-		priorityToUse = priorities[len(priorities)-1]
-	} else {
-		priorityToUse = priorities[retry]
-	}
-	return priorityToUse, nil
-}
-
-func getChannelQuery(group string, model string, retry int, allowedChannelIds map[int]struct{}) (*gorm.DB, error) {
-	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
-	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
-	if ids, constrained := assetAllowedChannelIdSlice(allowedChannelIds); constrained {
-		maxPrioritySubQuery = maxPrioritySubQuery.Where("channel_id IN ?", ids)
-		channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and channel_id IN ? and priority = (?)", group, model, true, ids, maxPrioritySubQuery)
-	}
-	if retry != 0 {
-		priority, err := getPriority(group, model, retry, allowedChannelIds)
-		if err != nil {
-			return nil, err
-		} else {
-			channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
-			if ids, constrained := assetAllowedChannelIdSlice(allowedChannelIds); constrained {
-				channelQuery = channelQuery.Where("channel_id IN ?", ids)
-			}
-		}
-	}
-
-	return channelQuery, nil
-}
-
 func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
 	return GetChannelWithFilter(group, model, retry, requestPath, nil)
 }
@@ -123,53 +100,76 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 // set. A nil set preserves the ordinary unconstrained selection behavior.
 func GetChannelWithFilter(group string, model string, retry int, requestPath string, allowedChannelIds map[int]struct{}) (*Channel, error) {
 	var abilities []Ability
-	if ids, constrained := assetAllowedChannelIdSlice(allowedChannelIds); constrained && len(ids) == 0 {
-		return nil, nil
+	allowedChannelIdSlice := make([]int, 0, len(allowedChannelIds))
+	if allowedChannelIds != nil {
+		if len(allowedChannelIds) == 0 {
+			return nil, nil
+		}
+		for channelId := range allowedChannelIds {
+			allowedChannelIdSlice = append(allowedChannelIdSlice, channelId)
+		}
 	}
 
-	var err error = nil
-	channelQuery, err := getChannelQuery(group, model, retry, allowedChannelIds)
+	query := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
+	if allowedChannelIds != nil {
+		query = query.Where("channel_id IN ?", allowedChannelIdSlice)
+	}
+	err := query.Order("weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
-	err = channelQuery.Order("weight DESC").Find(&abilities).Error
+	abilities, err = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
 	if err != nil {
 		return nil, err
 	}
-	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
-	channel := Channel{}
-	if len(abilities) > 0 {
-		// Randomly choose one
-		weightSum := uint(0)
-		for _, ability_ := range abilities {
-			weightSum += ability_.Weight + 10
-		}
-		// Randomly choose one
-		weight := common.GetRandomInt(int(weightSum))
-		for _, ability_ := range abilities {
-			weight -= int(ability_.Weight) + 10
-			//log.Printf("weight: %d, ability weight: %d", weight, *ability_.Weight)
-			if weight <= 0 {
-				channel.Id = ability_.ChannelId
-				break
+	if len(abilities) == 0 {
+		normalizedModel := ratio_setting.FormatMatchingModelName(model)
+		if normalizedModel != "" && normalizedModel != model {
+			query = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, normalizedModel, true)
+			if allowedChannelIds != nil {
+				query = query.Where("channel_id IN ?", allowedChannelIdSlice)
+			}
+			err = query.Order("weight DESC").Find(&abilities).Error
+			if err != nil {
+				return nil, err
+			}
+			abilities, err = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
+			if err != nil {
+				return nil, err
 			}
 		}
-	} else {
+	}
+	if len(abilities) == 0 {
 		return nil, nil
 	}
+
+	priorities := make([]int64, 0)
+	seenPriorities := make(map[int64]struct{})
+	for _, ability := range abilities {
+		priority := effectiveAbilityPriority(&ability)
+		if _, ok := seenPriorities[priority]; ok {
+			continue
+		}
+		seenPriorities[priority] = struct{}{}
+		priorities = append(priorities, priority)
+	}
+	sort.Slice(priorities, func(i, j int) bool { return priorities[i] > priorities[j] })
+	if retry < 0 {
+		retry = 0
+	}
+	if retry >= len(priorities) {
+		retry = len(priorities) - 1
+	}
+	targetPriority := priorities[retry]
+	targetAbilities := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		if effectiveAbilityPriority(&ability) == targetPriority {
+			targetAbilities = append(targetAbilities, ability)
+		}
+	}
+	channel := Channel{Id: chooseChannelIdByWeight(targetAbilities, common.GetRandomInt)}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
-}
-
-func assetAllowedChannelIdSlice(allowedChannelIds map[int]struct{}) ([]int, bool) {
-	if allowedChannelIds == nil {
-		return nil, false
-	}
-	ids := make([]int, 0, len(allowedChannelIds))
-	for channelId := range allowedChannelIds {
-		ids = append(ids, channelId)
-	}
-	return ids, true
 }
 
 // filterAbilitiesByRequestPathAndModel restricts candidates by request path and
@@ -177,9 +177,9 @@ func assetAllowedChannelIdSlice(allowedChannelIds map[int]struct{}) ([]int, bool
 // (type 58) channels are path-checked: kept only when one of their routes matches
 // requestPath and model; all other channel types always pass. When requestPath is
 // empty, filtering is skipped.
-func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath string, model string) []Ability {
+func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath string, model string) ([]Ability, error) {
 	if requestPath == "" || len(abilities) == 0 {
-		return abilities
+		return abilities, nil
 	}
 
 	channelIds := make([]int, 0, len(abilities))
@@ -194,8 +194,7 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 
 	var channels []*Channel
 	if err := DB.Where("id IN ?", channelIds).Find(&channels).Error; err != nil {
-		// On error, fall back to unfiltered candidates to avoid blocking selection
-		return abilities
+		return nil, err
 	}
 
 	advancedConfigs := make(map[int]*dto.AdvancedCustomConfig)
@@ -216,15 +215,30 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 			filtered = append(filtered, ability)
 		}
 	}
-	return filtered
+	return filtered, nil
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
-	models_ := strings.Split(channel.Models, ",")
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
+	useDB := DB
+	if tx != nil {
+		useDB = tx
+	}
+	overrides, err := getChannelModelOverrideMap(useDB, channel.Id)
+	if err != nil {
+		return err
+	}
+	models_ := normalizeChannelModels(channel)
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
+		routing := effectiveChannelModelRouting(channel, model, nil)
+		if override, ok := overrides[model]; ok {
+			routing = effectiveChannelModelRouting(channel, model, &override)
+		}
 		for _, group := range groups_ {
 			key := group + "|" + model
 			if _, exists := abilitySet[key]; exists {
@@ -236,8 +250,8 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 				Model:     model,
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
-				Priority:  channel.Priority,
-				Weight:    uint(channel.GetWeight()),
+				Priority:  common.GetPointer(routing.EffectivePriority),
+				Weight:    routing.EffectiveWeight,
 				Tag:       channel.Tag,
 			}
 			abilities = append(abilities, ability)
@@ -245,11 +259,6 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 	}
 	if len(abilities) == 0 {
 		return nil
-	}
-	// choose DB or provided tx
-	useDB := DB
-	if tx != nil {
-		useDB = tx
 	}
 	for _, chunk := range lo.Chunk(abilities, 50) {
 		err := useDB.Clauses(clause.OnConflict{DoNothing: true}).Create(&chunk).Error
@@ -267,6 +276,9 @@ func (channel *Channel) DeleteAbilities() error {
 // UpdateAbilities updates abilities of this channel.
 // Make sure the channel is completed before calling this function.
 func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
 	isNewTx := false
 	// 如果没有传入事务，创建新的事务
 	if tx == nil {
@@ -290,13 +302,30 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 		}
 		return err
 	}
+	if err := pruneChannelModelOverrides(tx, channel); err != nil {
+		if isNewTx {
+			tx.Rollback()
+		}
+		return err
+	}
 
 	// Then add new abilities
-	models_ := strings.Split(channel.Models, ",")
+	overrides, err := getChannelModelOverrideMap(tx, channel.Id)
+	if err != nil {
+		if isNewTx {
+			tx.Rollback()
+		}
+		return err
+	}
+	models_ := normalizeChannelModels(channel)
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
+		routing := effectiveChannelModelRouting(channel, model, nil)
+		if override, ok := overrides[model]; ok {
+			routing = effectiveChannelModelRouting(channel, model, &override)
+		}
 		for _, group := range groups_ {
 			key := group + "|" + model
 			if _, exists := abilitySet[key]; exists {
@@ -308,8 +337,8 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 				Model:     model,
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
-				Priority:  channel.Priority,
-				Weight:    uint(channel.GetWeight()),
+				Priority:  common.GetPointer(routing.EffectivePriority),
+				Weight:    routing.EffectiveWeight,
 				Tag:       channel.Tag,
 			}
 			abilities = append(abilities, ability)
@@ -338,24 +367,6 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 
 func UpdateAbilityStatus(channelId int, status bool) error {
 	return DB.Model(&Ability{}).Where("channel_id = ?", channelId).Select("enabled").Update("enabled", status).Error
-}
-
-func UpdateAbilityStatusByTag(tag string, status bool) error {
-	return DB.Model(&Ability{}).Where("tag = ?", tag).Select("enabled").Update("enabled", status).Error
-}
-
-func UpdateAbilityByTag(tag string, newTag *string, priority *int64, weight *uint) error {
-	ability := Ability{}
-	if newTag != nil {
-		ability.Tag = newTag
-	}
-	if priority != nil {
-		ability.Priority = priority
-	}
-	if weight != nil {
-		ability.Weight = *weight
-	}
-	return DB.Model(&Ability{}).Where("tag = ?", tag).Updates(ability).Error
 }
 
 var fixLock = sync.Mutex{}

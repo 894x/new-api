@@ -75,6 +75,25 @@ export const channelSchema = z.object({
 
 export type Channel = z.infer<typeof channelSchema>
 
+export interface ModelRoutingOverride {
+  channel_id: number
+  channel_name: string
+  channel_type: number
+  channel_status: number
+  model: string
+  default_priority: number
+  default_weight: number
+  priority_override: number | null
+  weight_override: number | null
+  effective_priority: number
+  effective_weight: number
+}
+
+export type ModelRoutingOverridePatch = Pick<
+  ModelRoutingOverride,
+  'channel_id' | 'model' | 'priority_override' | 'weight_override'
+>
+
 // ============================================================================
 // Channel Settings Types
 // ============================================================================
@@ -196,6 +215,12 @@ export interface GetChannelResponse {
   success: boolean
   message?: string
   data?: Channel
+}
+
+export interface ModelRoutingOverridesResponse {
+  success: boolean
+  message?: string
+  data?: ModelRoutingOverride[]
 }
 
 export interface ChannelOpsResponse {

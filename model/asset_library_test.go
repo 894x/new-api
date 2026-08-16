@@ -133,7 +133,7 @@ func TestListUserAssetsFiltersStatusesFromEnabledChannelsOnly(t *testing.T) {
 
 func TestBatchDeleteChannelsRemovesAssetLibraryData(t *testing.T) {
 	db := setupAssetLibraryModelTestDB(t)
-	require.NoError(t, db.AutoMigrate(&Channel{}, &Ability{}))
+	require.NoError(t, db.AutoMigrate(&Channel{}, &Ability{}, &ChannelModelOverride{}))
 	require.NoError(t, db.Create(&Channel{Id: 17, Name: "asset-channel", Key: "key"}).Error)
 	require.NoError(t, db.Create(&ChannelAssetConfig{ChannelId: 17, Enabled: true}).Error)
 	require.NoError(t, db.Create(&UserAssetGroupReplica{GroupId: "group-na-a", ChannelId: 17}).Error)
