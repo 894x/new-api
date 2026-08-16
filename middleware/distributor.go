@@ -35,6 +35,7 @@ type ModelRequest struct {
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
+		allowedChannelIds, assetConstrained := common.GetContextKeyType[map[int]struct{}](c, constant.ContextKeyAssetAllowedChannelIds)
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
@@ -60,6 +61,12 @@ func Distribute() func(c *gin.Context) {
 			if !channel.SupportsVideoResolution(modelRequest.Model, modelRequest.VideoResolution) {
 				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": fmt.Sprintf("model %s does not support video resolution %s on channel %d", modelRequest.Model, modelRequest.VideoResolution, channel.Id)}))
 				return
+			}
+			if assetConstrained {
+				if _, allowed := allowedChannelIds[channel.Id]; !allowed {
+					abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "The specified channel has no replica for every referenced asset")
+					return
+				}
 			}
 		} else {
 			// Select a channel for the user
@@ -114,7 +121,8 @@ func Distribute() func(c *gin.Context) {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
 						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) &&
-						preferred.SupportsVideoResolution(modelRequest.Model, modelRequest.VideoResolution) {
+						preferred.SupportsVideoResolution(modelRequest.Model, modelRequest.VideoResolution) &&
+						channelAllowedForAssets(preferred.Id, allowedChannelIds, assetConstrained) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetRequestAutoGroups(c, userGroup)
@@ -142,12 +150,13 @@ func Distribute() func(c *gin.Context) {
 
 				if channel == nil {
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:             c,
-						ModelName:       modelRequest.Model,
-						TokenGroup:      usingGroup,
-						RequestPath:     c.Request.URL.Path,
-						VideoResolution: modelRequest.VideoResolution,
-						Retry:           common.GetPointer(0),
+						Ctx:               c,
+						ModelName:         modelRequest.Model,
+						TokenGroup:        usingGroup,
+						RequestPath:       c.Request.URL.Path,
+						VideoResolution:   modelRequest.VideoResolution,
+						AllowedChannelIds: allowedChannelIds,
+						Retry:             common.GetPointer(0),
 					})
 					if err != nil {
 						if errors.Is(err, model.ErrVideoResolutionUnsupported) {
@@ -175,12 +184,23 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
-		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		if setupErr := SetupContextForSelectedChannel(c, channel, modelRequest.Model); setupErr != nil {
+			abortWithOpenAiMessage(c, setupErr.StatusCode, setupErr.Error(), setupErr.GetErrorCode())
+			return
+		}
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+func channelAllowedForAssets(channelId int, allowedChannelIds map[int]struct{}, constrained bool) bool {
+	if !constrained {
+		return true
+	}
+	_, ok := allowedChannelIds[channelId]
+	return ok
 }
 
 // channelSupportsRequestPath reports whether a channel can serve the request path.
@@ -471,11 +491,11 @@ func setVideoRequestResolution(c *gin.Context, modelRequest *ModelRequest) error
 	if resolution == "" {
 		return nil
 	}
-	normalized, err := dto.NormalizeVideoResolution(resolution)
+	resolution, err := dto.NormalizeVideoResolution(resolution)
 	if err != nil {
 		return err
 	}
-	modelRequest.VideoResolution = normalized
+	modelRequest.VideoResolution = resolution
 	return nil
 }
 

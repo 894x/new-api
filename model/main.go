@@ -260,6 +260,11 @@ func migrateDB() error {
 
 	err := DB.AutoMigrate(
 		&Channel{},
+		&ChannelAssetConfig{},
+		&UserAssetGroup{},
+		&UserAsset{},
+		&UserAssetGroupReplica{},
+		&UserAssetReplica{},
 		&Token{},
 		&User{},
 		&UserSession{},
@@ -269,6 +274,7 @@ func migrateDB() error {
 		&Option{},
 		&Redemption{},
 		&Ability{},
+		&ChannelModelOverride{},
 		&Log{},
 		&Midjourney{},
 		&TopUp{},
@@ -337,6 +343,7 @@ func migrateDBFast() error {
 		{&Option{}, "Option"},
 		{&Redemption{}, "Redemption"},
 		{&Ability{}, "Ability"},
+		{&ChannelModelOverride{}, "ChannelModelOverride"},
 		{&Log{}, "Log"},
 		{&Midjourney{}, "Midjourney"},
 		{&TopUp{}, "TopUp"},

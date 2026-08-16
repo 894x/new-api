@@ -18,6 +18,13 @@ func TestChannelStatusRoutesUseOperatePermission(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodPut, "/", authz.ChannelWrite, controller.UpdateChannel)
 }
 
+func TestChannelModelRoutingOverrideRoutesUseChannelPermissions(t *testing.T) {
+	assertChannelRoutePermission(t, http.MethodGet, "/:id/model-routing-overrides", authz.ChannelRead, controller.GetChannelModelRoutingOverrides)
+	assertChannelRoutePermission(t, http.MethodPatch, "/:id/model-routing-overrides", authz.ChannelWrite, controller.PatchChannelModelRoutingOverrides)
+	assertChannelRoutePermission(t, http.MethodGet, "/model-routing-overrides", authz.ChannelRead, controller.GetModelChannelRoutingOverrides)
+	assertChannelRoutePermission(t, http.MethodPatch, "/model-routing-overrides", authz.ChannelWrite, controller.PatchModelChannelRoutingOverrides)
+}
+
 func TestChannelDeleteRoutesUseSensitiveWritePermission(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodDelete, "/:id", authz.ChannelSensitiveWrite, controller.DeleteChannel)
 	assertChannelRoutePermission(t, http.MethodPost, "/batch", authz.ChannelSensitiveWrite, controller.DeleteChannelBatch)
@@ -25,6 +32,13 @@ func TestChannelDeleteRoutesUseSensitiveWritePermission(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodPut, "/", authz.ChannelWrite, controller.UpdateChannel)
 	assertChannelRoutePermission(t, http.MethodPut, "/tag", authz.ChannelWrite, controller.EditTagChannels)
 	assertChannelRoutePermission(t, http.MethodPost, "/batch/tag", authz.ChannelWrite, controller.BatchSetChannelTag)
+}
+
+func TestChannelAssetLibraryRoutesUseSensitivePermissions(t *testing.T) {
+	assertChannelRoutePermission(t, http.MethodGet, "/:id/asset-library", authz.ChannelRead, controller.GetChannelAssetLibraryConfig)
+	assertChannelRoutePermission(t, http.MethodPut, "/:id/asset-library", authz.ChannelSensitiveWrite, controller.UpdateChannelAssetLibraryConfig)
+	assertChannelRoutePermission(t, http.MethodDelete, "/:id/asset-library", authz.ChannelSensitiveWrite, controller.DeleteChannelAssetLibraryConfig)
+	assertChannelRoutePermission(t, http.MethodPost, "/:id/asset-library/sync", authz.ChannelSensitiveWrite, controller.SyncChannelAssetLibrary)
 }
 
 func TestChannelStatusRoutesRegisterWithoutConflict(t *testing.T) {

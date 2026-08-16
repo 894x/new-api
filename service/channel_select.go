@@ -16,8 +16,12 @@ type RetryParam struct {
 	ModelName       string
 	RequestPath     string
 	VideoResolution string
-	Retry           *int
-	resetNextTry    bool
+
+	// AllowedChannelIds is nil for ordinary requests. A non-nil map restricts
+	// selection to channels that can resolve every local asset reference.
+	AllowedChannelIds map[int]struct{}
+	Retry             *int
+	resetNextTry      bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -117,7 +121,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, err = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath, param.VideoResolution)
+			channel, err = model.GetRandomSatisfiedChannelWithFilters(autoGroup, param.ModelName, priorityRetry, param.RequestPath, param.VideoResolution, param.AllowedChannelIds)
 			if err != nil && !errors.Is(err, model.ErrVideoResolutionUnsupported) {
 				return nil, autoGroup, err
 			}
@@ -164,7 +168,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			return nil, selectGroup, lastSelectionErr
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, param.VideoResolution)
+		channel, err = model.GetRandomSatisfiedChannelWithFilters(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, param.VideoResolution, param.AllowedChannelIds)
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}

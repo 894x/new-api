@@ -27,6 +27,7 @@ import {
   ClipboardPaste,
   HelpCircle,
   KeyRound,
+  Library,
   Loader2,
   Server,
   Sparkles,
@@ -108,6 +109,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { getChannelAssetLibraryConfig } from '@/features/asset-library/api'
+import { assetLibraryQueryKeys } from '@/features/asset-library/lib'
 import {
   SecureVerificationDialog,
   useSecureVerification,
@@ -187,9 +190,11 @@ import { ParameterCapabilityEditorDialog } from '../dialogs/parameter-capability
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { VideoCapabilityEditorDialog } from '../dialogs/video-capability-editor-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
+import { ModelRoutingOverridesEditor } from '../model-routing-overrides-editor'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
+  ChannelAssetLibrarySection,
   ChannelAuthSection,
   ChannelBasicSection,
   ChannelEditorLoadingState,
@@ -248,12 +253,14 @@ const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
 const CHANNEL_EDITOR_SECTION_IDS = {
   identity: 'channel-section-identity',
   credentials: 'channel-section-credentials',
+  assetLibrary: 'channel-section-asset-library',
   models: 'channel-section-models',
   advanced: 'channel-section-advanced',
 } as const
 const CHANNEL_EDITOR_MAIN_SECTION_IDS = [
   CHANNEL_EDITOR_SECTION_IDS.identity,
   CHANNEL_EDITOR_SECTION_IDS.credentials,
+  CHANNEL_EDITOR_SECTION_IDS.assetLibrary,
   CHANNEL_EDITOR_SECTION_IDS.models,
   CHANNEL_EDITOR_SECTION_IDS.advanced,
 ]
@@ -676,6 +683,12 @@ export function ChannelMutateDrawer({
     queryKey: channelsQueryKeys.detail(channelId || 0),
     queryFn: () => getChannel(channelId || 0),
     enabled: isEditing && Boolean(channelId),
+  })
+
+  const { data: assetLibraryConfig } = useQuery({
+    queryKey: assetLibraryQueryKeys.channelConfig(channelId || 0),
+    queryFn: () => getChannelAssetLibraryConfig(channelId || 0),
+    enabled: open && isEditing && Boolean(channelId),
   })
 
   // Fetch available groups
@@ -1160,6 +1173,15 @@ export function ChannelMutateDrawer({
       icon: <KeyRound className='h-4 w-4' aria-hidden='true' />,
     },
     {
+      id: CHANNEL_EDITOR_SECTION_IDS.assetLibrary,
+      title: t('Asset Library'),
+      description: assetLibraryConfig?.enabled ? t('Enabled') : t('Optional'),
+      statusLabel: assetLibraryConfig?.enabled ? t('Enabled') : t('Optional'),
+      status: assetLibraryConfig?.enabled ? 'configured' : 'idle',
+      configured: assetLibraryConfig?.enabled,
+      icon: <Library className='h-4 w-4' aria-hidden='true' />,
+    },
+    {
       id: CHANNEL_EDITOR_SECTION_IDS.models,
       title: t('Models & Groups'),
       description: getSectionStatusLabel(modelsStatus, t),
@@ -1603,7 +1625,7 @@ export function ChannelMutateDrawer({
   // Handle model selection change from MultiSelect
   const handleModelsChange = useCallback(
     (selected: string[]) => {
-      form.setValue('models', selected.join(','))
+      form.setValue('models', selected.join(','), { shouldDirty: true })
     },
     [form]
   )
@@ -3412,6 +3434,17 @@ export function ChannelMutateDrawer({
                       </ChannelApiAccessSection>
                     </div>
 
+                    {/* ── Asset Library ── */}
+                    <div
+                      id={CHANNEL_EDITOR_SECTION_IDS.assetLibrary}
+                      className='scroll-mt-4'
+                    >
+                      <ChannelAssetLibrarySection
+                        channelId={channelId}
+                        disabled={sensitiveLocked}
+                      />
+                    </div>
+
                     {/* ── Models & Groups ── */}
                     <div
                       id={CHANNEL_EDITOR_SECTION_IDS.models}
@@ -3922,6 +3955,20 @@ export function ChannelMutateDrawer({
                               )}
                             />
                           </div>
+
+                          {isEditing && channelId && (
+                            <div className='border-border/60 rounded-lg border p-4'>
+                              <ModelRoutingOverridesEditor
+                                channelId={channelId}
+                                disabled={Boolean(
+                                  form.formState.dirtyFields.models
+                                )}
+                                disabledReason={t(
+                                  'Save model list changes before editing routing overrides.'
+                                )}
+                              />
+                            </div>
+                          )}
                         </div>
                       </ChannelModelsSection>
                     </div>

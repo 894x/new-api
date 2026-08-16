@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -416,6 +417,108 @@ func GetChannel(c *gin.Context) {
 	return
 }
 
+type channelModelOverridePatchRequest struct {
+	Overrides []model.ChannelModelOverridePatch `json:"overrides"`
+}
+
+func GetChannelModelRoutingOverrides(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	routings, err := model.ListChannelModelRoutings(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, routings)
+}
+
+func GetModelChannelRoutingOverrides(c *gin.Context) {
+	modelName := strings.TrimSpace(c.Query("model"))
+	if modelName == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	routings, err := model.ListModelChannelRoutings(modelName)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, routings)
+}
+
+func PatchChannelModelRoutingOverrides(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	var request channelModelOverridePatchRequest
+	if err := c.ShouldBindJSON(&request); err != nil || len(request.Overrides) == 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	for i := range request.Overrides {
+		if request.Overrides[i].ChannelId != 0 && request.Overrides[i].ChannelId != id {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		request.Overrides[i].ChannelId = id
+	}
+	if err := model.PatchChannelModelOverrides(request.Overrides); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.InitChannelCache()
+	recordManageAudit(c, "channel.model_routing_override", map[string]interface{}{
+		"id":    id,
+		"count": len(request.Overrides),
+	})
+	routings, err := model.ListChannelModelRoutings(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, routings)
+}
+
+func PatchModelChannelRoutingOverrides(c *gin.Context) {
+	modelName := strings.TrimSpace(c.Query("model"))
+	if modelName == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	var request channelModelOverridePatchRequest
+	if err := c.ShouldBindJSON(&request); err != nil || len(request.Overrides) == 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	for i := range request.Overrides {
+		if strings.TrimSpace(request.Overrides[i].Model) != "" && strings.TrimSpace(request.Overrides[i].Model) != modelName {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		request.Overrides[i].Model = modelName
+	}
+	if err := model.PatchChannelModelOverrides(request.Overrides); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.InitChannelCache()
+	recordManageAudit(c, "model.channel_routing_override", map[string]interface{}{
+		"model": modelName,
+		"count": len(request.Overrides),
+	})
+	routings, err := model.ListModelChannelRoutings(modelName)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, routings)
+}
+
 // GetChannelKey 获取渠道密钥（需要通过安全验证中间件）
 // 此函数依赖 SecureVerificationRequired 中间件，确保用户已通过安全验证
 func GetChannelKey(c *gin.Context) {
@@ -475,6 +578,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel == nil {
 		return fmt.Errorf("channel cannot be empty")
 	}
+	if err := model.ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
 
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
@@ -485,17 +591,16 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		return fmt.Errorf("New API channel base URL cannot be empty")
 	}
 
+	for _, modelName := range channel.GetModels() {
+		if len(modelName) > 255 {
+			return fmt.Errorf("模型名称过长: %s", modelName)
+		}
+	}
+
 	// 如果是添加操作，检查 channel 和 key 是否为空
 	if isAdd {
 		if channel.Key == "" {
 			return fmt.Errorf("channel cannot be empty")
-		}
-
-		// 检查模型名称长度是否超过 255
-		for _, m := range channel.GetModels() {
-			if len(m) > 255 {
-				return fmt.Errorf("模型名称过长: %s", m)
-			}
 		}
 	}
 
@@ -846,6 +951,13 @@ func EditTagChannels(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "tag不能为空",
+		})
+		return
+	}
+	if err := model.ValidateChannelWeight(channelTag.Weight); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
 		})
 		return
 	}
@@ -1417,35 +1529,13 @@ func CopyChannel(c *gin.Context) {
 		}
 	}
 
-	// fetch original channel with key
-	origin, err := model.GetChannelById(id, true)
+	clone, err := model.CloneChannelWithModelOverrides(id, suffix, resetBalance)
 	if err != nil {
-		common.SysError("failed to get channel by id: " + err.Error())
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道信息失败，请稍后重试"})
-		return
-	}
-
-	// clone channel
-	clone := *origin // shallow copy is sufficient as we will overwrite primitives
-	clone.Id = 0     // let DB auto-generate
-	clone.CreatedTime = common.GetTimestamp()
-	clone.Name = origin.Name + suffix
-	clone.TestTime = 0
-	clone.ResponseTime = 0
-	if resetBalance {
-		clone.Balance = 0
-		clone.UsedQuota = 0
-	}
-
-	if err := clone.ValidateSettings(); err != nil {
-		common.SysError("failed to validate cloned channel: " + err.Error())
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Failed to copy channel: invalid channel settings"})
-		return
-	}
-
-	// insert
-	if err := clone.Insert(); err != nil {
 		common.SysError("failed to clone channel: " + err.Error())
+		if errors.Is(err, model.ErrInvalidChannelSettings) {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "Failed to copy channel: invalid channel settings"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "复制渠道失败，请稍后重试"})
 		return
 	}
@@ -1679,6 +1769,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = 2 // disabled
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1721,6 +1812,7 @@ func ManageMultiKeys(c *gin.Context) {
 		if channel.ChannelInfo.MultiKeyDisabledReason != nil {
 			delete(channel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
 		}
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1745,6 +1837,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
 		channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
 		channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1792,6 +1885,7 @@ func ManageMultiKeys(c *gin.Context) {
 			})
 			return
 		}
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1872,6 +1966,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyStatusList = newStatusList
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1933,6 +2028,13 @@ func ManageMultiKeys(c *gin.Context) {
 			})
 			return
 		}
+		if len(remainingKeys) == 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "不能删除最后一个密钥",
+			})
+			return
+		}
 
 		// Update channel with remaining keys
 		channel.Key = strings.Join(remainingKeys, "\n")
@@ -1940,6 +2042,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyStatusList = newStatusList
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
+		channel.NormalizeMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {

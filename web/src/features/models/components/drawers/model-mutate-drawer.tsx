@@ -73,6 +73,7 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { ModelRoutingOverridesEditor } from '@/features/channels/components/model-routing-overrides-editor'
 import {
   useSystemOptions,
   getOptionValue,
@@ -1467,6 +1468,12 @@ export function ModelMutateDrawer({
                 )}
               </fieldset>
             </SideDrawerSection>
+
+            {isEditing && modelData?.data?.name_rule === 0 && oldModelName && (
+              <SideDrawerSection>
+                <ModelRoutingOverridesEditor model={oldModelName} />
+              </SideDrawerSection>
+            )}
 
             {/* Status & Sync */}
             <SideDrawerSection>

@@ -61,9 +61,9 @@ func isChannelEnabledForGroupModelDB(group string, modelName string, channelID i
 	return err == nil && count > 0
 }
 
-func isChannelIDInList(list []int, channelID int) bool {
-	for _, id := range list {
-		if id == channelID {
+func isChannelIDInList(list []cachedChannelRouting, channelID int) bool {
+	for _, routing := range list {
+		if routing.ChannelId == channelID {
 			return true
 		}
 	}

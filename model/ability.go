@@ -3,12 +3,15 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -28,6 +31,35 @@ type Ability struct {
 type AbilityWithChannel struct {
 	Ability
 	ChannelType int `json:"channel_type"`
+}
+
+func effectiveAbilityPriority(ability *Ability) int64 {
+	if ability == nil || ability.Priority == nil {
+		return 0
+	}
+	return *ability.Priority
+}
+
+func chooseChannelIdByWeight(abilities []Ability, randomInt func(int) int) int {
+	if len(abilities) == 0 {
+		return 0
+	}
+	weightSum := 0
+	for _, ability := range abilities {
+		effectiveWeight := int(ability.Weight) + 10
+		if effectiveWeight <= 0 || weightSum > math.MaxInt-effectiveWeight {
+			return abilities[0].ChannelId
+		}
+		weightSum += effectiveWeight
+	}
+	randomWeight := randomInt(weightSum)
+	for _, ability := range abilities {
+		randomWeight -= int(ability.Weight) + 10
+		if randomWeight < 0 {
+			return ability.ChannelId
+		}
+	}
+	return abilities[len(abilities)-1].ChannelId
 }
 
 func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
@@ -60,23 +92,64 @@ func GetAllEnableAbilities() []Ability {
 	return abilities
 }
 
-func GetChannel(group string, model string, retry int, requestPath string, videoResolution string) (*Channel, error) {
+func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetChannelWithFilters(group, model, retry, requestPath, "", nil)
+}
+
+// GetChannelWithFilter selects a DB-backed channel from the supplied allowed
+// set. A nil set preserves the ordinary unconstrained selection behavior.
+func GetChannelWithFilter(group string, model string, retry int, requestPath string, allowedChannelIds map[int]struct{}) (*Channel, error) {
+	return GetChannelWithFilters(group, model, retry, requestPath, "", allowedChannelIds)
+}
+
+// GetChannelWithFilters selects a DB-backed channel after applying request
+// path, video resolution, and optional asset-replica constraints.
+func GetChannelWithFilters(group string, model string, retry int, requestPath string, videoResolution string, allowedChannelIds map[int]struct{}) (*Channel, error) {
 	var abilities []Ability
-	err := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
-		Order("priority DESC").
-		Order("weight DESC").
-		Find(&abilities).Error
+	allowedChannelIdSlice := make([]int, 0, len(allowedChannelIds))
+	if allowedChannelIds != nil {
+		if len(allowedChannelIds) == 0 {
+			return nil, nil
+		}
+		for channelId := range allowedChannelIds {
+			allowedChannelIdSlice = append(allowedChannelIdSlice, channelId)
+		}
+	}
+
+	query := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
+	if allowedChannelIds != nil {
+		query = query.Where("channel_id IN ?", allowedChannelIdSlice)
+	}
+	err := query.Order("weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
-	eligibleAbilities, pathEligibleCount, filterErr := filterAbilitiesByRequestPathModelAndVideoResolution(abilities, requestPath, model, videoResolution)
-	if filterErr != nil {
-		return nil, filterErr
+	abilities, pathEligibleCount, err := filterAbilitiesByRequestPathModelAndVideoResolution(abilities, requestPath, model, videoResolution)
+	if err != nil {
+		return nil, err
 	}
-	if videoResolution != "" && pathEligibleCount > 0 && len(eligibleAbilities) == 0 {
+	if len(abilities) == 0 {
+		normalizedModel := ratio_setting.FormatMatchingModelName(model)
+		if normalizedModel != "" && normalizedModel != model {
+			query = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, normalizedModel, true)
+			if allowedChannelIds != nil {
+				query = query.Where("channel_id IN ?", allowedChannelIdSlice)
+			}
+			err = query.Order("weight DESC").Find(&abilities).Error
+			if err != nil {
+				return nil, err
+			}
+			var normalizedPathEligibleCount int
+			abilities, normalizedPathEligibleCount, err = filterAbilitiesByRequestPathModelAndVideoResolution(abilities, requestPath, model, videoResolution)
+			if err != nil {
+				return nil, err
+			}
+			pathEligibleCount += normalizedPathEligibleCount
+		}
+	}
+	if videoResolution != "" && pathEligibleCount > 0 && len(abilities) == 0 {
 		return nil, newVideoResolutionUnsupportedError(model, videoResolution)
 	}
-	abilities = eligibleAbilities
 	if len(abilities) == 0 {
 		return nil, nil
 	}
@@ -84,15 +157,16 @@ func GetChannel(group string, model string, retry int, requestPath string, video
 	priorities := make([]int64, 0)
 	seenPriorities := make(map[int64]struct{})
 	for _, ability := range abilities {
-		priority := int64(0)
-		if ability.Priority != nil {
-			priority = *ability.Priority
-		}
+		priority := effectiveAbilityPriority(&ability)
 		if _, ok := seenPriorities[priority]; ok {
 			continue
 		}
 		seenPriorities[priority] = struct{}{}
 		priorities = append(priorities, priority)
+	}
+	sort.Slice(priorities, func(i, j int) bool { return priorities[i] > priorities[j] })
+	if retry < 0 {
+		retry = 0
 	}
 	if retry >= len(priorities) {
 		retry = len(priorities) - 1
@@ -100,28 +174,11 @@ func GetChannel(group string, model string, retry int, requestPath string, video
 	targetPriority := priorities[retry]
 	targetAbilities := make([]Ability, 0, len(abilities))
 	for _, ability := range abilities {
-		priority := int64(0)
-		if ability.Priority != nil {
-			priority = *ability.Priority
-		}
-		if priority == targetPriority {
+		if effectiveAbilityPriority(&ability) == targetPriority {
 			targetAbilities = append(targetAbilities, ability)
 		}
 	}
-
-	channel := Channel{}
-	weightSum := uint(0)
-	for _, ability := range targetAbilities {
-		weightSum += ability.Weight + 10
-	}
-	weight := common.GetRandomInt(int(weightSum))
-	for _, ability := range targetAbilities {
-		weight -= int(ability.Weight) + 10
-		if weight <= 0 {
-			channel.Id = ability.ChannelId
-			break
-		}
-	}
+	channel := Channel{Id: chooseChannelIdByWeight(targetAbilities, common.GetRandomInt)}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
 }
@@ -178,11 +235,26 @@ func filterAbilitiesByRequestPathModelAndVideoResolution(abilities []Ability, re
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
-	models_ := strings.Split(channel.Models, ",")
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
+	useDB := DB
+	if tx != nil {
+		useDB = tx
+	}
+	overrides, err := getChannelModelOverrideMap(useDB, channel.Id)
+	if err != nil {
+		return err
+	}
+	models_ := normalizeChannelModels(channel)
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
+		routing := effectiveChannelModelRouting(channel, model, nil)
+		if override, ok := overrides[model]; ok {
+			routing = effectiveChannelModelRouting(channel, model, &override)
+		}
 		for _, group := range groups_ {
 			key := group + "|" + model
 			if _, exists := abilitySet[key]; exists {
@@ -194,8 +266,8 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 				Model:     model,
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
-				Priority:  channel.Priority,
-				Weight:    uint(channel.GetWeight()),
+				Priority:  common.GetPointer(routing.EffectivePriority),
+				Weight:    routing.EffectiveWeight,
 				Tag:       channel.Tag,
 			}
 			abilities = append(abilities, ability)
@@ -203,11 +275,6 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 	}
 	if len(abilities) == 0 {
 		return nil
-	}
-	// choose DB or provided tx
-	useDB := DB
-	if tx != nil {
-		useDB = tx
 	}
 	for _, chunk := range lo.Chunk(abilities, 50) {
 		err := useDB.Clauses(clause.OnConflict{DoNothing: true}).Create(&chunk).Error
@@ -225,6 +292,9 @@ func (channel *Channel) DeleteAbilities() error {
 // UpdateAbilities updates abilities of this channel.
 // Make sure the channel is completed before calling this function.
 func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
+	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
 	isNewTx := false
 	// 如果没有传入事务，创建新的事务
 	if tx == nil {
@@ -248,13 +318,30 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 		}
 		return err
 	}
+	if err := pruneChannelModelOverrides(tx, channel); err != nil {
+		if isNewTx {
+			tx.Rollback()
+		}
+		return err
+	}
 
 	// Then add new abilities
-	models_ := strings.Split(channel.Models, ",")
+	overrides, err := getChannelModelOverrideMap(tx, channel.Id)
+	if err != nil {
+		if isNewTx {
+			tx.Rollback()
+		}
+		return err
+	}
+	models_ := normalizeChannelModels(channel)
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
+		routing := effectiveChannelModelRouting(channel, model, nil)
+		if override, ok := overrides[model]; ok {
+			routing = effectiveChannelModelRouting(channel, model, &override)
+		}
 		for _, group := range groups_ {
 			key := group + "|" + model
 			if _, exists := abilitySet[key]; exists {
@@ -266,8 +353,8 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 				Model:     model,
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
-				Priority:  channel.Priority,
-				Weight:    uint(channel.GetWeight()),
+				Priority:  common.GetPointer(routing.EffectivePriority),
+				Weight:    routing.EffectiveWeight,
 				Tag:       channel.Tag,
 			}
 			abilities = append(abilities, ability)
@@ -296,24 +383,6 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 
 func UpdateAbilityStatus(channelId int, status bool) error {
 	return DB.Model(&Ability{}).Where("channel_id = ?", channelId).Select("enabled").Update("enabled", status).Error
-}
-
-func UpdateAbilityStatusByTag(tag string, status bool) error {
-	return DB.Model(&Ability{}).Where("tag = ?", tag).Select("enabled").Update("enabled", status).Error
-}
-
-func UpdateAbilityByTag(tag string, newTag *string, priority *int64, weight *uint) error {
-	ability := Ability{}
-	if newTag != nil {
-		ability.Tag = newTag
-	}
-	if priority != nil {
-		ability.Priority = priority
-	}
-	if weight != nil {
-		ability.Weight = *weight
-	}
-	return DB.Model(&Ability{}).Where("tag = ?", tag).Updates(ability).Error
 }
 
 var fixLock = sync.Mutex{}

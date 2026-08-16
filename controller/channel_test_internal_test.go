@@ -85,6 +85,127 @@ func TestValidateChannelRequiresNewAPIBaseURL(t *testing.T) {
 	}
 }
 
+func TestValidateChannelRejectsOversizedDefaultWeight(t *testing.T) {
+	oversized := model.MaxChannelWeight + 1
+	err := validateChannel(&model.Channel{
+		Type:   constant.ChannelTypeOpenAI,
+		Weight: &oversized,
+	}, false)
+
+	require.ErrorContains(t, err, "channel weight exceeds")
+}
+
+func TestManageMultiKeysKeepsChannelAbilityAndCacheStatusInSync(t *testing.T) {
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "database", true: "memory cache"}[memoryCacheEnabled], func(t *testing.T) {
+			db := setupModelListControllerTestDB(t)
+			originalMemoryCacheEnabled := common.MemoryCacheEnabled
+			common.MemoryCacheEnabled = memoryCacheEnabled
+			t.Cleanup(func() {
+				common.MemoryCacheEnabled = originalMemoryCacheEnabled
+				if originalMemoryCacheEnabled {
+					model.InitChannelCache()
+				}
+			})
+
+			priority := int64(1)
+			weight := uint(2)
+			channel := &model.Channel{
+				Type:     constant.ChannelTypeOpenAI,
+				Key:      "key-a\nkey-b",
+				Status:   common.ChannelStatusEnabled,
+				Name:     "managed-multi-key",
+				Models:   "model-a",
+				Group:    "default",
+				Priority: &priority,
+				Weight:   &weight,
+				ChannelInfo: model.ChannelInfo{
+					IsMultiKey:         true,
+					MultiKeySize:       2,
+					MultiKeyStatusList: map[int]int{},
+				},
+			}
+			require.NoError(t, channel.Insert())
+			model.InitChannelCache()
+
+			call := func(action string, keyIndex int) {
+				t.Helper()
+				body, err := common.Marshal(MultiKeyManageRequest{
+					ChannelId: channel.Id,
+					Action:    action,
+					KeyIndex:  common.GetPointer(keyIndex),
+				})
+				require.NoError(t, err)
+				recorder := httptest.NewRecorder()
+				ctx, _ := gin.CreateTestContext(recorder)
+				ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/multi-key/manage", bytes.NewReader(body))
+				ctx.Request.Header.Set("Content-Type", "application/json")
+				ManageMultiKeys(ctx)
+				var response struct {
+					Success bool   `json:"success"`
+					Message string `json:"message"`
+				}
+				require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+				require.True(t, response.Success, response.Message)
+			}
+			assertState := func(status int, enabled bool) {
+				t.Helper()
+				var persisted model.Channel
+				require.NoError(t, db.First(&persisted, channel.Id).Error)
+				assert.Equal(t, status, persisted.Status)
+				var ability model.Ability
+				require.NoError(t, db.Where("channel_id = ? AND model = ?", channel.Id, "model-a").First(&ability).Error)
+				assert.Equal(t, enabled, ability.Enabled)
+				assert.Equal(t, enabled, model.IsChannelEnabledForGroupModel("default", "model-a", channel.Id))
+			}
+
+			call("disable_key", 0)
+			assertState(common.ChannelStatusEnabled, true)
+			call("disable_key", 1)
+			assertState(common.ChannelStatusAutoDisabled, false)
+			call("enable_key", 0)
+			assertState(common.ChannelStatusEnabled, true)
+		})
+	}
+}
+
+func TestManageMultiKeysDoesNotEnableManuallyDisabledChannel(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "key-a\nkey-b",
+		Status: common.ChannelStatusManuallyDisabled,
+		Name:   "manual-multi-key",
+		Models: "model-a",
+		Group:  "default",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:         true,
+			MultiKeySize:       2,
+			MultiKeyStatusList: map[int]int{0: common.ChannelStatusManuallyDisabled},
+		},
+	}
+	require.NoError(t, channel.Insert())
+	body, err := common.Marshal(MultiKeyManageRequest{
+		ChannelId: channel.Id,
+		Action:    "enable_key",
+		KeyIndex:  common.GetPointer(0),
+	})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/multi-key/manage", bytes.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	ManageMultiKeys(ctx)
+
+	var persisted model.Channel
+	require.NoError(t, db.First(&persisted, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, persisted.Status)
+	var ability model.Ability
+	require.NoError(t, db.Where("channel_id = ?", channel.Id).First(&ability).Error)
+	assert.False(t, ability.Enabled)
+}
+
 func TestNewAPIChannelRegistration(t *testing.T) {
 	apiType, ok := common.ChannelType2APIType(constant.ChannelTypeNewAPI)
 
@@ -195,9 +316,63 @@ func TestCopyChannelRejectsInvalidLegacyProxySettings(t *testing.T) {
 	assert.Equal(t, int64(1), channelCount)
 }
 
+func TestCopyChannelUsesCurrentSourceStateAndCopiesRouting(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	priority := int64(3)
+	weight := uint(4)
+	origin := &model.Channel{
+		Type:      constant.ChannelTypeOpenAI,
+		Name:      "current source",
+		Key:       "test-key",
+		Models:    "gpt-test",
+		Group:     "default",
+		Status:    common.ChannelStatusEnabled,
+		Priority:  &priority,
+		Weight:    &weight,
+		Balance:   11,
+		UsedQuota: 23,
+	}
+	require.NoError(t, origin.Insert())
+	overridePriority := int64(9)
+	require.NoError(t, model.PatchChannelModelOverrides([]model.ChannelModelOverridePatch{
+		{ChannelId: origin.Id, Model: "gpt-test", Priority: &overridePriority},
+	}))
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", origin.Id)}}
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/copy?suffix=-copy&reset_balance=true", nil)
+	CopyChannel(ctx)
+
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Id int `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.NotZero(t, response.Data.Id)
+	var clone model.Channel
+	require.NoError(t, db.First(&clone, response.Data.Id).Error)
+	assert.Equal(t, "current source-copy", clone.Name)
+	assert.Zero(t, clone.Balance)
+	assert.Zero(t, clone.UsedQuota)
+	var override model.ChannelModelOverride
+	require.NoError(t, db.Where("channel_id = ? AND model = ?", clone.Id, "gpt-test").First(&override).Error)
+	require.NotNil(t, override.Priority)
+	assert.Equal(t, int64(9), *override.Priority)
+	var ability model.Ability
+	require.NoError(t, db.Where("channel_id = ? AND model = ?", clone.Id, "gpt-test").First(&ability).Error)
+	require.NotNil(t, ability.Priority)
+	assert.Equal(t, int64(9), *ability.Priority)
+}
+
 func TestDeleteChannelResetsProxyCacheWhenPreReadFails(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	require.NoError(t, db.AutoMigrate(
+		&model.Log{}, &model.ChannelAssetConfig{}, &model.UserAssetGroupReplica{}, &model.UserAssetReplica{},
+	))
 	service.ResetProxyClientCache()
 	t.Cleanup(service.ResetProxyClientCache)
 
@@ -220,7 +395,9 @@ func TestDeleteChannelResetsProxyCacheWhenPreReadFails(t *testing.T) {
 
 func TestDeleteChannelBatchReportsAndAuditsActualDeletedCount(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	require.NoError(t, db.AutoMigrate(
+		&model.Log{}, &model.ChannelAssetConfig{}, &model.UserAssetGroupReplica{}, &model.UserAssetReplica{},
+	))
 	channel := &model.Channel{Name: "existing", Key: "test-key"}
 	require.NoError(t, db.Create(channel).Error)
 

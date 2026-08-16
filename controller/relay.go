@@ -181,12 +181,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:             c,
-		TokenGroup:      relayInfo.TokenGroup,
-		ModelName:       relayInfo.OriginModelName,
-		RequestPath:     c.Request.URL.Path,
-		VideoResolution: common.GetContextKeyString(c, constant.ContextKeyVideoResolution),
-		Retry:           common.GetPointer(0),
+		Ctx:               c,
+		TokenGroup:        relayInfo.TokenGroup,
+		ModelName:         relayInfo.OriginModelName,
+		RequestPath:       c.Request.URL.Path,
+		VideoResolution:   common.GetContextKeyString(c, constant.ContextKeyVideoResolution),
+		AllowedChannelIds: assetAllowedChannelIds(c),
+		Retry:             common.GetPointer(0),
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
@@ -302,13 +303,19 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
 	if info.ChannelMeta == nil {
+		channelId := c.GetInt("channel_id")
+		if retryParam.AllowedChannelIds != nil {
+			if _, allowed := retryParam.AllowedChannelIds[channelId]; !allowed {
+				return nil, types.NewError(errors.New("selected channel has no replica for every referenced asset"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			}
+		}
 		autoBan := c.GetBool("auto_ban")
 		autoBanInt := 1
 		if !autoBan {
 			autoBanInt = 0
 		}
 		return &model.Channel{
-			Id:      c.GetInt("channel_id"),
+			Id:      channelId,
 			Type:    c.GetInt("channel_type"),
 			Name:    c.GetString("channel_name"),
 			AutoBan: &autoBanInt,
@@ -329,6 +336,11 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, newAPIError
 	}
 	return channel, nil
+}
+
+func assetAllowedChannelIds(c *gin.Context) map[int]struct{} {
+	allowedChannelIds, _ := common.GetContextKeyType[map[int]struct{}](c, constant.ContextKeyAssetAllowedChannelIds)
+	return allowedChannelIds
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
@@ -532,18 +544,25 @@ func RelayTask(c *gin.Context) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:             c,
-		TokenGroup:      relayInfo.TokenGroup,
-		ModelName:       relayInfo.OriginModelName,
-		RequestPath:     c.Request.URL.Path,
-		VideoResolution: common.GetContextKeyString(c, constant.ContextKeyVideoResolution),
-		Retry:           common.GetPointer(0),
+		Ctx:               c,
+		TokenGroup:        relayInfo.TokenGroup,
+		ModelName:         relayInfo.OriginModelName,
+		RequestPath:       c.Request.URL.Path,
+		VideoResolution:   common.GetContextKeyString(c, constant.ContextKeyVideoResolution),
+		AllowedChannelIds: assetAllowedChannelIds(c),
+		Retry:             common.GetPointer(0),
 	}
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		var channel *model.Channel
 
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
+			if retryParam.AllowedChannelIds != nil {
+				if _, allowed := retryParam.AllowedChannelIds[lockedCh.Id]; !allowed {
+					taskErr = service.TaskErrorWrapperLocal(errors.New("the locked channel has no replica for every referenced asset"), "asset_channel_unavailable", http.StatusServiceUnavailable)
+					break
+				}
+			}
 			channel = lockedCh
 			if retryParam.GetRetry() > 0 {
 				if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {

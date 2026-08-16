@@ -30,7 +30,12 @@ func TestGetRandomSatisfiedChannelFiltersVideoResolutionBeforePriority(t *testin
 	originalChannels := channelsIDM
 	originalAdvanced := channel2advancedCustomConfig
 	originalVideo := channel2videoCapabilityConfig
-	group2model2channels = map[string]map[string][]int{"default": {"video-model": {701, 702}}}
+	group2model2channels = map[string]map[string][]cachedChannelRouting{
+		"default": {"video-model": {
+			{ChannelId: 701, Priority: 100},
+			{ChannelId: 702, Priority: 10},
+		}},
+	}
 	channelsIDM = map[int]*Channel{701: channel720, 702: channel1080}
 	channel2advancedCustomConfig = map[int]*dto.AdvancedCustomConfig{}
 	channel2videoCapabilityConfig = map[int]*dto.VideoCapabilityConfig{
@@ -48,12 +53,12 @@ func TestGetRandomSatisfiedChannelFiltersVideoResolutionBeforePriority(t *testin
 		common.MemoryCacheEnabled = originalMemoryCacheEnabled
 	})
 
-	selected, err := GetRandomSatisfiedChannel("default", "video-model", 0, "/v1/video/generations", "1920x1080")
+	selected, err := GetRandomSatisfiedChannelWithFilters("default", "video-model", 0, "/v1/video/generations", "1920x1080", nil)
 	require.NoError(t, err)
 	require.NotNil(t, selected)
 	assert.Equal(t, 702, selected.Id)
 
-	selected, err = GetRandomSatisfiedChannel("default", "video-model", 0, "/v1/chat/completions", "")
+	selected, err = GetRandomSatisfiedChannelWithFilters("default", "video-model", 0, "/v1/chat/completions", "", nil)
 	require.NoError(t, err)
 	require.NotNil(t, selected)
 	assert.Equal(t, 701, selected.Id)
@@ -72,7 +77,9 @@ func TestGetRandomSatisfiedChannelReportsUnsupportedVideoResolution(t *testing.T
 	originalChannels := channelsIDM
 	originalAdvanced := channel2advancedCustomConfig
 	originalVideo := channel2videoCapabilityConfig
-	group2model2channels = map[string]map[string][]int{"default": {"video-model": {703}}}
+	group2model2channels = map[string]map[string][]cachedChannelRouting{
+		"default": {"video-model": {{ChannelId: 703}}},
+	}
 	channelsIDM = map[int]*Channel{703: channel}
 	channel2advancedCustomConfig = map[int]*dto.AdvancedCustomConfig{}
 	channel2videoCapabilityConfig = map[int]*dto.VideoCapabilityConfig{703: channel.GetOtherSettings().VideoCapabilities}
@@ -87,7 +94,7 @@ func TestGetRandomSatisfiedChannelReportsUnsupportedVideoResolution(t *testing.T
 		common.MemoryCacheEnabled = originalMemoryCacheEnabled
 	})
 
-	selected, err := GetRandomSatisfiedChannel("default", "video-model", 0, "/v1/video/generations", "1080p")
+	selected, err := GetRandomSatisfiedChannelWithFilters("default", "video-model", 0, "/v1/video/generations", "1080p", nil)
 	assert.Nil(t, selected)
 	assert.ErrorIs(t, err, ErrVideoResolutionUnsupported)
 	assert.True(t, errors.Is(err, ErrVideoResolutionUnsupported))
@@ -114,7 +121,7 @@ func TestGetChannelFiltersVideoResolutionBeforePriorityWithoutMemoryCache(t *tes
 		require.NoError(t, channel.AddAbilities(nil))
 	}
 
-	selected, err := GetChannel("default", "video-model", 0, "/v1/video/generations", "1080p")
+	selected, err := GetChannelWithFilters("default", "video-model", 0, "/v1/video/generations", "1080p", nil)
 	require.NoError(t, err)
 	require.NotNil(t, selected)
 	assert.Equal(t, 712, selected.Id)
