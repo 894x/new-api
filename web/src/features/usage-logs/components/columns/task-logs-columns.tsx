@@ -36,12 +36,16 @@ import {
   type AudioClip,
 } from '../dialogs/audio-preview-dialog'
 import { FailReasonDialog } from '../dialogs/fail-reason-dialog'
+import { VideoPreviewDialog } from '../dialogs/video-preview-dialog'
 import { useUsageLogsContext } from '../usage-logs-provider'
 import {
   createDurationColumn,
   createChannelColumn,
   createProgressColumn,
 } from './column-helpers'
+
+const VIDEO_RESULT_URL_PATTERN = /^(https?:\/\/|data:video\/)/i
+const AUTHENTICATED_VIDEO_URL_PATTERN = /\/v1\/videos\/.+\/content(?:[?#]|$)/i
 
 function parseTaskData(data: unknown): unknown[] {
   if (Array.isArray(data)) return data
@@ -90,7 +94,10 @@ function AudioPreviewCell({ log }: { log: TaskLog }) {
   )
 }
 
-export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
+export function useTaskLogsColumns(
+  isAdminView: boolean,
+  canViewRawData: boolean
+): ColumnDef<TaskLog>[] {
   const { t } = useTranslation()
   const columns: ColumnDef<TaskLog>[] = [
     {
@@ -119,7 +126,7 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
     },
   ]
 
-  if (isAdmin) {
+  if (isAdminView) {
     columns.push(createChannelColumn<TaskLog>({ headerLabel: t('Channel') }), {
       id: 'user',
       header: t('User'),
@@ -245,19 +252,36 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
           log.action === TASK_ACTIONS.REFERENCE_GENERATE ||
           log.action === TASK_ACTIONS.REMIX_GENERATE
         const isSuccess = status === TASK_STATUS.SUCCESS
-        const isUrl = failReason?.startsWith('http')
+        const videoUrl = log.result_url?.trim()
+        const isAuthenticatedVideoUrl = videoUrl
+          ? AUTHENTICATED_VIDEO_URL_PATTERN.test(videoUrl)
+          : false
 
-        if (isSuccess && isVideoTask && isUrl) {
-          const videoUrl = `/v1/videos/${log.task_id}/content`
+        if (
+          isSuccess &&
+          isVideoTask &&
+          videoUrl &&
+          !isAuthenticatedVideoUrl &&
+          VIDEO_RESULT_URL_PATTERN.test(videoUrl)
+        ) {
           return (
-            <a
-              href={videoUrl}
-              target='_blank'
-              rel='noopener noreferrer'
-              className='text-foreground text-xs hover:underline'
-            >
-              {t('Click to preview video')}
-            </a>
+            <>
+              <button
+                type='button'
+                className='text-foreground text-xs hover:underline'
+                onClick={() => setDialogOpen(true)}
+              >
+                {canViewRawData
+                  ? t('View details')
+                  : t('Click to preview video')}
+              </button>
+              <VideoPreviewDialog
+                open={dialogOpen}
+                onOpenChange={setDialogOpen}
+                sourceUrl={videoUrl}
+                rawData={canViewRawData ? log.data : undefined}
+              />
+            </>
           )
         }
 
