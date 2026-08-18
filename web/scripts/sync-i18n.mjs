@@ -81,6 +81,7 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'QuantumNous',
   'Quota:',
   'Replicate',
+  'Seedance SLS',
   'SiliconFlow',
   'Stripe',
   'Submodel',

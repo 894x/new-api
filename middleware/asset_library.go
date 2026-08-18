@@ -17,11 +17,15 @@ import (
 
 const localAssetURIPrefix = "asset://asset-na-"
 
-// AssetLibraryRouting restricts a native Doubao video request to channels that
-// have an upstream mapping for every local asset URI in its JSON payload.
+// AssetLibraryRouting restricts a video request to channels that have an
+// upstream mapping for every local asset URI in its JSON payload.
 func AssetLibraryRouting() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.Method != http.MethodPost {
+			c.Next()
+			return
+		}
+		if !strings.HasPrefix(c.GetHeader("Content-Type"), gin.MIMEJSON) {
 			c.Next()
 			return
 		}

@@ -231,6 +231,21 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'AstraFlow Gemini image model',
     },
   },
+  104: {
+    id: 104,
+    name: CHANNEL_TYPES[104],
+    icon: 'Doubao',
+    defaultBaseUrl: 'https://lm.sls.cn',
+    supportedModels: [
+      'doubao-seedance-2-0',
+      'doubao-seedance-2-0-fast',
+      'doubao-seedance-2-0-mini',
+    ],
+    hints: {
+      key: 'Enter API key for this channel',
+      models: 'Models',
+    },
+  },
 }
 
 /**
