@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -69,7 +70,9 @@ func TestNativeRequestRewritesLogicalAssetForCurrentChannel(t *testing.T) {
 	originalDB := model.DB
 	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.UserAsset{}, &model.UserAssetReplica{}))
+	require.NoError(t, db.AutoMigrate(
+		&model.Channel{}, &model.ChannelAssetConfig{}, &model.UserAsset{}, &model.UserAssetReplica{},
+	))
 	model.DB = db
 	t.Cleanup(func() {
 		model.DB = originalDB
@@ -80,6 +83,14 @@ func TestNativeRequestRewritesLogicalAssetForCurrentChannel(t *testing.T) {
 	})
 
 	assetId := "asset-na-0123456789abcdef0123456789abcdef"
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 11, Type: constant.ChannelTypeDoubaoVideo, Key: "action-key", Name: "Doubao Video",
+	}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 11, Enabled: true, Backend: service.AssetLibraryBackendAction,
+		BaseURL: service.DefaultAssetLibraryBaseURL, AuthType: service.AssetLibraryAuthAKSK,
+		AccessKey: "access-key", SecretKey: "secret-key",
+	}).Error)
 	require.NoError(t, db.Create(&model.UserAsset{
 		Id: assetId, UserId: 7, GroupId: "group-na-test", AssetType: "Image",
 		SourceURL: "https://example.com/a.png", ProjectName: "default",

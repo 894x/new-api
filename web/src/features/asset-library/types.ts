@@ -105,10 +105,15 @@ export type ListAssetLibraryRequest = {
 }
 
 export type ChannelAssetLibraryAuthType = 'aksk' | 'bearer'
+export type ChannelAssetLibraryBackend =
+  | 'volcengine'
+  | 'seedance_sls'
+  | 'openapi'
 
 export type ChannelAssetLibraryConfig = {
   channel_id?: number
   enabled: boolean
+  backend: ChannelAssetLibraryBackend
   base_url: string
   auth_type: ChannelAssetLibraryAuthType
   access_key?: string
@@ -126,7 +131,7 @@ export type ChannelAssetLibraryConfig = {
 
 export type ChannelAssetLibraryConfigInput = Pick<
   ChannelAssetLibraryConfig,
-  'enabled' | 'base_url' | 'auth_type' | 'region' | 'project_name'
+  'enabled' | 'backend' | 'base_url' | 'auth_type' | 'region' | 'project_name'
 > &
   Partial<
     Pick<ChannelAssetLibraryConfig, 'access_key' | 'secret_key' | 'api_key'>

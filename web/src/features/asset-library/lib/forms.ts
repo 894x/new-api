@@ -19,6 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import type {
+  ChannelAssetLibraryAuthType,
+  ChannelAssetLibraryBackend,
   ChannelAssetLibraryConfig,
   ChannelAssetLibraryConfigInput,
 } from '../types'
@@ -51,6 +53,7 @@ export const assetGroupFormSchema = z.object({
 export const channelAssetConfigFormSchema = z
   .object({
     enabled: z.boolean(),
+    backend: z.enum(['volcengine', 'seedance_sls', 'openapi']),
     baseUrl: z
       .string()
       .url('Enter a valid asset service URL')
@@ -72,6 +75,13 @@ export const channelAssetConfigFormSchema = z
         code: 'custom',
         path: ['baseUrl'],
         message: 'Asset service URL is required',
+      })
+    }
+    if (value.backend !== 'volcengine' && value.authType !== 'bearer') {
+      context.addIssue({
+        code: 'custom',
+        path: ['authType'],
+        message: 'Selected asset backend requires Bearer authentication',
       })
     }
     if (value.authType === 'aksk') {
@@ -110,9 +120,26 @@ export type ChannelAssetConfigFormValues = z.infer<
   typeof channelAssetConfigFormSchema
 >
 
+export function getChannelAssetBackendDefaults(
+  backend: ChannelAssetLibraryBackend
+): { baseUrl: string; authType: ChannelAssetLibraryAuthType } {
+  switch (backend) {
+    case 'seedance_sls':
+      return { baseUrl: 'https://lm.sls.cn', authType: 'bearer' }
+    case 'openapi':
+      return { baseUrl: 'https://token.wxkjwlw.com', authType: 'bearer' }
+    default:
+      return {
+        baseUrl: 'https://ark.cn-beijing.volcengineapi.com',
+        authType: 'aksk',
+      }
+  }
+}
+
 export const DEFAULT_CHANNEL_ASSET_CONFIG_FORM_VALUES: ChannelAssetConfigFormValues =
   {
     enabled: false,
+    backend: 'volcengine',
     baseUrl: 'https://ark.cn-beijing.volcengineapi.com',
     authType: 'aksk',
     accessKey: '',
@@ -132,6 +159,7 @@ export function getChannelAssetConfigFormValues(
 
   return {
     enabled: config.enabled,
+    backend: config.backend ?? 'volcengine',
     baseUrl: config.base_url,
     authType: config.auth_type,
     accessKey: '',
@@ -150,6 +178,7 @@ export function getChannelAssetConfigPayload(
 ): ChannelAssetLibraryConfigInput {
   const payload: ChannelAssetLibraryConfigInput = {
     enabled: values.enabled,
+    backend: values.backend,
     base_url: values.baseUrl.trim(),
     auth_type: values.authType,
     region: values.region.trim(),
@@ -164,12 +193,16 @@ export function getChannelAssetConfigPayload(
 }
 
 export function channelAssetConfigDestinationChanged(
-  values: Pick<ChannelAssetConfigFormValues, 'baseUrl' | 'authType'>,
+  values: Pick<
+    ChannelAssetConfigFormValues,
+    'backend' | 'baseUrl' | 'authType'
+  >,
   config: ChannelAssetLibraryConfig | null
 ) {
   if (!config) return false
 
   return (
+    values.backend !== config.backend ||
     values.baseUrl.trim().replace(/\/+$/, '') !==
       config.base_url.trim().replace(/\/+$/, '') ||
     values.authType !== config.auth_type

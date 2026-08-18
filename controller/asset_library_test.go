@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -130,7 +132,7 @@ func TestNormalizeChannelAssetLibraryConfigPreservesBlankCredential(t *testing.T
 		Region: "cn-beijing", ProjectName: "project-a",
 	}
 
-	config, err := normalizeChannelAssetLibraryConfig(3, request, existing)
+	config, err := normalizeChannelAssetLibraryConfig(&model.Channel{Id: 3}, request, existing)
 
 	require.NoError(t, err)
 	assert.Equal(t, "https://old.example.com", config.BaseURL)
@@ -144,14 +146,14 @@ func TestNormalizeChannelAssetLibraryConfigRequiresCredentialsForNewBaseURL(t *t
 		APIKey: "old-key", Region: "cn-beijing", ProjectName: "project-a",
 	}
 
-	_, err := normalizeChannelAssetLibraryConfig(3, &channelAssetLibraryConfigRequest{
+	_, err := normalizeChannelAssetLibraryConfig(&model.Channel{Id: 3}, &channelAssetLibraryConfigRequest{
 		Enabled: true, BaseURL: "https://new.example.com", AuthType: "bearer",
 		Region: "cn-beijing", ProjectName: "project-a",
 	}, existing)
 
 	require.ErrorContains(t, err, "api_key")
 
-	config, err := normalizeChannelAssetLibraryConfig(3, &channelAssetLibraryConfigRequest{
+	config, err := normalizeChannelAssetLibraryConfig(&model.Channel{Id: 3}, &channelAssetLibraryConfigRequest{
 		Enabled: true, BaseURL: "https://new.example.com", AuthType: "bearer", APIKey: "new-key",
 		Region: "cn-beijing", ProjectName: "project-a",
 	}, existing)
@@ -165,7 +167,7 @@ func TestNormalizeChannelAssetLibraryConfigRequiresCredentialsWhenAuthTypeChange
 		APIKey: "old-key", Region: "cn-beijing", ProjectName: "project-a",
 	}
 
-	_, err := normalizeChannelAssetLibraryConfig(3, &channelAssetLibraryConfigRequest{
+	_, err := normalizeChannelAssetLibraryConfig(&model.Channel{Id: 3}, &channelAssetLibraryConfigRequest{
 		Enabled: true, BaseURL: existing.BaseURL, AuthType: "aksk",
 		Region: "cn-beijing", ProjectName: "project-a",
 	}, existing)
@@ -174,21 +176,58 @@ func TestNormalizeChannelAssetLibraryConfigRequiresCredentialsWhenAuthTypeChange
 }
 
 func TestNormalizeChannelAssetLibraryConfigValidatesAuthentication(t *testing.T) {
-	_, err := normalizeChannelAssetLibraryConfig(3, &channelAssetLibraryConfigRequest{
+	_, err := normalizeChannelAssetLibraryConfig(&model.Channel{Id: 3}, &channelAssetLibraryConfigRequest{
 		Enabled: true, BaseURL: "https://assets.example.com", AuthType: "bearer",
 	}, nil)
 	require.ErrorContains(t, err, "api_key")
 
-	_, err = normalizeChannelAssetLibraryConfig(3, &channelAssetLibraryConfigRequest{
+	_, err = normalizeChannelAssetLibraryConfig(&model.Channel{Id: 3}, &channelAssetLibraryConfigRequest{
 		Enabled: true, BaseURL: "ftp://assets.example.com", AuthType: "aksk",
 		AccessKey: "ak", SecretKey: "sk",
 	}, nil)
 	require.ErrorContains(t, err, "http or https")
 }
 
+func TestNormalizeChannelAssetLibraryConfigUsesSeedanceSLSProtocolDefaults(t *testing.T) {
+	channel := &model.Channel{Id: 17, Type: constant.ChannelTypeSeedanceSLS}
+	config, err := normalizeChannelAssetLibraryConfig(channel, &channelAssetLibraryConfigRequest{
+		Enabled: true,
+		APIKey:  "sls-key",
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "https://lm.sls.cn", config.BaseURL)
+	assert.Equal(t, service.AssetLibraryBackendSeedanceSLS, config.Backend)
+	assert.Equal(t, "bearer", config.AuthType)
+	assert.Equal(t, "sls-key", config.APIKey)
+
+	_, err = normalizeChannelAssetLibraryConfig(channel, &channelAssetLibraryConfigRequest{
+		Enabled: true, AuthType: "aksk", AccessKey: "ak", SecretKey: "sk",
+	}, nil)
+	require.ErrorContains(t, err, "Bearer")
+}
+
+func TestNormalizeChannelAssetLibraryConfigSupportsBearerOpenAPIBackend(t *testing.T) {
+	channel := &model.Channel{Id: 21, Type: constant.ChannelTypeOpenAI}
+	config, err := normalizeChannelAssetLibraryConfig(channel, &channelAssetLibraryConfigRequest{
+		Enabled: true, Backend: service.AssetLibraryBackendOpenAPI,
+		BaseURL: "https://token.example.com", APIKey: "upstream-key",
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, service.AssetLibraryBackendOpenAPI, config.Backend)
+	assert.Equal(t, service.AssetLibraryAuthBearer, config.AuthType)
+
+	_, err = normalizeChannelAssetLibraryConfig(channel, &channelAssetLibraryConfigRequest{
+		Enabled: true, Backend: service.AssetLibraryBackendOpenAPI,
+		BaseURL: "https://token.example.com", AuthType: service.AssetLibraryAuthAKSK,
+		AccessKey: "ak", SecretKey: "sk",
+	}, nil)
+	require.ErrorContains(t, err, "Bearer")
+}
+
 func TestChannelAssetLibraryResponseDoesNotExposeCredentials(t *testing.T) {
 	response := buildChannelAssetLibraryConfigResponse(&model.ChannelAssetConfig{
-		ChannelId: 3, Enabled: true, BaseURL: "https://assets.example.com", AuthType: "aksk",
+		ChannelId: 3, Enabled: true, Backend: service.AssetLibraryBackendOpenAPI,
+		BaseURL: "https://assets.example.com", AuthType: "aksk",
 		AccessKey: "sensitive-ak", SecretKey: "sensitive-sk", APIKey: "sensitive-api-key",
 		Region: "cn-beijing", ProjectName: "default",
 	}, 2)
@@ -202,6 +241,7 @@ func TestChannelAssetLibraryResponseDoesNotExposeCredentials(t *testing.T) {
 	assert.True(t, response.HasAccessKey)
 	assert.True(t, response.HasSecretKey)
 	assert.True(t, response.HasAPIKey)
+	assert.Equal(t, service.AssetLibraryBackendOpenAPI, response.Backend)
 }
 
 func TestAssetLibraryResultDoesNotExposeChannelOrUpstreamError(t *testing.T) {

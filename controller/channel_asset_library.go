@@ -17,6 +17,7 @@ import (
 
 type channelAssetLibraryConfigRequest struct {
 	Enabled     bool   `json:"enabled"`
+	Backend     string `json:"backend"`
 	BaseURL     string `json:"base_url"`
 	AuthType    string `json:"auth_type"`
 	AccessKey   string `json:"access_key"`
@@ -29,6 +30,7 @@ type channelAssetLibraryConfigRequest struct {
 type channelAssetLibraryConfigResponse struct {
 	ChannelId    int    `json:"channel_id"`
 	Enabled      bool   `json:"enabled"`
+	Backend      string `json:"backend"`
 	BaseURL      string `json:"base_url"`
 	AuthType     string `json:"auth_type"`
 	Region       string `json:"region"`
@@ -54,16 +56,19 @@ func GetChannelAssetLibraryConfig(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if _, err := model.GetChannelById(channelId, false); err != nil {
+	channel, err := model.GetChannelById(channelId, false)
+	if err != nil {
 		writeChannelAssetLibraryModelError(c, err)
 		return
 	}
 	config, err := model.GetChannelAssetConfig(channelId)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		backend, baseURL, authType := channelAssetLibraryDefaults(channel)
 		common.ApiSuccess(c, channelAssetLibraryConfigResponse{
 			ChannelId:   channelId,
-			BaseURL:     service.DefaultAssetLibraryBaseURL,
-			AuthType:    service.AssetLibraryAuthAKSK,
+			Backend:     backend,
+			BaseURL:     baseURL,
+			AuthType:    authType,
 			Region:      service.DefaultAssetLibraryRegion,
 			ProjectName: service.DefaultAssetLibraryProject,
 		})
@@ -72,6 +77,9 @@ func GetChannelAssetLibraryConfig(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if strings.TrimSpace(config.Backend) == "" {
+		config.Backend = service.DefaultAssetLibraryBackend(channel.Type)
 	}
 	replicaCount, err := model.CountChannelAssetReplicas(channelId)
 	if err != nil {
@@ -86,7 +94,8 @@ func UpdateChannelAssetLibraryConfig(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if _, err := model.GetChannelById(channelId, false); err != nil {
+	channel, err := model.GetChannelById(channelId, false)
+	if err != nil {
 		writeChannelAssetLibraryModelError(c, err)
 		return
 	}
@@ -100,7 +109,7 @@ func UpdateChannelAssetLibraryConfig(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	config, err := normalizeChannelAssetLibraryConfig(channelId, &request, existing)
+	config, err := normalizeChannelAssetLibraryConfig(channel, &request, existing)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
@@ -201,10 +210,21 @@ func writeChannelAssetLibraryModelError(c *gin.Context, err error) {
 	common.ApiError(c, err)
 }
 
-func normalizeChannelAssetLibraryConfig(channelId int, request *channelAssetLibraryConfigRequest, existing *model.ChannelAssetConfig) (*model.ChannelAssetConfig, error) {
+func normalizeChannelAssetLibraryConfig(channel *model.Channel, request *channelAssetLibraryConfigRequest, existing *model.ChannelAssetConfig) (*model.ChannelAssetConfig, error) {
+	if channel == nil {
+		return nil, errors.New("channel is required")
+	}
+	defaultBackend, _, _ := channelAssetLibraryDefaults(channel)
+	backend := strings.TrimSpace(request.Backend)
+	if backend == "" {
+		backend = defaultBackend
+	}
+	if !service.IsSupportedAssetLibraryBackend(backend) {
+		return nil, errors.New("asset library backend must be volcengine, seedance_sls, or openapi")
+	}
 	baseURL := strings.TrimRight(strings.TrimSpace(request.BaseURL), "/")
 	if baseURL == "" {
-		baseURL = service.DefaultAssetLibraryBaseURL
+		baseURL = service.DefaultAssetLibraryBackendBaseURL(backend)
 	}
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.User != nil {
@@ -212,10 +232,13 @@ func normalizeChannelAssetLibraryConfig(channelId int, request *channelAssetLibr
 	}
 	authType := strings.ToLower(strings.TrimSpace(request.AuthType))
 	if authType == "" {
-		authType = service.AssetLibraryAuthAKSK
+		authType = service.DefaultAssetLibraryBackendAuthType(backend)
 	}
 	if authType != service.AssetLibraryAuthAKSK && authType != service.AssetLibraryAuthBearer {
 		return nil, errors.New("asset library auth_type must be aksk or bearer")
+	}
+	if service.AssetLibraryBackendRequiresBearer(backend) && authType != service.AssetLibraryAuthBearer {
+		return nil, errors.New("selected asset library backend requires Bearer authentication")
 	}
 	region := strings.TrimSpace(request.Region)
 	if region == "" {
@@ -232,8 +255,9 @@ func normalizeChannelAssetLibraryConfig(channelId int, request *channelAssetLibr
 		return nil, errors.New("asset library project_name must be 128 characters or fewer")
 	}
 	config := &model.ChannelAssetConfig{
-		ChannelId:   channelId,
+		ChannelId:   channel.Id,
 		Enabled:     request.Enabled,
+		Backend:     backend,
 		BaseURL:     baseURL,
 		AuthType:    authType,
 		AccessKey:   strings.TrimSpace(request.AccessKey),
@@ -246,7 +270,14 @@ func normalizeChannelAssetLibraryConfig(channelId int, request *channelAssetLibr
 		// Blank credentials mean "keep the stored value" only while the
 		// destination is unchanged. Reusing a stored credential after changing
 		// the Base URL would send that secret to a different upstream.
-		preserveCredentials := baseURL == strings.TrimRight(strings.TrimSpace(existing.BaseURL), "/") && authType == existing.AuthType
+		existingBackend := strings.TrimSpace(existing.Backend)
+		if existingBackend == "" {
+			existingBackend = service.DefaultAssetLibraryBackend(channel.Type)
+		}
+		sameDestination := backend == existingBackend &&
+			baseURL == strings.TrimRight(strings.TrimSpace(existing.BaseURL), "/") &&
+			authType == existing.AuthType
+		preserveCredentials := sameDestination
 		if preserveCredentials && config.AccessKey == "" {
 			config.AccessKey = existing.AccessKey
 		}
@@ -273,10 +304,20 @@ func normalizeChannelAssetLibraryConfig(channelId int, request *channelAssetLibr
 	return config, nil
 }
 
+func channelAssetLibraryDefaults(channel *model.Channel) (string, string, string) {
+	channelType := 0
+	if channel != nil {
+		channelType = channel.Type
+	}
+	backend := service.DefaultAssetLibraryBackend(channelType)
+	return backend, service.DefaultAssetLibraryBackendBaseURL(backend), service.DefaultAssetLibraryBackendAuthType(backend)
+}
+
 func buildChannelAssetLibraryConfigResponse(config *model.ChannelAssetConfig, replicaCount int64) channelAssetLibraryConfigResponse {
 	return channelAssetLibraryConfigResponse{
 		ChannelId:    config.ChannelId,
 		Enabled:      config.Enabled,
+		Backend:      config.Backend,
 		BaseURL:      config.BaseURL,
 		AuthType:     config.AuthType,
 		Region:       config.Region,

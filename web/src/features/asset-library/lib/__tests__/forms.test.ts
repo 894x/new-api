@@ -23,6 +23,7 @@ import {
   assetFormSchema,
   channelAssetConfigDestinationChanged,
   channelAssetConfigFormSchema,
+  getChannelAssetBackendDefaults,
   getChannelAssetConfigPayload,
 } from '../forms'
 
@@ -52,6 +53,7 @@ describe('asset library forms', () => {
   test('allows stored AK and SK to remain blank when editing', () => {
     const result = channelAssetConfigFormSchema.safeParse({
       enabled: true,
+      backend: 'volcengine',
       baseUrl: 'https://ark.cn-beijing.volcengineapi.com',
       authType: 'aksk',
       accessKey: '',
@@ -67,10 +69,45 @@ describe('asset library forms', () => {
     assert.equal(result.success, true)
   })
 
+  test('requires bearer authentication for REST and OpenAPI backends', () => {
+    const result = channelAssetConfigFormSchema.safeParse({
+      enabled: true,
+      backend: 'openapi',
+      baseUrl: 'https://token.example.com',
+      authType: 'aksk',
+      accessKey: 'ak',
+      secretKey: 'sk',
+      apiKey: '',
+      region: 'cn-beijing',
+      projectName: 'default',
+      hasAccessKey: false,
+      hasSecretKey: false,
+      hasApiKey: false,
+    })
+
+    assert.equal(result.success, false)
+  })
+
+  test('selecting an upstream backend applies its endpoint and authentication defaults', () => {
+    assert.deepEqual(getChannelAssetBackendDefaults('volcengine'), {
+      baseUrl: 'https://ark.cn-beijing.volcengineapi.com',
+      authType: 'aksk',
+    })
+    assert.deepEqual(getChannelAssetBackendDefaults('seedance_sls'), {
+      baseUrl: 'https://lm.sls.cn',
+      authType: 'bearer',
+    })
+    assert.deepEqual(getChannelAssetBackendDefaults('openapi'), {
+      baseUrl: 'https://token.wxkjwlw.com',
+      authType: 'bearer',
+    })
+  })
+
   test('omits blank credentials so the backend preserves stored secrets', () => {
     assert.deepEqual(
       getChannelAssetConfigPayload({
         enabled: true,
+        backend: 'openapi',
         baseUrl: ' https://assets.example.com/ ',
         authType: 'bearer',
         accessKey: '',
@@ -84,6 +121,7 @@ describe('asset library forms', () => {
       }),
       {
         enabled: true,
+        backend: 'openapi',
         base_url: 'https://assets.example.com/',
         auth_type: 'bearer',
         region: 'cn-beijing',
@@ -96,6 +134,7 @@ describe('asset library forms', () => {
     const config = {
       channel_id: 3,
       enabled: true,
+      backend: 'openapi' as const,
       base_url: 'https://old.example.com',
       auth_type: 'bearer' as const,
       region: 'cn-beijing',
@@ -108,21 +147,44 @@ describe('asset library forms', () => {
 
     assert.equal(
       channelAssetConfigDestinationChanged(
-        { baseUrl: 'https://old.example.com/', authType: 'bearer' },
+        {
+          backend: 'openapi',
+          baseUrl: 'https://old.example.com/',
+          authType: 'bearer',
+        },
         config
       ),
       false
     )
     assert.equal(
       channelAssetConfigDestinationChanged(
-        { baseUrl: 'https://new.example.com', authType: 'bearer' },
+        {
+          backend: 'openapi',
+          baseUrl: 'https://new.example.com',
+          authType: 'bearer',
+        },
         config
       ),
       true
     )
     assert.equal(
       channelAssetConfigDestinationChanged(
-        { baseUrl: 'https://old.example.com', authType: 'aksk' },
+        {
+          backend: 'openapi',
+          baseUrl: 'https://old.example.com',
+          authType: 'aksk',
+        },
+        config
+      ),
+      true
+    )
+    assert.equal(
+      channelAssetConfigDestinationChanged(
+        {
+          backend: 'volcengine',
+          baseUrl: 'https://old.example.com',
+          authType: 'bearer',
+        },
         config
       ),
       true
