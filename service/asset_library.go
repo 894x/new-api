@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -61,6 +62,11 @@ func SaveAssetLibraryChannelConfig(config *model.ChannelAssetConfig) ([]string, 
 	if config == nil {
 		return nil, errors.New("asset library channel config is nil")
 	}
+	backend, err := effectiveAssetLibraryBackend(config.Backend, config.ChannelId)
+	if err != nil {
+		return nil, err
+	}
+	config.Backend = backend
 	lock := getAssetLibraryChannelLock(config.ChannelId)
 	lock.Lock()
 	defer lock.Unlock()
@@ -74,6 +80,18 @@ func SaveAssetLibraryChannelConfig(config *model.ChannelAssetConfig) ([]string, 
 	identityChanged := newConfig
 	if newConfig || existing.Enabled != config.Enabled {
 		changedFields = append(changedFields, "enabled")
+	}
+	if !newConfig {
+		existingBackend, backendErr := effectiveAssetLibraryBackend(existing.Backend, existing.ChannelId)
+		if backendErr != nil {
+			return nil, backendErr
+		}
+		if existingBackend != config.Backend {
+			changedFields = append(changedFields, "backend")
+			identityChanged = true
+		}
+	} else {
+		changedFields = append(changedFields, "backend")
 	}
 	if newConfig || existing.BaseURL != config.BaseURL {
 		changedFields = append(changedFields, "base_url")
@@ -104,7 +122,7 @@ func SaveAssetLibraryChannelConfig(config *model.ChannelAssetConfig) ([]string, 
 		return tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "channel_id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
-				"enabled", "base_url", "auth_type", "access_key", "secret_key", "api_key",
+				"enabled", "backend", "base_url", "auth_type", "access_key", "secret_key", "api_key",
 				"region", "project_name", "updated_time",
 			}),
 		}).Create(config).Error
@@ -112,6 +130,24 @@ func SaveAssetLibraryChannelConfig(config *model.ChannelAssetConfig) ([]string, 
 		return nil, err
 	}
 	return changedFields, nil
+}
+
+func effectiveAssetLibraryBackend(backend string, channelId int) (string, error) {
+	backend = strings.TrimSpace(backend)
+	if backend != "" {
+		if !IsSupportedAssetLibraryBackend(backend) {
+			return "", fmt.Errorf("unsupported asset library backend %q", backend)
+		}
+		return backend, nil
+	}
+	channel, err := model.GetChannelById(channelId, false)
+	if err == nil {
+		return DefaultAssetLibraryBackend(channel.Type), nil
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return AssetLibraryBackendAction, nil
+	}
+	return "", err
 }
 
 func DeleteAssetLibraryChannelConfig(channelId int) error {
@@ -583,7 +619,13 @@ func isAssetLibraryNotFound(err error) bool {
 		return false
 	}
 	var upstreamErr *AssetLibraryUpstreamError
-	return errors.As(err, &upstreamErr) && (upstreamErr.StatusCode == 404 || strings.Contains(strings.ToLower(upstreamErr.Code), "notfound"))
+	if !errors.As(err, &upstreamErr) {
+		return false
+	}
+	if upstreamErr.StatusCode == http.StatusNotFound || upstreamErr.Code == "3001" || upstreamErr.Code == "3002" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(upstreamErr.Code), "notfound")
 }
 
 func RefreshAssetLibraryAsset(ctx context.Context, assetId string) (*AssetLibraryAssetDetails, error) {
@@ -816,6 +858,13 @@ func RewriteAssetReferences(userId int, channelId int, payload map[string]any) (
 		if len(missing) > 0 {
 			return nil, fmt.Errorf("asset replica is unavailable for channel: %s", strings.Join(missing, ", "))
 		}
+		backend, err := assetLibraryBackendForChannel(channelId)
+		if err != nil {
+			return nil, err
+		}
+		for assetId, upstreamAssetId := range mappings {
+			mappings[assetId] = backend.FormatAssetReference(upstreamAssetId)
+		}
 	}
 	rewritten, _ := rewriteAssetLibraryValue(payload, mappings).(map[string]any)
 	return rewritten, nil
@@ -896,7 +945,7 @@ func rewriteAssetLibraryValue(value any, mappings map[string]string) any {
 		return result
 	case string:
 		if assetId, ok := parseLocalAssetReference(typed); ok {
-			return "asset://" + mappings[assetId]
+			return mappings[assetId]
 		}
 		return typed
 	default:

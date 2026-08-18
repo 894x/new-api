@@ -17,6 +17,14 @@ import (
 	"github.com/QuantumNous/new-api/model"
 )
 
+const (
+	AssetLibraryBackendAction      = "volcengine"
+	AssetLibraryBackendSeedanceSLS = "seedance_sls"
+	AssetLibraryBackendOpenAPI     = "openapi"
+
+	DefaultAssetLibraryOpenAPIBaseURL = "https://token.wxkjwlw.com"
+)
+
 type assetLibraryCreateGroupResult struct {
 	GroupID  string
 	Deferred bool
@@ -36,6 +44,7 @@ type assetLibraryBackend interface {
 	DeleteGroup(context.Context, *model.ChannelAssetConfig, string) error
 	DeleteAsset(context.Context, *model.ChannelAssetConfig, string) error
 	GetAsset(context.Context, *model.ChannelAssetConfig, string) (*AssetLibraryAssetDetails, error)
+	FormatAssetReference(string) string
 }
 
 type actionAssetLibraryBackend struct{}
@@ -43,18 +52,73 @@ type actionAssetLibraryBackend struct{}
 type seedanceSLSAssetLibraryBackend struct{}
 
 func assetLibraryBackendForChannelType(channelType int) assetLibraryBackend {
-	if channelType == constant.ChannelTypeSeedanceSLS {
+	if DefaultAssetLibraryBackend(channelType) == AssetLibraryBackendSeedanceSLS {
 		return seedanceSLSAssetLibraryBackend{}
 	}
 	return actionAssetLibraryBackend{}
 }
 
 func assetLibraryBackendForChannel(channelId int) (assetLibraryBackend, error) {
+	config, err := model.GetChannelAssetConfig(channelId)
+	if err != nil {
+		return nil, err
+	}
 	channel, err := model.GetChannelById(channelId, false)
 	if err != nil {
 		return nil, err
 	}
-	return assetLibraryBackendForChannelType(channel.Type), nil
+	backend := strings.TrimSpace(config.Backend)
+	if backend == "" {
+		backend = DefaultAssetLibraryBackend(channel.Type)
+	}
+	switch backend {
+	case AssetLibraryBackendAction:
+		return actionAssetLibraryBackend{}, nil
+	case AssetLibraryBackendSeedanceSLS:
+		return seedanceSLSAssetLibraryBackend{}, nil
+	case AssetLibraryBackendOpenAPI:
+		return openAPIAssetLibraryBackend{}, nil
+	default:
+		return nil, fmt.Errorf("unsupported asset library backend %q", backend)
+	}
+}
+
+func DefaultAssetLibraryBackend(channelType int) string {
+	if channelType == constant.ChannelTypeSeedanceSLS {
+		return AssetLibraryBackendSeedanceSLS
+	}
+	return AssetLibraryBackendAction
+}
+
+func DefaultAssetLibraryBackendBaseURL(backend string) string {
+	switch backend {
+	case AssetLibraryBackendSeedanceSLS:
+		return constant.ChannelBaseURLs[constant.ChannelTypeSeedanceSLS]
+	case AssetLibraryBackendOpenAPI:
+		return DefaultAssetLibraryOpenAPIBaseURL
+	default:
+		return DefaultAssetLibraryBaseURL
+	}
+}
+
+func DefaultAssetLibraryBackendAuthType(backend string) string {
+	if backend == AssetLibraryBackendAction {
+		return AssetLibraryAuthAKSK
+	}
+	return AssetLibraryAuthBearer
+}
+
+func IsSupportedAssetLibraryBackend(backend string) bool {
+	switch backend {
+	case AssetLibraryBackendAction, AssetLibraryBackendSeedanceSLS, AssetLibraryBackendOpenAPI:
+		return true
+	default:
+		return false
+	}
+}
+
+func AssetLibraryBackendRequiresBearer(backend string) bool {
+	return backend == AssetLibraryBackendSeedanceSLS || backend == AssetLibraryBackendOpenAPI
 }
 
 func (actionAssetLibraryBackend) CreateGroup(ctx context.Context, config *model.ChannelAssetConfig, group *model.UserAssetGroup) (*assetLibraryCreateGroupResult, error) {
@@ -139,6 +203,10 @@ func (actionAssetLibraryBackend) GetAsset(ctx context.Context, config *model.Cha
 	return &details, nil
 }
 
+func (actionAssetLibraryBackend) FormatAssetReference(upstreamAssetId string) string {
+	return "asset://" + upstreamAssetId
+}
+
 func (seedanceSLSAssetLibraryBackend) CreateGroup(context.Context, *model.ChannelAssetConfig, *model.UserAssetGroup) (*assetLibraryCreateGroupResult, error) {
 	return &assetLibraryCreateGroupResult{Deferred: true}, nil
 }
@@ -220,6 +288,10 @@ func (seedanceSLSAssetLibraryBackend) GetAsset(ctx context.Context, config *mode
 		Status:      result.Status,
 		ProjectName: assetLibraryProject(config),
 	}, nil
+}
+
+func (seedanceSLSAssetLibraryBackend) FormatAssetReference(upstreamAssetId string) string {
+	return "asset://" + upstreamAssetId
 }
 
 type seedanceSLSResponseEnvelope struct {

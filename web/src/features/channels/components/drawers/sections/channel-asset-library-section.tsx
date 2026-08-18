@@ -63,6 +63,7 @@ import {
   channelAssetConfigDestinationChanged,
   channelAssetConfigFormSchema,
   getAssetLibraryErrorMessage,
+  getChannelAssetBackendDefaults,
   getChannelAssetConfigFormValues,
   getChannelAssetConfigPayload,
   type ChannelAssetConfigFormValues,
@@ -87,11 +88,12 @@ export function ChannelAssetLibrarySection(props: {
     resolver: zodResolver(channelAssetConfigFormSchema),
     defaultValues: getChannelAssetConfigFormValues(null),
   })
+  const backend = form.watch('backend')
   const authType = form.watch('authType')
   const baseUrl = form.watch('baseUrl')
   const enabled = form.watch('enabled')
   const canReuseStoredCredential = !channelAssetConfigDestinationChanged(
-    { authType, baseUrl },
+    { backend, authType, baseUrl },
     config ?? null
   )
   const hasStoredCredential = Boolean(
@@ -220,6 +222,70 @@ export function ChannelAssetLibrarySection(props: {
             <div className='grid gap-4 sm:grid-cols-2'>
               <FormField
                 control={form.control}
+                name='backend'
+                render={({ field }) => (
+                  <FormItem className='sm:col-span-2'>
+                    <FormLabel>{t('Upstream asset protocol')}</FormLabel>
+                    <Select
+                      items={[
+                        {
+                          value: 'volcengine',
+                          label: t('Volcengine Action API'),
+                        },
+                        {
+                          value: 'seedance_sls',
+                          label: t('Seedance SLS REST API'),
+                        },
+                        {
+                          value: 'openapi',
+                          label: t('Asset OpenAPI v1'),
+                        },
+                      ]}
+                      value={field.value}
+                      onValueChange={(value) => {
+                        if (!value) return
+                        field.onChange(value)
+                        const defaults = getChannelAssetBackendDefaults(value)
+                        form.setValue('baseUrl', defaults.baseUrl, {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        })
+                        form.setValue('authType', defaults.authType, {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        })
+                      }}
+                    >
+                      <FormControl>
+                        <SelectTrigger className='w-full'>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='volcengine'>
+                            {t('Volcengine Action API')}
+                          </SelectItem>
+                          <SelectItem value='seedance_sls'>
+                            {t('Seedance SLS REST API')}
+                          </SelectItem>
+                          <SelectItem value='openapi'>
+                            {t('Asset OpenAPI v1')}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>
+                      {t(
+                        'Customers continue to use one unified asset library; this only selects the protocol used for this channel replica.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
                 name='baseUrl'
                 render={({ field }) => (
                   <FormItem className='sm:col-span-2'>
@@ -243,6 +309,7 @@ export function ChannelAssetLibrarySection(props: {
                   <FormItem>
                     <FormLabel>{t('Authentication type')}</FormLabel>
                     <Select
+                      disabled={backend !== 'volcengine'}
                       items={[
                         { value: 'aksk', label: t('Volcengine AK/SK') },
                         { value: 'bearer', label: t('Single API key') },

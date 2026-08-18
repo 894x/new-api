@@ -230,6 +230,13 @@ func TestRefreshAssetLibraryAssetRefreshesEveryEnabledReplica(t *testing.T) {
 
 func TestRewriteAssetReferencesRewritesNestedPayloadWithoutMutation(t *testing.T) {
 	db := setupAssetLibraryServiceTestDB(t)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 11, Type: constant.ChannelTypeDoubaoVideo, Key: "action-key", Name: "Action",
+	}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 11, Enabled: true, Backend: AssetLibraryBackendAction,
+		BaseURL: DefaultAssetLibraryBaseURL, AuthType: AssetLibraryAuthBearer, APIKey: "action-key",
+	}).Error)
 	assetId := "asset-na-0123456789abcdef0123456789abcdef"
 	otherAssetId := "asset-na-abcdef0123456789abcdef0123456789"
 	require.NoError(t, db.Create(&model.UserAsset{
@@ -320,6 +327,31 @@ func TestSaveAssetLibraryChannelConfigClearsReplicasOnlyWhenIdentityChanges(t *t
 	require.NoError(t, err)
 	assert.Contains(t, changed, "credentials")
 	count, err = model.CountChannelAssetReplicas(11)
+	require.NoError(t, err)
+	assert.Zero(t, count)
+}
+
+func TestSaveAssetLibraryChannelConfigClearsReplicasWhenBackendChanges(t *testing.T) {
+	db := setupAssetLibraryServiceTestDB(t)
+	existing := &model.ChannelAssetConfig{
+		ChannelId: 11, Enabled: true, Backend: AssetLibraryBackendAction,
+		BaseURL: "https://assets.example.com", AuthType: AssetLibraryAuthBearer,
+		APIKey: "key", Region: DefaultAssetLibraryRegion, ProjectName: "project-a",
+	}
+	require.NoError(t, db.Create(existing).Error)
+	require.NoError(t, db.Create(&model.UserAssetReplica{
+		AssetId: "asset-na-0123456789abcdef0123456789abcdef", ChannelId: 11,
+		UpstreamAssetId: "asset-upstream", State: model.AssetReplicaStateReady,
+	}).Error)
+
+	changed, err := SaveAssetLibraryChannelConfig(&model.ChannelAssetConfig{
+		ChannelId: 11, Enabled: true, Backend: AssetLibraryBackendOpenAPI,
+		BaseURL: existing.BaseURL, AuthType: existing.AuthType,
+		APIKey: existing.APIKey, Region: existing.Region, ProjectName: existing.ProjectName,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, changed, "backend")
+	count, err := model.CountChannelAssetReplicas(11)
 	require.NoError(t, err)
 	assert.Zero(t, count)
 }

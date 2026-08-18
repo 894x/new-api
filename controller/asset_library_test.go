@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -195,6 +196,7 @@ func TestNormalizeChannelAssetLibraryConfigUsesSeedanceSLSProtocolDefaults(t *te
 	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "https://lm.sls.cn", config.BaseURL)
+	assert.Equal(t, service.AssetLibraryBackendSeedanceSLS, config.Backend)
 	assert.Equal(t, "bearer", config.AuthType)
 	assert.Equal(t, "sls-key", config.APIKey)
 
@@ -204,9 +206,28 @@ func TestNormalizeChannelAssetLibraryConfigUsesSeedanceSLSProtocolDefaults(t *te
 	require.ErrorContains(t, err, "Bearer")
 }
 
+func TestNormalizeChannelAssetLibraryConfigSupportsBearerOpenAPIBackend(t *testing.T) {
+	channel := &model.Channel{Id: 21, Type: constant.ChannelTypeOpenAI}
+	config, err := normalizeChannelAssetLibraryConfig(channel, &channelAssetLibraryConfigRequest{
+		Enabled: true, Backend: service.AssetLibraryBackendOpenAPI,
+		BaseURL: "https://token.example.com", APIKey: "upstream-key",
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, service.AssetLibraryBackendOpenAPI, config.Backend)
+	assert.Equal(t, service.AssetLibraryAuthBearer, config.AuthType)
+
+	_, err = normalizeChannelAssetLibraryConfig(channel, &channelAssetLibraryConfigRequest{
+		Enabled: true, Backend: service.AssetLibraryBackendOpenAPI,
+		BaseURL: "https://token.example.com", AuthType: service.AssetLibraryAuthAKSK,
+		AccessKey: "ak", SecretKey: "sk",
+	}, nil)
+	require.ErrorContains(t, err, "Bearer")
+}
+
 func TestChannelAssetLibraryResponseDoesNotExposeCredentials(t *testing.T) {
 	response := buildChannelAssetLibraryConfigResponse(&model.ChannelAssetConfig{
-		ChannelId: 3, Enabled: true, BaseURL: "https://assets.example.com", AuthType: "aksk",
+		ChannelId: 3, Enabled: true, Backend: service.AssetLibraryBackendOpenAPI,
+		BaseURL: "https://assets.example.com", AuthType: "aksk",
 		AccessKey: "sensitive-ak", SecretKey: "sensitive-sk", APIKey: "sensitive-api-key",
 		Region: "cn-beijing", ProjectName: "default",
 	}, 2)
@@ -220,6 +241,7 @@ func TestChannelAssetLibraryResponseDoesNotExposeCredentials(t *testing.T) {
 	assert.True(t, response.HasAccessKey)
 	assert.True(t, response.HasSecretKey)
 	assert.True(t, response.HasAPIKey)
+	assert.Equal(t, service.AssetLibraryBackendOpenAPI, response.Backend)
 }
 
 func TestAssetLibraryResultDoesNotExposeChannelOrUpstreamError(t *testing.T) {

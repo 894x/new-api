@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -149,7 +150,9 @@ func TestBuildNativeSLSRequestRewritesAccountAsset(t *testing.T) {
 	originalDB := model.DB
 	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.UserAsset{}, &model.UserAssetReplica{}))
+	require.NoError(t, db.AutoMigrate(
+		&model.Channel{}, &model.ChannelAssetConfig{}, &model.UserAsset{}, &model.UserAssetReplica{},
+	))
 	model.DB = db
 	t.Cleanup(func() {
 		model.DB = originalDB
@@ -160,6 +163,13 @@ func TestBuildNativeSLSRequestRewritesAccountAsset(t *testing.T) {
 	})
 
 	const assetID = "asset-na-0123456789abcdef0123456789abcdef"
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 11, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-key", Name: "Seedance SLS",
+	}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 11, Enabled: true, Backend: service.AssetLibraryBackendSeedanceSLS,
+		BaseURL: "https://lm.sls.cn", AuthType: service.AssetLibraryAuthBearer, APIKey: "sls-key",
+	}).Error)
 	require.NoError(t, db.Create(&model.UserAsset{
 		Id: assetID, UserId: 7, GroupId: "group-na-test", AssetType: "Image",
 		SourceURL: "https://example.com/reference.png", ProjectName: "default",

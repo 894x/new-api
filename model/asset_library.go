@@ -17,6 +17,7 @@ const (
 type ChannelAssetConfig struct {
 	ChannelId   int    `json:"channel_id" gorm:"primaryKey;autoIncrement:false"`
 	Enabled     bool   `json:"enabled" gorm:"not null"`
+	Backend     string `json:"backend" gorm:"type:varchar(32)"`
 	BaseURL     string `json:"base_url" gorm:"type:varchar(2048);not null"`
 	AuthType    string `json:"auth_type" gorm:"type:varchar(16);not null"`
 	AccessKey   string `json:"-" gorm:"type:text"`
