@@ -504,12 +504,6 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			taskResult.Progress = t.Progress
 			taskResult.Reason = t.FailReason
 			task.Data = t.Data
-			// Compatibility bridge: some video_generations upstreams wrap provider results in a New API task envelope.
-			// Keep the outer task state, but recover nested usage for settlement.
-			if nestedResult, nestedErr := adaptor.ParseTaskResult(t.Data); nestedErr == nil && nestedResult != nil {
-				taskResult.CompletionTokens = nestedResult.CompletionTokens
-				taskResult.TotalTokens = nestedResult.TotalTokens
-			}
 		} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
 			return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
 		}

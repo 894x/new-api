@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,6 +21,10 @@ func TestGetTaskAdaptorMapsSeedanceSLSChannel(t *testing.T) {
 }
 
 func TestSeedanceSLSChannelCapabilities(t *testing.T) {
+	adaptor := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeSeedanceSLS)))
+	_, supportsDoubaoV3 := adaptor.(channel.NativeVideoConverter)
+	assert.True(t, supportsDoubaoV3)
+
 	_, hasSynchronousAPI := common.ChannelType2APIType(constant.ChannelTypeSeedanceSLS)
 	assert.False(t, hasSynchronousAPI)
 	assert.Equal(t,

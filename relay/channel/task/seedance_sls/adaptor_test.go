@@ -1,6 +1,7 @@
 package seedance_sls
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -226,10 +227,55 @@ func TestBuildCompatibleRequestConvertsPromptAndImages(t *testing.T) {
 	}`, string(encoded))
 }
 
+func TestBuildDoubaoV3RequestPreservesNativeContentForSLSUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(ctx, constant.ContextKeyTaskResponseFormat, constant.TaskResponseFormatDoubaoVideo)
+	ctx.Set("task_request", relaycommon.TaskSubmitReq{
+		Model:    "doubao-seedance-2-0",
+		Prompt:   "Animate this image",
+		Duration: 5,
+		Metadata: map[string]any{
+			"model": "doubao-seedance-2-0",
+			"content": []any{
+				map[string]any{
+					"type":      "image_url",
+					"image_url": map[string]any{"url": "https://example.com/reference.png"},
+				},
+				map[string]any{"type": "text", "text": "Animate this image"},
+			},
+			"duration":       float64(5),
+			"generate_audio": false,
+			"seed":           float64(0),
+		},
+	})
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+		UpstreamModelName: "mapped-seedance-model",
+		IsModelMapped:     true,
+	}}
+
+	body, err := (&TaskAdaptor{}).BuildRequestBody(ctx, info)
+	require.NoError(t, err)
+	encoded, err := io.ReadAll(body)
+	require.NoError(t, err)
+
+	assert.JSONEq(t, `{
+		"model":"mapped-seedance-model",
+		"content":[
+			{"type":"image_url","image_url":{"url":"https://example.com/reference.png"}},
+			{"type":"text","text":"Animate this image"}
+		],
+		"duration":5,
+		"generate_audio":false,
+		"seed":0
+	}`, string(encoded))
+}
+
 func TestSubmitResponseAcceptsSLSTaskID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
+	common.SetContextKey(ctx, constant.ContextKeyTaskResponseFormat, constant.TaskResponseFormatDoubaoVideo)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(`{"task_id":"task_upstream","status":"QUEUED"}`)),
@@ -245,7 +291,7 @@ func TestSubmitResponseAcceptsSLSTaskID(t *testing.T) {
 	assert.Equal(t, "task_upstream", upstreamID)
 	assert.NotContains(t, string(taskData), "task_upstream")
 	assert.Contains(t, string(taskData), "task_public")
-	assert.Contains(t, recorder.Body.String(), `"id":"task_public"`)
+	assert.JSONEq(t, `{"id":"task_public"}`, recorder.Body.String())
 }
 
 func TestParseSLSWrappedTaskResult(t *testing.T) {
@@ -300,6 +346,71 @@ func TestParseNestedNewAPIWrapperMergesProviderUsage(t *testing.T) {
 	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
 	assert.Equal(t, "https://example.com/nested.mp4", result.Url)
 	assert.Equal(t, 87300, result.TotalTokens)
+}
+
+func TestConvertToNativeVideoMapsNestedSLSResultToDoubaoV3(t *testing.T) {
+	task := &model.Task{
+		TaskID:    "task_public",
+		Status:    model.TaskStatusSuccess,
+		CreatedAt: 100,
+		UpdatedAt: 200,
+		Properties: model.Properties{
+			OriginModelName: "doubao-seedance-2-0",
+		},
+		Data: json.RawMessage(`{
+			"code":"success",
+			"data":{
+				"task_id":"task_public",
+				"status":"SUCCESS",
+				"result_url":"https://example.com/output.mp4",
+				"last_frame_url":"https://example.com/last-frame.png",
+				"duration":5,
+				"resolution":"720p",
+				"ratio":"16:9",
+				"total_tokens":108900
+			}
+		}`),
+	}
+
+	encoded, err := (&TaskAdaptor{}).ConvertToNativeVideo(task)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"id":"task_public",
+		"model":"doubao-seedance-2-0",
+		"status":"succeeded",
+		"created_at":100,
+		"updated_at":200,
+		"content":{
+			"video_url":"https://example.com/output.mp4",
+			"last_frame_url":"https://example.com/last-frame.png"
+		},
+		"duration":5,
+		"resolution":"720p",
+		"ratio":"16:9",
+		"usage":{"completion_tokens":108900,"total_tokens":108900}
+	}`, string(encoded))
+}
+
+func TestConvertToNativeVideoReturnsDoubaoV3FailureShape(t *testing.T) {
+	task := &model.Task{
+		TaskID:     "task_failed",
+		Status:     model.TaskStatusFailure,
+		CreatedAt:  100,
+		UpdatedAt:  200,
+		FailReason: "content rejected",
+		Properties: model.Properties{OriginModelName: "doubao-seedance-2-0"},
+	}
+
+	encoded, err := (&TaskAdaptor{}).ConvertToNativeVideo(task)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"id":"task_failed",
+		"model":"doubao-seedance-2-0",
+		"status":"failed",
+		"created_at":100,
+		"updated_at":200,
+		"error":{"code":"","message":"content rejected"}
+	}`, string(encoded))
 }
 
 func TestSanitizeTaskDataReplacesNestedUpstreamTaskID(t *testing.T) {

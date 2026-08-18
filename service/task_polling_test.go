@@ -36,9 +36,8 @@ type sunoFailurePollingAdaptor struct {
 	failReason string
 }
 
-type nestedUsagePollingAdaptor struct {
-	taskResult   *relaycommon.TaskInfo
-	parsedBodies [][]byte
+type opaqueDataPollingAdaptor struct {
+	parseCalls int
 }
 
 type wrappedTaskPollingAdaptor struct {
@@ -80,9 +79,9 @@ func (a *sunoFailurePollingAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *re
 	return 0
 }
 
-func (a *nestedUsagePollingAdaptor) Init(_ *relaycommon.RelayInfo) {}
+func (a *opaqueDataPollingAdaptor) Init(_ *relaycommon.RelayInfo) {}
 
-func (a *nestedUsagePollingAdaptor) FetchTask(_ string, _ string, body map[string]any, _ string) (*http.Response, error) {
+func (a *opaqueDataPollingAdaptor) FetchTask(_ string, _ string, body map[string]any, _ string) (*http.Response, error) {
 	taskID, _ := body["task_id"].(string)
 	responseBody, err := common.Marshal(taskdto.TaskResponse[model.Task]{
 		Code: taskdto.TaskSuccessCode,
@@ -103,12 +102,15 @@ func (a *nestedUsagePollingAdaptor) FetchTask(_ string, _ string, body map[strin
 	}, nil
 }
 
-func (a *nestedUsagePollingAdaptor) ParseTaskResult(body []byte) (*relaycommon.TaskInfo, error) {
-	a.parsedBodies = append(a.parsedBodies, bytes.Clone(body))
-	return a.taskResult, nil
+func (a *opaqueDataPollingAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	a.parseCalls++
+	return &relaycommon.TaskInfo{
+		CompletionTokens: 87300,
+		TotalTokens:      87300,
+	}, nil
 }
 
-func (a *nestedUsagePollingAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *relaycommon.TaskInfo) int {
+func (a *opaqueDataPollingAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *relaycommon.TaskInfo) int {
 	return 0
 }
 
@@ -332,9 +334,8 @@ func TestUpdateVideoTasksCanSkipPollingSleepPerChannel(t *testing.T) {
 	assert.Equal(t, 2, adaptor.fetchCount())
 }
 
-func TestUpdateVideoSingleTaskRefundsFromNestedNewAPIUsage(t *testing.T) {
+func TestUpdateVideoSingleTaskKeepsNestedNewAPIDataOpaqueWithoutWrappedParser(t *testing.T) {
 	truncate(t)
-
 	previousModelRatios := ratio_setting.ModelRatio2JSONString()
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"test-model":3.1506849315068495}`))
 	t.Cleanup(func() {
@@ -361,41 +362,17 @@ func TestUpdateVideoSingleTaskRefundsFromNestedNewAPIUsage(t *testing.T) {
 		Key:    "sk-test",
 		Status: common.ChannelStatusEnabled,
 	}
-	adaptor := &nestedUsagePollingAdaptor{taskResult: &relaycommon.TaskInfo{
-		Status:           "succeeded",
-		Url:              "https://example.com/video.mp4",
-		CompletionTokens: 87300,
-		TotalTokens:      87300,
-	}}
+	adaptor := &opaqueDataPollingAdaptor{}
 	err := updateVideoSingleTask(context.Background(), adaptor, channel,
 		task.GetUpstreamTaskID(), map[string]*model.Task{task.GetUpstreamTaskID(): task})
 
 	require.NoError(t, err)
-	assert.Equal(t, 275054, getTaskQuota(t, task.ID))
-	assert.Equal(t, 1512617, getUserQuota(t, 1))
-	assert.Equal(t, 724946, getTokenRemainQuota(t, 1))
-	assert.Equal(t, 275054, getTokenUsedQuota(t, 1))
-	refundLog := getLastLog(t)
-	require.NotNil(t, refundLog)
-	assert.Equal(t, model.LogTypeRefund, refundLog.Type)
-	assert.Equal(t, 512617, refundLog.Quota)
-	assert.EqualValues(t, 1, countLogs(t))
-
-	var reloaded model.Task
-	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
-	err = updateVideoSingleTask(context.Background(), adaptor, channel,
-		reloaded.GetUpstreamTaskID(), map[string]*model.Task{reloaded.GetUpstreamTaskID(): &reloaded})
-
-	require.NoError(t, err)
-	assert.Equal(t, 275054, getTaskQuota(t, task.ID))
-	assert.Equal(t, 1512617, getUserQuota(t, 1))
-	assert.Equal(t, 724946, getTokenRemainQuota(t, 1))
-	assert.Equal(t, 275054, getTokenUsedQuota(t, 1))
-	assert.EqualValues(t, 1, countLogs(t))
-	require.Len(t, adaptor.parsedBodies, 2)
-	for _, parsedBody := range adaptor.parsedBodies {
-		assert.JSONEq(t, `{"provider":"opaque-payload"}`, string(parsedBody))
-	}
+	assert.Equal(t, 787671, getTaskQuota(t, task.ID))
+	assert.Equal(t, 1000000, getUserQuota(t, 1))
+	assert.Equal(t, 212329, getTokenRemainQuota(t, 1))
+	assert.Equal(t, 787671, getTokenUsedQuota(t, 1))
+	assert.EqualValues(t, 0, countLogs(t))
+	assert.Zero(t, adaptor.parseCalls)
 }
 
 func TestUpdateVideoSingleTaskUsesWrappedResultURLAndTotalTokens(t *testing.T) {
