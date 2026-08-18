@@ -130,6 +130,18 @@ func TestAssetLibraryRoutingRejectsRawUpstreamAssetURI(t *testing.T) {
 	}
 }
 
+func TestAssetLibraryRoutingPassesThroughMultipartVideoRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader("multipart-body"))
+	ctx.Request.Header.Set("Content-Type", "multipart/form-data; boundary=test-boundary")
+
+	AssetLibraryRouting()(ctx)
+
+	assert.False(t, ctx.IsAborted())
+}
+
 func TestChannelAllowedForAssetsPreservesOrdinaryAndConstrainsAffinityCandidates(t *testing.T) {
 	allowed := map[int]struct{}{22: {}}
 	assert.True(t, channelAllowedForAssets(11, nil, false))

@@ -41,6 +41,10 @@ type nestedUsagePollingAdaptor struct {
 	parsedBodies [][]byte
 }
 
+type wrappedTaskPollingAdaptor struct {
+	completedResult *relaycommon.TaskInfo
+}
+
 func (a *sunoFailurePollingAdaptor) Init(_ *relaycommon.RelayInfo) {}
 
 func (a *sunoFailurePollingAdaptor) FetchTask(_ string, _ string, body map[string]any, _ string) (*http.Response, error) {
@@ -105,6 +109,57 @@ func (a *nestedUsagePollingAdaptor) ParseTaskResult(body []byte) (*relaycommon.T
 }
 
 func (a *nestedUsagePollingAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *relaycommon.TaskInfo) int {
+	return 0
+}
+
+func (a *wrappedTaskPollingAdaptor) Init(_ *relaycommon.RelayInfo) {}
+
+func (a *wrappedTaskPollingAdaptor) FetchTask(_ string, _ string, body map[string]any, _ string) (*http.Response, error) {
+	taskID, _ := body["task_id"].(string)
+	responseBody, err := common.Marshal(map[string]any{
+		"code": "success",
+		"data": map[string]any{
+			"task_id":      taskID,
+			"status":       "COMPLETED",
+			"progress":     "100%",
+			"result_url":   "https://example.com/sls-output.mp4",
+			"total_tokens": 108900,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(responseBody)),
+	}, nil
+}
+
+func (a *wrappedTaskPollingAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return nil, assert.AnError
+}
+
+func (a *wrappedTaskPollingAdaptor) ParseWrappedTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{
+		TaskID:      "task_upstream_sls",
+		Status:      string(model.TaskStatusSuccess),
+		Progress:    "100%",
+		Url:         "https://example.com/sls-output.mp4",
+		TotalTokens: 108900,
+	}, nil
+}
+
+func (a *wrappedTaskPollingAdaptor) SanitizeTaskData(_ []byte, publicTaskID string) []byte {
+	responseBody, _ := common.Marshal(map[string]any{
+		"code": "success",
+		"data": map[string]any{"task_id": publicTaskID, "status": "COMPLETED"},
+	})
+	return responseBody
+}
+
+func (a *wrappedTaskPollingAdaptor) AdjustBillingOnComplete(_ *model.Task, result *relaycommon.TaskInfo) int {
+	copy := *result
+	a.completedResult = &copy
 	return 0
 }
 
@@ -341,6 +396,31 @@ func TestUpdateVideoSingleTaskRefundsFromNestedNewAPIUsage(t *testing.T) {
 	for _, parsedBody := range adaptor.parsedBodies {
 		assert.JSONEq(t, `{"provider":"opaque-payload"}`, string(parsedBody))
 	}
+}
+
+func TestUpdateVideoSingleTaskUsesWrappedResultURLAndTotalTokens(t *testing.T) {
+	truncate(t)
+
+	task := seedPollingTask(t, 1, "task_public_sls", "task_upstream_sls")
+	channel := &model.Channel{
+		Id:     1,
+		Type:   constant.ChannelTypeSeedanceSLS,
+		Name:   "seedance_sls_channel",
+		Key:    "sk-test",
+		Status: common.ChannelStatusEnabled,
+	}
+	adaptor := &wrappedTaskPollingAdaptor{}
+
+	err := updateVideoSingleTask(context.Background(), adaptor, channel,
+		task.GetUpstreamTaskID(), map[string]*model.Task{task.GetUpstreamTaskID(): task})
+
+	require.NoError(t, err)
+	require.NotNil(t, adaptor.completedResult)
+	assert.Equal(t, 108900, adaptor.completedResult.TotalTokens)
+	assert.Equal(t, "https://example.com/sls-output.mp4", task.PrivateData.ResultURL)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), task.Status)
+	assert.NotContains(t, string(task.Data), "task_upstream_sls")
+	assert.Contains(t, string(task.Data), "task_public_sls")
 }
 
 func TestUpdateVideoTasksPassesChannelOtherSettingsToAdaptor(t *testing.T) {

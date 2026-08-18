@@ -34,6 +34,14 @@ type TaskPollingAdaptor interface {
 	AdjustBillingOnComplete(task *model.Task, taskResult *relaycommon.TaskInfo) int
 }
 
+type wrappedTaskResultParser interface {
+	ParseWrappedTaskResult(body []byte) (*relaycommon.TaskInfo, error)
+}
+
+type taskDataSanitizer interface {
+	SanitizeTaskData(body []byte, publicTaskID string) []byte
+}
+
 // GetTaskAdaptorFunc 由 main 包注入，用于获取指定平台的任务适配器。
 // 打破 service -> relay -> relay/channel -> service 的循环依赖。
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
@@ -480,29 +488,38 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	snap := task.Snapshot()
 
 	taskResult := &relaycommon.TaskInfo{}
-	// try parse as New API response format
-	var responseItems taskdto.TaskResponse[model.Task]
-	if err = common.Unmarshal(responseBody, &responseItems); err == nil && responseItems.IsSuccess() {
-		logger.LogDebug(ctx, "updateVideoSingleTask parsed as new api response format: %+v", responseItems)
-		t := responseItems.Data
-		taskResult.TaskID = t.TaskID
-		taskResult.Status = string(t.Status)
-		taskResult.Url = t.GetResultURL()
-		taskResult.Progress = t.Progress
-		taskResult.Reason = t.FailReason
-		task.Data = t.Data
-		// Compatibility bridge: some video_generations upstreams wrap provider results in a New API task envelope.
-		// Keep the outer task state, but recover nested usage for settlement. Move this unwrapping into the
-		// selected upstream video protocol adaptor before adding another response format here.
-		if nestedResult, nestedErr := adaptor.ParseTaskResult(t.Data); nestedErr == nil && nestedResult != nil {
-			taskResult.CompletionTokens = nestedResult.CompletionTokens
-			taskResult.TotalTokens = nestedResult.TotalTokens
+	if wrappedAdaptor, ok := adaptor.(wrappedTaskResultParser); ok {
+		if taskResult, err = wrappedAdaptor.ParseWrappedTaskResult(responseBody); err != nil {
+			return fmt.Errorf("parseWrappedTaskResult failed for task %s: %w", taskId, err)
 		}
-	} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
-		return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
+	} else {
+		// try parse as New API response format
+		var responseItems taskdto.TaskResponse[model.Task]
+		if err = common.Unmarshal(responseBody, &responseItems); err == nil && responseItems.IsSuccess() {
+			logger.LogDebug(ctx, "updateVideoSingleTask parsed as new api response format: %+v", responseItems)
+			t := responseItems.Data
+			taskResult.TaskID = t.TaskID
+			taskResult.Status = string(t.Status)
+			taskResult.Url = t.GetResultURL()
+			taskResult.Progress = t.Progress
+			taskResult.Reason = t.FailReason
+			task.Data = t.Data
+			// Compatibility bridge: some video_generations upstreams wrap provider results in a New API task envelope.
+			// Keep the outer task state, but recover nested usage for settlement.
+			if nestedResult, nestedErr := adaptor.ParseTaskResult(t.Data); nestedErr == nil && nestedResult != nil {
+				taskResult.CompletionTokens = nestedResult.CompletionTokens
+				taskResult.TotalTokens = nestedResult.TotalTokens
+			}
+		} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
+			return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
+		}
 	}
 
-	task.Data = redactVideoResponseBody(responseBody)
+	storedResponseBody := responseBody
+	if sanitizer, ok := adaptor.(taskDataSanitizer); ok {
+		storedResponseBody = sanitizer.SanitizeTaskData(responseBody, task.TaskID)
+	}
+	task.Data = redactVideoResponseBody(storedResponseBody)
 
 	logger.LogDebug(ctx, "updateVideoSingleTask taskResult: %+v", taskResult)
 

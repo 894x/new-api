@@ -23,7 +23,7 @@ const BUILT_IN_EXPECTATIONS: ReadonlyArray<{
     apis: ['chat', 'responses'],
   },
   {
-    types: [15, 16, 18, 23, 34, 37, 42, 49, 53],
+    types: [15, 16, 18, 23, 34, 37, 42, 49, 53, 103],
     apis: ['chat'],
   },
   {
@@ -31,7 +31,7 @@ const BUILT_IN_EXPECTATIONS: ReadonlyArray<{
     apis: ['responses'],
   },
   {
-    types: [2, 5, 36, 38, 44, 50, 51, 52, 54, 55, 56, 100],
+    types: [2, 5, 36, 38, 44, 50, 51, 52, 54, 55, 56, 100, 102, 104],
     apis: [],
   },
 ]

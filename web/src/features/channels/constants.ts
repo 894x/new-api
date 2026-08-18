@@ -24,6 +24,7 @@ For commercial licensing, please contact support@quantumnous.com
 export const CHANNEL_TYPE_NEW_API = 60
 export const CHANNEL_TYPE_ASTRAFLOW_IMAGE = 102
 export const CHANNEL_TYPE_ASTRAFLOW_GEMINI = 103
+export const CHANNEL_TYPE_SEEDANCE_SLS = 104
 
 export const CHANNEL_TYPES = {
   0: 'Unknown',
@@ -87,12 +88,13 @@ export const CHANNEL_TYPES = {
   101: 'Xunfei MaaS',
   102: 'AstraFlow Image',
   103: 'AstraFlow Gemini',
+  104: 'Seedance SLS',
 } as const
 
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
-  1, 14, 33, 24, 43, 3, 41, 48, 60, 58, 102, 103, 42, 34, 20, 4, 40, 27, 25, 17, 26,
-  15, 46, 23, 100, 101, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 59,
-  22, 21, 44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56,
+  1, 14, 33, 24, 43, 3, 41, 48, 60, 58, 102, 103, 42, 34, 20, 4, 40, 27, 25, 17,
+  26, 15, 46, 23, 100, 101, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57,
+  59, 22, 21, 44, 2, 5, 36, 50, 51, 52, 53, 54, 104, 55, 56,
 ]
 
 export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
@@ -411,6 +413,7 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
   60: 'Enter API key for this channel',
   102: 'Enter API key for this channel',
   103: 'Enter API key for this channel',
+  104: 'Enter API key for this channel',
 }
 
 export const CHANNEL_TYPE_WARNINGS: Record<number, string> = {

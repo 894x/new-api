@@ -107,6 +107,7 @@ export function getChannelTypeIcon(type: number): string {
     36: 'Suno', // SunoAPI
     55: 'OpenAI', // Sora
     54: 'Doubao', // DoubaoVideo
+    104: 'Doubao', // Seedance SLS
     56: 'Replicate', // Replicate
 
     // Tools & Platforms
@@ -186,6 +187,7 @@ const BUILT_IN_CHANNEL_EXTERNAL_APIS = {
   101: ['chat', 'responses', 'messages'],
   102: [],
   103: ['chat'],
+  104: [],
 } as const satisfies Record<
   keyof typeof CHANNEL_TYPES,
   readonly ChannelExternalAPI[]

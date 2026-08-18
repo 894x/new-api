@@ -95,6 +95,7 @@ Do NOT directly import or call `encoding/json` in business code. `json.RawMessag
 
 **Relay and provider behavior:**
 
+- New channel type constants MUST use the next available custom numeric ID greater than 100. Do not fill unused IDs at or below 99; those values are reserved for historical compatibility.
 - When implementing a new channel, confirm whether the provider supports `StreamOptions`; if supported, add the channel to `streamSupportedChannels`.
 - For request structs parsed from client JSON and re-marshaled to upstream providers, optional scalar fields MUST use pointer types with `omitempty` (for example, `*int`, `*uint`, `*float64`, `*bool`).
 - Preserve explicit zero values in upstream relay request DTOs: absent client JSON fields must become `nil` and be omitted, while explicit `0`, `0.0`, or `false` values must remain non-`nil` and be sent upstream.
