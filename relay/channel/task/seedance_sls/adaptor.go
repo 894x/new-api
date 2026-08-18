@@ -39,19 +39,60 @@ type TaskAdaptor struct {
 }
 
 type taskResponse struct {
-	TaskID      string          `json:"task_id"`
-	Status      string          `json:"status"`
-	FailReason  string          `json:"fail_reason"`
-	ResultURL   string          `json:"result_url"`
-	Progress    string          `json:"progress"`
-	TotalTokens int             `json:"total_tokens"`
-	Data        json.RawMessage `json:"data"`
+	TaskID          string          `json:"task_id"`
+	Status          string          `json:"status"`
+	FailReason      string          `json:"fail_reason"`
+	ResultURL       string          `json:"result_url"`
+	LastFrameURL    string          `json:"last_frame_url"`
+	Progress        string          `json:"progress"`
+	TotalTokens     int             `json:"total_tokens"`
+	Duration        *int            `json:"duration"`
+	Resolution      string          `json:"resolution"`
+	Ratio           string          `json:"ratio"`
+	Seed            *int            `json:"seed"`
+	Frames          *int            `json:"frames"`
+	FramesPerSecond *int            `json:"framespersecond"`
+	GenerateAudio   *bool           `json:"generate_audio"`
+	Data            json.RawMessage `json:"data"`
 }
 
 type wrappedTaskResponse struct {
 	Code    string       `json:"code"`
 	Message string       `json:"message"`
 	Data    taskResponse `json:"data"`
+}
+
+type nativeVideoContent struct {
+	VideoURL     string `json:"video_url,omitempty"`
+	LastFrameURL string `json:"last_frame_url,omitempty"`
+}
+
+type nativeVideoUsage struct {
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type nativeVideoError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type nativeVideoResponse struct {
+	ID              string              `json:"id"`
+	Model           string              `json:"model"`
+	Status          string              `json:"status"`
+	Error           *nativeVideoError   `json:"error,omitempty"`
+	CreatedAt       int64               `json:"created_at"`
+	UpdatedAt       int64               `json:"updated_at"`
+	Content         *nativeVideoContent `json:"content,omitempty"`
+	Seed            *int                `json:"seed,omitempty"`
+	Resolution      string              `json:"resolution,omitempty"`
+	Ratio           string              `json:"ratio,omitempty"`
+	Duration        *int                `json:"duration,omitempty"`
+	Frames          *int                `json:"frames,omitempty"`
+	FramesPerSecond *int                `json:"framespersecond,omitempty"`
+	GenerateAudio   *bool               `json:"generate_audio,omitempty"`
+	Usage           *nativeVideoUsage   `json:"usage,omitempty"`
 }
 
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
@@ -196,6 +237,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		for key, value := range nativePayload {
 			payload[key] = value
 		}
+	} else if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+		for key, value := range request.Metadata {
+			payload[key] = value
+		}
 	} else {
 		for key, value := range request.Metadata {
 			if key != "model" && key != "content" && key != "duration" && key != "seconds" {
@@ -334,18 +379,9 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 }
 
 func (a *TaskAdaptor) parseTaskResult(respBody []byte, depth int) (*relaycommon.TaskInfo, error) {
-	var wrapped wrappedTaskResponse
-	if err := common.Unmarshal(respBody, &wrapped); err != nil {
-		return nil, errors.Wrap(err, "unmarshal Seedance SLS task result failed")
-	}
-	if wrapped.Code != "" && wrapped.Code != taskdto.TaskSuccessCode {
-		return nil, fmt.Errorf("Seedance SLS task query failed: %s", wrapped.Message)
-	}
-	result := wrapped.Data
-	if wrapped.Code == "" {
-		if err := common.Unmarshal(respBody, &result); err != nil {
-			return nil, errors.Wrap(err, "unmarshal Seedance SLS task data failed")
-		}
+	result, err := a.parseTaskResponse(respBody, depth)
+	if err != nil {
+		return nil, err
 	}
 
 	taskInfo := &relaycommon.TaskInfo{
@@ -383,38 +419,73 @@ func (a *TaskAdaptor) parseTaskResult(respBody []byte, depth int) (*relaycommon.
 			taskInfo.Progress = taskcommon.ProgressComplete
 		}
 	}
+	return taskInfo, nil
+}
 
-	if len(result.Data) > 0 && depth < 4 && string(result.Data) != "null" {
-		nested, err := a.parseTaskResult(result.Data, depth+1)
-		if err != nil {
-			return nil, err
-		}
-		if taskInfo.TaskID == "" {
-			taskInfo.TaskID = nested.TaskID
-		}
-		if taskInfo.Status == "" {
-			taskInfo.Status = nested.Status
-		}
-		if taskInfo.Reason == "" {
-			taskInfo.Reason = nested.Reason
-		}
-		if taskInfo.Url == "" {
-			taskInfo.Url = nested.Url
-		}
-		if taskInfo.RemoteUrl == "" {
-			taskInfo.RemoteUrl = nested.RemoteUrl
-		}
-		if taskInfo.Progress == "" {
-			taskInfo.Progress = nested.Progress
-		}
-		if taskInfo.CompletionTokens == 0 {
-			taskInfo.CompletionTokens = nested.CompletionTokens
-		}
-		if taskInfo.TotalTokens == 0 {
-			taskInfo.TotalTokens = nested.TotalTokens
+func (a *TaskAdaptor) parseTaskResponse(respBody []byte, depth int) (taskResponse, error) {
+	var wrapped wrappedTaskResponse
+	if err := common.Unmarshal(respBody, &wrapped); err != nil {
+		return taskResponse{}, errors.Wrap(err, "unmarshal Seedance SLS task result failed")
+	}
+	if wrapped.Code != "" && wrapped.Code != taskdto.TaskSuccessCode {
+		return taskResponse{}, fmt.Errorf("Seedance SLS task query failed: %s", wrapped.Message)
+	}
+	result := wrapped.Data
+	if wrapped.Code == "" {
+		if err := common.Unmarshal(respBody, &result); err != nil {
+			return taskResponse{}, errors.Wrap(err, "unmarshal Seedance SLS task data failed")
 		}
 	}
-	return taskInfo, nil
+
+	if len(result.Data) > 0 && depth < 4 && string(result.Data) != "null" {
+		nested, err := a.parseTaskResponse(result.Data, depth+1)
+		if err != nil {
+			return taskResponse{}, err
+		}
+		if result.TaskID == "" {
+			result.TaskID = nested.TaskID
+		}
+		if result.Status == "" {
+			result.Status = nested.Status
+		}
+		if result.FailReason == "" {
+			result.FailReason = nested.FailReason
+		}
+		if result.ResultURL == "" {
+			result.ResultURL = nested.ResultURL
+		}
+		if result.LastFrameURL == "" {
+			result.LastFrameURL = nested.LastFrameURL
+		}
+		if result.Progress == "" {
+			result.Progress = nested.Progress
+		}
+		if result.TotalTokens == 0 {
+			result.TotalTokens = nested.TotalTokens
+		}
+		if result.Duration == nil {
+			result.Duration = nested.Duration
+		}
+		if result.Resolution == "" {
+			result.Resolution = nested.Resolution
+		}
+		if result.Ratio == "" {
+			result.Ratio = nested.Ratio
+		}
+		if result.Seed == nil {
+			result.Seed = nested.Seed
+		}
+		if result.Frames == nil {
+			result.Frames = nested.Frames
+		}
+		if result.FramesPerSecond == nil {
+			result.FramesPerSecond = nested.FramesPerSecond
+		}
+		if result.GenerateAudio == nil {
+			result.GenerateAudio = nested.GenerateAudio
+		}
+	}
+	return result, nil
 }
 
 func (a *TaskAdaptor) ParseWrappedTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
@@ -428,6 +499,58 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 		video.Error = &relaykitdto.OpenAIVideoError{Message: originTask.FailReason}
 	}
 	return common.Marshal(video)
+}
+
+func (a *TaskAdaptor) ConvertToNativeVideo(originTask *model.Task) ([]byte, error) {
+	var source taskResponse
+	if len(originTask.Data) > 0 {
+		var err error
+		source, err = a.parseTaskResponse(originTask.Data, 0)
+		if err != nil {
+			return nil, errors.Wrap(err, "parse Seedance SLS task data failed")
+		}
+	}
+
+	response := nativeVideoResponse{
+		ID:              originTask.TaskID,
+		Model:           originTask.Properties.OriginModelName,
+		CreatedAt:       originTask.CreatedAt,
+		UpdatedAt:       originTask.UpdatedAt,
+		Seed:            source.Seed,
+		Resolution:      source.Resolution,
+		Ratio:           source.Ratio,
+		Duration:        source.Duration,
+		Frames:          source.Frames,
+		FramesPerSecond: source.FramesPerSecond,
+		GenerateAudio:   source.GenerateAudio,
+	}
+	if source.TotalTokens > 0 {
+		response.Usage = &nativeVideoUsage{
+			CompletionTokens: source.TotalTokens,
+			TotalTokens:      source.TotalTokens,
+		}
+	}
+	switch originTask.Status {
+	case model.TaskStatusInProgress:
+		response.Status = "running"
+	case model.TaskStatusSuccess:
+		response.Status = "succeeded"
+		videoURL := source.ResultURL
+		if videoURL == "" {
+			videoURL = originTask.GetResultURL()
+		}
+		response.Content = &nativeVideoContent{
+			VideoURL:     videoURL,
+			LastFrameURL: source.LastFrameURL,
+		}
+	case model.TaskStatusFailure:
+		response.Status = "failed"
+		response.Error = &nativeVideoError{Message: originTask.FailReason}
+	default:
+		response.Status = "queued"
+	}
+
+	return common.Marshal(response)
 }
 
 func (a *TaskAdaptor) GetModelList() []string {
