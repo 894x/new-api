@@ -354,7 +354,7 @@ func GetAssetReplicaMappings(userId int, channelId int, assetIds []string) (map[
 	err := DB.Table("user_asset_replicas AS replicas").
 		Select("replicas.asset_id, replicas.upstream_asset_id").
 		Joins("JOIN user_assets AS assets ON assets.id = replicas.asset_id").
-		Where("assets.user_id = ? AND replicas.channel_id = ? AND replicas.asset_id IN ? AND replicas.upstream_asset_id <> ''", userId, channelId, assetIds).
+		Where("assets.user_id = ? AND replicas.channel_id = ? AND replicas.asset_id IN ? AND replicas.upstream_asset_id <> '' AND replicas.state = ?", userId, channelId, assetIds, AssetReplicaStateReady).
 		Find(&rows).Error
 	if err != nil {
 		return nil, err
@@ -382,7 +382,7 @@ func GetAssetReplicaChannelIntersection(userId int, assetIds []string) (map[int]
 	err := DB.Table("user_asset_replicas AS replicas").
 		Select("replicas.channel_id").
 		Joins("JOIN channel_asset_configs AS configs ON configs.channel_id = replicas.channel_id AND configs.enabled = ?", true).
-		Where("replicas.asset_id IN ? AND replicas.upstream_asset_id <> ''", assetIds).
+		Where("replicas.asset_id IN ? AND replicas.upstream_asset_id <> '' AND replicas.state = ?", assetIds, AssetReplicaStateReady).
 		Group("replicas.channel_id").
 		Having("COUNT(DISTINCT replicas.asset_id) = ?", len(assetIds)).
 		Pluck("replicas.channel_id", &channelIds).Error

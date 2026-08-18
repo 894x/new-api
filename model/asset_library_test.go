@@ -49,10 +49,10 @@ func TestAssetReplicaIntersectionEnforcesOwnershipAndAllMappings(t *testing.T) {
 		{Id: "asset-na-other", UserId: 20, GroupId: "group-na-b", AssetType: "Image"},
 	}).Error)
 	require.NoError(t, db.Create(&[]UserAssetReplica{
-		{AssetId: "asset-na-one", ChannelId: 1, UpstreamAssetId: "up-one-a"},
-		{AssetId: "asset-na-two", ChannelId: 1, UpstreamAssetId: "up-two-a"},
-		{AssetId: "asset-na-one", ChannelId: 2, UpstreamAssetId: "up-one-b"},
-		{AssetId: "asset-na-two", ChannelId: 3, UpstreamAssetId: "up-two-c"},
+		{AssetId: "asset-na-one", ChannelId: 1, UpstreamAssetId: "up-one-a", State: AssetReplicaStateReady},
+		{AssetId: "asset-na-two", ChannelId: 1, UpstreamAssetId: "up-two-a", State: AssetReplicaStateReady},
+		{AssetId: "asset-na-one", ChannelId: 2, UpstreamAssetId: "up-one-b", State: AssetReplicaStateReady},
+		{AssetId: "asset-na-two", ChannelId: 3, UpstreamAssetId: "up-two-c", State: AssetReplicaStateReady},
 	}).Error)
 
 	allowed, err := GetAssetReplicaChannelIntersection(10, []string{"asset-na-one", "asset-na-two", "asset-na-one"})
@@ -61,6 +61,32 @@ func TestAssetReplicaIntersectionEnforcesOwnershipAndAllMappings(t *testing.T) {
 
 	_, err = GetAssetReplicaChannelIntersection(10, []string{"asset-na-one", "asset-na-other"})
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+func TestAssetReplicaMappingsAndIntersectionRequireReadyReplicas(t *testing.T) {
+	db := setupAssetLibraryModelTestDB(t)
+	require.NoError(t, db.Create(&[]ChannelAssetConfig{
+		{ChannelId: 1, Enabled: true},
+		{ChannelId: 2, Enabled: true},
+	}).Error)
+	require.NoError(t, db.Create(&[]UserAsset{
+		{Id: "asset-na-one", UserId: 10, GroupId: "group-na-a", AssetType: "Image"},
+		{Id: "asset-na-two", UserId: 10, GroupId: "group-na-a", AssetType: "Video"},
+	}).Error)
+	require.NoError(t, db.Create(&[]UserAssetReplica{
+		{AssetId: "asset-na-one", ChannelId: 1, UpstreamAssetId: "up-one-processing", State: AssetReplicaStateProcessing},
+		{AssetId: "asset-na-two", ChannelId: 1, UpstreamAssetId: "up-two-ready", State: AssetReplicaStateReady},
+		{AssetId: "asset-na-one", ChannelId: 2, UpstreamAssetId: "up-one-ready", State: AssetReplicaStateReady},
+		{AssetId: "asset-na-two", ChannelId: 2, UpstreamAssetId: "up-two-ready", State: AssetReplicaStateReady},
+	}).Error)
+
+	mappings, err := GetAssetReplicaMappings(10, 1, []string{"asset-na-one", "asset-na-two"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"asset-na-two": "up-two-ready"}, mappings)
+
+	allowed, err := GetAssetReplicaChannelIntersection(10, []string{"asset-na-one", "asset-na-two"})
+	require.NoError(t, err)
+	assert.Equal(t, map[int]struct{}{2: {}}, allowed)
 }
 
 func TestAssetReplicaUpsertKeepsSingleMapping(t *testing.T) {

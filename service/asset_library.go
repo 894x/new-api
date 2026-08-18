@@ -211,31 +211,36 @@ func replicateAssetGroupToChannelLocked(ctx context.Context, group *model.UserAs
 	if err := model.SaveUserAssetGroupReplica(replica); err != nil {
 		return false, err
 	}
-	projectName := assetLibraryProject(config)
-	groupType := group.GroupType
-	request := dto.CreateAssetGroupRequest{
-		Name:        group.Name,
-		Description: &group.Description,
-		GroupType:   &groupType,
-		ProjectName: &projectName,
-	}
-	var result struct {
-		Id string `json:"Id"`
-	}
-	if err := CallAssetLibraryUpstream(ctx, config, "CreateAssetGroup", request, &result); err != nil {
+	backend, err := assetLibraryBackendForChannel(config.ChannelId)
+	if err != nil {
 		replica.State = model.AssetReplicaStateFailed
 		replica.LastError = assetLibraryStoredError(err)
 		_ = model.SaveUserAssetGroupReplica(replica)
 		return false, err
 	}
-	if strings.TrimSpace(result.Id) == "" {
+	result, err := backend.CreateGroup(ctx, config, group)
+	if err != nil {
+		replica.State = model.AssetReplicaStateFailed
+		replica.LastError = assetLibraryStoredError(err)
+		_ = model.SaveUserAssetGroupReplica(replica)
+		return false, err
+	}
+	if result.Deferred {
+		replica.State = model.AssetReplicaStateProcessing
+		replica.LastError = ""
+		if err := model.SaveUserAssetGroupReplica(replica); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	if strings.TrimSpace(result.GroupID) == "" {
 		err := errors.New("asset library upstream returned an empty group id")
 		replica.State = model.AssetReplicaStateFailed
 		replica.LastError = assetLibraryStoredError(err)
 		_ = model.SaveUserAssetGroupReplica(replica)
 		return false, err
 	}
-	replica.UpstreamGroupId = result.Id
+	replica.UpstreamGroupId = result.GroupID
 	replica.State = model.AssetReplicaStateReady
 	replica.LastError = ""
 	if err := model.SaveUserAssetGroupReplica(replica); err != nil {
@@ -263,6 +268,10 @@ func replicateAssetToChannelLocked(ctx context.Context, asset *model.UserAsset, 
 	if err != nil {
 		return false, err
 	}
+	backend, err := assetLibraryBackendForChannel(config.ChannelId)
+	if err != nil {
+		return false, err
+	}
 	replica := &model.UserAssetReplica{
 		AssetId:        asset.Id,
 		ChannelId:      config.ChannelId,
@@ -276,18 +285,8 @@ func replicateAssetToChannelLocked(ctx context.Context, asset *model.UserAsset, 
 	if err := model.SaveUserAssetReplica(replica); err != nil {
 		return false, err
 	}
-	projectName := assetLibraryProject(config)
-	request := dto.CreateAssetRequest{
-		GroupId:     groupReplica.UpstreamGroupId,
-		URL:         asset.SourceURL,
-		AssetType:   asset.AssetType,
-		Name:        &asset.Name,
-		ProjectName: &projectName,
-	}
-	var result struct {
-		Id string `json:"Id"`
-	}
-	if err := CallAssetLibraryUpstream(ctx, config, "CreateAsset", request, &result); err != nil {
+	result, err := backend.CreateAsset(ctx, config, group, groupReplica, asset)
+	if err != nil {
 		replica.State = model.AssetReplicaStateFailed
 		replica.UpstreamStatus = "Failed"
 		replica.LastError = assetLibraryStoredError(err)
@@ -297,7 +296,7 @@ func replicateAssetToChannelLocked(ctx context.Context, asset *model.UserAsset, 
 		_ = model.SaveUserAssetReplica(replica)
 		return false, err
 	}
-	if strings.TrimSpace(result.Id) == "" {
+	if strings.TrimSpace(result.AssetID) == "" {
 		err := errors.New("asset library upstream returned an empty asset id")
 		replica.State = model.AssetReplicaStateFailed
 		replica.UpstreamStatus = "Failed"
@@ -305,9 +304,20 @@ func replicateAssetToChannelLocked(ctx context.Context, asset *model.UserAsset, 
 		_ = model.SaveUserAssetReplica(replica)
 		return false, err
 	}
-	replica.UpstreamAssetId = result.Id
-	replica.State = model.AssetReplicaStateReady
-	replica.UpstreamStatus = "Processing"
+	if strings.TrimSpace(result.GroupID) != "" && groupReplica.UpstreamGroupId == "" {
+		groupReplica.UpstreamGroupId = result.GroupID
+		groupReplica.State = model.AssetReplicaStateReady
+		groupReplica.LastError = ""
+		if err := model.SaveUserAssetGroupReplica(groupReplica); err != nil {
+			return false, err
+		}
+	}
+	replica.UpstreamAssetId = result.AssetID
+	replica.UpstreamStatus = strings.TrimSpace(result.Status)
+	if replica.UpstreamStatus == "" {
+		replica.UpstreamStatus = "Processing"
+	}
+	replica.State = assetReplicaStateForStatus(replica.UpstreamStatus)
 	replica.LastErrorCode = ""
 	replica.LastError = ""
 	if err := model.SaveUserAssetReplica(replica); err != nil {
@@ -406,14 +416,12 @@ func UpdateAssetGroupReplicas(ctx context.Context, group *model.UserAssetGroup) 
 		if configErr == nil {
 			upstreamConfig := *config
 			upstreamConfig.Enabled = true
-			projectName := assetLibraryProject(&upstreamConfig)
-			request := dto.UpdateAssetGroupRequest{
-				Id:          replica.UpstreamGroupId,
-				Name:        &group.Name,
-				Description: &group.Description,
-				ProjectName: &projectName,
+			backend, backendErr := assetLibraryBackendForChannel(replica.ChannelId)
+			if backendErr != nil {
+				configErr = backendErr
+			} else {
+				configErr = backend.UpdateGroup(ctx, &upstreamConfig, group, replica.UpstreamGroupId)
 			}
-			configErr = CallAssetLibraryUpstream(ctx, &upstreamConfig, "UpdateAssetGroup", request, nil)
 		}
 		if configErr != nil {
 			replica.LastError = assetLibraryStoredError(configErr)
@@ -458,9 +466,12 @@ func UpdateAssetReplicas(ctx context.Context, asset *model.UserAsset) (*AssetLib
 		if configErr == nil {
 			upstreamConfig := *config
 			upstreamConfig.Enabled = true
-			projectName := assetLibraryProject(&upstreamConfig)
-			request := dto.UpdateAssetRequest{Id: replica.UpstreamAssetId, Name: &asset.Name, ProjectName: &projectName}
-			configErr = CallAssetLibraryUpstream(ctx, &upstreamConfig, "UpdateAsset", request, nil)
+			backend, backendErr := assetLibraryBackendForChannel(replica.ChannelId)
+			if backendErr != nil {
+				configErr = backendErr
+			} else {
+				configErr = backend.UpdateAsset(ctx, &upstreamConfig, asset, replica.UpstreamAssetId)
+			}
 		}
 		if configErr != nil {
 			replica.LastError = assetLibraryStoredError(configErr)
@@ -468,7 +479,6 @@ func UpdateAssetReplicas(ctx context.Context, asset *model.UserAsset) (*AssetLib
 		} else {
 			replica.LastErrorCode = ""
 			replica.LastError = ""
-			replica.State = model.AssetReplicaStateReady
 		}
 		_ = model.SaveUserAssetReplica(replica)
 		lock.Unlock()
@@ -506,9 +516,12 @@ func DeleteAssetReplicas(ctx context.Context, assetId string) ([]assetLibraryCha
 		if deleteErr == nil {
 			upstreamConfig := *config
 			upstreamConfig.Enabled = true
-			projectName := assetLibraryProject(&upstreamConfig)
-			request := dto.DeleteAssetRequest{Id: replica.UpstreamAssetId, ProjectName: &projectName}
-			deleteErr = CallAssetLibraryUpstream(ctx, &upstreamConfig, "DeleteAsset", request, nil)
+			backend, backendErr := assetLibraryBackendForChannel(replica.ChannelId)
+			if backendErr != nil {
+				deleteErr = backendErr
+			} else {
+				deleteErr = backend.DeleteAsset(ctx, &upstreamConfig, replica.UpstreamAssetId)
+			}
 			if isAssetLibraryNotFound(deleteErr) {
 				deleteErr = nil
 			}
@@ -547,9 +560,12 @@ func DeleteAssetGroupReplicas(ctx context.Context, groupId string) ([]assetLibra
 		if deleteErr == nil {
 			upstreamConfig := *config
 			upstreamConfig.Enabled = true
-			projectName := assetLibraryProject(&upstreamConfig)
-			request := dto.DeleteAssetGroupRequest{Id: replica.UpstreamGroupId, ProjectName: &projectName}
-			deleteErr = CallAssetLibraryUpstream(ctx, &upstreamConfig, "DeleteAssetGroup", request, nil)
+			backend, backendErr := assetLibraryBackendForChannel(replica.ChannelId)
+			if backendErr != nil {
+				deleteErr = backendErr
+			} else {
+				deleteErr = backend.DeleteGroup(ctx, &upstreamConfig, replica.UpstreamGroupId)
+			}
 			if isAssetLibraryNotFound(deleteErr) {
 				deleteErr = nil
 			}
@@ -567,7 +583,7 @@ func isAssetLibraryNotFound(err error) bool {
 		return false
 	}
 	var upstreamErr *AssetLibraryUpstreamError
-	return errors.As(err, &upstreamErr) && strings.Contains(strings.ToLower(upstreamErr.Code), "notfound")
+	return errors.As(err, &upstreamErr) && (upstreamErr.StatusCode == 404 || strings.Contains(strings.ToLower(upstreamErr.Code), "notfound"))
 }
 
 func RefreshAssetLibraryAsset(ctx context.Context, assetId string) (*AssetLibraryAssetDetails, error) {
@@ -576,6 +592,7 @@ func RefreshAssetLibraryAsset(ctx context.Context, assetId string) (*AssetLibrar
 		return nil, err
 	}
 	var refreshErrors []error
+	var selectedDetails *AssetLibraryAssetDetails
 	for i := range replicas {
 		replica := &replicas[i]
 		if replica.UpstreamAssetId == "" {
@@ -594,10 +611,13 @@ func RefreshAssetLibraryAsset(ctx context.Context, assetId string) (*AssetLibrar
 			lock.Unlock()
 			continue
 		}
-		projectName := assetLibraryProject(config)
-		request := dto.GetAssetRequest{Id: replica.UpstreamAssetId, ProjectName: &projectName}
-		var details AssetLibraryAssetDetails
-		err = CallAssetLibraryUpstream(ctx, config, "GetAsset", request, &details)
+		backend, backendErr := assetLibraryBackendForChannel(replica.ChannelId)
+		if backendErr != nil {
+			lock.Unlock()
+			refreshErrors = append(refreshErrors, backendErr)
+			continue
+		}
+		details, err := backend.GetAsset(ctx, config, replica.UpstreamAssetId)
 		if err != nil {
 			replica.LastError = assetLibraryStoredError(err)
 			if upstreamErr, ok := err.(*AssetLibraryUpstreamError); ok {
@@ -609,6 +629,7 @@ func RefreshAssetLibraryAsset(ctx context.Context, assetId string) (*AssetLibrar
 			continue
 		}
 		replica.UpstreamStatus = details.Status
+		replica.State = assetReplicaStateForStatus(details.Status)
 		replica.LastInferenceTime = details.LastInferenceTime
 		replica.LastErrorCode = ""
 		replica.LastError = ""
@@ -618,12 +639,28 @@ func RefreshAssetLibraryAsset(ctx context.Context, assetId string) (*AssetLibrar
 		}
 		_ = model.SaveUserAssetReplica(replica)
 		lock.Unlock()
-		return &details, nil
+		if selectedDetails == nil || (!strings.EqualFold(selectedDetails.Status, "Active") && strings.EqualFold(details.Status, "Active")) {
+			selectedDetails = details
+		}
+	}
+	if selectedDetails != nil {
+		return selectedDetails, nil
 	}
 	if len(refreshErrors) > 0 {
 		return nil, errors.Join(refreshErrors...)
 	}
 	return nil, errors.New("asset has no available upstream replica")
+}
+
+func assetReplicaStateForStatus(status string) string {
+	switch {
+	case strings.EqualFold(strings.TrimSpace(status), "Active"):
+		return model.AssetReplicaStateReady
+	case strings.EqualFold(strings.TrimSpace(status), "Failed"):
+		return model.AssetReplicaStateFailed
+	default:
+		return model.AssetReplicaStateProcessing
+	}
 }
 
 func assetLibraryStoredError(err error) string {
@@ -651,7 +688,7 @@ func GetAssetGroupReplicationSummary(groupId string) (*dto.AssetReplicaSummary, 
 		if _, ok := enabled[replica.ChannelId]; !ok {
 			continue
 		}
-		if replica.UpstreamGroupId != "" {
+		if replica.State == model.AssetReplicaStateReady && replica.UpstreamGroupId != "" {
 			summary.Ready++
 		} else if replica.State == model.AssetReplicaStateFailed {
 			summary.Failed++
@@ -682,7 +719,7 @@ func GetAssetReplicationSummary(assetId string) (*dto.AssetReplicaSummary, error
 		if _, ok := enabled[replica.ChannelId]; !ok {
 			continue
 		}
-		if replica.UpstreamAssetId != "" {
+		if replica.State == model.AssetReplicaStateReady && replica.UpstreamAssetId != "" {
 			summary.Ready++
 		} else if replica.State == model.AssetReplicaStateFailed {
 			summary.Failed++

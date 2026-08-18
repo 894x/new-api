@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -54,16 +55,18 @@ func GetChannelAssetLibraryConfig(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if _, err := model.GetChannelById(channelId, false); err != nil {
+	channel, err := model.GetChannelById(channelId, false)
+	if err != nil {
 		writeChannelAssetLibraryModelError(c, err)
 		return
 	}
 	config, err := model.GetChannelAssetConfig(channelId)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		baseURL, authType := channelAssetLibraryDefaults(channel)
 		common.ApiSuccess(c, channelAssetLibraryConfigResponse{
 			ChannelId:   channelId,
-			BaseURL:     service.DefaultAssetLibraryBaseURL,
-			AuthType:    service.AssetLibraryAuthAKSK,
+			BaseURL:     baseURL,
+			AuthType:    authType,
 			Region:      service.DefaultAssetLibraryRegion,
 			ProjectName: service.DefaultAssetLibraryProject,
 		})
@@ -86,7 +89,8 @@ func UpdateChannelAssetLibraryConfig(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if _, err := model.GetChannelById(channelId, false); err != nil {
+	channel, err := model.GetChannelById(channelId, false)
+	if err != nil {
 		writeChannelAssetLibraryModelError(c, err)
 		return
 	}
@@ -100,7 +104,7 @@ func UpdateChannelAssetLibraryConfig(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	config, err := normalizeChannelAssetLibraryConfig(channelId, &request, existing)
+	config, err := normalizeChannelAssetLibraryConfig(channel, &request, existing)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
@@ -201,10 +205,14 @@ func writeChannelAssetLibraryModelError(c *gin.Context, err error) {
 	common.ApiError(c, err)
 }
 
-func normalizeChannelAssetLibraryConfig(channelId int, request *channelAssetLibraryConfigRequest, existing *model.ChannelAssetConfig) (*model.ChannelAssetConfig, error) {
+func normalizeChannelAssetLibraryConfig(channel *model.Channel, request *channelAssetLibraryConfigRequest, existing *model.ChannelAssetConfig) (*model.ChannelAssetConfig, error) {
+	if channel == nil {
+		return nil, errors.New("channel is required")
+	}
+	defaultBaseURL, defaultAuthType := channelAssetLibraryDefaults(channel)
 	baseURL := strings.TrimRight(strings.TrimSpace(request.BaseURL), "/")
 	if baseURL == "" {
-		baseURL = service.DefaultAssetLibraryBaseURL
+		baseURL = defaultBaseURL
 	}
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.User != nil {
@@ -212,10 +220,13 @@ func normalizeChannelAssetLibraryConfig(channelId int, request *channelAssetLibr
 	}
 	authType := strings.ToLower(strings.TrimSpace(request.AuthType))
 	if authType == "" {
-		authType = service.AssetLibraryAuthAKSK
+		authType = defaultAuthType
 	}
 	if authType != service.AssetLibraryAuthAKSK && authType != service.AssetLibraryAuthBearer {
 		return nil, errors.New("asset library auth_type must be aksk or bearer")
+	}
+	if channel.Type == constant.ChannelTypeSeedanceSLS && authType != service.AssetLibraryAuthBearer {
+		return nil, errors.New("Seedance SLS asset library requires Bearer authentication")
 	}
 	region := strings.TrimSpace(request.Region)
 	if region == "" {
@@ -232,7 +243,7 @@ func normalizeChannelAssetLibraryConfig(channelId int, request *channelAssetLibr
 		return nil, errors.New("asset library project_name must be 128 characters or fewer")
 	}
 	config := &model.ChannelAssetConfig{
-		ChannelId:   channelId,
+		ChannelId:   channel.Id,
 		Enabled:     request.Enabled,
 		BaseURL:     baseURL,
 		AuthType:    authType,
@@ -271,6 +282,13 @@ func normalizeChannelAssetLibraryConfig(channelId int, request *channelAssetLibr
 		}
 	}
 	return config, nil
+}
+
+func channelAssetLibraryDefaults(channel *model.Channel) (string, string) {
+	if channel != nil && channel.Type == constant.ChannelTypeSeedanceSLS {
+		return constant.ChannelBaseURLs[constant.ChannelTypeSeedanceSLS], service.AssetLibraryAuthBearer
+	}
+	return service.DefaultAssetLibraryBaseURL, service.AssetLibraryAuthAKSK
 }
 
 func buildChannelAssetLibraryConfigResponse(config *model.ChannelAssetConfig, replicaCount int64) channelAssetLibraryConfigResponse {
