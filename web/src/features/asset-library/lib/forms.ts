@@ -70,7 +70,7 @@ export const channelAssetConfigFormSchema = z
   })
   .superRefine((value, context) => {
     if (!value.enabled) return
-    if (!value.baseUrl.trim()) {
+    if (!value.baseUrl.trim() && value.backend !== 'openapi') {
       context.addIssue({
         code: 'custom',
         path: ['baseUrl'],
@@ -121,13 +121,14 @@ export type ChannelAssetConfigFormValues = z.infer<
 >
 
 export function getChannelAssetBackendDefaults(
-  backend: ChannelAssetLibraryBackend
+  backend: ChannelAssetLibraryBackend,
+  channelBaseUrl: string
 ): { baseUrl: string; authType: ChannelAssetLibraryAuthType } {
   switch (backend) {
     case 'seedance_sls':
       return { baseUrl: 'https://lm.sls.cn', authType: 'bearer' }
     case 'openapi':
-      return { baseUrl: 'https://token.wxkjwlw.com', authType: 'bearer' }
+      return { baseUrl: channelBaseUrl.trim(), authType: 'bearer' }
     default:
       return {
         baseUrl: 'https://ark.cn-beijing.volcengineapi.com',

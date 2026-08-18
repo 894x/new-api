@@ -3441,6 +3441,7 @@ export function ChannelMutateDrawer({
                     >
                       <ChannelAssetLibrarySection
                         channelId={channelId}
+                        channelBaseUrl={currentBaseUrl ?? ''}
                         disabled={sensitiveLocked}
                       />
                     </div>

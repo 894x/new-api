@@ -21,8 +21,6 @@ const (
 	AssetLibraryBackendAction      = "volcengine"
 	AssetLibraryBackendSeedanceSLS = "seedance_sls"
 	AssetLibraryBackendOpenAPI     = "openapi"
-
-	DefaultAssetLibraryOpenAPIBaseURL = "https://token.wxkjwlw.com"
 )
 
 type assetLibraryCreateGroupResult struct {
@@ -90,12 +88,15 @@ func DefaultAssetLibraryBackend(channelType int) string {
 	return AssetLibraryBackendAction
 }
 
-func DefaultAssetLibraryBackendBaseURL(backend string) string {
+func DefaultAssetLibraryBackendBaseURL(backend string, channel *model.Channel) string {
 	switch backend {
 	case AssetLibraryBackendSeedanceSLS:
 		return constant.ChannelBaseURLs[constant.ChannelTypeSeedanceSLS]
 	case AssetLibraryBackendOpenAPI:
-		return DefaultAssetLibraryOpenAPIBaseURL
+		if channel == nil {
+			return ""
+		}
+		return strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/")
 	default:
 		return DefaultAssetLibraryBaseURL
 	}

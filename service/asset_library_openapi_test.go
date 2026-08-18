@@ -208,3 +208,8 @@ func TestOpenAPINotFoundBusinessCodesAreIdempotentForReplicaDeletion(t *testing.
 	assert.True(t, isAssetLibraryNotFound(&AssetLibraryUpstreamError{Code: "3001", Message: "group not found"}))
 	assert.True(t, isAssetLibraryNotFound(&AssetLibraryUpstreamError{Code: "3002", Message: "asset not found"}))
 }
+
+func TestOpenAPIAssetLibraryURLRequiresConfiguredBaseURL(t *testing.T) {
+	_, err := openAPIAssetLibraryURL("", "/openapi/v1/asset/get")
+	require.ErrorContains(t, err, "base URL")
+}

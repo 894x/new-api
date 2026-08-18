@@ -260,7 +260,7 @@ func callOpenAPIAssetLibrary(ctx context.Context, config *model.ChannelAssetConf
 func openAPIAssetLibraryURL(baseURL string, path string) (string, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
-		baseURL = DefaultAssetLibraryOpenAPIBaseURL
+		return "", errors.New("asset OpenAPI base URL is empty")
 	}
 	endpoint, err := url.Parse(baseURL)
 	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {

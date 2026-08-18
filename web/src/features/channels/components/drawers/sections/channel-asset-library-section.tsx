@@ -71,6 +71,7 @@ import {
 
 export function ChannelAssetLibrarySection(props: {
   channelId: number | null
+  channelBaseUrl: string
   disabled?: boolean
 }) {
   const { t } = useTranslation()
@@ -245,7 +246,10 @@ export function ChannelAssetLibrarySection(props: {
                       onValueChange={(value) => {
                         if (!value) return
                         field.onChange(value)
-                        const defaults = getChannelAssetBackendDefaults(value)
+                        const defaults = getChannelAssetBackendDefaults(
+                          value,
+                          props.channelBaseUrl
+                        )
                         form.setValue('baseUrl', defaults.baseUrl, {
                           shouldDirty: true,
                           shouldValidate: true,

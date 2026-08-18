@@ -224,7 +224,7 @@ func normalizeChannelAssetLibraryConfig(channel *model.Channel, request *channel
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(request.BaseURL), "/")
 	if baseURL == "" {
-		baseURL = service.DefaultAssetLibraryBackendBaseURL(backend)
+		baseURL = service.DefaultAssetLibraryBackendBaseURL(backend, channel)
 	}
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.User != nil {
@@ -310,7 +310,7 @@ func channelAssetLibraryDefaults(channel *model.Channel) (string, string, string
 		channelType = channel.Type
 	}
 	backend := service.DefaultAssetLibraryBackend(channelType)
-	return backend, service.DefaultAssetLibraryBackendBaseURL(backend), service.DefaultAssetLibraryBackendAuthType(backend)
+	return backend, service.DefaultAssetLibraryBackendBaseURL(backend, channel), service.DefaultAssetLibraryBackendAuthType(backend)
 }
 
 func buildChannelAssetLibraryConfigResponse(config *model.ChannelAssetConfig, replicaCount int64) channelAssetLibraryConfigResponse {

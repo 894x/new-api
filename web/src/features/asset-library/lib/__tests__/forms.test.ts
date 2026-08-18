@@ -88,17 +88,51 @@ describe('asset library forms', () => {
     assert.equal(result.success, false)
   })
 
-  test('selecting an upstream backend applies its endpoint and authentication defaults', () => {
-    assert.deepEqual(getChannelAssetBackendDefaults('volcengine'), {
-      baseUrl: 'https://ark.cn-beijing.volcengineapi.com',
-      authType: 'aksk',
-    })
-    assert.deepEqual(getChannelAssetBackendDefaults('seedance_sls'), {
-      baseUrl: 'https://lm.sls.cn',
+  test('allows OpenAPI base URL omission so the backend can inherit the channel URL', () => {
+    const result = channelAssetConfigFormSchema.safeParse({
+      enabled: true,
+      backend: 'openapi',
+      baseUrl: '',
       authType: 'bearer',
+      accessKey: '',
+      secretKey: '',
+      apiKey: 'upstream-key',
+      region: 'cn-beijing',
+      projectName: 'default',
+      hasAccessKey: false,
+      hasSecretKey: false,
+      hasApiKey: false,
     })
-    assert.deepEqual(getChannelAssetBackendDefaults('openapi'), {
-      baseUrl: 'https://token.wxkjwlw.com',
+
+    assert.equal(result.success, true)
+  })
+
+  test('selecting an upstream backend applies its endpoint and authentication defaults', () => {
+    const channelBaseUrl = 'https://assets.channel.example.com'
+
+    assert.deepEqual(
+      getChannelAssetBackendDefaults('volcengine', channelBaseUrl),
+      {
+        baseUrl: 'https://ark.cn-beijing.volcengineapi.com',
+        authType: 'aksk',
+      }
+    )
+    assert.deepEqual(
+      getChannelAssetBackendDefaults('seedance_sls', channelBaseUrl),
+      {
+        baseUrl: 'https://lm.sls.cn',
+        authType: 'bearer',
+      }
+    )
+    assert.deepEqual(
+      getChannelAssetBackendDefaults('openapi', channelBaseUrl),
+      {
+        baseUrl: channelBaseUrl,
+        authType: 'bearer',
+      }
+    )
+    assert.deepEqual(getChannelAssetBackendDefaults('openapi', ''), {
+      baseUrl: '',
       authType: 'bearer',
     })
   })

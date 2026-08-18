@@ -224,6 +224,38 @@ func TestNormalizeChannelAssetLibraryConfigSupportsBearerOpenAPIBackend(t *testi
 	require.ErrorContains(t, err, "Bearer")
 }
 
+func TestNormalizeChannelAssetLibraryConfigUsesChannelBaseURLForOpenAPIBackend(t *testing.T) {
+	channelBaseURL := "https://assets.channel.example.com"
+	channel := &model.Channel{
+		Id:      21,
+		Type:    constant.ChannelTypeOpenAI,
+		BaseURL: &channelBaseURL,
+	}
+	config, err := normalizeChannelAssetLibraryConfig(channel, &channelAssetLibraryConfigRequest{
+		Enabled: true,
+		Backend: service.AssetLibraryBackendOpenAPI,
+		APIKey:  "upstream-key",
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, channelBaseURL, config.BaseURL)
+}
+
+func TestNormalizeChannelAssetLibraryConfigUsesProviderDefaultChannelBaseURLForOpenAPIBackend(t *testing.T) {
+	channelBaseURL := ""
+	channel := &model.Channel{
+		Id:      21,
+		Type:    constant.ChannelTypeOpenAI,
+		BaseURL: &channelBaseURL,
+	}
+	config, err := normalizeChannelAssetLibraryConfig(channel, &channelAssetLibraryConfigRequest{
+		Enabled: true,
+		Backend: service.AssetLibraryBackendOpenAPI,
+		APIKey:  "upstream-key",
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, constant.ChannelBaseURLs[constant.ChannelTypeOpenAI], config.BaseURL)
+}
+
 func TestChannelAssetLibraryResponseDoesNotExposeCredentials(t *testing.T) {
 	response := buildChannelAssetLibraryConfigResponse(&model.ChannelAssetConfig{
 		ChannelId: 3, Enabled: true, Backend: service.AssetLibraryBackendOpenAPI,
