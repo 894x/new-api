@@ -681,7 +681,14 @@ func RefreshAssetLibraryAsset(ctx context.Context, assetId string) (*AssetLibrar
 		}
 		_ = model.SaveUserAssetReplica(replica)
 		lock.Unlock()
-		if selectedDetails == nil || (!strings.EqualFold(selectedDetails.Status, "Active") && strings.EqualFold(details.Status, "Active")) {
+		if selectedDetails == nil {
+			selectedDetails = details
+			continue
+		}
+		selectedIsActive := strings.EqualFold(selectedDetails.Status, "Active")
+		detailsIsActive := strings.EqualFold(details.Status, "Active")
+		if (!selectedIsActive && detailsIsActive) ||
+			(selectedIsActive == detailsIsActive && strings.TrimSpace(selectedDetails.URL) == "" && strings.TrimSpace(details.URL) != "") {
 			selectedDetails = details
 		}
 	}

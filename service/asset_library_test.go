@@ -228,6 +228,57 @@ func TestRefreshAssetLibraryAssetRefreshesEveryEnabledReplica(t *testing.T) {
 	}
 }
 
+func TestRefreshAssetLibraryAssetPrefersActiveReplicaWithPreviewURL(t *testing.T) {
+	db := setupAssetLibraryServiceTestDB(t)
+	slsServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assert.Equal(t, http.MethodGet, request.Method)
+		assert.Equal(t, "/v1/volcengine/assets/lass_sls", request.URL.Path)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"success": true,
+			"data": {"logical_id":"lass_sls","status":"Active"}
+		}`))
+	}))
+	t.Cleanup(slsServer.Close)
+	openAPIServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		assert.Equal(t, http.MethodPost, request.Method)
+		assert.Equal(t, "/openapi/v1/asset/get", request.URL.Path)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"code": 0,
+			"message": "",
+			"data": {"asset": {
+				"id": 5001,
+				"group_id": 101,
+				"asset_type": 1,
+				"url": "https://example.com/preview.png",
+				"sync_status": 2
+			}}
+		}`))
+	}))
+	t.Cleanup(openAPIServer.Close)
+
+	require.NoError(t, db.Create(&[]model.Channel{
+		{Id: 11, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-key", Name: "Seedance SLS"},
+		{Id: 12, Type: constant.ChannelTypeOpenAI, Key: "openapi-key", Name: "OpenAPI"},
+	}).Error)
+	require.NoError(t, db.Create(&[]model.ChannelAssetConfig{
+		{ChannelId: 11, Enabled: true, Backend: AssetLibraryBackendSeedanceSLS, BaseURL: slsServer.URL, AuthType: AssetLibraryAuthBearer, APIKey: "sls-key"},
+		{ChannelId: 12, Enabled: true, Backend: AssetLibraryBackendOpenAPI, BaseURL: openAPIServer.URL, AuthType: AssetLibraryAuthBearer, APIKey: "openapi-key"},
+	}).Error)
+	assetId := "asset-na-0123456789abcdef0123456789abcdef"
+	require.NoError(t, db.Create(&[]model.UserAssetReplica{
+		{AssetId: assetId, ChannelId: 11, UpstreamAssetId: "lass_sls", State: model.AssetReplicaStateProcessing},
+		{AssetId: assetId, ChannelId: 12, UpstreamAssetId: "5001", State: model.AssetReplicaStateProcessing},
+	}).Error)
+
+	details, err := RefreshAssetLibraryAsset(t.Context(), assetId)
+
+	require.NoError(t, err)
+	assert.Equal(t, "Active", details.Status)
+	assert.Equal(t, "https://example.com/preview.png", details.URL)
+}
+
 func TestRewriteAssetReferencesRewritesNestedPayloadWithoutMutation(t *testing.T) {
 	db := setupAssetLibraryServiceTestDB(t)
 	require.NoError(t, db.Create(&model.Channel{

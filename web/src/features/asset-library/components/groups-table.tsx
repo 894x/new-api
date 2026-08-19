@@ -68,7 +68,10 @@ export function GroupsTable() {
     queryFn: () => listAssetGroups(request),
     placeholderData: (previousData) => previousData,
   })
-  const columns = useAssetGroupColumns()
+  const includeReplication = Boolean(
+    data?.Items.some((group) => group.Replication)
+  )
+  const columns = useAssetGroupColumns(includeReplication)
   const { table } = useDataTable({
     data: data?.Items ?? [],
     columns,

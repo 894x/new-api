@@ -22,6 +22,7 @@ func setupAssetLibraryControllerTestDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
+		&model.User{},
 		&model.Channel{},
 		&model.ChannelAssetConfig{},
 		&model.UserAssetGroup{},
@@ -293,16 +294,134 @@ func TestAssetLibraryResultDoesNotExposeChannelOrUpstreamError(t *testing.T) {
 		UpstreamStatus: "Failed", LastErrorCode: "UpstreamSensitiveCode", LastError: "upstream sensitive details",
 	}).Error)
 
-	result, err := buildAssetLibraryResult(asset, nil)
+	result, err := buildAssetLibraryResult(asset, nil, false)
 	require.NoError(t, err)
 	data, err := common.Marshal(result)
 	require.NoError(t, err)
 	serialized := string(data)
-	assert.NotContains(t, serialized, "17")
+	assert.NotContains(t, serialized, `"ChannelId"`)
+	assert.NotContains(t, serialized, `"channel_id"`)
 	assert.NotContains(t, serialized, "Asset-secret")
 	assert.NotContains(t, serialized, "UpstreamSensitiveCode")
 	assert.NotContains(t, serialized, "upstream sensitive details")
 	assert.Equal(t, "AssetProcessingFailed", result.Error.Code)
+}
+
+func TestAssetLibraryResultFallsBackToLogicalSourceURL(t *testing.T) {
+	setupAssetLibraryControllerTestDB(t)
+	asset := &model.UserAsset{
+		Id:          "asset-na-0123456789abcdef0123456789abcdef",
+		UserId:      1,
+		GroupId:     "group-na-0123456789abcdef0123456789abcdef",
+		Name:        "portrait",
+		SourceURL:   "https://example.com/portrait.png",
+		AssetType:   "Image",
+		ProjectName: "default",
+	}
+
+	result, err := buildAssetLibraryResult(asset, &service.AssetLibraryAssetDetails{Status: "Active"}, false)
+
+	require.NoError(t, err)
+	assert.Equal(t, "https://example.com/portrait.png", result.URL)
+}
+
+func TestGetAssetKeepsSourcePreviewWhenUpstreamRefreshFails(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+	require.NoError(t, db.Create(&model.User{
+		Id: 1, Username: "common-user", Password: "password", Role: common.RoleCommonUser, AffCode: "common-aff",
+	}).Error)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 17, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-key", Name: "Seedance SLS",
+	}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 17, Enabled: true, Backend: service.AssetLibraryBackendSeedanceSLS,
+		BaseURL: server.URL, AuthType: service.AssetLibraryAuthBearer, APIKey: "sls-key",
+	}).Error)
+	asset := &model.UserAsset{
+		Id: "asset-na-0123456789abcdef0123456789abcdef", UserId: 1,
+		GroupId: "group-na-0123456789abcdef0123456789abcdef", Name: "portrait",
+		SourceURL: "https://example.com/portrait.png", AssetType: "Image", ProjectName: "default",
+	}
+	require.NoError(t, db.Create(asset).Error)
+	require.NoError(t, db.Create(&model.UserAssetReplica{
+		AssetId: asset.Id, ChannelId: 17, UpstreamAssetId: "lass_sls", State: model.AssetReplicaStateReady,
+	}).Error)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost,
+		"/api/asset-library?Action=GetAsset&Version=2024-01-01",
+		bytes.NewBufferString(`{"Id":"`+asset.Id+`"}`),
+	)
+	context.Set("id", 1)
+
+	AssetLibraryAction(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"URL":"https://example.com/portrait.png"`)
+	assert.NotContains(t, recorder.Body.String(), `"Error"`)
+}
+
+func TestAssetLibraryReplicationMetadataIsAdminOnly(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	require.NoError(t, db.Create(&[]model.User{
+		{Id: 1, Username: "common-user", Password: "password", Role: common.RoleCommonUser, AffCode: "common-aff"},
+		{Id: 2, Username: "admin-user", Password: "password", Role: common.RoleAdminUser, AffCode: "admin-aff"},
+	}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 17,
+		Enabled:   true,
+		BaseURL:   "https://assets.example.com",
+		AuthType:  "bearer",
+		APIKey:    "secret",
+	}).Error)
+	for _, fixture := range []struct {
+		userId  int
+		assetId string
+	}{
+		{userId: 1, assetId: "asset-na-0123456789abcdef0123456789abcde1"},
+		{userId: 2, assetId: "asset-na-0123456789abcdef0123456789abcde2"},
+	} {
+		require.NoError(t, db.Create(&model.UserAsset{
+			Id: fixture.assetId, UserId: fixture.userId, GroupId: "group-na-0123456789abcdef0123456789abcdef",
+			Name: "portrait", SourceURL: "https://example.com/a.png", AssetType: "Image", ProjectName: "default",
+		}).Error)
+		require.NoError(t, db.Create(&model.UserAssetReplica{
+			AssetId: fixture.assetId, ChannelId: 17, State: model.AssetReplicaStateReady,
+			UpstreamAssetId: "asset-upstream", UpstreamStatus: "Active",
+		}).Error)
+	}
+
+	for _, testCase := range []struct {
+		name              string
+		userId            int
+		expectReplication bool
+	}{
+		{name: "common user", userId: 1, expectReplication: false},
+		{name: "admin API token", userId: 2, expectReplication: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(http.MethodPost,
+				"/api/asset-library?Action=ListAssets&Version=2024-01-01",
+				bytes.NewBufferString(`{}`),
+			)
+			context.Set("id", testCase.userId)
+
+			AssetLibraryAction(context)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			if testCase.expectReplication {
+				assert.Contains(t, recorder.Body.String(), `"Replication"`)
+			} else {
+				assert.NotContains(t, recorder.Body.String(), `"Replication"`)
+			}
+		})
+	}
 }
 
 func TestDeleteAssetGroupRequiresEmptyGroup(t *testing.T) {

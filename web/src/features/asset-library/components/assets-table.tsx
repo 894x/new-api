@@ -97,7 +97,10 @@ export function AssetsTable() {
     queryFn: () => listAssets(request),
     placeholderData: (previousData) => previousData,
   })
-  const columns = useAssetColumns(groupsById)
+  const includeReplication = Boolean(
+    data?.Items.some((asset) => asset.Replication)
+  )
+  const columns = useAssetColumns(groupsById, includeReplication)
   const { table } = useDataTable({
     data: data?.Items ?? [],
     columns,

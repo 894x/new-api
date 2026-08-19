@@ -41,8 +41,10 @@ function getReplicationVariant(
 export function ReplicationBadge(props: { replication?: AssetReplicaSummary }) {
   const { t } = useTranslation()
   const replication = props.replication
-  const ready = replication?.Ready ?? 0
-  const total = replication?.Total ?? 0
+  if (!replication) return null
+
+  const ready = replication.Ready
+  const total = replication.Total
   let label = t('Not synchronized')
   if (total > 0) {
     label = t('{{ready}} of {{total}} channels ready', { ready, total })
@@ -65,8 +67,8 @@ export function ReplicationBadge(props: { replication?: AssetReplicaSummary }) {
       <TooltipContent>
         {t('Ready: {{ready}}, processing: {{processing}}, failed: {{failed}}', {
           ready,
-          processing: replication?.Processing ?? 0,
-          failed: replication?.Failed ?? 0,
+          processing: replication.Processing,
+          failed: replication.Failed,
         })}
       </TooltipContent>
     </Tooltip>

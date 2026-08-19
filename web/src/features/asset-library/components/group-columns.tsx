@@ -28,10 +28,12 @@ import { formatAssetDate } from './asset-columns'
 import { GroupRowActions } from './group-row-actions'
 import { ReplicationBadge } from './replication-badge'
 
-export function useAssetGroupColumns(): ColumnDef<AssetGroup>[] {
+export function useAssetGroupColumns(
+  includeReplication = false
+): ColumnDef<AssetGroup>[] {
   const { t } = useTranslation()
 
-  return [
+  const columns: ColumnDef<AssetGroup>[] = [
     {
       accessorKey: 'Name',
       header: t('Name'),
@@ -73,7 +75,9 @@ export function useAssetGroupColumns(): ColumnDef<AssetGroup>[] {
       enableSorting: false,
       size: 360,
     },
-    {
+  ]
+  if (includeReplication) {
+    columns.push({
       id: 'replication',
       header: t('Channel availability'),
       cell: ({ row }) => (
@@ -81,7 +85,9 @@ export function useAssetGroupColumns(): ColumnDef<AssetGroup>[] {
       ),
       enableSorting: false,
       size: 190,
-    },
+    })
+  }
+  columns.push(
     {
       accessorKey: 'CreateTime',
       header: t('Created'),
@@ -101,6 +107,7 @@ export function useAssetGroupColumns(): ColumnDef<AssetGroup>[] {
       enableHiding: false,
       size: 64,
       meta: { pinned: 'right' as const },
-    },
-  ]
+    }
+  )
+  return columns
 }

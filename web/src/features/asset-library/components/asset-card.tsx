@@ -61,17 +61,25 @@ function AssetCardComponent(props: { row: Row<Asset>; group?: AssetGroup }) {
         <AssetRowActions row={props.row} />
       </div>
 
-      <div className='grid grid-cols-2 gap-3 text-sm'>
+      <div
+        className={
+          asset.Replication
+            ? 'grid grid-cols-2 gap-3 text-sm'
+            : 'grid grid-cols-1 gap-3 text-sm'
+        }
+      >
         <div className='min-w-0'>
           <p className='text-muted-foreground text-xs'>{t('Asset Group')}</p>
           <p className='truncate'>{props.group?.Name || asset.GroupId}</p>
         </div>
-        <div className='min-w-0'>
-          <p className='text-muted-foreground text-xs'>
-            {t('Channel availability')}
-          </p>
-          <ReplicationBadge replication={asset.Replication} />
-        </div>
+        {asset.Replication ? (
+          <div className='min-w-0'>
+            <p className='text-muted-foreground text-xs'>
+              {t('Channel availability')}
+            </p>
+            <ReplicationBadge replication={asset.Replication} />
+          </div>
+        ) : null}
       </div>
     </div>
   )

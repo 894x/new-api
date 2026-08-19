@@ -30,6 +30,11 @@ type assetLibraryResponse struct {
 	Result           any                          `json:"Result,omitempty"`
 }
 
+type assetLibraryMutationResult struct {
+	Id          string                   `json:"Id"`
+	Replication *dto.AssetReplicaSummary `json:"Replication,omitempty"`
+}
+
 func AssetLibraryAction(c *gin.Context) {
 	action := strings.TrimSpace(c.Query("Action"))
 	version := strings.TrimSpace(c.Query("Version"))
@@ -42,23 +47,24 @@ func AssetLibraryAction(c *gin.Context) {
 		writeAssetLibraryError(c, action, http.StatusUnauthorized, "Unauthorized", "user identity is missing", nil)
 		return
 	}
+	includeReplication := model.IsAdmin(userId)
 	switch action {
 	case "CreateAssetGroup":
-		createAssetLibraryGroup(c, userId)
+		createAssetLibraryGroup(c, userId, includeReplication)
 	case "CreateAsset":
-		createAssetLibraryAsset(c, userId)
+		createAssetLibraryAsset(c, userId, includeReplication)
 	case "ListAssetGroups":
-		listAssetLibraryGroups(c, userId)
+		listAssetLibraryGroups(c, userId, includeReplication)
 	case "ListAssets":
-		listAssetLibraryAssets(c, userId)
+		listAssetLibraryAssets(c, userId, includeReplication)
 	case "GetAssetGroup":
-		getAssetLibraryGroup(c, userId)
+		getAssetLibraryGroup(c, userId, includeReplication)
 	case "GetAsset":
-		getAssetLibraryAsset(c, userId)
+		getAssetLibraryAsset(c, userId, includeReplication)
 	case "UpdateAssetGroup":
-		updateAssetLibraryGroup(c, userId)
+		updateAssetLibraryGroup(c, userId, includeReplication)
 	case "UpdateAsset":
-		updateAssetLibraryAsset(c, userId)
+		updateAssetLibraryAsset(c, userId, includeReplication)
 	case "DeleteAsset":
 		deleteAssetLibraryAsset(c, userId)
 	case "DeleteAssetGroup":
@@ -68,7 +74,7 @@ func AssetLibraryAction(c *gin.Context) {
 	}
 }
 
-func createAssetLibraryGroup(c *gin.Context, userId int) {
+func createAssetLibraryGroup(c *gin.Context, userId int, includeReplication bool) {
 	var request dto.CreateAssetGroupRequest
 	if !decodeAssetLibraryRequest(c, "CreateAssetGroup", &request) {
 		return
@@ -125,11 +131,14 @@ func createAssetLibraryGroup(c *gin.Context, userId int) {
 		writeAssetLibraryInternalError(c, "CreateAssetGroup", err)
 		return
 	}
-	result := gin.H{"Id": group.Id, "Replication": report.Summary}
+	result := assetLibraryMutationResult{Id: group.Id}
+	if includeReplication {
+		result.Replication = report.Summary
+	}
 	writeAssetLibrarySuccess(c, "CreateAssetGroup", result)
 }
 
-func createAssetLibraryAsset(c *gin.Context, userId int) {
+func createAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool) {
 	var request dto.CreateAssetRequest
 	if !decodeAssetLibraryRequest(c, "CreateAsset", &request) {
 		return
@@ -189,11 +198,14 @@ func createAssetLibraryAsset(c *gin.Context, userId int) {
 		writeAssetLibraryInternalError(c, "CreateAsset", err)
 		return
 	}
-	result := gin.H{"Id": asset.Id, "Replication": report.Summary}
+	result := assetLibraryMutationResult{Id: asset.Id}
+	if includeReplication {
+		result.Replication = report.Summary
+	}
 	writeAssetLibrarySuccess(c, "CreateAsset", result)
 }
 
-func listAssetLibraryGroups(c *gin.Context, userId int) {
+func listAssetLibraryGroups(c *gin.Context, userId int, includeReplication bool) {
 	var request dto.ListAssetGroupsRequest
 	if !decodeAssetLibraryRequest(c, "ListAssetGroups", &request) {
 		return
@@ -224,7 +236,7 @@ func listAssetLibraryGroups(c *gin.Context, userId int) {
 	}
 	items := make([]dto.AssetGroupResult, 0, len(groups))
 	for i := range groups {
-		item, err := buildAssetLibraryGroupResult(&groups[i])
+		item, err := buildAssetLibraryGroupResult(&groups[i], includeReplication)
 		if err != nil {
 			writeAssetLibraryInternalError(c, "ListAssetGroups", err)
 			return
@@ -239,7 +251,7 @@ func listAssetLibraryGroups(c *gin.Context, userId int) {
 	})
 }
 
-func listAssetLibraryAssets(c *gin.Context, userId int) {
+func listAssetLibraryAssets(c *gin.Context, userId int, includeReplication bool) {
 	var request dto.ListAssetsRequest
 	if !decodeAssetLibraryRequest(c, "ListAssets", &request) {
 		return
@@ -272,7 +284,7 @@ func listAssetLibraryAssets(c *gin.Context, userId int) {
 	}
 	items := make([]dto.AssetResult, 0, len(assets))
 	for i := range assets {
-		item, err := buildAssetLibraryResult(&assets[i], nil)
+		item, err := buildAssetLibraryResult(&assets[i], nil, includeReplication)
 		if err != nil {
 			writeAssetLibraryInternalError(c, "ListAssets", err)
 			return
@@ -287,7 +299,7 @@ func listAssetLibraryAssets(c *gin.Context, userId int) {
 	})
 }
 
-func getAssetLibraryGroup(c *gin.Context, userId int) {
+func getAssetLibraryGroup(c *gin.Context, userId int, includeReplication bool) {
 	var request dto.GetAssetGroupRequest
 	if !decodeAssetLibraryRequest(c, "GetAssetGroup", &request) {
 		return
@@ -297,7 +309,7 @@ func getAssetLibraryGroup(c *gin.Context, userId int) {
 		writeAssetLibraryLookupError(c, "GetAssetGroup", "NotFound.GroupId", "asset group not found", err)
 		return
 	}
-	result, err := buildAssetLibraryGroupResult(group)
+	result, err := buildAssetLibraryGroupResult(group, includeReplication)
 	if err != nil {
 		writeAssetLibraryInternalError(c, "GetAssetGroup", err)
 		return
@@ -305,7 +317,7 @@ func getAssetLibraryGroup(c *gin.Context, userId int) {
 	writeAssetLibrarySuccess(c, "GetAssetGroup", result)
 }
 
-func getAssetLibraryAsset(c *gin.Context, userId int) {
+func getAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool) {
 	var request dto.GetAssetRequest
 	if !decodeAssetLibraryRequest(c, "GetAsset", &request) {
 		return
@@ -316,19 +328,21 @@ func getAssetLibraryAsset(c *gin.Context, userId int) {
 		return
 	}
 	details, refreshErr := service.RefreshAssetLibraryAsset(c.Request.Context(), asset.Id)
-	result, err := buildAssetLibraryResult(asset, details)
+	result, err := buildAssetLibraryResult(asset, details, includeReplication)
 	if err != nil {
 		writeAssetLibraryInternalError(c, "GetAsset", err)
 		return
 	}
-	if refreshErr != nil && result.Error == nil {
+	if refreshErr != nil {
 		common.SysError("asset library GetAsset preview refresh failed")
-		result.Error = &dto.AssetLibraryError{Code: "PreviewUnavailable", Message: "Asset preview is temporarily unavailable"}
+		if result.Error == nil && strings.TrimSpace(result.URL) == "" {
+			result.Error = &dto.AssetLibraryError{Code: "PreviewUnavailable", Message: "Asset preview is temporarily unavailable"}
+		}
 	}
 	writeAssetLibrarySuccess(c, "GetAsset", result)
 }
 
-func updateAssetLibraryGroup(c *gin.Context, userId int) {
+func updateAssetLibraryGroup(c *gin.Context, userId int, includeReplication bool) {
 	var request dto.UpdateAssetGroupRequest
 	if !decodeAssetLibraryRequest(c, "UpdateAssetGroup", &request) {
 		return
@@ -367,11 +381,14 @@ func updateAssetLibraryGroup(c *gin.Context, userId int) {
 		writeAssetLibraryInternalError(c, "UpdateAssetGroup", err)
 		return
 	}
-	result := gin.H{"Id": group.Id, "Replication": report.Summary}
+	result := assetLibraryMutationResult{Id: group.Id}
+	if includeReplication {
+		result.Replication = report.Summary
+	}
 	writeAssetLibrarySuccess(c, "UpdateAssetGroup", result)
 }
 
-func updateAssetLibraryAsset(c *gin.Context, userId int) {
+func updateAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool) {
 	var request dto.UpdateAssetRequest
 	if !decodeAssetLibraryRequest(c, "UpdateAsset", &request) {
 		return
@@ -400,7 +417,10 @@ func updateAssetLibraryAsset(c *gin.Context, userId int) {
 		writeAssetLibraryInternalError(c, "UpdateAsset", err)
 		return
 	}
-	result := gin.H{"Id": asset.Id, "Replication": report.Summary}
+	result := assetLibraryMutationResult{Id: asset.Id}
+	if includeReplication {
+		result.Replication = report.Summary
+	}
 	writeAssetLibrarySuccess(c, "UpdateAsset", result)
 }
 
@@ -465,10 +485,14 @@ func deleteAssetLibraryGroup(c *gin.Context, userId int) {
 	writeAssetLibrarySuccess(c, "DeleteAssetGroup", gin.H{})
 }
 
-func buildAssetLibraryGroupResult(group *model.UserAssetGroup) (dto.AssetGroupResult, error) {
-	summary, err := service.GetAssetGroupReplicationSummary(group.Id)
-	if err != nil {
-		return dto.AssetGroupResult{}, err
+func buildAssetLibraryGroupResult(group *model.UserAssetGroup, includeReplication bool) (dto.AssetGroupResult, error) {
+	var summary *dto.AssetReplicaSummary
+	if includeReplication {
+		var err error
+		summary, err = service.GetAssetGroupReplicationSummary(group.Id)
+		if err != nil {
+			return dto.AssetGroupResult{}, err
+		}
 	}
 	return dto.AssetGroupResult{
 		Id:          group.Id,
@@ -482,10 +506,14 @@ func buildAssetLibraryGroupResult(group *model.UserAssetGroup) (dto.AssetGroupRe
 	}, nil
 }
 
-func buildAssetLibraryResult(asset *model.UserAsset, details *service.AssetLibraryAssetDetails) (dto.AssetResult, error) {
-	summary, err := service.GetAssetReplicationSummary(asset.Id)
-	if err != nil {
-		return dto.AssetResult{}, err
+func buildAssetLibraryResult(asset *model.UserAsset, details *service.AssetLibraryAssetDetails, includeReplication bool) (dto.AssetResult, error) {
+	var summary *dto.AssetReplicaSummary
+	if includeReplication {
+		var err error
+		summary, err = service.GetAssetReplicationSummary(asset.Id)
+		if err != nil {
+			return dto.AssetResult{}, err
+		}
 	}
 	status, assetError, lastInferenceTime, err := service.GetAssetLibraryAggregateState(asset.Id)
 	if err != nil {
@@ -494,6 +522,7 @@ func buildAssetLibraryResult(asset *model.UserAsset, details *service.AssetLibra
 	result := dto.AssetResult{
 		Id:                asset.Id,
 		Name:              asset.Name,
+		URL:               asset.SourceURL,
 		GroupId:           asset.GroupId,
 		AssetType:         asset.AssetType,
 		Status:            status,
@@ -505,7 +534,9 @@ func buildAssetLibraryResult(asset *model.UserAsset, details *service.AssetLibra
 		Replication:       summary,
 	}
 	if details != nil {
-		result.URL = details.URL
+		if strings.TrimSpace(details.URL) != "" {
+			result.URL = details.URL
+		}
 		result.Status = details.Status
 		if details.Error != nil && (details.Error.Code != "" || details.Error.Message != "") {
 			result.Error = &dto.AssetLibraryError{Code: "AssetProcessingFailed", Message: "Asset processing failed"}

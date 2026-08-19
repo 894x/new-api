@@ -43,11 +43,12 @@ function formatAssetDate(value?: string): string {
 }
 
 export function useAssetColumns(
-  groupsById: Map<string, AssetGroup>
+  groupsById: Map<string, AssetGroup>,
+  includeReplication = false
 ): ColumnDef<Asset>[] {
   const { t } = useTranslation()
 
-  return [
+  const columns: ColumnDef<Asset>[] = [
     {
       id: 'preview',
       header: t('Preview'),
@@ -121,7 +122,9 @@ export function useAssetColumns(
       enableSorting: false,
       size: 220,
     },
-    {
+  ]
+  if (includeReplication) {
+    columns.push({
       id: 'replication',
       header: t('Channel availability'),
       cell: ({ row }) => (
@@ -129,7 +132,9 @@ export function useAssetColumns(
       ),
       enableSorting: false,
       size: 190,
-    },
+    })
+  }
+  columns.push(
     {
       accessorKey: 'CreateTime',
       header: t('Created'),
@@ -149,8 +154,9 @@ export function useAssetColumns(
       enableHiding: false,
       size: 64,
       meta: { pinned: 'right' as const },
-    },
-  ]
+    }
+  )
+  return columns
 }
 
 export { formatAssetDate, getAssetStatusVariant }
