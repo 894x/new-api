@@ -14,6 +14,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -85,6 +87,56 @@ func TestGetChannelRestoresPublicModelBeforeRetrySetup(t *testing.T) {
 	assert.Equal(t, publicModel, c.GetString("original_model"))
 	info.InitChannelMeta(c)
 	assert.Equal(t, publicModel, info.UpstreamModelName)
+}
+
+func TestChannelModelCapacityTokenReservationUsesPromptAndMaximumOutput(t *testing.T) {
+	tests := []struct {
+		name        string
+		info        *relaycommon.RelayInfo
+		prompt      int
+		outputLimit *int64
+		want        int64
+	}{
+		{
+			name:        "explicit text output maximum",
+			info:        &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI, RelayMode: relayconstant.RelayModeChatCompletions},
+			prompt:      120,
+			outputLimit: common.GetPointer[int64](300),
+			want:        420,
+		},
+		{
+			name:   "unspecified text output uses conservative default",
+			info:   &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude},
+			prompt: 120,
+			want:   120 + defaultChannelModelCapacityOutputTokens,
+		},
+		{
+			name:   "embedding reserves input only",
+			info:   &relaycommon.RelayInfo{RelayFormat: types.RelayFormatEmbedding, RelayMode: relayconstant.RelayModeEmbeddings},
+			prompt: 120,
+			want:   120,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, channelModelCapacityTokenReservation(tt.info, tt.prompt, tt.outputLimit))
+		})
+	}
+}
+
+func TestChannelModelCapacityTokenReservationPreservesExplicitZeroOutputLimit(t *testing.T) {
+	zero := uint(0)
+	outputLimit := channelModelCapacityOutputTokenLimit(&dto.GeneralOpenAIRequest{MaxTokens: &zero})
+	require.NotNil(t, outputLimit)
+	assert.Zero(t, *outputLimit)
+	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI, RelayMode: relayconstant.RelayModeChatCompletions}
+	assert.Equal(t, int64(120), channelModelCapacityTokenReservation(info, 120, outputLimit))
+}
+
+func TestChannelModelCapacityExcludesRealtimeUntilAdmissionCanPrecedeWebSocketUpgrade(t *testing.T) {
+	assert.True(t, channelModelCapacitySupportsRelayFormat(types.RelayFormatOpenAI))
+	assert.False(t, channelModelCapacitySupportsRelayFormat(types.RelayFormatOpenAIRealtime))
 }
 
 func TestDynamicRoutingSampleFromAttemptPreservesIdentityAndMetrics(t *testing.T) {

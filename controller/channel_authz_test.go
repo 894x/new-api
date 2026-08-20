@@ -31,10 +31,16 @@ func TestChannelHasSensitiveChanges(t *testing.T) {
 		updated := PatchChannel{Channel: *origin}
 		updated.Models = "gpt-4o,gpt-4o-mini"
 		updated.Group = "vip"
+		rpm := int64(60)
+		tpm := int64(6000)
+		updated.RPM = &rpm
+		updated.TPM = &tpm
 
 		assert.False(t, channelHasSensitiveChanges(&updated, origin, map[string]any{
 			"models": updated.Models,
 			"group":  updated.Group,
+			"rpm":    rpm,
+			"tpm":    tpm,
 		}))
 	})
 

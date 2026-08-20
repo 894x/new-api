@@ -14,6 +14,8 @@ type SatisfiedChannelCandidate struct {
 	ChannelId int
 	Priority  int64
 	Weight    uint
+	RPM       int64
+	TPM       int64
 }
 
 // ListSatisfiedChannelCandidatesWithFilters returns every channel that passes
@@ -95,6 +97,8 @@ func listCachedSatisfiedChannelCandidates(
 			ChannelId: routing.ChannelId,
 			Priority:  routing.Priority,
 			Weight:    routing.Weight,
+			RPM:       routing.RPM,
+			TPM:       routing.TPM,
 		})
 	}
 	return candidates, nil
@@ -149,6 +153,8 @@ func listDBSatisfiedChannelCandidates(
 			ChannelId: abilities[i].ChannelId,
 			Priority:  effectiveAbilityPriority(&abilities[i]),
 			Weight:    abilities[i].Weight,
+			RPM:       abilities[i].RPM,
+			TPM:       abilities[i].TPM,
 		})
 	}
 	return candidates, nil

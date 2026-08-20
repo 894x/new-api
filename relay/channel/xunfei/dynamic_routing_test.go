@@ -12,6 +12,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
@@ -86,11 +87,12 @@ func TestXunfeiInvalidChannelKeyPublishesPreDialHealthFailure(t *testing.T) {
 		ChannelMeta: &relaycommon.ChannelMeta{ApiKey: "invalid-key"},
 	}
 	info.BeginDynamicRoutingAttempt(7, info.GetChannelType(), "public-model", true)
-	adaptor := &Adaptor{request: &dto.GeneralOpenAIRequest{}}
+	adaptor := &Adaptor{}
 
-	usage, handlerErr := adaptor.DoResponse(c, &http.Response{}, info)
-	require.Nil(t, usage)
-	require.NotNil(t, handlerErr)
+	_, prepareErr := adaptor.PrepareFinalOutboundRequest(c, info, &dto.GeneralOpenAIRequest{})
+	require.Error(t, prepareErr)
+	var handlerErr *types.NewAPIError
+	require.ErrorAs(t, prepareErr, &handlerErr)
 	sample, observed := info.FinishDynamicRoutingAttempt(handlerErr)
 
 	require.True(t, observed)
@@ -141,7 +143,8 @@ func TestXunfeiSilentWebsocketCancellationClosesConnectionAndProducer(t *testing
 	info := &relaycommon.RelayInfo{}
 	info.BeginDynamicRoutingAttempt(7, info.GetChannelType(), "public-model", true)
 	info.StreamStatus = relaycommon.NewStreamStatus()
-	stream, err := xunfeiMakeRequest(ctx, info, dto.GeneralOpenAIRequest{}, "general", strings.Replace(server.URL, "http://", "ws://", 1), "app")
+	request := requestOpenAI2Xunfei(dto.GeneralOpenAIRequest{}, "app", "general")
+	stream, err := xunfeiMakeRequest(ctx, info, request, strings.Replace(server.URL, "http://", "ws://", 1))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		stream.idleWatchdog.Stop()
@@ -193,7 +196,8 @@ func TestXunfeiTerminalOnlyStreamIsProtocolFailure(t *testing.T) {
 	info := &relaycommon.RelayInfo{IsStream: true}
 	info.BeginDynamicRoutingAttempt(7, info.GetChannelType(), "public-model", true)
 	info.StreamStatus = relaycommon.NewStreamStatus()
-	stream, err := xunfeiMakeRequest(ctx, info, dto.GeneralOpenAIRequest{}, "general", strings.Replace(server.URL, "http://", "ws://", 1), "app")
+	request := requestOpenAI2Xunfei(dto.GeneralOpenAIRequest{}, "app", "general")
+	stream, err := xunfeiMakeRequest(ctx, info, request, strings.Replace(server.URL, "http://", "ws://", 1))
 	require.NoError(t, err)
 	for range stream.responses {
 	}

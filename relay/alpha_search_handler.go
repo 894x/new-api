@@ -72,6 +72,9 @@ func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError
 	}
 	adaptor.Init(info)
 
+	if capacityErr := admitFinalChannelModelCapacity(c, info, body); capacityErr != nil {
+		return capacityErr
+	}
 	resp, err := adaptor.DoRequest(c, info, body)
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)

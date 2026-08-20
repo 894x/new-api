@@ -30,6 +30,8 @@ type Channel struct {
 	Status             int     `json:"status" gorm:"default:1"`
 	Name               string  `json:"name" gorm:"index"`
 	Weight             *uint   `json:"weight" gorm:"default:0"`
+	RPM                *int64  `json:"rpm" gorm:"bigint;default:0"`
+	TPM                *int64  `json:"tpm" gorm:"bigint;default:0"`
 	CreatedTime        int64   `json:"created_time" gorm:"bigint"`
 	TestTime           int64   `json:"test_time" gorm:"bigint"`
 	ResponseTime       int     `json:"response_time"` // in milliseconds
@@ -80,9 +82,35 @@ type ChannelSortOptions struct {
 // within a signed int on all supported architectures.
 const MaxChannelWeight uint = math.MaxInt32 - 10
 
+// MaxChannelModelRateLimit keeps values exact in both JavaScript forms and
+// Redis Lua number comparisons.
+const MaxChannelModelRateLimit int64 = 1<<53 - 1
+
 func ValidateChannelWeight(weight *uint) error {
 	if weight != nil && *weight > MaxChannelWeight {
 		return fmt.Errorf("channel weight exceeds %d", MaxChannelWeight)
+	}
+	return nil
+}
+
+func ValidateChannelModelRateLimits(rpm *int64, tpm *int64) error {
+	limits := []struct {
+		name  string
+		value *int64
+	}{
+		{name: "rpm", value: rpm},
+		{name: "tpm", value: tpm},
+	}
+	for _, limit := range limits {
+		if limit.value == nil {
+			continue
+		}
+		if *limit.value < 0 {
+			return fmt.Errorf("channel %s must not be negative", limit.name)
+		}
+		if *limit.value > MaxChannelModelRateLimit {
+			return fmt.Errorf("channel %s exceeds %d", limit.name, MaxChannelModelRateLimit)
+		}
 	}
 	return nil
 }
@@ -443,6 +471,9 @@ func BatchInsertChannels(channels []Channel) error {
 		if err := ValidateChannelWeight(channels[i].Weight); err != nil {
 			return err
 		}
+		if err := ValidateChannelModelRateLimits(channels[i].RPM, channels[i].TPM); err != nil {
+			return err
+		}
 	}
 	tx := DB.Begin()
 	if tx.Error != nil {
@@ -519,6 +550,20 @@ func (channel *Channel) GetWeight() int {
 	return int(*channel.Weight)
 }
 
+func (channel *Channel) GetRPM() int64 {
+	if channel == nil || channel.RPM == nil {
+		return 0
+	}
+	return *channel.RPM
+}
+
+func (channel *Channel) GetTPM() int64 {
+	if channel == nil || channel.TPM == nil {
+		return 0
+	}
+	return *channel.TPM
+}
+
 func (channel *Channel) GetBaseURL() string {
 	if channel.BaseURL == nil {
 		return ""
@@ -548,6 +593,9 @@ func (channel *Channel) Insert() error {
 	if err := ValidateChannelWeight(channel.Weight); err != nil {
 		return err
 	}
+	if err := ValidateChannelModelRateLimits(channel.RPM, channel.TPM); err != nil {
+		return err
+	}
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return tx.Error
@@ -565,6 +613,9 @@ func (channel *Channel) Insert() error {
 
 func (channel *Channel) Update() error {
 	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
+	if err := ValidateChannelModelRateLimits(channel.RPM, channel.TPM); err != nil {
 		return err
 	}
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys

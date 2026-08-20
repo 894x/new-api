@@ -58,6 +58,25 @@ func NormalizeUpstreamError(adaptor Adaptor, err *types.NewAPIError) *types.NewA
 	return normalizer.NormalizeUpstreamError(err)
 }
 
+// ChannelModelCapacityAdmissionDeferrer identifies custom transports whose
+// physical upstream dispatch happens after DoRequest. They must perform the
+// single capacity admission themselves immediately before that dispatch.
+type ChannelModelCapacityAdmissionDeferrer interface {
+	DeferChannelModelCapacityAdmission() bool
+}
+
+func DefersChannelModelCapacityAdmission(adaptor Adaptor) bool {
+	deferred, ok := adaptor.(ChannelModelCapacityAdmissionDeferrer)
+	return ok && deferred.DeferChannelModelCapacityAdmission()
+}
+
+// FinalOutboundRequestPreparer converts a shared request into the provider's
+// true outbound payload after shared system-prompt handling and before request
+// policies and capacity estimation are applied.
+type FinalOutboundRequestPreparer interface {
+	PrepareFinalOutboundRequest(c *gin.Context, info *relaycommon.RelayInfo, request any) (any, error)
+}
+
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 

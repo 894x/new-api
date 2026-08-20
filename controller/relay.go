@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +35,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
+
+const defaultChannelModelCapacityOutputTokens int64 = 8192
+
+func channelModelCapacitySupportsRelayFormat(relayFormat types.RelayFormat) bool {
+	return relayFormat != types.RelayFormatOpenAIRealtime
+}
 
 func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
 	var err *types.NewAPIError
@@ -127,7 +135,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
-
 	publicModelName := relayInfo.OriginModelName
 	retryParam := &service.RetryParam{
 		Ctx:                    c,
@@ -139,8 +146,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		AllowedChannelIds:      assetAllowedChannelIds(c),
 		Retry:                  common.GetPointer(0),
 	}
+	capacityPlan := service.ChannelModelCapacityPlan{}
+	if channelModelCapacitySupportsRelayFormat(relayFormat) {
+		capacityPlan, err = service.ResolveChannelModelCapacityPlan(retryParam)
+		if err != nil {
+			newAPIError = types.NewError(fmt.Errorf("resolve channel-model capacity: %w", err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			return
+		}
+	}
+
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
-	needCountToken := constant.CountToken
+	needCountToken := constant.CountToken || capacityPlan.RequiresTokenEstimate
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
 	if needSensitiveCheck || needCountToken {
@@ -158,7 +174,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}
 
-	tokens, err := service.EstimateRequestToken(c, meta, relayInfo)
+	var tokens int
+	if capacityPlan.RequiresTokenEstimate {
+		tokens, err = service.EstimateRequestTokenForCapacity(c, meta, relayInfo)
+	} else {
+		tokens, err = service.EstimateRequestToken(c, meta, relayInfo)
+	}
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeCountTokenFailed)
 		return
@@ -192,6 +213,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
+	if capacityPlan.Enabled {
+		capacityTokens := int64(0)
+		if capacityPlan.RequiresTokenEstimate {
+			capacityTokens = channelModelCapacityTokenReservation(relayInfo, tokens, channelModelCapacityOutputTokenLimit(request))
+		}
+		retryParam.CapacityTokens = &capacityTokens
+		service.BindChannelModelCapacityRequest(retryParam)
+	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
@@ -247,6 +276,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError == nil {
 			relayInfo.LastError = nil
 			return
+		}
+		if handled, finalErr := handleChannelModelCapacityAdmissionFailure(c, retryParam, newAPIError); handled {
+			relayInfo.LastError = nil
+			newAPIError = finalErr
+			if finalErr != nil {
+				break
+			}
+			continue
 		}
 		if c.Writer.Written() {
 			newAPIError = types.MarkResponseCommitted(newAPIError)
@@ -365,6 +402,75 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 	return meta
 }
 
+func channelModelCapacityOutputTokenLimit(request dto.Request) *int64 {
+	var limit uint
+	switch r := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		if r.MaxTokens == nil && r.MaxCompletionTokens == nil {
+			return nil
+		}
+		maxTokens := lo.FromPtrOr(r.MaxTokens, uint(0))
+		maxCompletionTokens := lo.FromPtrOr(r.MaxCompletionTokens, uint(0))
+		limit = max(maxTokens, maxCompletionTokens)
+	case *dto.OpenAIResponsesRequest:
+		if r.MaxOutputTokens == nil {
+			return nil
+		}
+		limit = *r.MaxOutputTokens
+	case *dto.ClaudeRequest:
+		if r.MaxTokens == nil && r.MaxTokensToSample == nil {
+			return nil
+		}
+		limit = max(lo.FromPtrOr(r.MaxTokens, uint(0)), lo.FromPtrOr(r.MaxTokensToSample, uint(0)))
+	case *dto.GeminiChatRequest:
+		if r.GenerationConfig.MaxOutputTokens == nil {
+			return nil
+		}
+		limit = *r.GenerationConfig.MaxOutputTokens
+	default:
+		return nil
+	}
+	value := int64(limit)
+	return &value
+}
+
+func channelModelCapacityTokenReservation(info *relaycommon.RelayInfo, promptTokens int, outputLimit *int64) int64 {
+	prompt := int64(promptTokens)
+	if prompt < 0 {
+		prompt = 0
+	}
+	output := int64(0)
+	if isChannelModelCapacityGenerationRequest(info) {
+		output = defaultChannelModelCapacityOutputTokens
+		if outputLimit != nil {
+			output = max(*outputLimit, 0)
+		}
+	}
+	if prompt >= model.MaxChannelModelRateLimit || output > model.MaxChannelModelRateLimit-prompt {
+		return model.MaxChannelModelRateLimit
+	}
+	return prompt + output
+}
+
+func isChannelModelCapacityGenerationRequest(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	switch info.RelayFormat {
+	case types.RelayFormatClaude, types.RelayFormatOpenAIResponses,
+		types.RelayFormatOpenAIResponsesCompaction, types.RelayFormatOpenAIRealtime:
+		return true
+	case types.RelayFormatGemini:
+		return !strings.Contains(strings.ToLower(info.RequestURLPath), "embed")
+	case types.RelayFormatOpenAI:
+		switch info.RelayMode {
+		case relayconstant.RelayModeChatCompletions, relayconstant.RelayModeCompletions, relayconstant.RelayModeEdits:
+			return true
+		}
+	}
+	return false
+}
+
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
 	// Provider-specific billing aliases may mutate OriginModelName during an
 	// attempt. Every retry must start from the immutable client-facing model so
@@ -378,21 +484,29 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 				return nil, types.NewError(errors.New("selected channel has no replica for every referenced asset"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 			}
 		}
-		autoBan := c.GetBool("auto_ban")
-		autoBanInt := 1
-		if !autoBan {
-			autoBanInt = 0
+		if retryParam.CapacityTokens == nil {
+			autoBan := c.GetBool("auto_ban")
+			autoBanInt := 1
+			if !autoBan {
+				autoBanInt = 0
+			}
+			return &model.Channel{
+				Id:      channelId,
+				Type:    c.GetInt("channel_type"),
+				Name:    c.GetString("channel_name"),
+				AutoBan: &autoBanInt,
+			}, nil
 		}
-		return &model.Channel{
-			Id:      channelId,
-			Type:    c.GetInt("channel_type"),
-			Name:    c.GetString("channel_name"),
-			AutoBan: &autoBanInt,
-		}, nil
+
+		selected, err := model.CacheGetChannel(channelId)
+		if err != nil {
+			return nil, types.NewError(fmt.Errorf("load selected channel %d for capacity admission: %w", channelId, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		return selected, nil
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
-		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, channelSelectionAPIError(c, selectGroup, info.OriginModelName, err)
 	}
 	if channel == nil {
 		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -405,6 +519,48 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, newAPIError
 	}
 	return channel, nil
+}
+
+func channelSelectionAPIError(c *gin.Context, group string, modelName string, err error) *types.NewAPIError {
+	var capacityErr *service.ChannelModelCapacityError
+	if errors.As(err, &capacityErr) {
+		retryAfterSeconds := int64(math.Ceil(capacityErr.RetryAfter.Seconds()))
+		if retryAfterSeconds < 1 {
+			retryAfterSeconds = 1
+		}
+		c.Header("Retry-After", strconv.FormatInt(retryAfterSeconds, 10))
+		return types.NewErrorWithStatusCode(
+			capacityErr,
+			types.ErrorCodeChannelModelCapacityExhausted,
+			http.StatusTooManyRequests,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	return types.NewError(
+		fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", group, modelName, err.Error()),
+		types.ErrorCodeGetChannelFailed,
+		types.ErrOptionWithSkipRetry(),
+	)
+}
+
+func handleChannelModelCapacityAdmissionFailure(
+	c *gin.Context,
+	retryParam *service.RetryParam,
+	attemptErr *types.NewAPIError,
+) (bool, *types.NewAPIError) {
+	var capacityErr *service.ChannelModelCapacityAdmissionError
+	if !errors.As(attemptErr, &capacityErr) {
+		return false, attemptErr
+	}
+	if _, forced := c.Get("specific_channel_id"); forced {
+		return true, channelSelectionAPIError(c, retryParam.TokenGroup, retryParam.ModelName, &service.ChannelModelCapacityError{
+			Model:      retryParam.ModelName,
+			RetryAfter: capacityErr.RetryAfter,
+		})
+	}
+	service.ClearChannelAffinitySelectionForFallback(c)
+	retryParam.ResetRetryNextTry()
+	return true, nil
 }
 
 func assetAllowedChannelIds(c *gin.Context) map[int]struct{} {

@@ -59,6 +59,34 @@ func TestListSatisfiedChannelCandidatesPreservesAllEligiblePriorities(t *testing
 	}
 }
 
+func TestListSatisfiedChannelCandidatesCarriesEffectiveRPMAndTPMWithAndWithoutCache(t *testing.T) {
+	db := setupAssetChannelSelectTest(t)
+	require.NoError(t, db.Model(&Ability{}).
+		Where("channel_id = ? AND model = ?", 4101, "asset-video-model").
+		Updates(map[string]any{"rpm": int64(60), "tpm": int64(6000)}).Error)
+
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memory_cache_%t", memoryCacheEnabled), func(t *testing.T) {
+			common.MemoryCacheEnabled = memoryCacheEnabled
+			if memoryCacheEnabled {
+				InitChannelCache()
+			}
+
+			candidates, err := ListSatisfiedChannelCandidatesWithFilters(
+				"default",
+				"asset-video-model",
+				"/api/v3/contents/generations/tasks",
+				"",
+				map[int]struct{}{4101: {}},
+			)
+			require.NoError(t, err)
+			assert.Equal(t, []SatisfiedChannelCandidate{
+				{ChannelId: 4101, Priority: 100, Weight: 100, RPM: 60, TPM: 6000},
+			}, candidates)
+		})
+	}
+}
+
 func TestListSatisfiedChannelCandidatesAppliesVideoResolutionBeforePriority(t *testing.T) {
 	db := setupAssetChannelSelectTest(t)
 

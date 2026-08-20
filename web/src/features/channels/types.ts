@@ -34,6 +34,8 @@ export const channelInfoSchema = z.object({
 
 export type ChannelInfo = z.infer<typeof channelInfoSchema>
 
+export const MAX_CHANNEL_MODEL_RATE_LIMIT = Number.MAX_SAFE_INTEGER
+
 export const channelSchema = z.object({
   id: z.number(),
   type: z.number(),
@@ -43,6 +45,8 @@ export const channelSchema = z.object({
   status: z.number(), // 1: enabled, 0: manual disabled, 2: auto disabled
   name: z.string(),
   weight: z.number().nullish(),
+  rpm: z.number().nullish(),
+  tpm: z.number().nullish(),
   created_time: z.number(),
   test_time: z.number(),
   response_time: z.number(), // in milliseconds
@@ -83,15 +87,26 @@ export interface ModelRoutingOverride {
   model: string
   default_priority: number
   default_weight: number
+  default_rpm: number
+  default_tpm: number
   priority_override: number | null
   weight_override: number | null
+  rpm_override: number | null
+  tpm_override: number | null
   effective_priority: number
   effective_weight: number
+  effective_rpm: number
+  effective_tpm: number
 }
 
 export type ModelRoutingOverridePatch = Pick<
   ModelRoutingOverride,
-  'channel_id' | 'model' | 'priority_override' | 'weight_override'
+  | 'channel_id'
+  | 'model'
+  | 'priority_override'
+  | 'weight_override'
+  | 'rpm_override'
+  | 'tpm_override'
 >
 
 // ============================================================================

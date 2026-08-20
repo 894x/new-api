@@ -581,6 +581,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if err := model.ValidateChannelWeight(channel.Weight); err != nil {
 		return err
 	}
+	if err := model.ValidateChannelModelRateLimits(channel.RPM, channel.TPM); err != nil {
+		return err
+	}
 
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {

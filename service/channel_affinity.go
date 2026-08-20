@@ -699,6 +699,17 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 	c.Set(ginKeyChannelAffinityLogInfo, info)
 }
 
+// ClearChannelAffinitySelectionForFallback removes only the per-attempt marker
+// after the pinned channel is bypassed. The long-lived affinity cache entry and
+// matching metadata stay intact for later requests.
+func ClearChannelAffinitySelectionForFallback(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	c.Set(ginKeyChannelAffinitySkipRetry, false)
+	c.Set(ginKeyChannelAffinityLogInfo, nil)
+}
+
 func AppendChannelAffinityAdminInfo(c *gin.Context, adminInfo map[string]interface{}) {
 	if c == nil || adminInfo == nil {
 		return

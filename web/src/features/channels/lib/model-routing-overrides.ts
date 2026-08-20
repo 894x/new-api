@@ -16,17 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type {
-  ModelRoutingOverride,
-  ModelRoutingOverridePatch,
-  ModelRoutingOverridesResponse,
+import {
+  MAX_CHANNEL_MODEL_RATE_LIMIT,
+  type ModelRoutingOverride,
+  type ModelRoutingOverridePatch,
+  type ModelRoutingOverridesResponse,
 } from '../types'
 
 export const MAX_MODEL_ROUTING_WEIGHT = 2_147_483_637
 
 export type ModelRoutingOverrideDraft = Pick<
   Record<keyof ModelRoutingOverridePatch, string>,
-  'priority_override' | 'weight_override'
+  'priority_override' | 'weight_override' | 'rpm_override' | 'tpm_override'
 >
 
 export type ModelRoutingOverrideDraftField = keyof ModelRoutingOverrideDraft
@@ -46,6 +47,9 @@ export type ModelRoutingOverrideSerialization = {
   overrides: ModelRoutingOverridePatch[]
   errors: ModelRoutingOverrideDraftError[]
 }
+
+const MODEL_ROUTING_OVERRIDE_FIELDS: readonly ModelRoutingOverrideDraftField[] =
+  ['priority_override', 'weight_override', 'rpm_override', 'tpm_override']
 
 export function getModelRoutingOverrideKey(
   channelId: number,
@@ -83,6 +87,8 @@ export function createModelRoutingOverrideDrafts(
           row.priority_override === null ? '' : String(row.priority_override),
         weight_override:
           row.weight_override === null ? '' : String(row.weight_override),
+        rpm_override: row.rpm_override === null ? '' : String(row.rpm_override),
+        tpm_override: row.tpm_override === null ? '' : String(row.tpm_override),
       },
     ])
   )
@@ -111,7 +117,7 @@ export function mergeModelRoutingOverrideDraftState(
     const currentDraft = currentState.drafts[key]
     const mergedDraft = { ...serverDraft }
 
-    for (const field of ['priority_override', 'weight_override'] as const) {
+    for (const field of MODEL_ROUTING_OVERRIDE_FIELDS) {
       const dirtyFieldKey = getModelRoutingOverrideDirtyFieldKey(key, field)
       if (
         !currentDraft ||
@@ -170,18 +176,11 @@ export function resetModelRoutingOverrideDraft(
   currentState: ModelRoutingOverrideDraftState,
   row: ModelRoutingOverride
 ): ModelRoutingOverrideDraftState {
-  const priorityResetState = updateModelRoutingOverrideDraftField(
-    currentState,
-    row,
-    'priority_override',
-    ''
-  )
-  return updateModelRoutingOverrideDraftField(
-    priorityResetState,
-    row,
-    'weight_override',
-    ''
-  )
+  let nextState = currentState
+  for (const field of MODEL_ROUTING_OVERRIDE_FIELDS) {
+    nextState = updateModelRoutingOverrideDraftField(nextState, row, field, '')
+  }
+  return nextState
 }
 
 export function ensureSuccessfulModelRoutingOverridesResponse(
@@ -208,6 +207,8 @@ export function collectChangedModelRoutingOverrides(
     if (!draft) continue
     const priorityOverride = parseRoutingOverrideInput(draft.priority_override)
     const weightOverride = parseRoutingOverrideInput(draft.weight_override)
+    const rpmOverride = parseRoutingOverrideInput(draft.rpm_override)
+    const tpmOverride = parseRoutingOverrideInput(draft.tpm_override)
     if (priorityOverride === undefined) {
       errors.push({ key, field: 'priority_override' })
     }
@@ -219,16 +220,38 @@ export function collectChangedModelRoutingOverrides(
       errors.push({ key, field: 'weight_override' })
     }
     if (
+      rpmOverride === undefined ||
+      (rpmOverride ?? 0) < 0 ||
+      (rpmOverride ?? 0) > MAX_CHANNEL_MODEL_RATE_LIMIT
+    ) {
+      errors.push({ key, field: 'rpm_override' })
+    }
+    if (
+      tpmOverride === undefined ||
+      (tpmOverride ?? 0) < 0 ||
+      (tpmOverride ?? 0) > MAX_CHANNEL_MODEL_RATE_LIMIT
+    ) {
+      errors.push({ key, field: 'tpm_override' })
+    }
+    if (
       priorityOverride === undefined ||
       weightOverride === undefined ||
       (weightOverride ?? 0) < 0 ||
-      (weightOverride ?? 0) > MAX_MODEL_ROUTING_WEIGHT
+      (weightOverride ?? 0) > MAX_MODEL_ROUTING_WEIGHT ||
+      rpmOverride === undefined ||
+      (rpmOverride ?? 0) < 0 ||
+      (rpmOverride ?? 0) > MAX_CHANNEL_MODEL_RATE_LIMIT ||
+      tpmOverride === undefined ||
+      (tpmOverride ?? 0) < 0 ||
+      (tpmOverride ?? 0) > MAX_CHANNEL_MODEL_RATE_LIMIT
     ) {
       continue
     }
     if (
       priorityOverride === row.priority_override &&
-      weightOverride === row.weight_override
+      weightOverride === row.weight_override &&
+      rpmOverride === row.rpm_override &&
+      tpmOverride === row.tpm_override
     ) {
       continue
     }
@@ -238,6 +261,8 @@ export function collectChangedModelRoutingOverrides(
       model: row.model,
       priority_override: priorityOverride,
       weight_override: weightOverride,
+      rpm_override: rpmOverride,
+      tpm_override: tpmOverride,
     })
   }
 

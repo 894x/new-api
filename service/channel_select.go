@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -20,10 +21,14 @@ type RetryParam struct {
 
 	// AllowedChannelIds is nil for ordinary requests. A non-nil map restricts
 	// selection to channels that can resolve every local asset reference.
-	AllowedChannelIds   map[int]struct{}
-	AttemptedChannelIds map[int]struct{}
-	Retry               *int
-	resetNextTry        bool
+	AllowedChannelIds          map[int]struct{}
+	AttemptedChannelIds        map[int]struct{}
+	CapacityTokens             *int64
+	CapacityEligibleChannelIds map[int]struct{}
+	CapacityBlockedChannelIds  map[int]struct{}
+	Retry                      *int
+	resetNextTry               bool
+	capacityRetryAfter         time.Duration
 }
 
 func (p *RetryParam) MarkAttempted(channelID int) {
@@ -145,6 +150,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			if channel == nil {
 				if allAttempted && !crossGroupRetry {
+					if capacityErr := param.capacityError(); capacityErr != nil {
+						return nil, autoGroup, capacityErr
+					}
 					return nil, autoGroup, nil
 				}
 				// Current group has no available channel for this model, try next group
@@ -182,13 +190,23 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			break
 		}
-		if channel == nil && lastSelectionErr != nil {
-			return nil, selectGroup, lastSelectionErr
+		if channel == nil {
+			if capacityErr := param.capacityError(); capacityErr != nil {
+				return nil, selectGroup, capacityErr
+			}
+			if lastSelectionErr != nil {
+				return nil, selectGroup, lastSelectionErr
+			}
 		}
 	} else {
 		channel, _, err = getSatisfiedChannelForRoute(param, param.TokenGroup, param.GetRetry())
 		if err != nil {
 			return nil, param.TokenGroup, err
+		}
+	}
+	if channel == nil {
+		if capacityErr := param.capacityError(); capacityErr != nil {
+			return nil, selectGroup, capacityErr
 		}
 	}
 	return channel, selectGroup, nil

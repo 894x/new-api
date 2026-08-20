@@ -8,8 +8,21 @@ import (
 )
 
 func TestChannelModelOverrideSQLiteSchemaSupportsSparseCompositeKey(t *testing.T) {
-	require.NoError(t, DB.AutoMigrate(&ChannelModelOverride{}))
-	require.NoError(t, DB.AutoMigrate(&ChannelModelOverride{}))
+	require.NoError(t, DB.AutoMigrate(&Channel{}, &Ability{}, &ChannelModelOverride{}))
+	require.NoError(t, DB.AutoMigrate(&Channel{}, &Ability{}, &ChannelModelOverride{}))
+	for _, schema := range []struct {
+		model  any
+		column string
+	}{
+		{model: &Channel{}, column: "rpm"},
+		{model: &Channel{}, column: "tpm"},
+		{model: &Ability{}, column: "rpm"},
+		{model: &Ability{}, column: "tpm"},
+		{model: &ChannelModelOverride{}, column: "rpm"},
+		{model: &ChannelModelOverride{}, column: "tpm"},
+	} {
+		assert.True(t, DB.Migrator().HasColumn(schema.model, schema.column), "%T.%s", schema.model, schema.column)
+	}
 
 	priority := int64(0)
 	first := ChannelModelOverride{ChannelId: 7101, Model: "model-a", Priority: &priority}

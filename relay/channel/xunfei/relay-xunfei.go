@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -136,11 +137,10 @@ func buildXunfeiAuthUrl(hostUrl string, apiKey, apiSecret string) string {
 	return callUrl
 }
 
-func xunfeiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, textRequest dto.GeneralOpenAIRequest, appId string, apiSecret string, apiKey string) (*dto.Usage, *types.NewAPIError) {
+func xunfeiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, request XunfeiChatRequest, authURL string) (*dto.Usage, *types.NewAPIError) {
 	info.StreamStatus = relaycommon.NewStreamStatus()
-	domain, authUrl := getXunfeiAuthUrl(c, apiKey, apiSecret, textRequest.Model)
 	streamCtx, cancel := context.WithCancel(c.Request.Context())
-	stream, err := xunfeiMakeRequest(streamCtx, info, textRequest, domain, authUrl, appId)
+	stream, err := xunfeiMakeRequest(streamCtx, info, &request, authURL)
 	if err != nil {
 		cancel()
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed)
@@ -210,14 +210,13 @@ func xunfeiStreamErrorStatus(code int) int {
 	}
 }
 
-func xunfeiHandler(c *gin.Context, info *relaycommon.RelayInfo, textRequest dto.GeneralOpenAIRequest, appId string, apiSecret string, apiKey string) (*dto.Usage, *types.NewAPIError) {
+func xunfeiHandler(c *gin.Context, info *relaycommon.RelayInfo, request XunfeiChatRequest, authURL string) (*dto.Usage, *types.NewAPIError) {
 	// Xunfei uses the same upstream WebSocket reader for buffered responses.
 	// Keep its lifecycle sink initialized even though non-stream requests are
 	// not eligible for dynamic-routing performance samples.
 	info.StreamStatus = relaycommon.NewStreamStatus()
-	domain, authUrl := getXunfeiAuthUrl(c, apiKey, apiSecret, textRequest.Model)
 	streamCtx, cancel := context.WithCancel(c.Request.Context())
-	stream, err := xunfeiMakeRequest(streamCtx, info, textRequest, domain, authUrl, appId)
+	stream, err := xunfeiMakeRequest(streamCtx, info, &request, authURL)
 	if err != nil {
 		cancel()
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed)
@@ -294,12 +293,14 @@ func dialXunfeiUpstream(ctx context.Context, info *relaycommon.RelayInfo, dialer
 	return conn, nil
 }
 
-func xunfeiMakeRequest(ctx context.Context, info *relaycommon.RelayInfo, textRequest dto.GeneralOpenAIRequest, domain, authUrl, appId string) (*xunfeiResponseStream, error) {
+func xunfeiMakeRequest(ctx context.Context, info *relaycommon.RelayInfo, data *XunfeiChatRequest, authURL string) (*xunfeiResponseStream, error) {
 	dialer := &websocket.Dialer{
 		HandshakeTimeout: 5 * time.Second,
 	}
-	data := requestOpenAI2Xunfei(textRequest, appId, domain)
-	conn, err := dialXunfeiUpstream(ctx, info, dialer, authUrl)
+	if data == nil {
+		return nil, errors.New("xunfei request is nil")
+	}
+	conn, err := dialXunfeiUpstream(ctx, info, dialer, authURL)
 	if err != nil {
 		return nil, err
 	}

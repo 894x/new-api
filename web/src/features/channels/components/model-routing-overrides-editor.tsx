@@ -60,10 +60,11 @@ import {
   updateModelRoutingOverrideDraftField,
   type ModelRoutingOverrideDraft,
 } from '../lib/model-routing-overrides'
-import type {
-  ModelRoutingOverride,
-  ModelRoutingOverridePatch,
-  ModelRoutingOverridesResponse,
+import {
+  MAX_CHANNEL_MODEL_RATE_LIMIT,
+  type ModelRoutingOverride,
+  type ModelRoutingOverridePatch,
+  type ModelRoutingOverridesResponse,
 } from '../types'
 
 type ModelRoutingOverridesEditorProps = {
@@ -82,6 +83,8 @@ type ModelRoutingOverrideRowProps = {
   disabled: boolean
   priorityInvalid: boolean
   weightInvalid: boolean
+  rpmInvalid: boolean
+  tpmInvalid: boolean
   onChange: (field: keyof ModelRoutingOverrideDraft, value: string) => void
   onReset: () => void
 }
@@ -91,6 +94,8 @@ function ModelRoutingOverrideRow(props: ModelRoutingOverrideRowProps) {
   const rowLabel = props.showChannel ? props.row.channel_name : props.row.model
   const draftPriority = parseRoutingOverrideInput(props.draft.priority_override)
   const draftWeight = parseRoutingOverrideInput(props.draft.weight_override)
+  const draftRPM = parseRoutingOverrideInput(props.draft.rpm_override)
+  const draftTPM = parseRoutingOverrideInput(props.draft.tpm_override)
   const effectivePriority =
     draftPriority === undefined
       ? props.row.effective_priority
@@ -101,6 +106,18 @@ function ModelRoutingOverrideRow(props: ModelRoutingOverrideRowProps) {
     (draftWeight ?? 0) > MAX_MODEL_ROUTING_WEIGHT
       ? props.row.effective_weight
       : (draftWeight ?? props.row.default_weight)
+  const effectiveRPM =
+    draftRPM === undefined ||
+    (draftRPM ?? 0) < 0 ||
+    (draftRPM ?? 0) > MAX_CHANNEL_MODEL_RATE_LIMIT
+      ? props.row.effective_rpm
+      : (draftRPM ?? props.row.default_rpm)
+  const effectiveTPM =
+    draftTPM === undefined ||
+    (draftTPM ?? 0) < 0 ||
+    (draftTPM ?? 0) > MAX_CHANNEL_MODEL_RATE_LIMIT
+      ? props.row.effective_tpm
+      : (draftTPM ?? props.row.default_tpm)
 
   return (
     <TableRow>
@@ -152,6 +169,44 @@ function ModelRoutingOverrideRow(props: ModelRoutingOverrideRowProps) {
           {t('Effective')}: {effectiveWeight}
         </div>
       </TableCell>
+      <TableCell className='min-w-36'>
+        <Input
+          type='number'
+          min={0}
+          max={MAX_CHANNEL_MODEL_RATE_LIMIT}
+          step={1}
+          value={props.draft.rpm_override}
+          placeholder={`${t('Inherit')} (${props.row.default_rpm})`}
+          aria-label={`${t('RPM')} · ${rowLabel}`}
+          aria-invalid={props.rpmInvalid}
+          disabled={props.disabled}
+          onChange={(event) =>
+            props.onChange('rpm_override', event.target.value)
+          }
+        />
+        <div className='text-muted-foreground mt-1 text-xs'>
+          {t('Effective')}: {effectiveRPM}
+        </div>
+      </TableCell>
+      <TableCell className='min-w-36'>
+        <Input
+          type='number'
+          min={0}
+          max={MAX_CHANNEL_MODEL_RATE_LIMIT}
+          step={1}
+          value={props.draft.tpm_override}
+          placeholder={`${t('Inherit')} (${props.row.default_tpm})`}
+          aria-label={`${t('TPM')} · ${rowLabel}`}
+          aria-invalid={props.tpmInvalid}
+          disabled={props.disabled}
+          onChange={(event) =>
+            props.onChange('tpm_override', event.target.value)
+          }
+        />
+        <div className='text-muted-foreground mt-1 text-xs'>
+          {t('Effective')}: {effectiveTPM}
+        </div>
+      </TableCell>
       <TableCell className='w-16 text-right'>
         <Button
           type='button'
@@ -162,7 +217,9 @@ function ModelRoutingOverrideRow(props: ModelRoutingOverrideRowProps) {
           disabled={
             props.disabled ||
             (props.draft.priority_override === '' &&
-              props.draft.weight_override === '')
+              props.draft.weight_override === '' &&
+              props.draft.rpm_override === '' &&
+              props.draft.tpm_override === '')
           }
           onClick={props.onReset}
         >
@@ -345,7 +402,9 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
   const saveOverrides = () => {
     if (serialization.errors.length > 0) {
       toast.error(
-        t('Use whole numbers; weight must be between 0 and 2147483637.')
+        t(
+          'Use whole numbers; weight must be between 0 and 2147483637, and RPM/TPM between 0 and 9007199254740991.'
+        )
       )
       return
     }
@@ -387,7 +446,7 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
             : t('This channel has no configured models.')}
         </div>
       ) : (
-        <div className='rounded-lg border'>
+        <div className='overflow-x-auto rounded-lg border'>
           <Table>
             <TableHeader>
               <TableRow>
@@ -396,6 +455,8 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
                 </TableHead>
                 <TableHead>{t('Priority')}</TableHead>
                 <TableHead>{t('Weight')}</TableHead>
+                <TableHead>{t('RPM')}</TableHead>
+                <TableHead>{t('TPM')}</TableHead>
                 <TableHead>
                   <span className='sr-only'>{t('Reset')}</span>
                 </TableHead>
@@ -422,6 +483,8 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
                       `${key}:priority_override`
                     )}
                     weightInvalid={invalidFields.has(`${key}:weight_override`)}
+                    rpmInvalid={invalidFields.has(`${key}:rpm_override`)}
+                    tpmInvalid={invalidFields.has(`${key}:tpm_override`)}
                     onChange={(field, value) => updateDraft(row, field, value)}
                     onReset={() => resetDraft(row)}
                   />
@@ -434,7 +497,9 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
 
       {serialization.errors.length > 0 && (
         <p className='text-destructive text-sm' role='alert'>
-          {t('Use whole numbers; weight must be between 0 and 2147483637.')}
+          {t(
+            'Use whole numbers; weight must be between 0 and 2147483637, and RPM/TPM between 0 and 9007199254740991.'
+          )}
         </p>
       )}
 

@@ -177,8 +177,35 @@ func getImageToken(c *gin.Context, fileMeta *types.FileMeta, model string, strea
 }
 
 func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
+	return estimateRequestToken(c, meta, info, false, info.RelayFormat, true)
+}
+
+// EstimateRequestTokenForCapacity estimates the upstream token reservation
+// even when ordinary token accounting is disabled. TPM admission must not turn
+// into a zero-token check merely because billing-side counting was disabled.
+func EstimateRequestTokenForCapacity(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
+	return estimateRequestToken(c, meta, info, true, info.RelayFormat, true)
+}
+
+func estimateRequestTokenForCapacityFormat(
+	c *gin.Context,
+	meta *types.TokenCountMeta,
+	info *relaycommon.RelayInfo,
+	relayFormat types.RelayFormat,
+) (int, error) {
+	return estimateRequestToken(c, meta, info, true, relayFormat, false)
+}
+
+func estimateRequestToken(
+	c *gin.Context,
+	meta *types.TokenCountMeta,
+	info *relaycommon.RelayInfo,
+	force bool,
+	relayFormat types.RelayFormat,
+	recordPromptTokens bool,
+) (int, error) {
 	// 是否统计token
-	if !constant.CountToken {
+	if !constant.CountToken && !force {
 		return 0, nil
 	}
 
@@ -186,7 +213,7 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 		return 0, errors.New("token count meta is nil")
 	}
 
-	if info.RelayFormat == types.RelayFormatOpenAIRealtime {
+	if relayFormat == types.RelayFormatOpenAIRealtime {
 		return 0, nil
 	}
 	if info.RelayMode == constant2.RelayModeAudioTranscription || info.RelayMode == constant2.RelayModeAudioTranslation {
@@ -228,7 +255,7 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 		tkm += CountTextToken(meta.CombineText, model)
 	}
 
-	if info.RelayFormat == types.RelayFormatOpenAI {
+	if relayFormat == types.RelayFormatOpenAI {
 		tkm += meta.ToolsCount * 8
 		tkm += meta.MessagesCount * 3 // 每条消息的格式化token数量
 		tkm += meta.NameCount * 3
@@ -237,7 +264,7 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 
 	shouldFetchFiles := true
 
-	if info.RelayFormat == types.RelayFormatGemini {
+	if relayFormat == types.RelayFormatGemini {
 		shouldFetchFiles = false
 	}
 
@@ -296,7 +323,9 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 		}
 	}
 
-	common.SetContextKey(c, constant.ContextKeyPromptTokens, tkm)
+	if recordPromptTokens {
+		common.SetContextKey(c, constant.ContextKeyPromptTokens, tkm)
+	}
 	return tkm, nil
 }
 

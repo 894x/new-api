@@ -554,6 +554,9 @@ export const STATIC_I18N_KEYS = [
   'Sidebar Personal Settings',
   'Customize sidebar display content',
   'Reset to Default',
+  'Maximum requests per fixed one-minute window for each model. 0 means unlimited.',
+  'Maximum reserved tokens per fixed one-minute window for each model. 0 means unlimited.',
+  'Use whole numbers; weight must be between 0 and 2147483637, and RPM/TPM between 0 and 9007199254740991.',
 
   // Available models
   'Available Models',

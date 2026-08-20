@@ -28,8 +28,19 @@ import {
   getModelRoutingOverrideKey,
   mergeModelRoutingOverrideDraftState,
   parseRoutingOverrideInput,
+  type ModelRoutingOverrideDraft,
+  type ModelRoutingOverrideDraftField,
   updateModelRoutingOverrideDraftField,
 } from '../model-routing-overrides'
+
+type MergeRefreshCase = {
+  dirtyField: ModelRoutingOverrideDraftField
+  expectedDraft: ModelRoutingOverrideDraft
+  expectedPatch: Pick<
+    ModelRoutingOverride,
+    'priority_override' | 'weight_override' | 'rpm_override' | 'tpm_override'
+  >
+}
 
 const row: ModelRoutingOverride = {
   channel_id: 7,
@@ -39,10 +50,16 @@ const row: ModelRoutingOverride = {
   model: 'gpt-test',
   default_priority: 10,
   default_weight: 20,
+  default_rpm: 60,
+  default_tpm: 6_000,
   priority_override: null,
   weight_override: 3,
+  rpm_override: null,
+  tpm_override: 1_000,
   effective_priority: 10,
   effective_weight: 3,
+  effective_rpm: 60,
+  effective_tpm: 1_000,
 }
 
 describe('model routing override serialization', () => {
@@ -62,6 +79,8 @@ describe('model routing override serialization', () => {
     drafts[getModelRoutingOverrideKey(row.channel_id, row.model)] = {
       priority_override: '0',
       weight_override: '',
+      rpm_override: '',
+      tpm_override: '1000',
     }
 
     expect(collectChangedModelRoutingOverrides([row], drafts)).toEqual({
@@ -71,6 +90,8 @@ describe('model routing override serialization', () => {
           model: 'gpt-test',
           priority_override: 0,
           weight_override: null,
+          rpm_override: null,
+          tpm_override: 1000,
         },
       ],
       errors: [],
@@ -92,6 +113,8 @@ describe('model routing override serialization', () => {
     drafts[key] = {
       priority_override: '0',
       weight_override: '-1',
+      rpm_override: '',
+      tpm_override: '1000',
     }
 
     expect(collectChangedModelRoutingOverrides([row], drafts)).toEqual({
@@ -106,6 +129,8 @@ describe('model routing override serialization', () => {
     drafts[key] = {
       priority_override: '',
       weight_override: '2147483638',
+      rpm_override: '',
+      tpm_override: '1000',
     }
 
     expect(collectChangedModelRoutingOverrides([row], drafts)).toEqual({
@@ -114,20 +139,78 @@ describe('model routing override serialization', () => {
     })
   })
 
+  it('serializes RPM and TPM inheritance and explicit zero with the full sparse state', () => {
+    const drafts = createModelRoutingOverrideDrafts([row])
+    const key = getModelRoutingOverrideKey(row.channel_id, row.model)
+    drafts[key] = {
+      ...drafts[key],
+      rpm_override: '0',
+      tpm_override: '',
+    }
+
+    expect(collectChangedModelRoutingOverrides([row], drafts)).toEqual({
+      overrides: [
+        {
+          channel_id: 7,
+          model: 'gpt-test',
+          priority_override: null,
+          weight_override: 3,
+          rpm_override: 0,
+          tpm_override: null,
+        },
+      ],
+      errors: [],
+    })
+  })
+
+  it('rejects an unsafe TPM without serializing a partial patch', () => {
+    const drafts = createModelRoutingOverrideDrafts([row])
+    const key = getModelRoutingOverrideKey(row.channel_id, row.model)
+    drafts[key] = {
+      ...drafts[key],
+      tpm_override: String(Number.MAX_SAFE_INTEGER + 1),
+    }
+
+    expect(collectChangedModelRoutingOverrides([row], drafts)).toEqual({
+      overrides: [],
+      errors: [{ key, field: 'tpm_override' }],
+    })
+  })
+
   it.each([
     {
       dirtyField: 'priority_override' as const,
-      expectedDraft: { priority_override: '0', weight_override: '12' },
-      expectedPatch: { priority_override: 0, weight_override: 12 },
+      expectedDraft: {
+        priority_override: '0',
+        weight_override: '12',
+        rpm_override: '',
+        tpm_override: '1000',
+      },
+      expectedPatch: {
+        priority_override: 0,
+        weight_override: 12,
+        rpm_override: null,
+        tpm_override: 1000,
+      },
     },
     {
       dirtyField: 'weight_override' as const,
-      expectedDraft: { priority_override: '9', weight_override: '0' },
-      expectedPatch: { priority_override: 9, weight_override: 0 },
+      expectedDraft: {
+        priority_override: '9',
+        weight_override: '0',
+        rpm_override: '',
+        tpm_override: '1000',
+      },
+      expectedPatch: {
+        priority_override: 9,
+        weight_override: 0,
+        rpm_override: null,
+        tpm_override: 1000,
+      },
     },
   ])(
     'keeps dirty $dirtyField while refreshing and patching the other field',
-    ({ dirtyField, expectedDraft, expectedPatch }) => {
+    ({ dirtyField, expectedDraft, expectedPatch }: MergeRefreshCase) => {
       const key = getModelRoutingOverrideKey(row.channel_id, row.model)
       let state = createModelRoutingOverrideDraftState([row])
       state = updateModelRoutingOverrideDraftField(state, row, dirtyField, '0')

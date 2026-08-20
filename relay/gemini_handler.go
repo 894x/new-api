@@ -170,6 +170,9 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		requestBody = body
 	}
 
+	if capacityErr := admitFinalChannelModelCapacity(c, info, requestBody); capacityErr != nil {
+		return capacityErr
+	}
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		logger.LogError(c, "Do gemini request failed: "+err.Error())
@@ -271,6 +274,9 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 	jsonData = nil
 	requestBody = body
 
+	if capacityErr := admitFinalChannelModelCapacity(c, info, requestBody); capacityErr != nil {
+		return capacityErr
+	}
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		logger.LogError(c, "Do gemini request failed: "+err.Error())

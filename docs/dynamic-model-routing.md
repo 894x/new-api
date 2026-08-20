@@ -49,6 +49,57 @@ same dynamically promoted channel and does not mutate the route's global
 candidate fingerprint. A specific-channel request bypasses both dynamic
 selection and observation.
 
+## Channel-model capacity admission
+
+RPM and TPM are proactive capacity constraints, not health scores. They are
+configured as channel defaults and may be overridden for an individual model
+alongside priority and weight. An override left blank inherits the channel
+default; an explicit `0` means unlimited.
+
+- Identity is `channel_id + public_model`, matching the performance observation
+  identity.
+- Each key uses a fixed Unix-epoch-aligned one-minute window. It is not a
+  rolling sixty-second window.
+- RPM counts admitted relay attempts. TPM counts reserved tokens. Admission is
+  atomic: a request is accepted only when both the next RPM and TPM totals
+  remain within their limits.
+- A capacity-denied channel is excluded immediately and selection continues
+  through the remaining same-priority and lower-priority channels. This does
+  not consume an upstream retry and does not produce a TTFT/TPOT or hard-failure
+  observation.
+- If every eligible channel is full, the gateway returns a local HTTP 429 with
+  error code `channel_model_capacity_exhausted` and a `Retry-After` value up to
+  the next minute boundary. A specifically forced channel is never silently
+  replaced; it receives the same local 429 when full.
+- When Redis is enabled, one Lua operation checks and increments RPM and TPM so
+  all gateway replicas share the same Redis-server-time window even when their
+  local clocks differ. This shared mode requires Redis 3.2 or newer. Without
+  Redis, the counters are process-local.
+- Admission currently covers synchronous relay requests. Channel tests and
+  asynchronous task relays do not consume these counters in this version.
+  OpenAI Realtime is also excluded because its WebSocket is upgraded before a
+  complete request can be admitted and its session TPM is not known up front.
+
+For text generation, TPM reserves estimated prompt tokens plus the explicit
+maximum output tokens. When the client omits an output limit, the gateway uses
+an 8192-token safety reservation; an explicitly supplied zero is preserved and
+reserves input tokens only. The final reservation is derived from the fully
+transformed outbound body, after channel system prompts, format conversion,
+handler defaults, and parameter overrides. It also accounts for multi-choice
+and Gemini batch output limits. Embeddings, images, and other
+non-text-generation routes reserve input tokens only. This is intentionally
+conservative: it prevents known capacity oversubscription but may leave unused
+tokens in the current minute when the response finishes below its reservation.
+
+Admission is reserved before the physical upstream dispatch. If a later local
+step rejects the request, that minute's RPM/TPM reservation is not refunded;
+this favors respecting the configured ceiling over maximizing utilization.
+
+Capacity admission wraps both static and dynamic selection. Priority and weight
+still determine the preferred candidate; TTFT/TPOT still determine dynamic
+quality allocation; RPM/TPM are the final eligibility gate for the selected
+channel-model pair.
+
 ## Control behavior
 
 1. Cold start sends primary traffic to the highest static priority and reserves
@@ -147,6 +198,13 @@ The full accepted report is under
 `pkg/dynamicrouting/sim/protocol/` uses real HTTP and SSE framing and verifies
 metadata-only frames, visible TTFT, TPOT, 429/503, disconnects, and a closed-loop
 A-to-B switch.
+
+The deterministic capacity simulation exercises the production selector and
+final admission boundary with independent RPM and TPM limits. It verifies that
+aggregate admitted throughput matches a separate late-rejection policy model
+and that a local capacity error is returned only after every configured
+channel-model window is full. It is a capacity-policy simulation, not an HTTP or
+upstream-429 integration test.
 
 Run the acceptance sweep from the repository root:
 

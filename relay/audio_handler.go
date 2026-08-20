@@ -3,10 +3,12 @@ package relay
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -43,7 +45,17 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
+	ioReader, capacityBodyCloser, err := replayableFinalAudioCapacityBody(info, ioReader)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	}
+	if capacityBodyCloser != nil {
+		defer capacityBodyCloser.Close()
+	}
 
+	if capacityErr := admitFinalChannelModelCapacity(c, info, ioReader); capacityErr != nil {
+		return capacityErr
+	}
 	resp, err := adaptor.DoRequest(c, info, ioReader)
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
@@ -74,4 +86,25 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 
 	return nil
+}
+
+func replayableFinalAudioCapacityBody(
+	info *relaycommon.RelayInfo,
+	body io.Reader,
+) (io.Reader, io.Closer, error) {
+	if info == nil || info.RelayMode != relayconstant.RelayModeAudioSpeech || body == nil {
+		return body, nil, nil
+	}
+	if _, ok := body.(common.ReplayableBody); ok {
+		return body, nil, nil
+	}
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return nil, nil, err
+	}
+	replayable, closer, err := relaycommon.NewOutboundJSONBody(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	return replayable, closer, nil
 }

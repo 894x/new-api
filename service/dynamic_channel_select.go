@@ -55,6 +55,9 @@ func ObserveDynamicRoutingSample(key dynamicrouting.ObservationKey, sample dynam
 }
 
 func getSatisfiedChannelForRoute(param *RetryParam, group string, retry int) (*model.Channel, bool, error) {
+	if param.CapacityTokens != nil {
+		return selectCapacitySatisfiedChannel(param, group, retry)
+	}
 	if param.DynamicRoutingEligible {
 		channel, handled, allAttempted, err := selectDynamicSatisfiedChannel(param, group)
 		if handled || err != nil {

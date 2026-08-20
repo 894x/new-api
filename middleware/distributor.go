@@ -560,6 +560,14 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
+	// Retry and proactive capacity spillover reuse the same Gin context. Clear
+	// optional provider metadata before applying the replacement channel so a
+	// missing value cannot inherit credentials or routing data from its predecessor.
+	common.SetContextKey(c, constant.ContextKeyChannelOrganization, "")
+	c.Set("api_version", "")
+	c.Set("region", "")
+	c.Set("plugin", "")
+	c.Set("bot_id", "")
 	common.SetContextKey(c, constant.ContextKeyChannelId, channel.Id)
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)
 	common.SetContextKey(c, constant.ContextKeyChannelType, channel.Type)

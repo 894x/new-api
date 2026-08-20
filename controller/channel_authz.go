@@ -122,6 +122,8 @@ var channelNonSensitiveFields = map[string]struct{}{
 	"test_model":          {},
 	"name":                {},
 	"weight":              {},
+	"rpm":                 {},
+	"tpm":                 {},
 	"models":              {},
 	"group":               {},
 	"model_mapping":       {},

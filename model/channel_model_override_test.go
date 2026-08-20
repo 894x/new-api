@@ -69,6 +69,160 @@ func TestPatchChannelModelOverridesMaterializesEffectiveAbilityValues(t *testing
 	assert.NotNil(t, routings[0].WeightOverride)
 }
 
+func TestChannelModelRPMAndTPMOverridesMaterializeEffectiveCapacity(t *testing.T) {
+	clearChannelModelRoutingTables(t)
+	priority := int64(10)
+	weight := uint(20)
+	defaultRPM := int64(60)
+	defaultTPM := int64(6000)
+	channel := &Channel{
+		Id:       5107,
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "test-key",
+		Status:   common.ChannelStatusEnabled,
+		Name:     "capacity-channel",
+		Weight:   &weight,
+		Models:   "model-a,model-b",
+		Group:    "default",
+		Priority: &priority,
+		RPM:      &defaultRPM,
+		TPM:      &defaultTPM,
+	}
+	require.NoError(t, channel.Insert())
+
+	unlimited := int64(0)
+	modelTPM := int64(1000)
+	require.NoError(t, PatchChannelModelOverrides([]ChannelModelOverridePatch{
+		{ChannelId: channel.Id, Model: "model-a", RPM: &unlimited, TPM: &modelTPM},
+	}))
+
+	var overridden Ability
+	require.NoError(t, DB.Where("channel_id = ? AND model = ?", channel.Id, "model-a").First(&overridden).Error)
+	assert.Equal(t, int64(0), overridden.RPM, "an explicit zero override disables the inherited RPM cap")
+	assert.Equal(t, int64(1000), overridden.TPM)
+
+	var inherited Ability
+	require.NoError(t, DB.Where("channel_id = ? AND model = ?", channel.Id, "model-b").First(&inherited).Error)
+	assert.Equal(t, int64(60), inherited.RPM)
+	assert.Equal(t, int64(6000), inherited.TPM)
+
+	routings, err := ListChannelModelRoutings(channel.Id)
+	require.NoError(t, err)
+	require.Len(t, routings, 2)
+	assert.Equal(t, int64(60), routings[0].DefaultRPM)
+	assert.Equal(t, int64(6000), routings[0].DefaultTPM)
+	assert.NotNil(t, routings[0].RPMOverride)
+	assert.Equal(t, int64(0), *routings[0].RPMOverride)
+	assert.NotNil(t, routings[0].TPMOverride)
+	assert.Equal(t, int64(1000), *routings[0].TPMOverride)
+	assert.Equal(t, int64(0), routings[0].EffectiveRPM)
+	assert.Equal(t, int64(1000), routings[0].EffectiveTPM)
+}
+
+func TestChannelModelCapacityRejectsNegativeDefaultsAndOverrides(t *testing.T) {
+	clearChannelModelRoutingTables(t)
+	negative := int64(-1)
+	priority := int64(1)
+	weight := uint(2)
+	channel := &Channel{
+		Id: 5108, Type: constant.ChannelTypeOpenAI, Key: "key", Status: common.ChannelStatusEnabled,
+		Name: "negative-capacity", Models: "model-a", Group: "default", Priority: &priority, Weight: &weight,
+		RPM: &negative,
+	}
+	require.Error(t, channel.Insert())
+
+	channel.RPM = nil
+	require.NoError(t, channel.Insert())
+	err := PatchChannelModelOverrides([]ChannelModelOverridePatch{
+		{ChannelId: channel.Id, Model: "model-a", TPM: &negative},
+	})
+	require.Error(t, err)
+
+	var count int64
+	require.NoError(t, DB.Model(&ChannelModelOverride{}).Where("channel_id = ?", channel.Id).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestChannelUpdatePersistsExplicitZeroCapacityAndRebuildsAbilities(t *testing.T) {
+	clearChannelModelRoutingTables(t)
+	priority := int64(10)
+	weight := uint(20)
+	rpm := int64(60)
+	tpm := int64(6000)
+	channel := &Channel{
+		Id: 5109, Type: constant.ChannelTypeOpenAI, Key: "key", Status: common.ChannelStatusEnabled,
+		Name: "capacity-update", Models: "model-a", Group: "default", Priority: &priority, Weight: &weight,
+		RPM: &rpm, TPM: &tpm,
+	}
+	require.NoError(t, channel.Insert())
+
+	unlimited := int64(0)
+	channel.RPM = &unlimited
+	channel.TPM = &unlimited
+	require.NoError(t, channel.Update())
+
+	var persisted Channel
+	require.NoError(t, DB.First(&persisted, channel.Id).Error)
+	require.NotNil(t, persisted.RPM)
+	require.NotNil(t, persisted.TPM)
+	assert.Zero(t, *persisted.RPM)
+	assert.Zero(t, *persisted.TPM)
+
+	var ability Ability
+	require.NoError(t, DB.Where("channel_id = ? AND model = ?", channel.Id, "model-a").First(&ability).Error)
+	assert.Zero(t, ability.RPM)
+	assert.Zero(t, ability.TPM)
+}
+
+func TestResolveChannelModelRateLimitsUsesExactAndNormalizedOverrides(t *testing.T) {
+	clearChannelModelRoutingTables(t)
+	priority := int64(10)
+	weight := uint(20)
+	defaultRPM := int64(60)
+	defaultTPM := int64(6000)
+	channel := &Channel{
+		Id: 5110, Type: constant.ChannelTypeOpenAI, Key: "key", Status: common.ChannelStatusEnabled,
+		Name: "capacity-resolver", Models: "gpt-4o-gizmo-*", Group: "default", Priority: &priority, Weight: &weight,
+		RPM: &defaultRPM, TPM: &defaultTPM,
+	}
+	require.NoError(t, channel.Insert())
+	overrideRPM := int64(12)
+	overrideTPM := int64(1200)
+	require.NoError(t, PatchChannelModelOverrides([]ChannelModelOverridePatch{{
+		ChannelId: channel.Id,
+		Model:     "gpt-4o-gizmo-*",
+		RPM:       &overrideRPM,
+		TPM:       &overrideTPM,
+	}}))
+
+	rpm, tpm, err := ResolveChannelModelRateLimits(channel, "gpt-4o-gizmo-2026-08-20")
+	require.NoError(t, err)
+	assert.Equal(t, int64(12), rpm)
+	assert.Equal(t, int64(1200), tpm)
+
+	rpm, tpm, err = ResolveChannelModelRateLimits(channel, "unconfigured-model")
+	require.NoError(t, err)
+	assert.Equal(t, int64(60), rpm)
+	assert.Equal(t, int64(6000), tpm)
+}
+
+func TestBatchInsertChannelsRejectsInvalidCapacityBeforeWriting(t *testing.T) {
+	clearChannelModelRoutingTables(t)
+	negative := int64(-1)
+	priority := int64(1)
+	weight := uint(1)
+	err := BatchInsertChannels([]Channel{{
+		Id: 5111, Type: constant.ChannelTypeOpenAI, Key: "key", Status: common.ChannelStatusEnabled,
+		Name: "invalid-batch-capacity", Models: "model-a", Group: "default",
+		Priority: &priority, Weight: &weight, TPM: &negative,
+	}})
+	require.ErrorContains(t, err, "channel tpm must not be negative")
+
+	var count int64
+	require.NoError(t, DB.Model(&Channel{}).Where("id = ?", 5111).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
 func TestChannelDefaultChangesPreserveSparseOverrides(t *testing.T) {
 	clearChannelModelRoutingTables(t)
 	channel := createChannelModelRoutingTestChannel(t, 5104, "model-a,model-b", 10, 20, common.ChannelStatusEnabled)

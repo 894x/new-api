@@ -95,6 +95,119 @@ func TestValidateChannelRejectsOversizedDefaultWeight(t *testing.T) {
 	require.ErrorContains(t, err, "channel weight exceeds")
 }
 
+func TestValidateChannelRejectsInvalidRPMAndTPMDefaults(t *testing.T) {
+	negative := int64(-1)
+	tooLarge := model.MaxChannelModelRateLimit + 1
+
+	rpmErr := validateChannel(&model.Channel{
+		Type: constant.ChannelTypeOpenAI,
+		RPM:  &negative,
+	}, false)
+	require.ErrorContains(t, rpmErr, "channel rpm must not be negative")
+
+	tpmErr := validateChannel(&model.Channel{
+		Type: constant.ChannelTypeOpenAI,
+		TPM:  &tooLarge,
+	}, false)
+	require.ErrorContains(t, tpmErr, "channel tpm exceeds")
+}
+
+func TestUpdateChannelPersistsExplicitZeroRPMAndTPMDefaults(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	priority := int64(10)
+	weight := uint(20)
+	rpm := int64(60)
+	tpm := int64(6000)
+	channel := &model.Channel{
+		Type: constant.ChannelTypeOpenAI, Key: "key", Status: common.ChannelStatusEnabled,
+		Name: "capacity-update", Models: "model-a", Group: "default",
+		Priority: &priority, Weight: &weight, RPM: &rpm, TPM: &tpm,
+	}
+	require.NoError(t, channel.Insert())
+	body, err := common.Marshal(map[string]any{
+		"id":       channel.Id,
+		"type":     channel.Type,
+		"name":     channel.Name,
+		"models":   channel.Models,
+		"group":    channel.Group,
+		"priority": priority,
+		"weight":   weight,
+		"rpm":      0,
+		"tpm":      0,
+	})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/channel/", bytes.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	UpdateChannel(ctx)
+
+	var response struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success, response.Message)
+	var persisted model.Channel
+	require.NoError(t, db.First(&persisted, channel.Id).Error)
+	require.NotNil(t, persisted.RPM)
+	require.NotNil(t, persisted.TPM)
+	assert.Zero(t, *persisted.RPM)
+	assert.Zero(t, *persisted.TPM)
+	var ability model.Ability
+	require.NoError(t, db.Where("channel_id = ? AND model = ?", channel.Id, "model-a").First(&ability).Error)
+	assert.Zero(t, ability.RPM)
+	assert.Zero(t, ability.TPM)
+}
+
+func TestUpdateChannelPreservesRPMAndTPMDefaultsWhenLegacyClientOmitsThem(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	priority := int64(10)
+	weight := uint(20)
+	rpm := int64(60)
+	tpm := int64(6000)
+	channel := &model.Channel{
+		Type: constant.ChannelTypeOpenAI, Key: "key", Status: common.ChannelStatusEnabled,
+		Name: "legacy-capacity-update", Models: "model-a", Group: "default",
+		Priority: &priority, Weight: &weight, RPM: &rpm, TPM: &tpm,
+	}
+	require.NoError(t, channel.Insert())
+	body, err := common.Marshal(map[string]any{
+		"id":       channel.Id,
+		"type":     channel.Type,
+		"name":     channel.Name,
+		"models":   channel.Models,
+		"group":    channel.Group,
+		"priority": priority,
+		"weight":   weight,
+	})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/channel/", bytes.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	UpdateChannel(ctx)
+
+	var response struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success, response.Message)
+	var persisted model.Channel
+	require.NoError(t, db.First(&persisted, channel.Id).Error)
+	require.NotNil(t, persisted.RPM)
+	require.NotNil(t, persisted.TPM)
+	assert.Equal(t, rpm, *persisted.RPM)
+	assert.Equal(t, tpm, *persisted.TPM)
+	var ability model.Ability
+	require.NoError(t, db.Where("channel_id = ? AND model = ?", channel.Id, "model-a").First(&ability).Error)
+	assert.Equal(t, rpm, ability.RPM)
+	assert.Equal(t, tpm, ability.TPM)
+}
+
 func TestManageMultiKeysKeepsChannelAbilityAndCacheStatusInSync(t *testing.T) {
 	for _, memoryCacheEnabled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "database", true: "memory cache"}[memoryCacheEnabled], func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -174,6 +175,29 @@ func TestShouldSkipRetryAfterChannelAffinityFailure(t *testing.T) {
 			require.Equal(t, tt.want, ShouldSkipRetryAfterChannelAffinityFailure(tt.ctx()))
 		})
 	}
+}
+
+func TestClearChannelAffinitySelectionForFallbackKeepsPinButDropsAttemptMarkers(t *testing.T) {
+	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+		RuleName:   "capacity-fallback",
+		SkipRetry:  true,
+		UsingGroup: "default",
+		ModelName:  "gpt-5",
+	})
+	MarkChannelAffinityUsed(ctx, "default", 9527)
+	require.True(t, ShouldSkipRetryAfterChannelAffinityFailure(ctx))
+	before := map[string]interface{}{}
+	AppendChannelAffinityAdminInfo(ctx, before)
+	require.Contains(t, before, "channel_affinity")
+
+	ClearChannelAffinitySelectionForFallback(ctx)
+
+	assert.False(t, ShouldSkipRetryAfterChannelAffinityFailure(ctx))
+	after := map[string]interface{}{}
+	AppendChannelAffinityAdminInfo(ctx, after)
+	assert.NotContains(t, after, "channel_affinity")
+	_, stillPinned := getChannelAffinityMeta(ctx)
+	assert.True(t, stillPinned, "capacity fallback must not delete the long-lived affinity pin")
 }
 
 func TestExtractChannelAffinityValue_RequestHeader(t *testing.T) {

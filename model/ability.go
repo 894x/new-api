@@ -25,6 +25,8 @@ type Ability struct {
 	Enabled   bool    `json:"enabled"`
 	Priority  *int64  `json:"priority" gorm:"bigint;default:0;index"`
 	Weight    uint    `json:"weight" gorm:"default:0;index"`
+	RPM       int64   `json:"rpm" gorm:"bigint;default:0"`
+	TPM       int64   `json:"tpm" gorm:"bigint;default:0"`
 	Tag       *string `json:"tag" gorm:"index"`
 }
 
@@ -238,6 +240,9 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 	if err := ValidateChannelWeight(channel.Weight); err != nil {
 		return err
 	}
+	if err := ValidateChannelModelRateLimits(channel.RPM, channel.TPM); err != nil {
+		return err
+	}
 	useDB := DB
 	if tx != nil {
 		useDB = tx
@@ -268,6 +273,8 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
 				Priority:  common.GetPointer(routing.EffectivePriority),
 				Weight:    routing.EffectiveWeight,
+				RPM:       routing.EffectiveRPM,
+				TPM:       routing.EffectiveTPM,
 				Tag:       channel.Tag,
 			}
 			abilities = append(abilities, ability)
@@ -293,6 +300,9 @@ func (channel *Channel) DeleteAbilities() error {
 // Make sure the channel is completed before calling this function.
 func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	if err := ValidateChannelWeight(channel.Weight); err != nil {
+		return err
+	}
+	if err := ValidateChannelModelRateLimits(channel.RPM, channel.TPM); err != nil {
 		return err
 	}
 	isNewTx := false
@@ -355,6 +365,8 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
 				Priority:  common.GetPointer(routing.EffectivePriority),
 				Weight:    routing.EffectiveWeight,
+				RPM:       routing.EffectiveRPM,
+				TPM:       routing.EffectiveTPM,
 				Tag:       channel.Tag,
 			}
 			abilities = append(abilities, ability)
