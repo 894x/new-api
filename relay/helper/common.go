@@ -105,6 +105,7 @@ func StringData(c *gin.Context, str string) error {
 	}
 
 	responseId := common.GetContextKeyString(c, constant.ContextKeyResponseId)
+	common.CaptureUpstreamResponseID(c, common.StringToByteSlice(str), responseId)
 	normalized, err := common.ReplaceTopLevelJSONID(common.StringToByteSlice(str), responseId)
 	if err != nil {
 		return fmt.Errorf("error normalizing response id: %w", err)
@@ -144,6 +145,7 @@ func ObjectData(c *gin.Context, object interface{}) error {
 // WriteJSON writes a JSON response after applying the public Chat Completions ID.
 func WriteJSON(c *gin.Context, data []byte) (int, error) {
 	responseId := common.GetContextKeyString(c, constant.ContextKeyResponseId)
+	common.CaptureUpstreamResponseID(c, data, responseId)
 	normalized, err := common.ReplaceTopLevelJSONID(data, responseId)
 	if err != nil {
 		return 0, fmt.Errorf("error normalizing response id: %w", err)

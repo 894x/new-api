@@ -34,6 +34,11 @@ const defaultSecuritySettings: SecuritySettings = {
   CheckSensitiveOnPromptEnabled: false,
   SensitiveWords: '',
   'error_setting.hide_error_details': true,
+  'error_setting.blocked_response_headers': [
+    'X-Modelverse-Request-Id',
+    'X-Request-Id',
+    'X-Trace-Id',
+  ],
   'fetch_setting.enable_ssrf_protection': true,
   'fetch_setting.allow_private_ip': false,
   'fetch_setting.domain_filter_mode': false,

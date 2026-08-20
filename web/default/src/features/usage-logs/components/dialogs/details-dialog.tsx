@@ -543,6 +543,18 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
+  const upstreamResponseId = other?.admin_info?.upstream_response_id
+  const upstreamRequestIds = Object.entries(
+    other?.admin_info?.upstream_request_ids ?? {}
+  )
+    .filter(
+      ([header, value]) =>
+        !(
+          header.toLowerCase() === 'x-oneapi-request-id' &&
+          value === props.log.upstream_request_id
+        )
+    )
+    .sort(([left], [right]) => left.localeCompare(right))
 
   return (
     <Dialog
@@ -581,13 +593,24 @@ export function DetailsDialog(props: DetailsDialogProps) {
               mono
             />
           )}
-          {props.log.upstream_request_id && (
+          {props.isAdmin && props.log.upstream_request_id && (
             <DetailRow
               label={t('Upstream Request ID')}
               value={props.log.upstream_request_id}
               mono
             />
           )}
+          {props.isAdmin && upstreamResponseId && (
+            <DetailRow
+              label={t('Upstream Response ID')}
+              value={upstreamResponseId}
+              mono
+            />
+          )}
+          {props.isAdmin &&
+            upstreamRequestIds.map(([header, value]) => (
+              <DetailRow key={header} label={header} value={value} mono />
+            ))}
 
           {props.isAdmin && props.log.channel > 0 && (
             <DetailRow

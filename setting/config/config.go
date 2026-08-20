@@ -269,6 +269,9 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 		}
 	}
 
+	if postUpdater, ok := config.(interface{ AfterConfigUpdate() error }); ok {
+		return postUpdater.AfterConfigUpdate()
+	}
 	return nil
 }
 

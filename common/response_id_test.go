@@ -1,8 +1,11 @@
 package common
 
 import (
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -59,4 +62,16 @@ func TestReplaceTopLevelJSONIDAllowsEmptyErrorFields(t *testing.T) {
 			assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", gjson.GetBytes(output, "id").String())
 		})
 	}
+}
+
+func TestCaptureUpstreamResponseIDLimitsUntrustedIdentifierSize(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	upstreamID := strings.Repeat("a", MaxUpstreamIdentifierBytes+100)
+	payload := []byte(`{"id":"` + upstreamID + `","choices":[]}`)
+
+	CaptureUpstreamResponseID(c, payload, "public-id")
+
+	captured := c.GetString(UpstreamResponseIdKey)
+	assert.LessOrEqual(t, len(captured), MaxUpstreamIdentifierBytes)
+	assert.True(t, strings.HasSuffix(captured, "…"))
 }

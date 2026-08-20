@@ -208,17 +208,19 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
-	// Save to database first
-	option := Option{
-		Key: key,
+	if err := validateOptionValue(key, value); err != nil {
+		return err
 	}
-	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
-	option.Value = value
-	// Save is a combination function.
-	// If save value does not contain primary key, it will execute Create,
-	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		option := Option{Key: key}
+		if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+			return err
+		}
+		option.Value = value
+		return tx.Save(&option).Error
+	}); err != nil {
+		return err
+	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
 }
@@ -231,6 +233,11 @@ func UpdateOption(key string, value string) error {
 func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
+	}
+	for key, value := range values {
+		if err := validateOptionValue(key, value); err != nil {
+			return err
+		}
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		for k, v := range values {
@@ -259,6 +266,21 @@ func UpdateOptionsBulk(values map[string]string) error {
 func updateOptionMap(key string, value string) (err error) {
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
+	if key == "error_setting.blocked_response_headers" {
+		headers, validateErr := operation_setting.ValidateBlockedResponseHeadersJSON(value)
+		if validateErr != nil {
+			return validateErr
+		}
+		if updateErr := operation_setting.UpdateBlockedResponseHeaders(headers); updateErr != nil {
+			return updateErr
+		}
+		normalized, marshalErr := common.Marshal(headers)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		common.OptionMap[key] = string(normalized)
+		return nil
+	}
 	common.OptionMap[key] = value
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
@@ -576,6 +598,14 @@ func updateOptionMap(key string, value string) (err error) {
 		// The value is already stored in OptionMap at the top of this function (line: common.OptionMap[key] = value).
 		// No additional in-memory variable to update.
 	}
+	return err
+}
+
+func validateOptionValue(key string, value string) error {
+	if key != "error_setting.blocked_response_headers" {
+		return nil
+	}
+	_, err := operation_setting.ValidateBlockedResponseHeadersJSON(value)
 	return err
 }
 

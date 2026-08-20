@@ -49,6 +49,25 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.OriginModelName))
 }
 
+// AppendUpstreamResponseAdminInfo adds provider identifiers captured before
+// client-facing normalization. The caller must place adminInfo under
+// other.admin_info so non-admin log views strip the whole object.
+func AppendUpstreamResponseAdminInfo(ctx *gin.Context, adminInfo map[string]interface{}) {
+	if ctx == nil || adminInfo == nil {
+		return
+	}
+	if upstreamResponseId := ctx.GetString(common.UpstreamResponseIdKey); upstreamResponseId != "" {
+		adminInfo["upstream_response_id"] = upstreamResponseId
+	}
+	if headers, ok := common.GetContextKeyType[map[string]string](ctx, common.UpstreamResponseHeadersKey); ok && len(headers) > 0 {
+		copiedHeaders := make(map[string]string, len(headers))
+		for key, value := range headers {
+			copiedHeaders[key] = value
+		}
+		adminInfo["upstream_request_ids"] = copiedHeaders
+	}
+}
+
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
 	if other == nil {
 		return
@@ -106,6 +125,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	}
 
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
+	AppendUpstreamResponseAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo
 	appendRequestPath(ctx, relayInfo, other)

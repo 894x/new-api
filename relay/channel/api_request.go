@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	common2 "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
@@ -515,9 +514,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		return nil, errors.New("resp is nil")
 	}
 
-	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
-		c.Set(common2.UpstreamRequestIdKey, upID)
-	}
+	service.CaptureUpstreamResponseHeaders(c, resp.Header)
 
 	_ = req.Body.Close()
 	_ = c.Request.Body.Close()
