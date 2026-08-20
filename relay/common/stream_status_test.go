@@ -31,6 +31,19 @@ func TestStreamStatus_SetEndReason_WithError(t *testing.T) {
 	assert.Equal(t, expectedErr, s.EndError)
 }
 
+func TestStreamStatus_ClientGoneOverridesScannerErrorRace(t *testing.T) {
+	t.Parallel()
+	s := NewStreamStatus()
+	scannerErr := fmt.Errorf("scanner read failed")
+	clientErr := fmt.Errorf("context canceled")
+
+	s.SetEndReason(StreamEndReasonScannerErr, scannerErr)
+	s.SetClientGone(clientErr)
+
+	assert.Equal(t, StreamEndReasonClientGone, s.EndReason)
+	assert.Equal(t, clientErr, s.EndError)
+}
+
 func TestStreamStatus_SetEndReason_NilSafe(t *testing.T) {
 	t.Parallel()
 	var s *StreamStatus

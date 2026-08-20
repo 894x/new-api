@@ -146,6 +146,7 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 	statusCodeMappingStr := c.GetString("status_code_mapping")
 
 	httpResp = resp.(*http.Response)
+	info.SetAttemptHTTPStatus(httpResp.StatusCode)
 	clientStream := info.IsStream
 	upstreamStream := isResponsesEventStreamContentType(httpResp.Header.Get("Content-Type"))
 	info.IsStream = clientStream || upstreamStream

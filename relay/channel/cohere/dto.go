@@ -20,6 +20,8 @@ type CohereResponse struct {
 	IsFinished   bool                  `json:"is_finished"`
 	EventType    string                `json:"event_type"`
 	Text         string                `json:"text,omitempty"`
+	Message      string                `json:"message,omitempty"`
+	Error        any                   `json:"error,omitempty"`
 	FinishReason string                `json:"finish_reason,omitempty"`
 	Response     *CohereResponseResult `json:"response"`
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -14,10 +15,44 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type DownstreamWriteError struct {
+	Err error
+}
+
+func (e *DownstreamWriteError) Error() string { return e.Err.Error() }
+func (e *DownstreamWriteError) Unwrap() error { return e.Err }
+
+func IsDownstreamWriteError(err error) bool {
+	var writeErr *DownstreamWriteError
+	return errors.As(err, &writeErr)
+}
+
+func downstreamWriteError(err error) error {
+	if err == nil || IsDownstreamWriteError(err) {
+		return err
+	}
+	return &DownstreamWriteError{Err: err}
+}
+
+func writeSSESegment(c *gin.Context, data string) error {
+	if c == nil || c.Writer == nil {
+		return downstreamWriteError(errors.New("context or writer is nil"))
+	}
+	common.CustomEvent{}.WriteContentType(c.Writer)
+	encoded := strings.ReplaceAll(data, "\r", "\\r")
+	if strings.HasPrefix(data, "data") {
+		encoded += "\n\n"
+	}
+	if _, err := c.Writer.Write([]byte(encoded)); err != nil {
+		return downstreamWriteError(fmt.Errorf("write stream data failed: %w", err))
+	}
+	return nil
+}
+
 func FlushWriter(c *gin.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("flush panic recovered: %v", r)
+			err = downstreamWriteError(fmt.Errorf("flush panic recovered: %v", r))
 		}
 	}()
 
@@ -26,12 +61,12 @@ func FlushWriter(c *gin.Context) (err error) {
 	}
 
 	if requestContextDone(c) {
-		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
+		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
 
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		return errors.New("streaming error: flusher not found")
+		return downstreamWriteError(errors.New("streaming error: flusher not found"))
 	}
 
 	flusher.Flush()
@@ -60,64 +95,76 @@ func SetEventStreamHeaders(c *gin.Context) {
 
 func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	if requestContextDone(c) {
-		return nil
+		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
 
 	jsonData, err := common.Marshal(resp)
 	if err != nil {
-		common.SysError("error marshalling stream response: " + err.Error())
-	} else {
-		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-		c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonData)})
+		return fmt.Errorf("error marshalling stream response: %w", err)
 	}
-	_ = FlushWriter(c)
-	return nil
+	if err := writeSSESegment(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
+		return err
+	}
+	if err := writeSSESegment(c, "data: "+string(jsonData)); err != nil {
+		return err
+	}
+	return FlushWriter(c)
 }
 
-func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) {
+func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) error {
 	if requestContextDone(c) {
-		return
+		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
 
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s\n", data)})
-	_ = FlushWriter(c)
+	if err := writeSSESegment(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
+		return err
+	}
+	if err := writeSSESegment(c, fmt.Sprintf("data: %s\n", data)); err != nil {
+		return err
+	}
+	return FlushWriter(c)
 }
 
 func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data string) error {
 	if requestContextDone(c) {
-		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
+		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
 
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", data)})
+	if err := writeSSESegment(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
+		return err
+	}
+	if err := writeSSESegment(c, fmt.Sprintf("data: %s", data)); err != nil {
+		return err
+	}
 	return FlushWriter(c)
 }
 
 func StringData(c *gin.Context, str string) error {
 	if c == nil || c.Writer == nil {
-		return errors.New("context or writer is nil")
+		return downstreamWriteError(errors.New("context or writer is nil"))
 	}
 
 	if requestContextDone(c) {
-		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
+		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
 
-	c.Render(-1, common.CustomEvent{Data: "data: " + str})
+	if err := writeSSESegment(c, "data: "+str); err != nil {
+		return err
+	}
 	return FlushWriter(c)
 }
 
 func PingData(c *gin.Context) error {
 	if c == nil || c.Writer == nil {
-		return errors.New("context or writer is nil")
+		return downstreamWriteError(errors.New("context or writer is nil"))
 	}
 
 	if requestContextDone(c) {
-		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
+		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
 
 	if _, err := c.Writer.Write([]byte(": PING\n\n")); err != nil {
-		return fmt.Errorf("write ping data failed: %w", err)
+		return downstreamWriteError(fmt.Errorf("write ping data failed: %w", err))
 	}
 	return FlushWriter(c)
 }
@@ -133,8 +180,8 @@ func ObjectData(c *gin.Context, object interface{}) error {
 	return StringData(c, string(jsonData))
 }
 
-func Done(c *gin.Context) {
-	_ = StringData(c, "[DONE]")
+func Done(c *gin.Context) error {
+	return StringData(c, "[DONE]")
 }
 
 func WssString(c *gin.Context, ws *websocket.Conn, str string) error {

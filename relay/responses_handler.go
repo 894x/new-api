@@ -128,6 +128,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 	if resp != nil {
 		httpResp = resp.(*http.Response)
+		info.SetAttemptHTTPStatus(httpResp.StatusCode)
 
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)

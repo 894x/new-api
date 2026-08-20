@@ -21,6 +21,7 @@ import { IoNetDeploymentSettingsSection } from '../integrations/ionet-deployment
 import type { ModelSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { ClaudeSettingsCard } from './claude-settings-card'
+import { DynamicRoutingSection } from './dynamic-routing-section'
 import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
@@ -85,6 +86,44 @@ const MODELS_SECTIONS = [
             settings['monitor_setting.auto_test_channel_minutes'],
           'monitor_setting.channel_test_mode':
             settings['monitor_setting.channel_test_mode'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'dynamic-routing',
+    titleKey: 'Dynamic Routing',
+    build: (settings: ModelSettings) => (
+      <DynamicRoutingSection
+        defaultValues={{
+          'dynamic_routing_setting.enabled':
+            settings['dynamic_routing_setting.enabled'],
+          'dynamic_routing_setting.max_samples':
+            settings['dynamic_routing_setting.max_samples'],
+          'dynamic_routing_setting.max_age_seconds':
+            settings['dynamic_routing_setting.max_age_seconds'],
+          'dynamic_routing_setting.min_samples':
+            settings['dynamic_routing_setting.min_samples'],
+          'dynamic_routing_setting.probe_fraction':
+            settings['dynamic_routing_setting.probe_fraction'],
+          'dynamic_routing_setting.degradation_threshold':
+            settings['dynamic_routing_setting.degradation_threshold'],
+          'dynamic_routing_setting.recovery_threshold':
+            settings['dynamic_routing_setting.recovery_threshold'],
+          'dynamic_routing_setting.critical_threshold':
+            settings['dynamic_routing_setting.critical_threshold'],
+          'dynamic_routing_setting.candidate_advantage':
+            settings['dynamic_routing_setting.candidate_advantage'],
+          'dynamic_routing_setting.aggressiveness':
+            settings['dynamic_routing_setting.aggressiveness'],
+          'dynamic_routing_setting.recovery_step':
+            settings['dynamic_routing_setting.recovery_step'],
+          'dynamic_routing_setting.cooldown_seconds':
+            settings['dynamic_routing_setting.cooldown_seconds'],
+          'dynamic_routing_setting.hard_failure_threshold':
+            settings['dynamic_routing_setting.hard_failure_threshold'],
+          'dynamic_routing_setting.hard_failure_cooldown_seconds':
+            settings['dynamic_routing_setting.hard_failure_cooldown_seconds'],
         }}
       />
     ),

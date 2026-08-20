@@ -1,0 +1,13 @@
+rank,parameters,average_improvement_percent,worst_improvement_percent,scenario_win_rate,acceptance_all_passed,significant,regressed_runs
+1,probe-015-m3-age60,41.6988,-1.0735,0.5397,true,true,0
+2,probe-015-m3-age90,40.2476,-1.0735,0.4286,true,true,0
+3,probe-015-hard-confirmed,40.1839,-1.0735,0.4286,true,true,0
+4,probe-025-m4-age90,39.8986,-3.1124,0.5556,true,true,0
+5,probe-020-m4-age90,37.5302,-1.2594,0.4286,true,true,0
+6,probe-020-m3-age60,32.5232,-1.2594,0.4444,true,true,0
+7,probe-020-slow-recovery,31.6915,-1.2594,0.4286,true,true,0
+8,probe-020-m3-age90,31.6695,-1.2594,0.4286,true,true,0
+9,probe-010-m3-age90,29.1290,-0.4894,0.3333,true,true,0
+10,probe-025-m3-age90,39.3235,-37.5785,0.5079,false,false,1
+11,probe-025-m3-age60,38.5792,-37.2505,0.5238,false,false,1
+12,probe-025-critical-fast,38.5250,-37.5785,0.5238,false,false,1

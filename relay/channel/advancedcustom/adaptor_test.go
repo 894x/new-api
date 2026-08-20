@@ -166,6 +166,33 @@ func TestAdaptorSetupRequestHeaderAddsClaudeDefaultHeaders(t *testing.T) {
 	assert.Equal(t, "2023-06-01", header.Get("anthropic-version"))
 }
 
+func TestInvalidAdvancedCustomAuthPublishesPreDispatchHealthFailure(t *testing.T) {
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/chat/completions",
+				UpstreamPath: "https://upstream.example/v1/chat/completions",
+				Converter:    relayconvert.ConverterNone,
+				Auth:         &dto.AdvancedCustomRouteAuth{Type: "invalid-auth-type"},
+			},
+		},
+	})
+	info.IsStream = true
+	info.BeginDynamicRoutingAttempt(13, info.GetChannelType(), info.OriginModelName, true)
+
+	_, err := (&Adaptor{}).GetRequestURL(info)
+	require.Error(t, err)
+	apiErr, ok := err.(*types.NewAPIError)
+	require.True(t, ok)
+	sample, observed := info.FinishDynamicRoutingAttempt(apiErr)
+
+	require.True(t, observed)
+	assert.True(t, sample.HardFailure)
+	assert.True(t, sample.UpstreamStartedAt.IsZero())
+	assert.False(t, sample.HasTTFT)
+	assert.False(t, sample.HasTPOT)
+}
+
 func TestAdaptorReturnsErrorWhenNoRouteMatchesPath(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{

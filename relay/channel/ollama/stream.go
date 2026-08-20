@@ -1,6 +1,7 @@
 package ollama
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 type ollamaChatStreamChunk struct {
 	Model     string `json:"model"`
 	CreatedAt string `json:"created_at"`
+	Error     string `json:"error,omitempty"`
 	// chat
 	Message *struct {
 		Role      string           `json:"role"`
@@ -95,10 +97,76 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if resp == nil || resp.Body == nil {
 		return nil, types.NewOpenAIError(fmt.Errorf("empty response"), types.ErrorCodeBadResponse, http.StatusBadRequest)
 	}
-	defer service.CloseResponseBodyGracefully(resp)
-
+	info.StreamStatus = relaycommon.NewStreamStatus()
+	streamCtx, cancel := context.WithCancel(c.Request.Context())
 	helper.SetEventStreamHeaders(c)
 	scanner := helper.NewStreamScanner(resp.Body)
+	dataChan := make(chan string, 10)
+	producerDone := make(chan struct{})
+	idleWatchdog := helper.NewConfiguredStreamIdleWatchdog()
+	var producerErr *types.NewAPIError
+	go func() {
+		defer close(producerDone)
+		defer close(dataChan)
+		for scanner.Scan() {
+			idleWatchdog.Reset()
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			if helper.IsNullJSONStreamEvent(line) {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, helper.ErrNullJSONStreamEvent)
+				return
+			}
+			var chunk ollamaChatStreamChunk
+			if err := common.Unmarshal([]byte(line), &chunk); err != nil {
+				logger.LogError(c, "ollama stream json decode error: "+err.Error()+" line="+line)
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
+				producerErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				return
+			}
+			if chunk.Error != "" {
+				producerErr = types.NewOpenAIError(fmt.Errorf("ollama stream error: %s", chunk.Error), types.ErrorCodeBadResponse, http.StatusBadGateway)
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, producerErr)
+				return
+			}
+			if !chunk.Done {
+				info.SetFirstResponseTime()
+				content := chunk.Response
+				if chunk.Message != nil {
+					content = chunk.Message.Content
+				}
+				info.RecordAttemptVisibleText(content)
+			} else {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+			}
+			if !helper.EnqueueStreamDataWithBackpressure(streamCtx, dataChan, line, info) {
+				return
+			}
+			if chunk.Done {
+				return
+			}
+		}
+		if requestErr := c.Request.Context().Err(); requestErr != nil {
+			info.StreamStatus.SetClientGone(requestErr)
+		} else if err := scanner.Err(); err != nil && err != io.EOF {
+			logger.LogError(c, "ollama stream scan error: "+err.Error())
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
+		} else {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
+		}
+	}()
+	watcherDone := helper.CloseUpstreamOnContext(c.Request.Context(), resp.Body, producerDone)
+	idleWatcherDone := helper.CloseUpstreamOnIdleTimeout(c.Request.Context(), info, resp.Body, producerDone, idleWatchdog)
+	defer func() {
+		cancel()
+		idleWatchdog.Stop()
+		service.CloseResponseBodyGracefully(resp)
+		<-producerDone
+		<-watcherDone
+		<-idleWatcherDone
+	}()
+
 	usage := &dto.Usage{}
 	var model = info.UpstreamModelName
 	var responseId = common.GetUUID()
@@ -106,20 +174,15 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	var toolCallIndex int
 	start := helper.GenerateStartEmptyResponse(responseId, created, model, nil)
 	if data, err := common.Marshal(start); err == nil {
-		_ = helper.StringData(c, string(data))
+		if err = helper.StringData(c, string(data)); err != nil {
+			info.StreamStatus.SetClientGone(err)
+			return usage, types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+		}
 	}
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
+	for line := range dataChan {
 		var chunk ollamaChatStreamChunk
-		if err := common.Unmarshal([]byte(line), &chunk); err != nil {
-			logger.LogError(c, "ollama stream json decode error: "+err.Error()+" line="+line)
-			return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
-		}
+		_ = common.Unmarshal([]byte(line), &chunk)
 		if chunk.Model != "" {
 			model = chunk.Model
 		}
@@ -164,7 +227,10 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 				delta.Choices[0].Delta.ToolCalls, toolCallIndex = ollamaToolCallsToOpenAI(chunk.Message.ToolCalls, toolCallIndex, true)
 			}
 			if data, err := common.Marshal(delta); err == nil {
-				_ = helper.StringData(c, string(data))
+				if err = helper.StringData(c, string(data)); err != nil {
+					info.StreamStatus.SetClientGone(err)
+					return usage, types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+				}
 			}
 			continue
 		}
@@ -183,21 +249,32 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		// emit stop delta
 		if stop := helper.GenerateStopResponse(responseId, created, model, finishReason); stop != nil {
 			if data, err := common.Marshal(stop); err == nil {
-				_ = helper.StringData(c, string(data))
+				if err = helper.StringData(c, string(data)); err != nil {
+					info.StreamStatus.SetClientGone(err)
+					return usage, types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+				}
 			}
 		}
 		// emit usage frame
 		if final := helper.GenerateFinalUsageResponse(responseId, created, model, *usage); final != nil {
 			if data, err := common.Marshal(final); err == nil {
-				_ = helper.StringData(c, string(data))
+				if err = helper.StringData(c, string(data)); err != nil {
+					info.StreamStatus.SetClientGone(err)
+					return usage, types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+				}
 			}
 		}
 		// send [DONE]
-		helper.Done(c)
-		break
+		if err := helper.Done(c); err != nil {
+			info.StreamStatus.SetClientGone(err)
+			return usage, types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+		}
 	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
-		logger.LogError(c, "ollama stream scan error: "+err.Error())
+	if requestErr := c.Request.Context().Err(); requestErr != nil {
+		info.StreamStatus.SetClientGone(requestErr)
+	}
+	if producerErr != nil {
+		return usage, producerErr
 	}
 	return usage, nil
 }

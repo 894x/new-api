@@ -32,6 +32,7 @@ type StreamStatus struct {
 	EndReason StreamEndReason
 	EndError  error
 	endOnce   sync.Once
+	endMu     sync.Mutex
 
 	mu         sync.Mutex
 	Errors     []StreamErrorEntry
@@ -46,10 +47,35 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 	if s == nil {
 		return
 	}
+	s.endMu.Lock()
+	defer s.endMu.Unlock()
 	s.endOnce.Do(func() {
 		s.EndReason = reason
 		s.EndError = err
 	})
+}
+
+// SetClientGone records an explicit downstream cancellation even when a
+// scanner error won the shutdown race first. Once the request context is gone,
+// that attempt says nothing about upstream health and must not become hard.
+func (s *StreamStatus) SetClientGone(err error) {
+	if s == nil {
+		return
+	}
+	s.endMu.Lock()
+	defer s.endMu.Unlock()
+	s.endOnce.Do(func() {})
+	s.EndReason = StreamEndReasonClientGone
+	s.EndError = err
+}
+
+func (s *StreamStatus) End() (StreamEndReason, error) {
+	if s == nil {
+		return StreamEndReasonNone, nil
+	}
+	s.endMu.Lock()
+	defer s.endMu.Unlock()
+	return s.EndReason, s.EndError
 }
 
 func (s *StreamStatus) RecordError(msg string) {
@@ -89,19 +115,21 @@ func (s *StreamStatus) IsNormalEnd() bool {
 	if s == nil {
 		return true
 	}
-	return s.EndReason == StreamEndReasonDone ||
-		s.EndReason == StreamEndReasonEOF ||
-		s.EndReason == StreamEndReasonHandlerStop
+	reason, _ := s.End()
+	return reason == StreamEndReasonDone ||
+		reason == StreamEndReasonEOF ||
+		reason == StreamEndReasonHandlerStop
 }
 
 func (s *StreamStatus) Summary() string {
 	if s == nil {
 		return "StreamStatus<nil>"
 	}
+	reason, endErr := s.End()
 	b := &strings.Builder{}
-	fmt.Fprintf(b, "reason=%s", s.EndReason)
-	if s.EndError != nil {
-		fmt.Fprintf(b, " end_error=%q", s.EndError.Error())
+	fmt.Fprintf(b, "reason=%s", reason)
+	if endErr != nil {
+		fmt.Fprintf(b, " end_error=%q", endErr.Error())
 	}
 	s.mu.Lock()
 	if s.ErrorCount > 0 {

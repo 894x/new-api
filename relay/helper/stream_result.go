@@ -34,6 +34,23 @@ func (r *StreamResult) Stop(err error) {
 	r.stopped = true
 }
 
+// ScannerError marks a malformed or unreadable upstream stream as a hard
+// stream failure and stops delivery after the current callback.
+func (r *StreamResult) ScannerError(err error) {
+	if err == nil {
+		return
+	}
+	r.status.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
+	r.stopped = true
+}
+
+// ClientGone marks a downstream write/cancellation failure and stops further
+// delivery. Dynamic routing discards this ambiguous attempt.
+func (r *StreamResult) ClientGone(err error) {
+	r.status.SetClientGone(err)
+	r.stopped = true
+}
+
 // Done signals that the handler has finished processing normally
 // (e.g., Dify "message_end"). The stream stops after this chunk.
 func (r *StreamResult) Done() {

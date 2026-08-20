@@ -84,6 +84,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var responseTextBuilder strings.Builder
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
 	imageCommitted := false
+	var streamErr *types.NewAPIError
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		clientData, isStreamError := service.StreamErrorDataForClient(c, data)
@@ -92,12 +93,17 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		var streamResponse dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(clientData, &streamResponse); err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
-			sr.Error(err)
+			sr.ScannerError(err)
 			return
 		}
-		sendResponsesStreamData(c, streamResponse, clientData)
+		if err := sendResponsesStreamData(c, streamResponse, clientData); err != nil {
+			streamErr = markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
+			sr.ClientGone(err)
+			return
+		}
 		if isStreamError {
-			sr.Error(fmt.Errorf("upstream responses stream error: %s", common.LocalLogPreview(data)))
+			streamErr = markStreamErrorIfCommitted(c, newResponsesStreamError(data, resp.StatusCode))
+			sr.Stop(streamErr)
 			return
 		}
 		switch streamResponse.Type {
@@ -136,7 +142,16 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				imageCounter.Commit(info)
 				imageCommitted = true
 			}
-		case "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+		case "response.failed", "response.error":
+			if !imageCommitted {
+				imageCounter.Reset()
+				imageCounter.Commit(info)
+				imageCommitted = true
+			}
+			streamErr = markStreamErrorIfCommitted(c, newResponsesStreamError(data, resp.StatusCode))
+			sr.Stop(streamErr)
+			return
+		case "response.incomplete", "response.cancelled", "response.canceled":
 			if !imageCommitted {
 				imageCounter.Reset()
 				imageCounter.Commit(info)
@@ -162,6 +177,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+	if streamErr != nil {
+		return nil, streamErr
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量

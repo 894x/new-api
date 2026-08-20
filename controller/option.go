@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
+	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -131,6 +132,13 @@ func UpdateOption(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"message": "无效的参数",
+		})
+		return
+	}
+	if strings.HasPrefix(option.Key, dynamic_routing_setting.OptionPrefix) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "dynamic routing settings must be updated atomically",
 		})
 		return
 	}
@@ -438,6 +446,85 @@ func UpdateOption(c *gin.Context) {
 	// 出于安全考虑只记录被修改的配置项名称，不记录配置值（可能含密钥等敏感信息）。
 	recordManageAudit(c, "option.update", map[string]interface{}{
 		"key": option.Key,
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+	})
+}
+
+func UpdateDynamicRoutingOptions(c *gin.Context) {
+	requiredFields := [...]string{
+		"enabled",
+		"max_samples",
+		"max_age_seconds",
+		"min_samples",
+		"probe_fraction",
+		"degradation_threshold",
+		"recovery_threshold",
+		"critical_threshold",
+		"candidate_advantage",
+		"aggressiveness",
+		"recovery_step",
+		"cooldown_seconds",
+		"hard_failure_threshold",
+		"hard_failure_cooldown_seconds",
+	}
+	rawSettings := make(map[string]any, len(requiredFields))
+	if err := common.DecodeJson(c.Request.Body, &rawSettings); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid dynamic routing settings: " + err.Error(),
+		})
+		return
+	}
+	if len(rawSettings) != len(requiredFields) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "dynamic routing settings must contain exactly all supported fields",
+		})
+		return
+	}
+	for _, field := range requiredFields {
+		value, exists := rawSettings[field]
+		if !exists || value == nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "dynamic routing settings must contain exactly all supported fields",
+			})
+			return
+		}
+	}
+
+	rawBytes, err := common.Marshal(rawSettings)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid dynamic routing settings: " + err.Error(),
+		})
+		return
+	}
+	var candidate dynamic_routing_setting.DynamicRoutingSetting
+	if err := common.Unmarshal(rawBytes, &candidate); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid dynamic routing settings: " + err.Error(),
+		})
+		return
+	}
+	if err := dynamic_routing_setting.Validate(candidate); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	if err := model.UpdateDynamicRoutingOptions(candidate); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "option.update", map[string]interface{}{
+		"key": dynamic_routing_setting.OptionPrefix + "*",
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

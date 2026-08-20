@@ -94,7 +94,10 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		a.ClientMode = ClientModeApiKey
 		awsSecret := strings.Split(info.ApiKey, "|")
 		if len(awsSecret) != 2 {
-			return "", errors.New("invalid aws api key, should be in format of <api-key>|<region>")
+			return "", types.NewError(
+				errors.New("invalid aws api key, should be in format of <api-key>|<region>"),
+				types.ErrorCodeChannelInvalidKey,
+			)
 		}
 		return fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com/model/%s/converse", awsModelId, awsSecret[1]), nil
 	} else {

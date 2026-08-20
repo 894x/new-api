@@ -5,6 +5,7 @@ import "encoding/json"
 type CozeError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Msg     string `json:"msg"`
 }
 
 type CozeEnterMessage struct {

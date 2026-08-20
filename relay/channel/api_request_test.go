@@ -1,14 +1,54 @@
 package channel
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type attemptBoundaryAdaptor struct {
+	Adaptor
+	requestURL string
+	urlErr     error
+	headerErr  error
+	headerHook func()
+}
+
+func (a *attemptBoundaryAdaptor) GetRequestURL(*relaycommon.RelayInfo) (string, error) {
+	return a.requestURL, a.urlErr
+}
+
+func (a *attemptBoundaryAdaptor) SetupRequestHeader(*gin.Context, *http.Header, *relaycommon.RelayInfo) error {
+	if a.headerHook != nil {
+		a.headerHook()
+	}
+	return a.headerErr
+}
+
+func newAttemptBoundaryFixture(requestURL string) (*gin.Context, *relaycommon.RelayInfo) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "upstream-model",
+		},
+	}
+	info.BeginDynamicRoutingAttempt(17, info.GetChannelType(), "public-model", true)
+	return c, info
+}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()
@@ -190,4 +230,122 @@ func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.
 	require.Equal(t, "Codex CLI", upstreamReq.Header.Get("Originator"))
 	require.Equal(t, "sess-123", upstreamReq.Header.Get("Session_id"))
 	require.Empty(t, upstreamReq.Header.Get("X-Codex-Beta-Features"))
+}
+
+func TestDoApiRequestLocalConstructionFailuresStayPreUpstream(t *testing.T) {
+	tests := []struct {
+		name       string
+		requestURL string
+		urlErr     error
+		headerErr  error
+		proxy      string
+	}{
+		{name: "request URL", urlErr: errors.New("URL construction failed")},
+		{name: "invalid URL", requestURL: "://invalid"},
+		{name: "request headers", requestURL: "https://example.test/v1", headerErr: errors.New("header construction failed")},
+		{name: "proxy client", requestURL: "https://example.test/v1", proxy: "http://["},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, info := newAttemptBoundaryFixture(tt.requestURL)
+			info.ChannelSetting.Proxy = tt.proxy
+			adaptor := &attemptBoundaryAdaptor{
+				requestURL: tt.requestURL,
+				urlErr:     tt.urlErr,
+				headerErr:  tt.headerErr,
+			}
+
+			_, err := DoApiRequest(adaptor, c, info, nil)
+
+			require.Error(t, err)
+			apiErr := relaytypes.NewOpenAIError(err, relaytypes.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+			_, observed := info.FinishDynamicRoutingAttempt(apiErr)
+			assert.False(t, observed)
+		})
+	}
+}
+
+func TestDoApiRequestMarksAttemptAtPhysicalDispatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	c, info := newAttemptBoundaryFixture(server.URL)
+
+	resp, err := DoApiRequest(&attemptBoundaryAdaptor{requestURL: server.URL}, c, info, strings.NewReader(`{}`))
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	info.StreamStatus = relaycommon.NewStreamStatus()
+	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
+
+	sample, observed := info.FinishDynamicRoutingAttempt(nil)
+
+	require.True(t, observed)
+	assert.False(t, sample.UpstreamStartedAt.IsZero())
+}
+
+func TestDoApiRequestInvalidatesTimingWhenPreHeaderPingIsStillWriting(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	c, info := newAttemptBoundaryFixture(server.URL)
+
+	settings := operation_setting.GetGeneralSetting()
+	oldEnabled := settings.PingIntervalEnabled
+	settings.PingIntervalEnabled = true
+	t.Cleanup(func() { settings.PingIntervalEnabled = oldEnabled })
+
+	originalStarter := startPingKeepAliveForRequest
+	interrupted := make(chan struct{})
+	startPingKeepAliveForRequest = func(*gin.Context, time.Duration) *pingKeepAlive {
+		done := make(chan struct{})
+		var once sync.Once
+		pinger := &pingKeepAlive{
+			done: done,
+			interruptWrite: func() {
+				once.Do(func() {
+					close(interrupted)
+					close(done)
+				})
+			},
+		}
+		pinger.stop = func() {}
+		pinger.writing = true
+		return pinger
+	}
+	t.Cleanup(func() { startPingKeepAliveForRequest = originalStarter })
+
+	resp, err := DoApiRequest(&attemptBoundaryAdaptor{requestURL: server.URL}, c, info, strings.NewReader(`{}`))
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	assert.True(t, info.DynamicRoutingAttemptBackpressured())
+	select {
+	case <-interrupted:
+	default:
+		t.Fatal("blocked pre-header ping write was not actively interrupted")
+	}
+}
+
+func TestDoApiRequestCancellationDuringHeaderConstructionStaysPreUpstream(t *testing.T) {
+	c, info := newAttemptBoundaryFixture("https://example.test/v1")
+	requestContext, cancel := context.WithCancel(c.Request.Context())
+	c.Request = c.Request.WithContext(requestContext)
+	adaptor := &attemptBoundaryAdaptor{
+		requestURL: "https://example.test/v1",
+		headerHook: cancel,
+		headerErr:  context.Canceled,
+	}
+
+	_, err := DoApiRequest(adaptor, c, info, nil)
+
+	require.ErrorIs(t, err, context.Canceled)
+	_, observed := info.FinishDynamicRoutingAttempt(
+		relaytypes.NewOpenAIError(err, relaytypes.ErrorCodeDoRequestFailed, http.StatusInternalServerError),
+	)
+	assert.False(t, observed)
 }

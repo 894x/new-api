@@ -69,8 +69,9 @@ const (
 	ContextKeyAdminRejectReason ContextKey = "admin_reject_reason"
 
 	// ContextKeyLanguage stores the user's language preference for i18n
-	ContextKeyLanguage ContextKey = "language"
-	ContextKeyIsStream ContextKey = "is_stream"
+	ContextKeyLanguage               ContextKey = "language"
+	ContextKeyIsStream               ContextKey = "is_stream"
+	ContextKeyDynamicRoutingEligible ContextKey = "dynamic_routing_eligible"
 	// ContextKeyTaskResponseFormat identifies provider-native task protocol
 	// entrypoints that share the common asynchronous task relay.
 	ContextKeyTaskResponseFormat ContextKey = "task_response_format"

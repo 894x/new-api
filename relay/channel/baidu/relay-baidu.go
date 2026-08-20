@@ -116,11 +116,21 @@ func embeddingResponseBaidu2OpenAI(response *BaiduEmbeddingResponse) *dto.OpenAI
 
 func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
 	usage := &dto.Usage{}
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	var streamErr *types.NewAPIError
+	helper.StreamScannerHandlerWithVisibleText(c, resp, info, baiduStreamVisibleText, func(data string, sr *helper.StreamResult) {
 		var baiduResponse BaiduChatStreamResponse
 		if err := common.Unmarshal([]byte(data), &baiduResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
-			sr.Error(err)
+			sr.ScannerError(err)
+			return
+		}
+		if baiduResponse.ErrorCode != 0 || baiduResponse.ErrorMsg != "" {
+			streamErr = types.WithOpenAIError(types.OpenAIError{
+				Message: baiduResponse.ErrorMsg,
+				Type:    "upstream_error",
+				Code:    baiduResponse.ErrorCode,
+			}, baiduStreamErrorStatus(baiduResponse.ErrorCode, data, resp.StatusCode))
+			sr.Stop(streamErr)
 			return
 		}
 		if baiduResponse.Usage.TotalTokens != 0 {
@@ -131,11 +141,43 @@ func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 		response := streamResponseBaidu2OpenAI(&baiduResponse)
 		if err := helper.ObjectData(c, response); err != nil {
 			common.SysLog("error sending stream response: " + err.Error())
-			sr.Error(err)
+			streamErr = types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+			sr.ClientGone(err)
 		}
 	})
 	service.CloseResponseBodyGracefully(resp)
-	return nil, usage
+	return streamErr, usage
+}
+
+func baiduStreamErrorStatus(code int, data string, fallbackStatus int) int {
+	switch code {
+	case 336001, 336002, 336003, 336005, 336006:
+		return http.StatusBadRequest
+	case 336004:
+		return http.StatusRequestEntityTooLarge
+	case 336007, 336103:
+		return http.StatusRequestEntityTooLarge
+	case 17, 18, 19:
+		return http.StatusTooManyRequests
+	case 110, 111:
+		return http.StatusUnauthorized
+	case 336000:
+		return http.StatusInternalServerError
+	case 336100:
+		return http.StatusServiceUnavailable
+	}
+	return helper.ResolveUpstreamStreamErrorStatus(data, fallbackStatus)
+}
+
+func baiduStreamVisibleText(data string) string {
+	var response BaiduChatStreamResponse
+	if err := common.Unmarshal([]byte(data), &response); err != nil {
+		return ""
+	}
+	if response.ErrorCode != 0 || response.ErrorMsg != "" {
+		return ""
+	}
+	return response.Result
 }
 
 func baiduHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {

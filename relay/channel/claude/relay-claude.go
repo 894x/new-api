@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -88,10 +89,14 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	err := common.UnmarshalJsonStr(data, &claudeResponse)
 	if err != nil {
 		common.SysLog("error unmarshalling stream response: " + err.Error())
-		return types.NewError(err, types.ErrorCodeBadResponseBody)
+		return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	}
-	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
-		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
+	claudeError := claudeResponse.GetClaudeError()
+	if claudeResponse.Type == "error" || (claudeError != nil && claudeError.Type != "") {
+		if claudeError == nil {
+			return types.NewOpenAIError(errors.New("Claude stream error without error details"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+		}
+		return types.WithClaudeError(*claudeError, claudeStreamErrorStatus(claudeError.Type))
 	}
 	if claudeResponse.StopReason != "" {
 		maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
@@ -115,7 +120,9 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			}
 		}
 		countClaudeStreamBillableTools(c, info, &claudeResponse)
-		helper.ClaudeChunkData(c, claudeResponse, data)
+		if err := helper.ClaudeChunkData(c, claudeResponse, data); err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+		}
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		response := StreamResponseClaude2OpenAI(&claudeResponse)
 
@@ -128,9 +135,33 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		err = helper.ObjectData(c, response)
 		if err != nil {
 			logger.LogError(c, "send_stream_response_failed: "+err.Error())
+			return types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
 		}
 	}
 	return nil
+}
+
+func claudeStreamErrorStatus(errorType string) int {
+	switch errorType {
+	case "invalid_request_error":
+		return http.StatusBadRequest
+	case "authentication_error":
+		return http.StatusUnauthorized
+	case "permission_error":
+		return http.StatusForbidden
+	case "not_found_error":
+		return http.StatusNotFound
+	case "request_too_large":
+		return http.StatusRequestEntityTooLarge
+	case "rate_limit_error":
+		return http.StatusTooManyRequests
+	case "api_error":
+		return http.StatusInternalServerError
+	case "overloaded_error":
+		return 529
+	default:
+		return http.StatusBadGateway
+	}
 }
 
 func countClaudeStreamBillableTools(c *gin.Context, info *relaycommon.RelayInfo, claudeResponse *dto.ClaudeResponse) {
@@ -150,7 +181,7 @@ func countClaudeStreamBillableTools(c *gin.Context, info *relaycommon.RelayInfo,
 	}
 }
 
-func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
+func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) error {
 	if claudeInfo.Usage.PromptTokens == 0 {
 		//上游出错
 	}
@@ -177,7 +208,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	}
 
 	if info.RelayFormat == types.RelayFormatClaude {
-		//
+		return nil
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		if info.ShouldIncludeUsage {
 			openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
@@ -185,10 +216,12 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 			err := helper.ObjectData(c, response)
 			if err != nil {
 				common.SysLog("send final response failed: " + err.Error())
+				return err
 			}
 		}
-		helper.Done(c)
+		return helper.Done(c)
 	}
+	return nil
 }
 
 func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
@@ -203,14 +236,23 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		err = HandleStreamResponseData(c, info, claudeInfo, data)
 		if err != nil {
-			sr.Stop(err)
+			if helper.IsDownstreamWriteError(err) {
+				sr.ClientGone(err)
+			} else {
+				sr.Stop(err)
+			}
 		}
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	HandleStreamFinalResponse(c, info, claudeInfo)
+	if finalErr := HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
+		if helper.IsDownstreamWriteError(finalErr) && info.StreamStatus != nil {
+			info.StreamStatus.SetClientGone(finalErr)
+		}
+		return claudeInfo.Usage, types.NewError(finalErr, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+	}
 	return claudeInfo.Usage, nil
 }
 

@@ -55,6 +55,8 @@ type Adaptor struct {
 	AccountCredentials Credentials
 }
 
+var vertexAccessTokenProvider = getAccessToken
+
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
 	// Vertex AI does not support functionResponse.id; keep it stripped here for consistency.
 	if model_setting.GetGeminiSettings().RemoveFunctionResponseIdEnabled {
@@ -130,7 +132,10 @@ func (a *Adaptor) getRequestUrl(info *relaycommon.RelayInfo, modelName, suffix s
 	if info.ChannelOtherSettings.VertexKeyType != dto.VertexKeyTypeAPIKey {
 		adc := &Credentials{}
 		if err := common.Unmarshal([]byte(info.ApiKey), adc); err != nil {
-			return "", fmt.Errorf("failed to decode credentials file: %w", err)
+			return "", types.NewError(
+				fmt.Errorf("failed to decode credentials file: %w", err),
+				types.ErrorCodeChannelInvalidKey,
+			)
 		}
 		a.AccountCredentials = *adc
 
@@ -215,9 +220,17 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
 	if info.ChannelOtherSettings.VertexKeyType != dto.VertexKeyTypeAPIKey {
-		accessToken, err := getAccessToken(a, info)
+		accessToken, err := vertexAccessTokenProvider(a, info)
 		if err != nil {
-			return err
+			var apiErr *types.NewAPIError
+			if errors.As(err, &apiErr) && types.IsChannelError(apiErr) {
+				return apiErr
+			}
+			info.MarkDynamicRoutingAttemptPreUpstreamHard()
+			return types.NewError(
+				fmt.Errorf("failed to obtain Vertex access token: %w", err),
+				types.ErrorCodeDoRequestFailed,
+			)
 		}
 		req.Set("Authorization", "Bearer "+accessToken)
 	}

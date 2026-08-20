@@ -190,6 +190,44 @@ export type ContentSettings = {
   MjActionCheckSuccessEnabled: boolean
 }
 
+export type DynamicRoutingSettings = {
+  enabled: boolean
+  max_samples: number
+  max_age_seconds: number
+  min_samples: number
+  probe_fraction: number
+  degradation_threshold: number
+  recovery_threshold: number
+  critical_threshold: number
+  candidate_advantage: number
+  aggressiveness: number
+  recovery_step: number
+  cooldown_seconds: number
+  hard_failure_threshold: number
+  hard_failure_cooldown_seconds: number
+}
+
+export type DynamicRoutingFlatSettings = {
+  [Key in keyof DynamicRoutingSettings as `dynamic_routing_setting.${Key & string}`]: DynamicRoutingSettings[Key]
+}
+
+export const DYNAMIC_ROUTING_FLAT_DEFAULTS: DynamicRoutingFlatSettings = {
+  'dynamic_routing_setting.enabled': false,
+  'dynamic_routing_setting.max_samples': 60,
+  'dynamic_routing_setting.max_age_seconds': 90,
+  'dynamic_routing_setting.min_samples': 3,
+  'dynamic_routing_setting.probe_fraction': 0.015,
+  'dynamic_routing_setting.degradation_threshold': 1.3,
+  'dynamic_routing_setting.recovery_threshold': 1.1,
+  'dynamic_routing_setting.critical_threshold': 1.9,
+  'dynamic_routing_setting.candidate_advantage': 1.1,
+  'dynamic_routing_setting.aggressiveness': 0.9,
+  'dynamic_routing_setting.recovery_step': 0.02,
+  'dynamic_routing_setting.cooldown_seconds': 3,
+  'dynamic_routing_setting.hard_failure_threshold': 1,
+  'dynamic_routing_setting.hard_failure_cooldown_seconds': 30,
+}
+
 export type ModelSettings = {
   'global.pass_through_request_enabled': boolean
   'global.thinking_model_blacklist': string
@@ -247,7 +285,7 @@ export type ModelSettings = {
   'channel_affinity_setting.rules': string
   'model_deployment.ionet.api_key': string
   'model_deployment.ionet.enabled': boolean
-}
+} & DynamicRoutingFlatSettings
 
 export type BillingSettings = {
   QuotaForNewUser: number

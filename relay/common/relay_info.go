@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -81,6 +83,47 @@ type TokenCountMeta struct {
 	estimatePromptTokens int
 }
 
+// DynamicRoutingAttemptSample is an immutable observation of one upstream
+// attempt. It deliberately carries the public model name: channel model
+// mappings must not split observations for the same routed model.
+type DynamicRoutingAttemptSample struct {
+	ChannelID         int
+	Model             string
+	ObservedAt        time.Time
+	UpstreamStartedAt time.Time
+	FirstResponseAt   time.Time
+	FirstContentAt    time.Time
+	LastContentAt     time.Time
+	TTFT              time.Duration
+	TPOT              time.Duration
+	HasTTFT           bool
+	HasTPOT           bool
+	TTFTInvalidated   bool
+	TPOTInvalidated   bool
+	Success           bool
+	HardFailure       bool
+	CompletionTokens  int
+}
+
+type dynamicRoutingAttempt struct {
+	enabled             bool
+	channelID           int
+	channelType         int
+	model               string
+	reachedUpstream     bool
+	preUpstreamHard     bool
+	upstreamStarted     time.Time
+	firstResponseAt     time.Time
+	firstContentAt      time.Time
+	lastContentAt       time.Time
+	visibleTextParts    []string
+	tTFTInvalid         bool
+	tPOTInvalid         bool
+	httpStatus          int
+	completionTokens    int
+	completionTokensSet bool
+}
+
 type RelayInfo struct {
 	TokenId           int
 	TokenKey          string
@@ -92,6 +135,9 @@ type RelayInfo struct {
 	StartTime         time.Time
 	FirstResponseTime time.Time
 	isFirstResponse   bool
+	attemptMu         sync.Mutex
+	currentAttempt    dynamicRoutingAttempt
+	attemptNow        func() time.Time
 	//SendLastReasoningResponse bool
 	IsStream               bool
 	IsGeminiBatchEmbedding bool
@@ -806,15 +852,400 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 	return options
 }
 
+// BeginDynamicRoutingAttempt resets only per-attempt telemetry. The selected
+// channel type is explicit because ChannelMeta can still describe the previous
+// retry until the handler rebuilds it. Request-wide timing such as StartTime
+// and FirstResponseTime intentionally survives retries.
+func (info *RelayInfo) BeginDynamicRoutingAttempt(channelID int, channelType int, publicModel string, enabled bool) {
+	if info == nil {
+		return
+	}
+	info.attemptMu.Lock()
+	info.currentAttempt = dynamicRoutingAttempt{
+		enabled:     enabled,
+		channelID:   channelID,
+		channelType: channelType,
+		model:       publicModel,
+	}
+	if enabled {
+		info.StreamStatus = nil
+	}
+	info.attemptMu.Unlock()
+}
+
+// DiscardDynamicRoutingAttempt clears only the current attempt. It is used
+// when downstream cancellation makes every in-flight timing or failure signal
+// ambiguous, while preserving request-wide timing across retries.
+func (info *RelayInfo) DiscardDynamicRoutingAttempt() {
+	if info == nil {
+		return
+	}
+	info.attemptMu.Lock()
+	info.currentAttempt = dynamicRoutingAttempt{}
+	info.StreamStatus = nil
+	info.attemptMu.Unlock()
+}
+
+// MarkAttemptUpstreamStarted marks the boundary immediately before the
+// physical upstream call. Performance timing requires this boundary; proven
+// channel config errors and explicitly marked channel-owned preflight failures
+// may still contribute health-only observations before it.
+func (info *RelayInfo) MarkAttemptUpstreamStarted() {
+	if info == nil {
+		return
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	if !info.currentAttempt.enabled || info.currentAttempt.reachedUpstream {
+		return
+	}
+	info.currentAttempt.reachedUpstream = true
+	info.currentAttempt.upstreamStarted = info.attemptTimeNowLocked()
+}
+
+// MarkDynamicRoutingAttemptPreUpstreamHard records a channel-owned preflight
+// failure that happened before the physical model call. It is intentionally
+// separate from channel-prefixed errors: transient token endpoint or network
+// failures should affect dynamic health and retry, but must not force the
+// permanent auto-disable policy used for proven credential/config errors.
+func (info *RelayInfo) MarkDynamicRoutingAttemptPreUpstreamHard() {
+	if info == nil {
+		return
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	if info.currentAttempt.enabled && !info.currentAttempt.reachedUpstream {
+		info.currentAttempt.preUpstreamHard = true
+	}
+}
+
+// SetAttemptHTTPStatus preserves the raw upstream status before configured
+// status-code mappings alter the client-facing error.
+func (info *RelayInfo) SetAttemptHTTPStatus(status int) {
+	if info == nil {
+		return
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	if info.currentAttempt.enabled && info.currentAttempt.reachedUpstream {
+		info.currentAttempt.httpStatus = status
+	}
+}
+
+// SetAttemptCompletionTokens records the first trusted upstream or locally
+// counted output token count. Timing comes only from upstream-visible content
+// events, so billing/database work cannot extend TPOT.
+func (info *RelayInfo) SetAttemptCompletionTokens(tokens int) {
+	if info == nil || tokens < 0 {
+		return
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	if info.currentAttempt.enabled && info.currentAttempt.reachedUpstream && !info.currentAttempt.completionTokensSet {
+		info.currentAttempt.completionTokens = tokens
+		info.currentAttempt.completionTokensSet = true
+	}
+}
+
+// RecordAttemptVisibleText records both the timing and exact text of an
+// upstream event known to contain user-visible model output. Reasoning, tools,
+// audio, and image data must not be passed here.
+func (info *RelayInfo) RecordAttemptVisibleText(text string) {
+	if info == nil || text == "" {
+		return
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	if info.currentAttempt.enabled && info.currentAttempt.reachedUpstream {
+		now := info.attemptTimeNowLocked()
+		if info.currentAttempt.firstResponseAt.IsZero() {
+			// Visible output is itself a non-terminal upstream payload. Keep the
+			// attempt health boundary valid even if a custom transport omitted the
+			// separate request-wide first-event hook.
+			info.currentAttempt.firstResponseAt = now
+		}
+		if info.currentAttempt.firstContentAt.IsZero() {
+			info.currentAttempt.firstContentAt = now
+		}
+		info.currentAttempt.lastContentAt = now
+		info.currentAttempt.visibleTextParts = append(info.currentAttempt.visibleTextParts, text)
+	}
+}
+
+// DynamicRoutingAttemptVisibleText returns a stable copy of the visible text
+// accumulated by the current attempt for local token counting.
+func (info *RelayInfo) DynamicRoutingAttemptVisibleText() string {
+	if info == nil {
+		return ""
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	return strings.Join(info.currentAttempt.visibleTextParts, "")
+}
+
+// DynamicRoutingAttemptModel returns the immutable public model captured when
+// the current attempt began. Billing aliases may mutate OriginModelName later
+// in the relay without changing the observation key or tokenizer model.
+func (info *RelayInfo) DynamicRoutingAttemptModel() string {
+	if info == nil {
+		return ""
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	return info.currentAttempt.model
+}
+
+// InvalidateDynamicRoutingAttemptTPOT marks only inter-token timing as
+// unreliable. It is used by synchronous custom transports whose first
+// upstream event remains trustworthy but whose later reads follow downstream
+// writes.
+func (info *RelayInfo) InvalidateDynamicRoutingAttemptTPOT() {
+	if info == nil {
+		return
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	if info.currentAttempt.enabled && info.currentAttempt.reachedUpstream {
+		info.currentAttempt.tPOTInvalid = true
+	}
+}
+
+// MarkDynamicRoutingAttemptBackpressure marks output timing that crossed a
+// full downstream queue. TPOT is always invalid after this point. If the queue
+// filled before any visible text arrived, TTFT is invalid too because reading
+// the first visible upstream event may have been delayed by the client.
+func (info *RelayInfo) MarkDynamicRoutingAttemptBackpressure() {
+	if info == nil {
+		return
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	if !info.currentAttempt.enabled || !info.currentAttempt.reachedUpstream {
+		return
+	}
+	info.currentAttempt.tPOTInvalid = true
+	if info.currentAttempt.firstContentAt.IsZero() {
+		info.currentAttempt.tTFTInvalid = true
+	}
+}
+
+// DynamicRoutingAttemptBackpressured reports whether the current bounded
+// ingress has ever had to wait for downstream delivery. It is primarily
+// useful for diagnostics and deterministic transport tests.
+func (info *RelayInfo) DynamicRoutingAttemptBackpressured() bool {
+	if info == nil {
+		return false
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	return info.currentAttempt.tPOTInvalid
+}
+
+// FinishDynamicRoutingAttempt snapshots and clears the current attempt. The
+// boolean is false for bypassed requests, unmarked local pre-upstream failures,
+// and stream endings that describe downstream cancellation rather than
+// upstream health.
+func (info *RelayInfo) FinishDynamicRoutingAttempt(handlerErr *types.NewAPIError) (DynamicRoutingAttemptSample, bool) {
+	if info == nil {
+		return DynamicRoutingAttemptSample{}, false
+	}
+
+	info.attemptMu.Lock()
+	attempt := info.currentAttempt
+	info.currentAttempt = dynamicRoutingAttempt{}
+	finishedAt := info.attemptTimeNowLocked()
+	info.attemptMu.Unlock()
+
+	if !attempt.enabled {
+		return DynamicRoutingAttemptSample{}, false
+	}
+
+	sample := DynamicRoutingAttemptSample{
+		ChannelID:         attempt.channelID,
+		Model:             attempt.model,
+		ObservedAt:        finishedAt,
+		UpstreamStartedAt: attempt.upstreamStarted,
+		FirstResponseAt:   attempt.firstResponseAt,
+		FirstContentAt:    attempt.firstContentAt,
+		LastContentAt:     attempt.lastContentAt,
+		CompletionTokens:  attempt.completionTokens,
+		TTFTInvalidated:   attempt.tTFTInvalid,
+		TPOTInvalidated:   attempt.tPOTInvalid,
+	}
+	if !attempt.reachedUpstream {
+		// Physical dispatch is required for performance timing, but an explicit
+		// channel construction/authentication failure is already a trustworthy
+		// health signal. Ordinary local conversion and client errors remain
+		// unobserved.
+		if handlerErr != nil && (types.IsChannelError(handlerErr) || attempt.preUpstreamHard) {
+			sample.HardFailure = true
+			return sample, true
+		}
+		return DynamicRoutingAttemptSample{}, false
+	}
+
+	if info.IsStream {
+		reason := StreamEndReasonNone
+		var streamEndErr error
+		if info.StreamStatus != nil {
+			reason, streamEndErr = info.StreamStatus.End()
+		}
+		switch reason {
+		case StreamEndReasonTimeout, StreamEndReasonScannerErr:
+			sample.HardFailure = true
+		case StreamEndReasonDone, StreamEndReasonEOF:
+			if isHardDynamicRoutingFailure(attempt.httpStatus, handlerErr, attempt.channelType) {
+				sample.HardFailure = true
+			} else if handlerErr == nil {
+				sample.Success = true
+			}
+		case StreamEndReasonHandlerStop:
+			if isHardDynamicRoutingFailure(attempt.httpStatus, handlerErr, attempt.channelType) {
+				sample.HardFailure = true
+			} else if handlerErr != nil {
+				// A non-channel 4xx/local handler error is observed but is not an
+				// upstream-health failure and must not be counted as success.
+			} else if streamEndErr != nil {
+				var streamAPIError *types.NewAPIError
+				if errors.As(streamEndErr, &streamAPIError) {
+					sample.HardFailure = isHardDynamicRoutingFailure(attempt.httpStatus, streamAPIError, attempt.channelType)
+				}
+			} else {
+				sample.Success = true
+			}
+		case StreamEndReasonNone:
+			// An immediate HTTP/channel failure happens before a stream scanner
+			// exists. Preserve that strong upstream signal; ambiguous local errors
+			// with no stream lifecycle remain discarded.
+			if !isHardDynamicRoutingFailure(attempt.httpStatus, handlerErr, attempt.channelType) {
+				return DynamicRoutingAttemptSample{}, false
+			}
+			sample.HardFailure = true
+		case StreamEndReasonClientGone, StreamEndReasonPingFail, StreamEndReasonPanic:
+			return DynamicRoutingAttemptSample{}, false
+		default:
+			return DynamicRoutingAttemptSample{}, false
+		}
+	} else {
+		if isHardDynamicRoutingFailure(attempt.httpStatus, handlerErr, attempt.channelType) {
+			sample.HardFailure = true
+		} else if handlerErr == nil {
+			sample.Success = true
+		}
+	}
+	if info.IsStream && sample.Success && attempt.firstResponseAt.IsZero() {
+		// An empty HTTP 200 body (or a terminal marker with no preceding payload)
+		// is a broken stream, not a health success. Metadata and tool-only events
+		// still set the first-response boundary and remain valid health-only
+		// successes without entering the performance ring.
+		sample.Success = false
+		sample.HardFailure = true
+	}
+
+	if info.IsStream && sample.Success && !attempt.tTFTInvalid && !attempt.upstreamStarted.IsZero() &&
+		!attempt.firstContentAt.IsZero() && attempt.firstContentAt.After(attempt.upstreamStarted) {
+		sample.TTFT = attempt.firstContentAt.Sub(attempt.upstreamStarted)
+		sample.HasTTFT = true
+		if !attempt.tPOTInvalid && attempt.completionTokens > 1 && attempt.lastContentAt.After(attempt.firstContentAt) {
+			sample.TPOT = attempt.lastContentAt.Sub(attempt.firstContentAt) / time.Duration(attempt.completionTokens-1)
+			sample.HasTPOT = true
+		}
+	}
+
+	return sample, true
+}
+
+func isHardDynamicRoutingFailure(upstreamStatus int, handlerErr *types.NewAPIError, channelType int) bool {
+	if isDynamicRoutingModelUnavailable(handlerErr, channelType) || (handlerErr != nil && types.IsChannelError(handlerErr)) {
+		return true
+	}
+	if upstreamStatus != 0 && upstreamStatus != http.StatusOK {
+		return (upstreamStatus > 0 && upstreamStatus < http.StatusBadRequest) ||
+			upstreamStatus == http.StatusPaymentRequired || upstreamStatus == http.StatusRequestTimeout || upstreamStatus == http.StatusUnauthorized || upstreamStatus == http.StatusForbidden ||
+			upstreamStatus == http.StatusProxyAuthRequired || upstreamStatus == http.StatusTooManyRequests || upstreamStatus == 498 || upstreamStatus == 499 ||
+			upstreamStatus >= http.StatusInternalServerError
+	}
+	if handlerErr == nil {
+		return false
+	}
+	return (handlerErr.StatusCode >= http.StatusMultipleChoices && handlerErr.StatusCode < http.StatusBadRequest) ||
+		handlerErr.StatusCode == http.StatusPaymentRequired || handlerErr.StatusCode == http.StatusRequestTimeout || handlerErr.StatusCode == http.StatusUnauthorized || handlerErr.StatusCode == http.StatusForbidden ||
+		handlerErr.StatusCode == http.StatusProxyAuthRequired || handlerErr.StatusCode == http.StatusTooManyRequests || handlerErr.StatusCode == 498 || handlerErr.StatusCode == 499 ||
+		handlerErr.StatusCode >= http.StatusInternalServerError
+}
+
+func isDynamicRoutingModelUnavailable(handlerErr *types.NewAPIError, channelType int) bool {
+	if handlerErr == nil {
+		return false
+	}
+	normalize := func(value any) string {
+		return strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+	}
+	errorCode := normalize(handlerErr.GetErrorCode())
+	if errorCode == string(types.ErrorCodeModelNotFound) || errorCode == "model_not_found_error" {
+		return true
+	}
+	if channelType == constant.ChannelTypeAzure && (errorCode == "deploymentnotfound" || errorCode == "modelnotfound") {
+		return true
+	}
+	if handlerErr.GetErrorType() == types.ErrorTypeClaudeError && errorCode == "not_found_error" {
+		return true
+	}
+	if openAIError, ok := handlerErr.RelayError.(types.OpenAIError); ok {
+		openAIErrorCode := normalize(openAIError.Code)
+		if channelType == constant.ChannelTypeAzure && (openAIErrorCode == "deploymentnotfound" || openAIErrorCode == "modelnotfound") {
+			return true
+		}
+		return openAIErrorCode == string(types.ErrorCodeModelNotFound) ||
+			normalize(openAIError.Type) == string(types.ErrorCodeModelNotFound) ||
+			normalize(openAIError.Type) == "model_not_found_error"
+	}
+	return false
+}
+
 func (info *RelayInfo) SetFirstResponseTime() {
-	if info.isFirstResponse {
-		info.FirstResponseTime = time.Now()
+	if info == nil {
+		return
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	needsRequestTime := info.isFirstResponse
+	needsAttemptTime := info.currentAttempt.enabled && info.currentAttempt.reachedUpstream && info.currentAttempt.firstResponseAt.IsZero()
+	if !needsRequestTime && !needsAttemptTime {
+		return
+	}
+	now := info.attemptTimeNowLocked()
+	if needsRequestTime {
+		info.FirstResponseTime = now
 		info.isFirstResponse = false
+	}
+	if needsAttemptTime {
+		info.currentAttempt.firstResponseAt = now
 	}
 }
 
 func (info *RelayInfo) HasSendResponse() bool {
+	if info == nil {
+		return false
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
 	return info.FirstResponseTime.After(info.StartTime)
+}
+
+func (info *RelayInfo) attemptTimeNowLocked() time.Time {
+	if info.attemptNow != nil {
+		return info.attemptNow()
+	}
+	return time.Now()
+}
+
+// setAttemptNowForTest gives same-package tests a deterministic clock without
+// exposing a production timing override.
+func (info *RelayInfo) setAttemptNowForTest(now func() time.Time) {
+	info.attemptMu.Lock()
+	info.attemptNow = now
+	info.attemptMu.Unlock()
 }
 
 type TaskRelayInfo struct {

@@ -181,6 +181,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
+		info.SetAttemptHTTPStatus(httpResp.StatusCode)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
@@ -280,6 +281,7 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
+		info.SetAttemptHTTPStatus(httpResp.StatusCode)
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)

@@ -156,22 +156,31 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 
 	key := strings.TrimSpace(info.ApiKey)
 	if !strings.HasPrefix(key, "{") {
-		return errors.New("codex channel: key must be a JSON object")
+		return types.NewError(
+			errors.New("codex channel: key must be a JSON object"),
+			types.ErrorCodeChannelInvalidKey,
+		)
 	}
 
 	oauthKey, err := ParseOAuthKey(key)
 	if err != nil {
-		return err
+		return types.NewError(err, types.ErrorCodeChannelInvalidKey)
 	}
 
 	accessToken := strings.TrimSpace(oauthKey.AccessToken)
 	accountID := strings.TrimSpace(oauthKey.AccountID)
 
 	if accessToken == "" {
-		return errors.New("codex channel: access_token is required")
+		return types.NewError(
+			errors.New("codex channel: access_token is required"),
+			types.ErrorCodeChannelInvalidKey,
+		)
 	}
 	if accountID == "" {
-		return errors.New("codex channel: account_id is required")
+		return types.NewError(
+			errors.New("codex channel: account_id is required"),
+			types.ErrorCodeChannelInvalidKey,
+		)
 	}
 
 	req.Set("Authorization", "Bearer "+accessToken)

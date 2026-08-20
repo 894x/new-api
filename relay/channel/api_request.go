@@ -402,9 +402,75 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	return targetConn, nil
 }
 
-func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) (context.CancelFunc, <-chan struct{}) {
+type pingKeepAlive struct {
+	stop               context.CancelFunc
+	done               <-chan struct{}
+	interruptWrite     func()
+	clearWriteDeadline func()
+	mu                 sync.Mutex
+	stopping           bool
+	writing            bool
+}
+
+func (p *pingKeepAlive) beginWrite() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopping {
+		return false
+	}
+	p.writing = true
+	return true
+}
+
+func (p *pingKeepAlive) finishWrite() {
+	p.mu.Lock()
+	p.writing = false
+	p.mu.Unlock()
+}
+
+// stopAndWait reports whether response headers arrived while a downstream
+// keepalive write was still in progress. Waiting for that write delays body
+// scanning, so the attempt's TTFT/TPOT is no longer upstream-only.
+func (p *pingKeepAlive) stopAndWait() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	p.stopping = true
+	writeInProgress := p.writing
+	stop := p.stop
+	interruptWrite := p.interruptWrite
+	clearWriteDeadline := p.clearWriteDeadline
+	p.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	if writeInProgress && interruptWrite != nil {
+		interruptWrite()
+	}
+	if p.done != nil {
+		<-p.done
+	}
+	if writeInProgress && clearWriteDeadline != nil {
+		clearWriteDeadline()
+	}
+	return writeInProgress
+}
+
+func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) *pingKeepAlive {
 	pingerCtx, stopPinger := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	responseController := http.NewResponseController(c.Writer)
+	pinger := &pingKeepAlive{
+		stop: stopPinger,
+		done: done,
+		interruptWrite: func() {
+			_ = responseController.SetWriteDeadline(time.Now())
+		},
+		clearWriteDeadline: func() {
+			_ = responseController.SetWriteDeadline(time.Time{})
+		},
+	}
 
 	gopool.Go(func() {
 		defer close(done)
@@ -439,10 +505,15 @@ func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) (context.Can
 			select {
 			// 发送 ping 数据
 			case <-ticker.C:
+				if !pinger.beginWrite() {
+					return
+				}
 				if err := sendPingData(c, &pingMutex); err != nil {
+					pinger.finishWrite()
 					logger.LogDebug(c, "SSE ping error, stopping goroutine: %s", err.Error())
 					return
 				}
+				pinger.finishWrite()
 			// 收到退出信号
 			case <-pingerCtx.Done():
 				return
@@ -457,8 +528,10 @@ func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) (context.Can
 		}
 	})
 
-	return stopPinger, done
+	return pinger
 }
+
+var startPingKeepAliveForRequest = startPingKeepAlive
 
 func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
 	mutex.Lock()
@@ -509,26 +582,27 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		))
 	}
 
-	var stopPinger context.CancelFunc
-	var pingerDone <-chan struct{}
+	var pinger *pingKeepAlive
 	if info.IsStream {
 		helper.SetEventStreamHeaders(c)
 		// 处理流式请求的 ping 保活
 		generalSettings := operation_setting.GetGeneralSetting()
 		if generalSettings.PingIntervalEnabled && !info.DisablePing {
 			pingInterval := time.Duration(generalSettings.PingIntervalSeconds) * time.Second
-			stopPinger, pingerDone = startPingKeepAlive(c, pingInterval)
+			pinger = startPingKeepAliveForRequest(c, pingInterval)
 			// 使用defer确保在任何情况下都能停止ping goroutine
 			defer func() {
-				if stopPinger != nil {
-					stopPinger()
-					<-pingerDone
+				if pinger != nil {
+					if pinger.stopAndWait() {
+						info.MarkDynamicRoutingAttemptBackpressure()
+					}
 					logger.LogDebug(c, "SSE ping goroutine stopped by defer")
 				}
 			}()
 		}
 	}
 
+	info.MarkAttemptUpstreamStarted()
 	resp, err := relayClient.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())

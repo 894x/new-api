@@ -101,7 +101,13 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 			return false
 		}
-		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data))
+		if err := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data)); err != nil {
+			streamErr = types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+			if info.StreamStatus != nil {
+				info.StreamStatus.SetClientGone(err)
+			}
+			return false
+		}
 		return true
 	}
 	sendChunk := func(chunk *dto.ChatCompletionsStreamResponse) bool {

@@ -1,11 +1,11 @@
 package cohere
 
 import (
-	"encoding/json"
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -80,7 +80,47 @@ func stopReasonCohere2OpenAI(reason string) string {
 	}
 }
 
+func isCohereStreamEnd(response *CohereResponse) bool {
+	if response == nil {
+		return false
+	}
+	return response.IsFinished || strings.EqualFold(strings.TrimSpace(response.EventType), "stream-end")
+}
+
+func cohereFinishReason(response *CohereResponse) string {
+	if response == nil {
+		return ""
+	}
+	reason := strings.ToUpper(strings.TrimSpace(response.FinishReason))
+	if reason == "" && response.Response != nil {
+		reason = strings.ToUpper(strings.TrimSpace(response.Response.FinishReason))
+	}
+	return reason
+}
+
+type cohereStreamAttemptObserver interface {
+	SetFirstResponseTime()
+	RecordAttemptVisibleText(string)
+}
+
+func observeCohereStreamAttempt(observer cohereStreamAttemptObserver, data string, firstResponseRecorded bool) (bool, error) {
+	if !firstResponseRecorded {
+		observer.SetFirstResponseTime()
+		firstResponseRecorded = true
+	}
+	var response CohereResponse
+	if err := common.Unmarshal([]byte(data), &response); err != nil {
+		return firstResponseRecorded, err
+	}
+	if !isCohereStreamEnd(&response) && response.Text != "" {
+		observer.RecordAttemptVisibleText(response.Text)
+	}
+	return firstResponseRecorded, nil
+}
+
 func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	info.StreamStatus = relaycommon.NewStreamStatus()
+	streamCtx, cancel := context.WithCancel(c.Request.Context())
 	responseId := helper.GetResponseID(c)
 	createdTime := common.GetTimestamp()
 	usage := &dto.Usage{}
@@ -98,76 +138,168 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 		return 0, nil, nil
 	})
-	dataChan := make(chan string)
-	stopChan := make(chan bool)
+	dataChan := make(chan string, 10)
+	producerDone := make(chan struct{})
+	idleWatchdog := helper.NewConfiguredStreamIdleWatchdog()
+	var producerErr *types.NewAPIError
 	go func() {
+		defer close(producerDone)
+		defer close(dataChan)
+		firstResponseRecorded := false
 		for scanner.Scan() {
-			data := scanner.Text()
-			dataChan <- data
+			idleWatchdog.Reset()
+			data := strings.TrimSuffix(scanner.Text(), "\r")
+			if helper.IsNullJSONStreamEvent(data) {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, helper.ErrNullJSONStreamEvent)
+				return
+			}
+			var envelope CohereResponse
+			if err := common.Unmarshal([]byte(data), &envelope); err != nil {
+				common.SysLog("error unmarshalling stream response: " + err.Error())
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
+				return
+			}
+			if envelope.EventType == "stream-error" || envelope.EventType == "error" || envelope.Error != nil {
+				message := envelope.Message
+				if message == "" {
+					message = "Cohere stream error"
+				}
+				producerErr = types.NewOpenAIError(
+					fmt.Errorf("%s", message),
+					types.ErrorCodeBadResponse,
+					helper.ResolveUpstreamStreamErrorStatus(data, resp.StatusCode),
+				)
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, producerErr)
+				return
+			}
+			streamEnd := isCohereStreamEnd(&envelope)
+			if streamEnd {
+				finishReason := cohereFinishReason(&envelope)
+				statusCode := 0
+				switch finishReason {
+				case "ERROR":
+					statusCode = http.StatusBadGateway
+				case "ERROR_TOXIC":
+					statusCode = http.StatusUnprocessableEntity
+				case "TIMEOUT":
+					statusCode = http.StatusRequestTimeout
+				}
+				if statusCode != 0 {
+					producerErr = types.NewOpenAIError(
+						fmt.Errorf("Cohere stream ended with finish reason %s", finishReason),
+						types.ErrorCodeBadResponse,
+						statusCode,
+					)
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, producerErr)
+					return
+				}
+			}
+			if !streamEnd {
+				var observeErr error
+				firstResponseRecorded, observeErr = observeCohereStreamAttempt(info, data, firstResponseRecorded)
+				if observeErr != nil {
+					common.SysLog("error unmarshalling stream response: " + observeErr.Error())
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, observeErr)
+					return
+				}
+			}
+			if !helper.EnqueueStreamDataWithBackpressure(streamCtx, dataChan, data, info) {
+				info.StreamStatus.SetClientGone(c.Request.Context().Err())
+				return
+			}
+			if streamEnd {
+				return
+			}
 		}
-		if err := scanner.Err(); err != nil {
+		if requestErr := c.Request.Context().Err(); requestErr != nil {
+			info.StreamStatus.SetClientGone(requestErr)
+		} else if err := scanner.Err(); err != nil {
 			common.SysLog("error reading stream: " + err.Error())
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
 		}
-		stopChan <- true
+	}()
+	watcherDone := helper.CloseUpstreamOnContext(streamCtx, resp.Body, producerDone)
+	idleWatcherDone := helper.CloseUpstreamOnIdleTimeout(streamCtx, info, resp.Body, producerDone, idleWatchdog)
+	defer func() {
+		cancel()
+		idleWatchdog.Stop()
+		service.CloseResponseBodyGracefully(resp)
+		<-producerDone
+		<-watcherDone
+		<-idleWatcherDone
 	}()
 	helper.SetEventStreamHeaders(c)
-	isFirst := true
-	c.Stream(func(w io.Writer) bool {
-		select {
-		case data := <-dataChan:
-			if isFirst {
-				isFirst = false
-				info.FirstResponseTime = time.Now()
+	var clientWriteErr error
+	clientGone := c.Stream(func(w io.Writer) bool {
+		data, ok := <-dataChan
+		if !ok {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
+			if err := helper.StringData(c, "[DONE]"); err != nil {
+				clientWriteErr = err
+				info.StreamStatus.SetClientGone(err)
 			}
-			data = strings.TrimSuffix(data, "\r")
-			var cohereResp CohereResponse
-			err := json.Unmarshal([]byte(data), &cohereResp)
-			if err != nil {
-				common.SysLog("error unmarshalling stream response: " + err.Error())
-				return true
-			}
-			var openaiResp dto.ChatCompletionsStreamResponse
-			openaiResp.Id = responseId
-			openaiResp.Created = createdTime
-			openaiResp.Object = "chat.completion.chunk"
-			openaiResp.Model = info.UpstreamModelName
-			if cohereResp.IsFinished {
-				finishReason := stopReasonCohere2OpenAI(cohereResp.FinishReason)
-				openaiResp.Choices = []dto.ChatCompletionsStreamResponseChoice{
-					{
-						Delta:        dto.ChatCompletionsStreamResponseChoiceDelta{},
-						Index:        0,
-						FinishReason: &finishReason,
-					},
-				}
-				if cohereResp.Response != nil {
-					usage.PromptTokens = cohereResp.Response.Meta.BilledUnits.InputTokens
-					usage.CompletionTokens = cohereResp.Response.Meta.BilledUnits.OutputTokens
-				}
-			} else {
-				openaiResp.Choices = []dto.ChatCompletionsStreamResponseChoice{
-					{
-						Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
-							Role:    "assistant",
-							Content: &cohereResp.Text,
-						},
-						Index: 0,
-					},
-				}
-				responseText += cohereResp.Text
-			}
-			jsonStr, err := json.Marshal(openaiResp)
-			if err != nil {
-				common.SysLog("error marshalling stream response: " + err.Error())
-				return true
-			}
-			c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonStr)})
-			return true
-		case <-stopChan:
-			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
 			return false
 		}
+		var cohereResp CohereResponse
+		err := common.Unmarshal([]byte(data), &cohereResp)
+		if err != nil {
+			common.SysLog("error unmarshalling stream response: " + err.Error())
+			info.StreamStatus.RecordError(err.Error())
+			return true
+		}
+		var openaiResp dto.ChatCompletionsStreamResponse
+		openaiResp.Id = responseId
+		openaiResp.Created = createdTime
+		openaiResp.Object = "chat.completion.chunk"
+		openaiResp.Model = info.UpstreamModelName
+		if isCohereStreamEnd(&cohereResp) {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+			finishReason := stopReasonCohere2OpenAI(cohereFinishReason(&cohereResp))
+			openaiResp.Choices = []dto.ChatCompletionsStreamResponseChoice{
+				{
+					Delta:        dto.ChatCompletionsStreamResponseChoiceDelta{},
+					Index:        0,
+					FinishReason: &finishReason,
+				},
+			}
+			if cohereResp.Response != nil {
+				usage.PromptTokens = cohereResp.Response.Meta.BilledUnits.InputTokens
+				usage.CompletionTokens = cohereResp.Response.Meta.BilledUnits.OutputTokens
+			}
+		} else {
+			openaiResp.Choices = []dto.ChatCompletionsStreamResponseChoice{
+				{
+					Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+						Role:    "assistant",
+						Content: &cohereResp.Text,
+					},
+					Index: 0,
+				},
+			}
+			responseText += cohereResp.Text
+		}
+		jsonStr, err := common.Marshal(openaiResp)
+		if err != nil {
+			common.SysLog("error marshalling stream response: " + err.Error())
+			info.StreamStatus.RecordError(err.Error())
+			return true
+		}
+		if err := helper.StringData(c, string(jsonStr)); err != nil {
+			clientWriteErr = err
+			info.StreamStatus.SetClientGone(err)
+			return false
+		}
+		return true
 	})
+	if clientGone && clientWriteErr == nil {
+		info.StreamStatus.SetClientGone(c.Request.Context().Err())
+	}
+	if clientWriteErr != nil {
+		return usage, types.NewError(clientWriteErr, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+	}
+	if producerErr != nil {
+		return usage, producerErr
+	}
 	if usage.PromptTokens == 0 {
 		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
 	}
@@ -182,7 +314,7 @@ func cohereHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 	service.CloseResponseBodyGracefully(resp)
 	var cohereResp CohereResponseResult
-	err = json.Unmarshal(responseBody, &cohereResp)
+	err = common.Unmarshal(responseBody, &cohereResp)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
@@ -206,7 +338,7 @@ func cohereHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		},
 	}
 
-	jsonResponse, err := json.Marshal(openaiResp)
+	jsonResponse, err := common.Marshal(openaiResp)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
@@ -223,7 +355,7 @@ func cohereRerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	}
 	service.CloseResponseBodyGracefully(resp)
 	var cohereResp CohereRerankResponseResult
-	err = json.Unmarshal(responseBody, &cohereResp)
+	err = common.Unmarshal(responseBody, &cohereResp)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
@@ -242,7 +374,7 @@ func cohereRerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	rerankResp.Results = cohereResp.Results
 	rerankResp.Usage = usage
 
-	jsonResponse, err := json.Marshal(rerankResp)
+	jsonResponse, err := common.Marshal(rerankResp)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}

@@ -89,7 +89,10 @@ import {
   formatUSDPriceFromDisplay,
 } from '@/features/system-settings/models/pricing-format'
 import { normalizeJsonString } from '@/features/system-settings/models/utils'
-import type { ModelSettings } from '@/features/system-settings/types'
+import {
+  DYNAMIC_ROUTING_FLAT_DEFAULTS,
+  type ModelSettings,
+} from '@/features/system-settings/types'
 import { safeJsonParse } from '@/features/system-settings/utils/json-parser'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
@@ -373,6 +376,7 @@ export function ModelMutateDrawer({
       'monitor_setting.auto_test_channel_enabled': false,
       'monitor_setting.auto_test_channel_minutes': 10,
       'monitor_setting.channel_test_mode': 'scheduled_all',
+      ...DYNAMIC_ROUTING_FLAT_DEFAULTS,
       'channel_affinity_setting.enabled': false,
       'channel_affinity_setting.switch_on_success': true,
       'channel_affinity_setting.keep_on_channel_disabled': false,

@@ -51,3 +51,16 @@ func TestShouldRetryRefusesWrittenResponse(t *testing.T) {
 
 	assert.False(t, shouldRetry(c, err, 1))
 }
+
+func TestShouldRetryRefusesForcedChannelEvenForChannelError(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Set("specific_channel_id", 42)
+	err := types.NewError(
+		errors.New("forced channel failed"),
+		types.ErrorCodeChannelInvalidKey,
+	)
+	require.True(t, types.IsChannelError(err))
+
+	assert.False(t, shouldRetry(c, err, 1))
+}

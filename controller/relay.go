@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -127,6 +128,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	publicModelName := relayInfo.OriginModelName
+	retryParam := &service.RetryParam{
+		Ctx:                    c,
+		TokenGroup:             relayInfo.TokenGroup,
+		ModelName:              publicModelName,
+		RequestPath:            c.Request.URL.Path,
+		VideoResolution:        common.GetContextKeyString(c, constant.ContextKeyVideoResolution),
+		DynamicRoutingEligible: common.GetContextKeyBool(c, constant.ContextKeyDynamicRoutingEligible),
+		AllowedChannelIds:      assetAllowedChannelIds(c),
+		Retry:                  common.GetPointer(0),
+	}
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
@@ -180,15 +192,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
-	retryParam := &service.RetryParam{
-		Ctx:               c,
-		TokenGroup:        relayInfo.TokenGroup,
-		ModelName:         relayInfo.OriginModelName,
-		RequestPath:       c.Request.URL.Path,
-		VideoResolution:   common.GetContextKeyString(c, constant.ContextKeyVideoResolution),
-		AllowedChannelIds: assetAllowedChannelIds(c),
-		Retry:             common.GetPointer(0),
-	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
@@ -201,6 +204,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		addUsedChannel(c, channel.Id)
+		retryParam.MarkAttempted(channel.Id)
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			newAPIError = billingErr
 			break
@@ -217,6 +221,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		observeAttempt := service.DynamicRoutingEnabled() && shouldObserveDynamicRoutingAttempt(c, relayInfo)
+		if observeAttempt {
+			relayInfo.BeginDynamicRoutingAttempt(channel.Id, channel.Type, publicModelName, true)
+		}
 
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
@@ -227,6 +235,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = geminiRelayHandler(c, relayInfo)
 		default:
 			newAPIError = relayHandler(c, relayInfo)
+		}
+
+		if observeAttempt {
+			if attempt, ok := finishDynamicRoutingAttempt(c, relayInfo, newAPIError); ok && shouldPublishDynamicRoutingAttempt(attempt) {
+				key, sample := dynamicRoutingSampleFromAttempt(attempt)
+				service.ObserveDynamicRoutingSample(key, sample)
+			}
 		}
 
 		if newAPIError == nil {
@@ -257,6 +272,55 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			perfmetrics.RecordRelaySample(relayInfo, false, 0)
 		})
 	}
+}
+
+func shouldObserveDynamicRoutingAttempt(c *gin.Context, info *relaycommon.RelayInfo) bool {
+	if c == nil || info == nil {
+		return false
+	}
+	if _, forced := c.Get("specific_channel_id"); forced {
+		return false
+	}
+	if !common.GetContextKeyBool(c, constant.ContextKeyDynamicRoutingEligible) {
+		return false
+	}
+	// Channel tests and task relays use different controller paths today. Keep
+	// these guards here so future call-path reuse cannot contaminate live QoS.
+	if info.IsChannelTest || (info.TaskRelayInfo != nil && info.LockedChannel != nil) {
+		return false
+	}
+	return true
+}
+
+func finishDynamicRoutingAttempt(c *gin.Context, info *relaycommon.RelayInfo, handlerErr *types.NewAPIError) (relaycommon.DynamicRoutingAttemptSample, bool) {
+	if info == nil {
+		return relaycommon.DynamicRoutingAttemptSample{}, false
+	}
+	if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
+		info.DiscardDynamicRoutingAttempt()
+		return relaycommon.DynamicRoutingAttemptSample{}, false
+	}
+	return info.FinishDynamicRoutingAttempt(handlerErr)
+}
+
+func shouldPublishDynamicRoutingAttempt(attempt relaycommon.DynamicRoutingAttemptSample) bool {
+	return attempt.Success || attempt.HardFailure || attempt.HasTTFT || attempt.HasTPOT
+}
+
+func dynamicRoutingSampleFromAttempt(attempt relaycommon.DynamicRoutingAttemptSample) (dynamicrouting.ObservationKey, dynamicrouting.Sample) {
+	return dynamicrouting.ObservationKey{
+			ChannelID: attempt.ChannelID,
+			Model:     attempt.Model,
+		}, dynamicrouting.Sample{
+			ObservedAt:        attempt.ObservedAt,
+			UpstreamStartedAt: attempt.UpstreamStartedAt,
+			TTFT:              attempt.TTFT,
+			TPOT:              attempt.TPOT,
+			HasTTFT:           attempt.HasTTFT,
+			HasTPOT:           attempt.HasTPOT,
+			Success:           attempt.Success,
+			HardFailure:       attempt.HardFailure,
+		}
 }
 
 var upgrader = websocket.Upgrader{
@@ -302,6 +366,11 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+	// Provider-specific billing aliases may mutate OriginModelName during an
+	// attempt. Every retry must start from the immutable client-facing model so
+	// channel setup and the next adaptor do not inherit the previous attempt's
+	// alias.
+	info.OriginModelName = retryParam.ModelName
 	if info.ChannelMeta == nil {
 		channelId := c.GetInt("channel_id")
 		if retryParam.AllowedChannelIds != nil {
@@ -350,6 +419,9 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	if c.Writer.Written() {
 		return false
 	}
+	if _, ok := c.Get("specific_channel_id"); ok {
+		return false
+	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}
@@ -360,9 +432,6 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 	if retryTimes <= 0 {
-		return false
-	}
-	if _, ok := c.Get("specific_channel_id"); ok {
 		return false
 	}
 	code := openaiErr.StatusCode
@@ -581,6 +650,7 @@ func RelayTask(c *gin.Context) {
 		}
 
 		addUsedChannel(c, channel.Id)
+		retryParam.MarkAttempted(channel.Id)
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {

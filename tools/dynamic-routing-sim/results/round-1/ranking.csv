@@ -1,0 +1,9 @@
+rank,parameters,average_improvement_percent,worst_improvement_percent,scenario_win_rate,significant,regressed_runs
+1,stable-recovery,18.8947,-0.1460,0.3036,false,0
+2,hard-failure-confirmed,18.5984,-0.1423,0.3036,false,0
+3,balanced,18.4695,-0.1423,0.3036,false,0
+4,fast-recovery,18.2145,-0.1423,0.2857,false,0
+5,short-window,15.4270,-0.1423,0.2321,false,0
+6,aggressive,12.5129,-0.1423,0.2500,false,0
+7,conservative,11.2351,-0.1731,0.1429,false,0
+8,fast-low-probe,6.2158,-0.1423,0.0893,false,0

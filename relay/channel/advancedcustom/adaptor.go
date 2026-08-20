@@ -190,7 +190,11 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if err := a.resolve(nil, info); err != nil {
 		return "", err
 	}
-	return a.routeURL(info)
+	requestURL, err := a.routeURL(info)
+	if err != nil {
+		return "", types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid)
+	}
+	return requestURL, nil
 }
 
 func (a *Adaptor) BuildModelListRequest(info *relaycommon.RelayInfo) (string, http.Header, error) {
@@ -356,10 +360,10 @@ func (a *Adaptor) resolve(c *gin.Context, info *relaycommon.RelayInfo) error {
 	}
 	config := info.ChannelOtherSettings.AdvancedCustom
 	if config == nil {
-		return errors.New("advanced_custom is required")
+		return types.NewError(errors.New("advanced_custom is required"), types.ErrorCodeChannelParamOverrideInvalid)
 	}
 	if err := config.Validate(); err != nil {
-		return err
+		return types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid)
 	}
 
 	incomingPath := incomingRequestPath(c, info)
@@ -374,7 +378,10 @@ func (a *Adaptor) resolve(c *gin.Context, info *relaycommon.RelayInfo) error {
 		a.resolved = true
 		return nil
 	}
-	return fmt.Errorf("advanced custom channel does not support request path %s for model %s", incomingPath, info.OriginModelName)
+	return types.NewError(
+		fmt.Errorf("advanced custom channel does not support request path %s for model %s", incomingPath, info.OriginModelName),
+		types.ErrorCodeChannelParamOverrideInvalid,
+	)
 }
 
 func incomingRequestPath(c *gin.Context, info *relaycommon.RelayInfo) string {

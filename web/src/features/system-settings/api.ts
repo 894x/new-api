@@ -20,6 +20,7 @@ import { api } from '@/lib/api'
 
 import type {
   ConfirmPaymentComplianceResponse,
+  DynamicRoutingSettings,
   FetchUpstreamRatiosRequest,
   LogCleanupTask,
   SystemOptionsResponse,
@@ -38,6 +39,20 @@ export async function getSystemOptions() {
 
 export async function updateSystemOption(request: UpdateOptionRequest) {
   const res = await api.put<UpdateOptionResponse>('/api/option/', request)
+  return res.data
+}
+
+export async function updateDynamicRoutingSettings(
+  settings: DynamicRoutingSettings
+) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/option/dynamic_routing',
+    settings,
+    {
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
   return res.data
 }
 

@@ -2,7 +2,6 @@ package aws
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	bedrockruntimeTypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/auth/bearer"
 )
 
@@ -52,9 +52,14 @@ func newAwsInvokeError(requestContext context.Context, err error, operation stri
 	if requestContext.Err() != nil {
 		options = append(options, types.ErrOptionWithSkipRetry())
 	}
+	errorCode := types.ErrorCodeAwsInvokeError
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) && apiErr.ErrorCode() == "ResourceNotFoundException" {
+		errorCode = types.ErrorCodeModelNotFound
+	}
 	return types.NewOpenAIError(
 		errors.Wrap(err, operation),
-		types.ErrorCodeAwsInvokeError,
+		errorCode,
 		getAwsErrorStatusCode(err),
 		options...,
 	)
@@ -232,7 +237,9 @@ func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types
 	ctx, cancel := newAwsInvokeContext(requestContext)
 	defer cancel()
 
-	awsResp, err := a.AwsClient.InvokeModel(ctx, a.AwsReq.(*bedrockruntime.InvokeModelInput))
+	request := a.AwsReq.(*bedrockruntime.InvokeModelInput)
+	info.MarkAttemptUpstreamStarted()
+	awsResp, err := a.AwsClient.InvokeModel(ctx, request)
 	if err != nil {
 		return newAwsInvokeError(requestContext, err, "InvokeModel"), nil
 	}
@@ -262,12 +269,19 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 	ctx, cancel := newAwsInvokeContext(requestContext)
 	defer cancel()
 
-	awsResp, err := a.AwsClient.InvokeModelWithResponseStream(ctx, a.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput))
+	request := a.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput)
+	info.MarkAttemptUpstreamStarted()
+	awsResp, err := a.AwsClient.InvokeModelWithResponseStream(ctx, request)
 	if err != nil {
 		return newAwsInvokeError(requestContext, err, "InvokeModelWithResponseStream"), nil
 	}
 	stream := awsResp.GetStream()
-	defer stream.Close()
+	info.StreamStatus = relaycommon.NewStreamStatus()
+	ingressCtx, cancelIngress := context.WithCancel(ctx)
+	dataChan := make(chan string, 10)
+	producerDone := make(chan struct{})
+	idleWatchdog := helper.NewConfiguredStreamIdleWatchdog()
+	var producerErr *types.NewAPIError
 
 	claudeInfo := &claude.ClaudeResponseInfo{
 		ResponseId:   helper.GetResponseID(c),
@@ -277,39 +291,101 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 		Usage:        &dto.Usage{},
 	}
 
-	events := stream.Events()
-streamLoop:
-	for {
-		select {
-		case <-ctx.Done():
-			break streamLoop
-		case event, ok := <-events:
-			if !ok {
-				break streamLoop
-			}
-			if ctx.Err() != nil {
-				break streamLoop
-			}
-
-			switch v := event.(type) {
-			case *bedrockruntimeTypes.ResponseStreamMemberChunk:
-				info.SetFirstResponseTime()
-				respErr := claude.HandleStreamResponseData(c, info, claudeInfo, string(v.Value.Bytes))
-				if respErr != nil {
-					return respErr, nil
+	go func() {
+		defer close(producerDone)
+		defer close(dataChan)
+		events := stream.Events()
+		for {
+			select {
+			case <-ingressCtx.Done():
+				if requestContext.Err() != nil {
+					info.StreamStatus.SetClientGone(requestContext.Err())
+				} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, ctx.Err())
+				} else {
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, ingressCtx.Err())
 				}
-			case *bedrockruntimeTypes.UnknownUnionMember:
-				fmt.Println("unknown tag:", v.Tag)
-				return types.NewError(errors.New("unknown response type"), types.ErrorCodeInvalidRequest), nil
-			default:
-				fmt.Println("union is nil or unknown type")
-				return types.NewError(errors.New("nil or unknown response type"), types.ErrorCodeInvalidRequest), nil
+				return
+			case event, ok := <-events:
+				if !ok {
+					if requestContext.Err() != nil {
+						info.StreamStatus.SetClientGone(requestContext.Err())
+					} else if streamErr := stream.Err(); streamErr != nil {
+						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, streamErr)
+					} else {
+						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
+					}
+					return
+				}
+				idleWatchdog.Reset()
+				switch value := event.(type) {
+				case *bedrockruntimeTypes.ResponseStreamMemberChunk:
+					data := string(value.Value.Bytes)
+					if helper.IsNullJSONStreamEvent(data) {
+						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, helper.ErrNullJSONStreamEvent)
+						return
+					}
+					visibleText := helper.StreamChunkVisibleText(data)
+					var eventHeader struct {
+						Type string `json:"type"`
+					}
+					_ = common.Unmarshal([]byte(data), &eventHeader)
+					if eventHeader.Type != "message_stop" && eventHeader.Type != "content_block_stop" {
+						info.SetFirstResponseTime()
+					}
+					info.RecordAttemptVisibleText(visibleText)
+					if !helper.EnqueueStreamDataWithBackpressure(ingressCtx, dataChan, data, info) {
+						return
+					}
+				case *bedrockruntimeTypes.UnknownUnionMember:
+					fmt.Println("unknown tag:", value.Tag)
+					producerErr = types.NewError(errors.New("unknown response type"), types.ErrorCodeInvalidRequest)
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, producerErr)
+					return
+				default:
+					fmt.Println("union is nil or unknown type")
+					producerErr = types.NewError(errors.New("nil or unknown response type"), types.ErrorCodeInvalidRequest)
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, producerErr)
+					return
+				}
 			}
 		}
-	}
+	}()
+	watcherDone := helper.CloseUpstreamOnContext(requestContext, stream, producerDone)
+	idleWatcherDone := helper.CloseUpstreamOnIdleTimeout(requestContext, info, stream, producerDone, idleWatchdog)
+	defer func() {
+		cancelIngress()
+		idleWatchdog.Stop()
+		_ = stream.Close()
+		<-producerDone
+		<-watcherDone
+		<-idleWatcherDone
+	}()
 
-	_ = stream.Close()
-	claude.HandleStreamFinalResponse(c, info, claudeInfo)
+	for data := range dataChan {
+		respErr := claude.HandleStreamResponseData(c, info, claudeInfo, data)
+		if respErr != nil {
+			if helper.IsDownstreamWriteError(respErr) {
+				info.StreamStatus.SetClientGone(respErr)
+			} else {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, respErr)
+			}
+			return respErr, nil
+		}
+	}
+	if requestContext.Err() != nil {
+		info.StreamStatus.SetClientGone(requestContext.Err())
+		return nil, claudeInfo.Usage
+	}
+	if producerErr != nil {
+		return producerErr, nil
+	}
+	if finalErr := claude.HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
+		if helper.IsDownstreamWriteError(finalErr) {
+			info.StreamStatus.SetClientGone(finalErr)
+		}
+		return types.NewError(finalErr, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry()), claudeInfo.Usage
+	}
 	return nil, claudeInfo.Usage
 }
 
@@ -317,12 +393,27 @@ streamLoop:
 func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
 
 	requestContext := c.Request.Context()
+	if info.IsStream {
+		info.StreamStatus = relaycommon.NewStreamStatus()
+	}
 	ctx, cancel := newAwsInvokeContext(requestContext)
 	defer cancel()
 
-	awsResp, err := a.AwsClient.InvokeModel(ctx, a.AwsReq.(*bedrockruntime.InvokeModelInput))
+	request := a.AwsReq.(*bedrockruntime.InvokeModelInput)
+	info.MarkAttemptUpstreamStarted()
+	awsResp, err := a.AwsClient.InvokeModel(ctx, request)
 	if err != nil {
-		return newAwsInvokeError(requestContext, err, "InvokeModel"), nil
+		apiErr := newAwsInvokeError(requestContext, err, "InvokeModel")
+		if info.IsStream {
+			if requestErr := requestContext.Err(); requestErr != nil {
+				info.StreamStatus.SetClientGone(requestErr)
+			} else if errors.Is(err, context.DeadlineExceeded) {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, err)
+			} else {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, apiErr)
+			}
+		}
+		return apiErr, nil
 	}
 
 	// 解析Nova响应
@@ -341,8 +432,28 @@ func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) 
 		} `json:"usage"`
 	}
 
-	if err := json.Unmarshal(awsResp.Body, &novaResp); err != nil {
-		return types.NewError(errors.Wrap(err, "unmarshal nova response"), types.ErrorCodeBadResponseBody), nil
+	if helper.IsNullJSONStreamEvent(string(awsResp.Body)) {
+		if info.IsStream {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, helper.ErrNullJSONStreamEvent)
+		}
+		return types.NewError(helper.ErrNullJSONStreamEvent, types.ErrorCodeBadResponseBody), nil
+	}
+	if err := common.Unmarshal(awsResp.Body, &novaResp); err != nil {
+		wrappedErr := errors.Wrap(err, "unmarshal nova response")
+		if info.IsStream {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, wrappedErr)
+		}
+		return types.NewError(wrappedErr, types.ErrorCodeBadResponseBody), nil
+	}
+	responseText := ""
+	if len(novaResp.Output.Message.Content) > 0 {
+		responseText = novaResp.Output.Message.Content[0].Text
+	}
+	if info.IsStream {
+		// The complete SDK body has now been decoded and visible output is known.
+		// Capture upstream timing before local DTO conversion and serialization.
+		info.SetFirstResponseTime()
+		info.RecordAttemptVisibleText(responseText)
 	}
 
 	// 构造OpenAI格式响应
@@ -355,7 +466,7 @@ func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) 
 			Index: 0,
 			Message: dto.Message{
 				Role:    "assistant",
-				Content: novaResp.Output.Message.Content[0].Text,
+				Content: responseText,
 			},
 			FinishReason: "stop",
 		}},
@@ -366,6 +477,21 @@ func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) 
 		},
 	}
 
-	c.JSON(http.StatusOK, response)
+	responseBody, err := common.Marshal(response)
+	if err != nil {
+		info.DiscardDynamicRoutingAttempt()
+		return types.NewError(err, types.ErrorCodeJsonMarshalFailed), nil
+	}
+	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	c.Writer.WriteHeader(http.StatusOK)
+	if _, err = c.Writer.Write(responseBody); err != nil {
+		if info.IsStream {
+			info.StreamStatus.SetClientGone(err)
+		}
+		return types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry()), nil
+	}
+	if info.IsStream {
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+	}
 	return nil, &response.Usage
 }

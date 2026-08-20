@@ -20,8 +20,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 
-import { updateSystemOption } from '../api'
-import type { UpdateOptionRequest } from '../types'
+import { updateDynamicRoutingSettings, updateSystemOption } from '../api'
+import type { DynamicRoutingSettings, UpdateOptionRequest } from '../types'
 
 // Configuration keys that require status refresh
 const STATUS_RELATED_KEYS = new Set([
@@ -76,6 +76,27 @@ export function useUpdateOption() {
       } else {
         toast.error(data.message || i18next.t('Failed to update setting'))
       }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || i18next.t('Failed to update setting'))
+    },
+  })
+}
+
+export function useUpdateDynamicRoutingSettings() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (settings: DynamicRoutingSettings) => {
+      const result = await updateDynamicRoutingSettings(settings)
+      if (!result.success) {
+        throw new Error(result.message || i18next.t('Failed to update setting'))
+      }
+      return result
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      toast.success(i18next.t('Setting updated successfully'))
     },
     onError: (error: Error) => {
       toast.error(error.message || i18next.t('Failed to update setting'))

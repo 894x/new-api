@@ -130,6 +130,9 @@ func handleStream(c *gin.Context, info *relaycommon.RelayInfo, resp *dto.ChatCom
 	}
 	err = openai.HandleStreamFormat(c, info, string(streamData), info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
 	if err != nil {
+		if helper.IsDownstreamWriteError(err) && info.StreamStatus != nil {
+			info.StreamStatus.SetClientGone(err)
+		}
 		return fmt.Errorf("failed to handle stream format: %w", err)
 	}
 	return nil
@@ -140,8 +143,7 @@ func handleFinalStream(c *gin.Context, info *relaycommon.RelayInfo, resp *dto.Ch
 	if err != nil {
 		return fmt.Errorf("failed to marshal stream response: %w", err)
 	}
-	openai.HandleFinalResponse(c, info, string(streamData), resp.Id, resp.Created, resp.Model, resp.GetSystemFingerprint(), resp.Usage, false)
-	return nil
+	return openai.HandleFinalResponse(c, info, string(streamData), resp.Id, resp.Created, resp.Model, resp.GetSystemFingerprint(), resp.Usage, false)
 }
 
 func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, callback func(data string, geminiResponse *dto.GeminiChatResponse) bool) (*dto.Usage, *types.NewAPIError) {
@@ -149,11 +151,26 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	var imageCount int
 	var hasBillableUsageMetadata bool
 	responseText := strings.Builder{}
+	var streamErr *types.NewAPIError
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var geminiResponse dto.GeminiChatResponse
 		if err := common.UnmarshalJsonStr(data, &geminiResponse); err != nil {
-			sr.Stop(fmt.Errorf("unmarshal: %w", err))
+			sr.ScannerError(fmt.Errorf("unmarshal upstream Gemini event: %w", err))
+			return
+		}
+		if geminiResponse.Error != nil {
+			errorCode := any(geminiResponse.Error.Code)
+			if strings.EqualFold(strings.TrimSpace(geminiResponse.Error.Status), "NOT_FOUND") &&
+				strings.Contains(strings.ToLower(geminiResponse.Error.Message), "models/") {
+				errorCode = types.ErrorCodeModelNotFound
+			}
+			streamErr = types.WithOpenAIError(types.OpenAIError{
+				Message: geminiResponse.Error.Message,
+				Type:    geminiResponse.Error.Status,
+				Code:    errorCode,
+			}, helper.ResolveUpstreamStreamErrorStatus(data, resp.StatusCode))
+			sr.Stop(streamErr)
 			return
 		}
 
@@ -186,6 +203,9 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			sr.Stop(fmt.Errorf("gemini callback stopped"))
 		}
 	})
+	if streamErr != nil {
+		return nil, streamErr
+	}
 
 	if !hasBillableUsageMetadata {
 		if info.ReceivedResponseCount > 0 {
@@ -268,6 +288,7 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 				err := handleStream(c, info, emptyResponse)
 				if err != nil {
 					logger.LogError(c, err.Error())
+					return false
 				}
 
 				response.ClearToolCalls()
@@ -278,6 +299,7 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 				err := handleStream(c, info, emptyResponse)
 				if err != nil {
 					logger.LogError(c, err.Error())
+					return false
 				}
 			}
 		}
@@ -285,10 +307,14 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 		err := handleStream(c, info, response)
 		if err != nil {
 			logger.LogError(c, err.Error())
+			return false
 		}
 		if isStop {
 			if info.RelayFormat != types.RelayFormatClaude {
-				_ = handleStream(c, info, helper.GenerateStopResponse(id, createAt, info.UpstreamModelName, finishReason))
+				if err := handleStream(c, info, helper.GenerateStopResponse(id, createAt, info.UpstreamModelName, finishReason)); err != nil {
+					logger.LogError(c, err.Error())
+					return false
+				}
 			}
 		}
 		return true
@@ -306,6 +332,10 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	handleErr := handleFinalStream(c, info, response)
 	if handleErr != nil {
 		common.SysLog("send final response failed: " + handleErr.Error())
+		if helper.IsDownstreamWriteError(handleErr) && info.StreamStatus != nil {
+			info.StreamStatus.SetClientGone(handleErr)
+		}
+		return usage, types.NewError(handleErr, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
 	}
 	return usage, nil
 }

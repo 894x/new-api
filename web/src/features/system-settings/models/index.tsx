@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { SettingsPage } from '../components/settings-page'
-import type { ModelSettings } from '../types'
+import { DYNAMIC_ROUTING_FLAT_DEFAULTS, type ModelSettings } from '../types'
 import {
   MODELS_DEFAULT_SECTION,
   getModelsSectionContent,
@@ -74,6 +74,7 @@ const defaultModelSettings: ModelSettings = {
   'monitor_setting.auto_test_channel_enabled': false,
   'monitor_setting.auto_test_channel_minutes': 10,
   'monitor_setting.channel_test_mode': 'scheduled_all',
+  ...DYNAMIC_ROUTING_FLAT_DEFAULTS,
   'channel_affinity_setting.enabled': false,
   'channel_affinity_setting.switch_on_success': true,
   'channel_affinity_setting.keep_on_channel_disabled': false,

@@ -19,6 +19,8 @@ import (
 type Adaptor struct {
 }
 
+var baiduAccessTokenProvider = getBaiduAccessToken
+
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
 	//TODO implement me
 	return nil, errors.New("not implemented")
@@ -102,10 +104,25 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		suffix += strings.ToLower(info.UpstreamModelName)
 	}
 	fullRequestURL := fmt.Sprintf("%s/rpc/2.0/ai_custom/v1/wenxinworkshop/%s", info.ChannelBaseUrl, suffix)
+	keyParts := strings.Split(info.ApiKey, "|")
+	if len(keyParts) != 2 || strings.TrimSpace(keyParts[0]) == "" || strings.TrimSpace(keyParts[1]) == "" {
+		return "", types.NewError(
+			errors.New("invalid baidu api key, should be in format of <api-key>|<secret-key>"),
+			types.ErrorCodeChannelInvalidKey,
+		)
+	}
 	var accessToken string
 	var err error
-	if accessToken, err = getBaiduAccessToken(info.ApiKey); err != nil {
-		return "", err
+	if accessToken, err = baiduAccessTokenProvider(info.ApiKey); err != nil {
+		info.MarkDynamicRoutingAttemptPreUpstreamHard()
+		return "", types.NewError(
+			fmt.Errorf("failed to obtain Baidu access token: %w", err),
+			types.ErrorCodeDoRequestFailed,
+		)
+	}
+	if strings.TrimSpace(accessToken) == "" {
+		info.MarkDynamicRoutingAttemptPreUpstreamHard()
+		return "", types.NewError(errors.New("Baidu access token response was empty"), types.ErrorCodeDoRequestFailed)
 	}
 	fullRequestURL += "?access_token=" + accessToken
 	return fullRequestURL, nil

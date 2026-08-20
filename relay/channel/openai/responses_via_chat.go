@@ -77,6 +77,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, markStreamErrorIfCommitted(c, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError))
 	}
 	streamErr := (*types.NewAPIError)(nil)
+	var clientWriteErr error
 
 	sendEvent := func(event relayconvert.ChatToResponsesStreamEvent) bool {
 		data, err := common.Marshal(event.Payload)
@@ -84,7 +85,11 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			streamErr = markStreamErrorIfCommitted(c, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError))
 			return false
 		}
-		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data))
+		if err := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data)); err != nil {
+			clientWriteErr = err
+			streamErr = markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
+			return false
+		}
 		return true
 	}
 
@@ -97,7 +102,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		var errorResp dto.OpenAITextResponse
 		if err := common.UnmarshalJsonStr(data, &errorResp); err == nil {
 			if oaiError := errorResp.GetOpenAIError(); oaiError.IsPresent() {
-				streamErr = markStreamErrorIfCommitted(c, types.WithOpenAIError(*oaiError, resp.StatusCode))
+				streamErr = markStreamErrorIfCommitted(c, types.WithOpenAIError(*oaiError, helper.ResolveUpstreamStreamErrorStatus(data, resp.StatusCode)))
 				sr.Stop(streamErr)
 				return
 			}
@@ -106,7 +111,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		var chunk dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &chunk); err != nil {
 			logger.LogError(c, "failed to unmarshal chat stream response: "+err.Error())
-			sr.Error(err)
+			sr.ScannerError(err)
 			return
 		}
 
@@ -124,7 +129,11 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				return
 			}
 			if !sendEvent(event) {
-				sr.Stop(streamErr)
+				if clientWriteErr != nil {
+					sr.ClientGone(clientWriteErr)
+				} else {
+					sr.Stop(streamErr)
+				}
 				return
 			}
 		}
@@ -150,6 +159,9 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return nil, markStreamErrorIfCommitted(c, types.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError))
 		}
 		if !sendEvent(event) {
+			if clientWriteErr != nil && info.StreamStatus != nil {
+				info.StreamStatus.SetClientGone(clientWriteErr)
+			}
 			return nil, streamErr
 		}
 	}

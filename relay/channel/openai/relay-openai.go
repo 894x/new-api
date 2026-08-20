@@ -83,7 +83,9 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 				response.Choices[j].Delta.Reasoning = nil
 			}
 			info.ThinkingContentInfo.SendLastThinkingContent = true
-			helper.ObjectData(c, response)
+			if err := helper.ObjectData(c, response); err != nil {
+				return err
+			}
 		}
 
 		// Convert reasoning content to regular content if any
@@ -137,7 +139,14 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		if lastStreamData != "" {
 			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
 				common.SysLog("error handling stream format: " + err.Error())
-				sr.Error(err)
+				if helper.IsDownstreamWriteError(err) {
+					streamErr = markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
+					lastStreamData = ""
+					sr.ClientGone(err)
+				} else {
+					sr.Stop(err)
+				}
+				return
 			}
 		}
 		if len(data) > 0 {
@@ -148,13 +157,17 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 			collectStreamFunctionCallNames(data, seenStreamToolCalls, &streamFunctionCallNames)
 			var errorResponse dto.OpenAITextResponse
-			if err := common.UnmarshalJsonStr(data, &errorResponse); err == nil {
-				if oaiError := errorResponse.GetOpenAIError(); oaiError.IsPresent() {
-					streamErr = markStreamErrorIfCommitted(c, types.WithOpenAIError(*oaiError, resp.StatusCode))
-					lastStreamData = ""
-					sr.Stop(streamErr)
-					return
-				}
+			if err := common.UnmarshalJsonStr(data, &errorResponse); err != nil {
+				lastStreamData = ""
+				sr.ScannerError(fmt.Errorf("unmarshal upstream OpenAI stream event: %w", err))
+				return
+			}
+			if oaiError := errorResponse.GetOpenAIError(); oaiError.IsPresent() {
+				statusCode := helper.ResolveUpstreamStreamErrorStatus(data, resp.StatusCode)
+				streamErr = markStreamErrorIfCommitted(c, types.WithOpenAIError(*oaiError, statusCode))
+				lastStreamData = ""
+				sr.Stop(streamErr)
+				return
 			}
 
 			clientData, isStreamError := service.StreamErrorDataForClient(c, data)
@@ -167,7 +180,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 			if err := processTokenData(info.RelayMode, clientData, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
-				sr.Error(err)
+				sr.ScannerError(err)
 			}
 		}
 	})
@@ -202,7 +215,12 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		if shouldSendLastResp {
-			_ = sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
+			if err := sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+				if helper.IsDownstreamWriteError(err) && info.StreamStatus != nil {
+					info.StreamStatus.SetClientGone(err)
+				}
+				return nil, markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
+			}
 		}
 	}
 
@@ -217,7 +235,12 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		info.CountBillableToolCall(dto.BuildInCallFunctionCall, name)
 	}
 
-	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
+	if err := HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage); err != nil {
+		if helper.IsDownstreamWriteError(err) && info.StreamStatus != nil {
+			info.StreamStatus.SetClientGone(err)
+		}
+		return usage, markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
+	}
 
 	return usage, nil
 }
