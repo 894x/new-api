@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
 )
@@ -143,6 +144,8 @@ type RelayInfo struct {
 	SubscriptionPlanTitle string
 	// RequestId is used for idempotent pre-consume/refund
 	RequestId string
+	// ResponseId is the gateway-owned ID returned by Chat Completions.
+	ResponseId string
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
@@ -503,6 +506,10 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 
 	if info.RelayMode == relayconstant.RelayModeUnknown {
 		info.RelayMode = c.GetInt("relay_mode")
+	}
+	if info.RelayMode == relayconstant.RelayModeChatCompletions && c.Request.URL.Path == "/v1/chat/completions" {
+		info.ResponseId = uuid.NewString()
+		common.SetContextKey(c, constant.ContextKeyResponseId, info.ResponseId)
 	}
 
 	if strings.HasPrefix(c.Request.URL.Path, "/pg") {

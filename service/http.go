@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 
 	"github.com/gin-gonic/gin"
@@ -46,6 +47,15 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 		return
 	}
 
+	responseId := common.GetContextKeyString(c, constant.ContextKeyResponseId)
+	normalizedData, err := common.ReplaceTopLevelJSONID(data, responseId)
+	if err != nil {
+		logger.LogError(c, fmt.Sprintf("failed to normalize response id: %s", err.Error()))
+		return
+	}
+	bodyChanged := !bytes.Equal(data, normalizedData)
+	data = normalizedData
+
 	body := io.NopCloser(bytes.NewBuffer(data))
 
 	// We shouldn't set the header before we parse the response body, because the parse part may fail.
@@ -55,6 +65,9 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 	if src != nil {
 		for k, v := range src.Header {
 			if !ShouldCopyUpstreamHeader(c, k, v) {
+				continue
+			}
+			if bodyChanged && (strings.EqualFold(k, "ETag") || strings.EqualFold(k, "Content-MD5") || strings.EqualFold(k, "Digest") || strings.EqualFold(k, "Content-Digest") || strings.EqualFold(k, "Repr-Digest")) {
 				continue
 			}
 			c.Writer.Header().Set(k, v[0])
@@ -71,7 +84,7 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 		c.Writer.WriteHeader(http.StatusOK)
 	}
 
-	_, err := io.Copy(c.Writer, body)
+	_, err = io.Copy(c.Writer, body)
 	if err != nil {
 		logger.LogError(c, fmt.Sprintf("failed to copy response body: %s", err.Error()))
 	}

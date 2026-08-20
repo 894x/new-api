@@ -35,7 +35,7 @@ func convertCozeChatRequest(c *gin.Context, request dto.GeneralOpenAIRequest) *C
 	}
 	user := request.User
 	if len(user) == 0 {
-		user = json.RawMessage(helper.GetResponseID(c))
+		user = json.RawMessage(helper.GetDefaultUpstreamUserID(c))
 	}
 	cozeRequest := &CozeChatRequest{
 		BotId:              c.GetString("bot_id"),
@@ -92,7 +92,7 @@ func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
-	_, _ = c.Writer.Write(jsonResponse)
+	_, _ = helper.WriteJSON(c, jsonResponse)
 
 	return &usage, nil
 }

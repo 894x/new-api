@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/types"
@@ -103,6 +104,13 @@ func StringData(c *gin.Context, str string) error {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
+	responseId := common.GetContextKeyString(c, constant.ContextKeyResponseId)
+	normalized, err := common.ReplaceTopLevelJSONID(common.StringToByteSlice(str), responseId)
+	if err != nil {
+		return fmt.Errorf("error normalizing response id: %w", err)
+	}
+	str = string(normalized)
+
 	c.Render(-1, common.CustomEvent{Data: "data: " + str})
 	return FlushWriter(c)
 }
@@ -131,6 +139,16 @@ func ObjectData(c *gin.Context, object interface{}) error {
 		return fmt.Errorf("error marshalling object: %w", err)
 	}
 	return StringData(c, string(jsonData))
+}
+
+// WriteJSON writes a JSON response after applying the public Chat Completions ID.
+func WriteJSON(c *gin.Context, data []byte) (int, error) {
+	responseId := common.GetContextKeyString(c, constant.ContextKeyResponseId)
+	normalized, err := common.ReplaceTopLevelJSONID(data, responseId)
+	if err != nil {
+		return 0, fmt.Errorf("error normalizing response id: %w", err)
+	}
+	return c.Writer.Write(normalized)
 }
 
 func Done(c *gin.Context) {
@@ -172,6 +190,15 @@ func WssError(c *gin.Context, ws *websocket.Conn, openaiError types.OpenAIError)
 }
 
 func GetResponseID(c *gin.Context) string {
+	if responseId := common.GetContextKeyString(c, constant.ContextKeyResponseId); responseId != "" {
+		return responseId
+	}
+	return GetDefaultUpstreamUserID(c)
+}
+
+// GetDefaultUpstreamUserID returns the legacy per-request identity used when a
+// provider requires a user value and the client omitted one.
+func GetDefaultUpstreamUserID(c *gin.Context) string {
 	logID := c.GetString(common.RequestIdKey)
 	return fmt.Sprintf("chatcmpl-%s", logID)
 }
