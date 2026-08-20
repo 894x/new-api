@@ -22,7 +22,15 @@ import * as React from 'react'
 
 import { cn } from '@/lib/utils'
 
-function Table({ className, ...props }: React.ComponentProps<'table'>) {
+type TableProps = React.ComponentProps<'table'> & {
+  compact?: boolean
+}
+
+const tableDensityClassNames = {
+  compact: '[&_tbody>tr]:h-10 [&_td]:py-1 [&_th]:h-8',
+} as const
+
+function Table({ className, compact, ...props }: TableProps) {
   return (
     <div
       data-slot='table-container'
@@ -32,6 +40,7 @@ function Table({ className, ...props }: React.ComponentProps<'table'>) {
         data-slot='table'
         className={cn(
           'w-full caption-bottom text-sm tabular-nums [&_td]:text-sm [&_td_*]:text-sm [&_th]:text-sm [&_th_*]:text-sm',
+          compact && tableDensityClassNames.compact,
           className
         )}
         {...props}
@@ -134,4 +143,5 @@ export {
   TableRow,
   TableCell,
   TableCaption,
+  tableDensityClassNames,
 }

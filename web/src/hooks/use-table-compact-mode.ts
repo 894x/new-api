@@ -16,18 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 const STORAGE_KEY = 'table_compact_modes'
 
 function getCompactMode(tableKey: string): boolean {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return false
+    if (!raw) return true
     const modes = JSON.parse(raw) as Record<string, boolean>
-    return Boolean(modes[tableKey])
+    return modes[tableKey] ?? true
   } catch {
-    return false
+    return true
   }
 }
 
@@ -47,9 +47,26 @@ function setCompactMode(value: boolean, tableKey: string) {
  * Stays in sync across tabs via the storage event.
  */
 export function useTableCompactMode(
-  tableKey = 'global'
+  tableKey = 'global',
+  enabled = true
 ): [boolean, (value: boolean) => void] {
-  const [compact, setCompactState] = useState(() => getCompactMode(tableKey))
+  const [compact, setCompactState] = useState(() =>
+    enabled ? getCompactMode(tableKey) : true
+  )
+  const hydratedConfigRef = useRef({ enabled, tableKey })
+
+  useEffect(() => {
+    const hydratedConfig = hydratedConfigRef.current
+    if (
+      hydratedConfig.enabled === enabled &&
+      hydratedConfig.tableKey === tableKey
+    ) {
+      return
+    }
+
+    hydratedConfigRef.current = { enabled, tableKey }
+    setCompactState(enabled ? getCompactMode(tableKey) : true)
+  }, [enabled, tableKey])
 
   const setCompact = useCallback(
     (value: boolean) => {
@@ -60,6 +77,10 @@ export function useTableCompactMode(
   )
 
   useEffect(() => {
+    if (!enabled) {
+      return
+    }
+
     const handleStorage = (e: StorageEvent) => {
       if (e.key === STORAGE_KEY) {
         try {
@@ -67,7 +88,7 @@ export function useTableCompactMode(
             string,
             boolean
           >
-          setCompactState(Boolean(modes[tableKey]))
+          setCompactState(modes[tableKey] ?? true)
         } catch {
           /* ignore */
         }
@@ -75,7 +96,7 @@ export function useTableCompactMode(
     }
     window.addEventListener('storage', handleStorage)
     return () => window.removeEventListener('storage', handleStorage)
-  }, [tableKey])
+  }, [enabled, tableKey])
 
   return [compact, setCompact]
 }

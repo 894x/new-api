@@ -43,6 +43,7 @@ import * as React from 'react'
 
 import { PageFooterPortal } from '@/components/layout/components/page-footer'
 import { useMediaQuery } from '@/hooks'
+import { useTableCompactMode } from '@/hooks/use-table-compact-mode'
 import { cn } from '@/lib/utils'
 
 import {
@@ -57,6 +58,7 @@ import {
   useDataTableViewMode,
   type DataTableViewMode,
 } from '../hooks/use-data-table-view-mode'
+import { DataTableDensityToggle } from '../toolbar/density-toggle'
 import { DataTableToolbar } from '../toolbar/toolbar'
 import { DataTableViewModeToggle } from '../toolbar/view-mode-toggle'
 import { DataTableCardGrid } from './card-grid'
@@ -238,6 +240,20 @@ export type DataTablePageProps<TData> = {
   tableHeaderClassName?: string
 
   /**
+   * Show a table-density toggle and default the table to compact rows.
+   */
+  enableCompactMode?: boolean
+
+  /** Controlled compact-row state. */
+  compactMode?: boolean
+
+  /** Change handler for controlled compact-row state. */
+  onCompactModeChange?: (compact: boolean) => void
+
+  /** Per-table preference key persisted inside `table_compact_modes`. */
+  compactModeStorageKey?: string
+
+  /**
    * Opt into the table/card view toggle. Defaults to `false`, so existing
    * pages render the table only and behave exactly as before. When enabled, a
    * {@link DataTableViewModeToggle} is injected into the default toolbar
@@ -311,6 +327,14 @@ export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
   const isMobile = useMediaQuery('(max-width: 640px)')
   const showMobile = isMobile && !props.hideMobile
 
+  const compactModeEnabled = props.enableCompactMode === true
+  const [internalCompactMode, setInternalCompactMode] = useTableCompactMode(
+    props.compactModeStorageKey,
+    compactModeEnabled && props.compactMode === undefined
+  )
+  const compactMode = props.compactMode ?? internalCompactMode
+  const setCompactMode = props.onCompactModeChange ?? setInternalCompactMode
+
   const [internalViewMode, setInternalViewMode] = useDataTableViewMode({
     storageKey: props.viewModeStorageKey,
     // When card view is enabled, prefer it as the default unless the consumer
@@ -324,13 +348,35 @@ export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
   const setViewMode = props.onViewModeChange ?? setInternalViewMode
   const cardViewActive = !!props.enableCardView
 
-  const viewToggle = cardViewActive ? (
+  const densityToggle = compactModeEnabled ? (
+    <DataTableDensityToggle compact={compactMode} onChange={setCompactMode} />
+  ) : undefined
+  const viewModeToggle = cardViewActive ? (
     <DataTableViewModeToggle value={viewMode} onChange={setViewMode} />
   ) : undefined
+  const viewToggle =
+    densityToggle || viewModeToggle ? (
+      <div className='flex items-center gap-1.5'>
+        {densityToggle}
+        {viewModeToggle}
+      </div>
+    ) : undefined
 
   const toolbarNode = renderToolbar(props, viewToggle)
-  const mobileNode = renderMobile(props, showMobile, cardViewActive, viewMode)
-  const desktopNode = renderDesktop(props, showMobile, cardViewActive, viewMode)
+  const mobileNode = renderMobile(
+    props,
+    showMobile,
+    cardViewActive,
+    viewMode,
+    compactModeEnabled && compactMode
+  )
+  const desktopNode = renderDesktop(
+    props,
+    showMobile,
+    cardViewActive,
+    viewMode,
+    compactModeEnabled && compactMode
+  )
   const paginationNode = renderPagination(props)
 
   return (
@@ -401,7 +447,8 @@ function renderMobile<TData>(
   props: DataTablePageProps<TData>,
   showMobile: boolean,
   cardViewActive: boolean,
-  viewMode: DataTableViewMode
+  viewMode: DataTableViewMode,
+  compactMode: boolean
 ): React.ReactNode {
   if (!showMobile) {
     return null
@@ -433,6 +480,7 @@ function renderMobile<TData>(
             '[background-color:var(--table-header)]',
             props.tableHeaderClassName
           )}
+          compact={compactMode}
           getColumnClassName={props.getColumnClassName}
           pinnedColumns={props.pinnedColumns}
           containerClassName={cn(
@@ -481,7 +529,8 @@ function renderDesktop<TData>(
   props: DataTablePageProps<TData>,
   showMobile: boolean,
   cardViewActive: boolean,
-  viewMode: DataTableViewMode
+  viewMode: DataTableViewMode,
+  compactMode: boolean
 ): React.ReactNode {
   if (showMobile) {
     return null
@@ -527,6 +576,7 @@ function renderDesktop<TData>(
       skeletonKeyPrefix={props.skeletonKeyPrefix}
       renderRow={props.renderRow}
       applyHeaderSize={props.applyHeaderSize}
+      compact={compactMode}
       splitHeader={fixedHeight}
       tableContainerClassName={fixedHeight ? 'h-full min-h-0' : undefined}
       tableHeaderClassName={cn(

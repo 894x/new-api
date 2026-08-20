@@ -418,6 +418,8 @@ export function ChannelsTable() {
         'No channels available. Create your first channel to get started.'
       )}
       skeletonKeyPrefix='channel-skeleton'
+      enableCompactMode
+      compactModeStorageKey='channels'
       enableCardView
       viewModeStorageKey={CHANNELS_VIEW_MODE_STORAGE_KEY}
       renderCard={(row, { isSelected }) => (

@@ -19,7 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 import type { Row, Table as TanstackTable } from '@tanstack/react-table'
 import * as React from 'react'
 
-import { Table, TableBody, TableCell, TableRow } from '@/components/ui/table'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableRow,
+  tableDensityClassNames,
+} from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 
 import {
@@ -101,7 +107,11 @@ function UnifiedTableView<TData>({
 
   return (
     <div className={props.tableContainerClassName}>
-      <Table className={props.tableClassName} style={tableSizing.style}>
+      <Table
+        compact={props.compact}
+        className={props.tableClassName}
+        style={tableSizing.style}
+      >
         {tableSizing.colgroup}
         <DataTableHeader
           table={props.table}
@@ -149,6 +159,7 @@ function SplitHeaderTableView<TData>({
           data-slot='table'
           className={cn(
             'w-full caption-bottom text-sm tabular-nums [&_td]:text-sm [&_td_*]:text-sm [&_th]:text-sm [&_th_*]:text-sm',
+            props.compact && tableDensityClassNames.compact,
             props.tableClassName
           )}
           style={tableSizing.style}

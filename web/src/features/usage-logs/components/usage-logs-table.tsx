@@ -23,11 +23,13 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import {
+  DataTableDensityToggle,
   DataTablePage,
   DataTableRow,
   useDataTable,
 } from '@/components/data-table'
 import { useMediaQuery } from '@/hooks'
+import { useTableCompactMode } from '@/hooks/use-table-compact-mode'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { cn } from '@/lib/utils'
 
@@ -82,6 +84,8 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const { isAdminView: isAdmin, canManageScope } = useLogsViewScope()
   const isMobile = useMediaQuery('(max-width: 640px)')
   const searchParams = route.useSearch()
+  const compactModeKey = `usage-logs:${logCategory}`
+  const [compactMode, setCompactMode] = useTableCompactMode(compactModeKey)
 
   const {
     columnFilters,
@@ -180,6 +184,13 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   })
 
   const isCommon = logCategory === 'common'
+  const densityToggle = (
+    <DataTableDensityToggle
+      compact={compactMode}
+      onChange={setCompactMode}
+      className='hidden sm:inline-flex'
+    />
+  )
 
   return (
     <DataTablePage
@@ -192,6 +203,10 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
         'No usage logs available. Logs will appear here once API calls are made.'
       )}
       skeletonKeyPrefix='usage-log-skeleton'
+      enableCompactMode
+      compactMode={compactMode}
+      onCompactModeChange={setCompactMode}
+      compactModeStorageKey={compactModeKey}
       applyHeaderSize
       tableClassName={cn(
         '[&_[data-slot=table]]:text-[13px] [&_[data-slot=table]_td]:text-[13px] [&_[data-slot=table]_td_*]:text-[13px] [&_[data-slot=table]_th]:text-[13px] [&_[data-slot=table]_th_*]:text-[13px]'
@@ -205,9 +220,13 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       }
       toolbar={
         isCommon ? (
-          <CommonLogsFilterBar table={table} />
+          <CommonLogsFilterBar table={table} densityToggle={densityToggle} />
         ) : (
-          <TaskLogsFilterBar table={table} logCategory={logCategory} />
+          <TaskLogsFilterBar
+            table={table}
+            logCategory={logCategory}
+            densityToggle={densityToggle}
+          />
         )
       }
       renderRow={(row) => {

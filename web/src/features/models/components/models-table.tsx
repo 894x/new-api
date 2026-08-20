@@ -199,6 +199,8 @@ export function ModelsTable() {
         'No models available. Create your first model to get started.'
       )}
       skeletonKeyPrefix='model-skeleton'
+      enableCompactMode
+      compactModeStorageKey='models'
       applyHeaderSize
       toolbarProps={{
         searchPlaceholder: t('Filter by model name...'),
