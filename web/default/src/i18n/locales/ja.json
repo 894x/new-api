@@ -5377,6 +5377,13 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
     "Zoom": "ズーム",
-    "Use at most 32 valid HTTP header names, one per line.": "有効な HTTP ヘッダー名を 1 行に 1 つ、最大 32 個まで入力してください。"
+    "Use at most 32 valid HTTP header names, one per line.": "有効な HTTP ヘッダー名を 1 行に 1 つ、最大 32 個まで入力してください。",
+    "Request Timeline": "リクエストタイムライン",
+    "Gateway Processing": "ゲートウェイ処理",
+    "Upstream Upload": "アップストリーム送信",
+    "Upstream Wait": "アップストリーム待機",
+    "First Response": "最初の応答",
+    "Longest Stage": "最長ステージ",
+    "Request Intake": "リクエスト受信"
   }
 }

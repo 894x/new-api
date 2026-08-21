@@ -5377,6 +5377,13 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
-    "Use at most 32 valid HTTP header names, one per line.": "Nhập tối đa 32 tên tiêu đề HTTP hợp lệ, mỗi dòng một tên."
+    "Use at most 32 valid HTTP header names, one per line.": "Nhập tối đa 32 tên tiêu đề HTTP hợp lệ, mỗi dòng một tên.",
+    "Request Timeline": "Dòng thời gian yêu cầu",
+    "Gateway Processing": "Xử lý tại cổng",
+    "Upstream Upload": "Gửi lên thượng nguồn",
+    "Upstream Wait": "Chờ thượng nguồn",
+    "First Response": "Phản hồi đầu tiên",
+    "Longest Stage": "Giai đoạn lâu nhất",
+    "Request Intake": "Tiếp nhận yêu cầu"
   }
 }

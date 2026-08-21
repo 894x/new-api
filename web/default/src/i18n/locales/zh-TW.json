@@ -5377,6 +5377,13 @@
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
     "Zoom": "縮放",
-    "Use at most 32 valid HTTP header names, one per line.": "每行填寫一個有效的 HTTP 回應標頭名稱，最多 32 個。"
+    "Use at most 32 valid HTTP header names, one per line.": "每行填寫一個有效的 HTTP 回應標頭名稱，最多 32 個。",
+    "Request Timeline": "請求時間軸",
+    "Gateway Processing": "閘道處理",
+    "Upstream Upload": "上游請求上傳",
+    "Upstream Wait": "等待上游回應",
+    "First Response": "首次回應",
+    "Longest Stage": "最耗時階段",
+    "Request Intake": "請求接收"
   }
 }

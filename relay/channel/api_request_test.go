@@ -1,14 +1,53 @@
 package channel
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	rootcommon "github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDoRequestRecordsGenericUpstreamTransportMilestones(t *testing.T) {
+	service.InitHttpClient()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.Copy(io.Discard, r.Body)
+		assert.NoError(t, err)
+		w.Header().Set("Content-Type", "application/json")
+		_, err = w.Write([]byte(`{"ok":true}`))
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test"}`))
+	timing := rootcommon.NewRequestTiming(time.Now())
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:   &relaycommon.ChannelMeta{},
+		RequestTiming: timing,
+	}
+	req, err := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(`{"model":"test"}`))
+	require.NoError(t, err)
+
+	resp, err := DoRequest(ctx, req, info)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	snapshot := timing.Snapshot()
+	require.Positive(t, snapshot.UpstreamRequestStartedAtMs)
+	require.Positive(t, snapshot.UpstreamRequestWrittenAtMs)
+	require.Positive(t, snapshot.UpstreamResponseHeadersAtMs)
+	assert.LessOrEqual(t, snapshot.UpstreamRequestStartedAtMs, snapshot.UpstreamRequestWrittenAtMs)
+	assert.LessOrEqual(t, snapshot.UpstreamRequestWrittenAtMs, snapshot.UpstreamResponseHeadersAtMs)
+}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()

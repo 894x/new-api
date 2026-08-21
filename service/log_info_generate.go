@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -126,6 +127,10 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 	AppendUpstreamResponseAdminInfo(ctx, adminInfo)
+	if relayInfo.RequestTiming != nil {
+		relayInfo.RequestTiming.Mark(common.RequestTimingCompleted, time.Now())
+		adminInfo["request_timing"] = relayInfo.RequestTiming.Snapshot()
+	}
 
 	other["admin_info"] = adminInfo
 	appendRequestPath(ctx, relayInfo, other)

@@ -5377,6 +5377,13 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
-    "Use at most 32 valid HTTP header names, one per line.": "Use at most 32 valid HTTP header names, one per line."
+    "Use at most 32 valid HTTP header names, one per line.": "Use at most 32 valid HTTP header names, one per line.",
+    "Request Timeline": "Request Timeline",
+    "Gateway Processing": "Gateway Processing",
+    "Upstream Upload": "Upstream Upload",
+    "Upstream Wait": "Upstream Wait",
+    "First Response": "First Response",
+    "Longest Stage": "Longest Stage",
+    "Request Intake": "Request Intake"
   }
 }

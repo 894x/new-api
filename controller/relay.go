@@ -390,6 +390,11 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		}
 		service.AppendChannelAffinityAdminInfo(c, adminInfo)
 		service.AppendUpstreamResponseAdminInfo(c, adminInfo)
+		if timing := common.GetRequestTiming(c); timing != nil {
+			snapshot := timing.Snapshot()
+			snapshot.RequestCompletedAtMs = time.Now().UnixMilli()
+			adminInfo["request_timing"] = snapshot
+		}
 		other["admin_info"] = adminInfo
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 		if startTime.IsZero() {

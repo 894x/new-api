@@ -5377,6 +5377,13 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
-    "Use at most 32 valid HTTP header names, one per line.": "Укажите не более 32 допустимых имен HTTP-заголовков, по одному в строке."
+    "Use at most 32 valid HTTP header names, one per line.": "Укажите не более 32 допустимых имен HTTP-заголовков, по одному в строке.",
+    "Request Timeline": "Хронология запроса",
+    "Gateway Processing": "Обработка шлюзом",
+    "Upstream Upload": "Отправка на upstream",
+    "Upstream Wait": "Ожидание upstream",
+    "First Response": "Первый ответ",
+    "Longest Stage": "Самый долгий этап",
+    "Request Intake": "Приём запроса"
   }
 }

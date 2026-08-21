@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	rootcommon "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
@@ -505,6 +507,18 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	if info.RequestTiming != nil {
+		info.RequestTiming.Mark(rootcommon.RequestTimingUpstreamRequestStarted, time.Now())
+		trace := &httptrace.ClientTrace{
+			WroteRequest: func(traceInfo httptrace.WroteRequestInfo) {
+				if traceInfo.Err == nil {
+					info.RequestTiming.Mark(rootcommon.RequestTimingUpstreamRequestWritten, time.Now())
+				}
+			},
+		}
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
@@ -513,6 +527,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if resp == nil {
 		return nil, errors.New("resp is nil")
 	}
+	info.RequestTiming.Mark(rootcommon.RequestTimingUpstreamResponseHeaders, time.Now())
 
 	service.CaptureUpstreamResponseHeaders(c, resp.Header)
 

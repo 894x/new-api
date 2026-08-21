@@ -96,6 +96,7 @@ type RelayInfo struct {
 	TokenUnlimited    bool
 	StartTime         time.Time
 	FirstResponseTime time.Time
+	RequestTiming     *common.RequestTiming
 	isFirstResponse   bool
 	//SendLastReasoningResponse bool
 	IsStream               bool
@@ -472,12 +473,13 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	info := &RelayInfo{
 		Request: request,
 
-		RequestId:  reqId,
-		UserId:     common.GetContextKeyInt(c, constant.ContextKeyUserId),
-		UsingGroup: common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
-		UserGroup:  common.GetContextKeyString(c, constant.ContextKeyUserGroup),
-		UserQuota:  common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
-		UserEmail:  common.GetContextKeyString(c, constant.ContextKeyUserEmail),
+		RequestId:     reqId,
+		RequestTiming: common.GetRequestTiming(c),
+		UserId:        common.GetContextKeyInt(c, constant.ContextKeyUserId),
+		UsingGroup:    common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+		UserGroup:     common.GetContextKeyString(c, constant.ContextKeyUserGroup),
+		UserQuota:     common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
+		UserEmail:     common.GetContextKeyString(c, constant.ContextKeyUserEmail),
 
 		OriginModelName: common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
 
@@ -670,7 +672,9 @@ func (info *RelayInfo) GetEstimatePromptTokens() int {
 
 func (info *RelayInfo) SetFirstResponseTime() {
 	if info.isFirstResponse {
-		info.FirstResponseTime = time.Now()
+		now := time.Now()
+		info.FirstResponseTime = now
+		info.RequestTiming.Mark(common.RequestTimingFirstResponse, now)
 		info.isFirstResponse = false
 	}
 }

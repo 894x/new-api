@@ -5377,6 +5377,13 @@
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
     "Zoom": "缩放",
-    "Use at most 32 valid HTTP header names, one per line.": "每行填写一个有效的 HTTP 响应头名称，最多 32 个。"
+    "Use at most 32 valid HTTP header names, one per line.": "每行填写一个有效的 HTTP 响应头名称，最多 32 个。",
+    "Request Timeline": "请求时间轴",
+    "Gateway Processing": "网关处理",
+    "Upstream Upload": "上游请求上传",
+    "Upstream Wait": "等待上游响应",
+    "First Response": "首次响应",
+    "Longest Stage": "最耗时阶段",
+    "Request Intake": "请求接收"
   }
 }

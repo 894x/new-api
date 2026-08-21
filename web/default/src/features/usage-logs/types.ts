@@ -92,6 +92,16 @@ export interface ChannelAffinityInfo {
   using_group?: string
 }
 
+export interface RequestTimingInfo {
+  request_received_at_ms?: number
+  request_body_read_at_ms?: number
+  upstream_request_started_at_ms?: number
+  upstream_request_written_at_ms?: number
+  upstream_response_headers_at_ms?: number
+  first_response_at_ms?: number
+  request_completed_at_ms?: number
+}
+
 export interface LogOtherData {
   admin_info?: {
     is_multi_key?: boolean
@@ -113,6 +123,7 @@ export interface LogOtherData {
     auth_method?: 'session' | 'access_token' | string
     upstream_response_id?: string
     upstream_request_ids?: Record<string, string>
+    request_timing?: RequestTimingInfo
     // Quota saturation marker: set when a quota conversion clamped at the
     // int32 bound (overflow/underflow) or hit a NaN fallback while computing
     // this request's charge. Admin-only (nested under admin_info).
