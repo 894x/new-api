@@ -14,11 +14,10 @@ import (
 )
 
 func TestSanitizeUserErrorLogsHidesProviderDetails(t *testing.T) {
-	setting := operation_setting.GetErrorSetting()
-	original := setting.HideErrorDetails
-	setting.HideErrorDetails = true
+	original := operation_setting.GetErrorSetting().HideErrorDetails
+	operation_setting.UpdateHideErrorDetails(true)
 	t.Cleanup(func() {
-		setting.HideErrorDetails = original
+		operation_setting.UpdateHideErrorDetails(original)
 	})
 
 	gin.SetMode(gin.TestMode)
@@ -51,11 +50,10 @@ func TestSanitizeUserErrorLogsHidesProviderDetails(t *testing.T) {
 }
 
 func TestSanitizeUserErrorLogsKeepsAdministratorDetails(t *testing.T) {
-	setting := operation_setting.GetErrorSetting()
-	original := setting.HideErrorDetails
-	setting.HideErrorDetails = true
+	original := operation_setting.GetErrorSetting().HideErrorDetails
+	operation_setting.UpdateHideErrorDetails(true)
 	t.Cleanup(func() {
-		setting.HideErrorDetails = original
+		operation_setting.UpdateHideErrorDetails(original)
 	})
 
 	gin.SetMode(gin.TestMode)

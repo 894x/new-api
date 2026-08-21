@@ -108,11 +108,10 @@ func TestStreamErrorDataForClientHidesErrorEventsOnly(t *testing.T) {
 
 func setHideErrorDetails(t *testing.T, enabled bool) {
 	t.Helper()
-	setting := operation_setting.GetErrorSetting()
-	original := setting.HideErrorDetails
-	setting.HideErrorDetails = enabled
+	original := operation_setting.GetErrorSetting().HideErrorDetails
+	operation_setting.UpdateHideErrorDetails(enabled)
 	t.Cleanup(func() {
-		setting.HideErrorDetails = original
+		operation_setting.UpdateHideErrorDetails(original)
 	})
 }
 

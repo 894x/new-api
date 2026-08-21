@@ -716,6 +716,7 @@
     "Blend": "ブレンド",
     "Block email aliases (e.g., user+alias@domain.com)": "メールエイリアスをブロック (例: user+alias@domain.com)",
     "Blocked keywords": "ブロックされたキーワード",
+    "Blocked upstream response headers": "ブロックするアップストリーム応答ヘッダー",
     "Blocks messages when sensitive keywords are detected.": "機密性の高いキーワードが検出された場合にメッセージをブロックします。",
     "Body param": "ボディパラメータ",
     "Border radius": "角丸",
@@ -3423,6 +3424,7 @@
     "One contract. More choices.": "一つの契約、より多くの選択肢。",
     "One domain per line": "1行に1つのドメイン",
     "One domain per line (only used when domain restriction is enabled)": "1行に1つのドメイン (ドメイン制限が有効な場合のみ使用されます)",
+    "One header name per line. Matching is case-insensitive; blocked values are saved only in administrator logs.": "1 行に 1 つのヘッダー名を入力します。大文字と小文字は区別されず、ブロックされた値は管理者ログにのみ保存されます。",
     "One IP or CIDR range per line": "1行に1つのIPまたはCIDR範囲",
     "One IP per line (empty for no restriction)": "1行に1つのIP (制限なしの場合は空欄)",
     "one keyword per line": "1行に1つのキーワード",
@@ -5404,6 +5406,7 @@
     "Upstream Response (billing-usage-gemini)": "アップストリームレスポンス (billing-usage-gemini)",
     "Upstream Response (billing-usage-openai-estimated)": "アップストリームレスポンス (billing-usage-openai-estimated)",
     "Upstream Response (billing-usage-openai)": "アップストリームレスポンス (billing-usage-openai)",
+    "Upstream Response ID": "アップストリーム応答 ID",
     "upstream services integrated": "アップストリームサービス連携",
     "Upstream task API": "アップストリームタスク API",
     "Upstream Updates": "アップストリーム更新",
@@ -5772,6 +5775,14 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Use at most 32 valid HTTP header names, one per line.": "有効な HTTP ヘッダー名を 1 行に 1 つ、最大 32 個まで入力してください。",
+    "Request Timeline": "リクエストタイムライン",
+    "Gateway Processing": "ゲートウェイ処理",
+    "Upstream Upload": "アップストリーム送信",
+    "Upstream Wait": "アップストリーム待機",
+    "First Response": "最初の応答",
+    "Longest Stage": "最長ステージ",
+    "Request Intake": "リクエスト受信"
   }
 }

@@ -82,6 +82,7 @@ import {
   isTimingLogType,
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import { RequestTimingTimeline } from '../request-timing-timeline'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -499,6 +500,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const showAdminIp =
     !!props.log.ip && (showTiming || (props.isAdmin && isTopup))
   const adminInfo = other?.admin_info
+  let dialogWidthClass = 'sm:max-w-lg'
+  if (isTieredBilling) {
+    dialogWidthClass = 'sm:max-w-4xl lg:max-w-5xl'
+  } else if (props.isAdmin && adminInfo?.request_timing) {
+    dialogWidthClass = 'sm:max-w-2xl'
+  }
   const topupAuditFields =
     isTopup && props.isAdmin && adminInfo
       ? ([
@@ -610,6 +617,18 @@ export function DetailsDialog(props: DetailsDialogProps) {
   } else if (other?.reasoning_effort === 'medium') {
     reasoningEffortVariant = 'yellow'
   }
+  const upstreamResponseId = other?.admin_info?.upstream_response_id
+  const upstreamRequestIds = Object.entries(
+    other?.admin_info?.upstream_request_ids ?? {}
+  )
+    .filter(
+      ([header, value]) =>
+        !(
+          header.toLowerCase() === 'x-oneapi-request-id' &&
+          value === props.log.upstream_request_id
+        )
+    )
+    .sort(([left], [right]) => left.localeCompare(right))
 
   return (
     <Dialog
@@ -630,7 +649,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
       contentClassName={cn(
         'min-w-0 overflow-hidden',
         'max-sm:max-h-[calc(100dvh-1.5rem)] max-sm:w-[calc(100vw-1.5rem)] max-sm:max-w-[calc(100vw-1.5rem)] max-sm:p-4',
-        isTieredBilling ? 'sm:max-w-4xl lg:max-w-5xl' : 'sm:max-w-lg'
+        dialogWidthClass
       )}
       headerClassName='max-sm:gap-1'
       titleClassName='flex items-center gap-2 text-base'
@@ -648,13 +667,24 @@ export function DetailsDialog(props: DetailsDialogProps) {
               mono
             />
           )}
-          {props.log.upstream_request_id && (
+          {props.isAdmin && props.log.upstream_request_id && (
             <DetailRow
               label={t('Upstream Request ID')}
               value={props.log.upstream_request_id}
               mono
             />
           )}
+          {props.isAdmin && upstreamResponseId && (
+            <DetailRow
+              label={t('Upstream Response ID')}
+              value={upstreamResponseId}
+              mono
+            />
+          )}
+          {props.isAdmin &&
+            upstreamRequestIds.map(([header, value]) => (
+              <DetailRow key={header} label={header} value={value} mono />
+            ))}
 
           {props.isAdmin && props.log.channel > 0 && (
             <DetailRow
@@ -1250,6 +1280,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
               </p>
             </div>
           </div>
+        )}
+
+        {props.isAdmin && other?.admin_info?.request_timing && (
+          <RequestTimingTimeline timing={other.admin_info.request_timing} />
         )}
       </div>
     </Dialog>

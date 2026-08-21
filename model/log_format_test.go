@@ -33,3 +33,23 @@ func TestFormatUserLogsStripsQuotaSaturation(t *testing.T) {
 	// Non-admin billing fields remain visible.
 	require.Contains(t, parsed, "model_price")
 }
+
+func TestFormatUserLogsStripsAllUpstreamIdentifiers(t *testing.T) {
+	other := common.MapToJsonStr(map[string]interface{}{
+		"model_price": 0.004,
+		"admin_info": map[string]interface{}{
+			"upstream_response_id": "gen_upstream",
+			"upstream_request_ids": map[string]interface{}{
+				"X-Trace-Id": "trace-secret",
+			},
+		},
+	})
+	logs := []*Log{{Other: other, UpstreamRequestId: "legacy-upstream-secret"}}
+
+	formatUserLogs(logs, 0)
+
+	parsed, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	require.NotContains(t, parsed, "admin_info")
+	require.Empty(t, logs[0].UpstreamRequestId)
+}

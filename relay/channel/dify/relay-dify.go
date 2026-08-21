@@ -132,13 +132,13 @@ func requestOpenAI2Dify(c *gin.Context, info *relaycommon.RelayInfo, request dto
 
 	user := request.User
 	if len(user) == 0 {
-		user = json.RawMessage(helper.GetResponseID(c))
+		user = json.RawMessage(helper.GetDefaultUpstreamUserID(c))
 	}
 	var stringUser string
 	err := json.Unmarshal(user, &stringUser)
 	if err != nil {
 		common.SysLog("failed to unmarshal user: " + err.Error())
-		stringUser = helper.GetResponseID(c)
+		stringUser = helper.GetDefaultUpstreamUserID(c)
 	}
 	difyReq.User = stringUser
 
@@ -296,6 +296,6 @@ func difyHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respons
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
-	c.Writer.Write(jsonResponse)
+	_, _ = helper.WriteJSON(c, jsonResponse)
 	return &difyResponse.MetaData.Usage, nil
 }

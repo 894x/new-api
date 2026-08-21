@@ -377,6 +377,7 @@ export type SecuritySettings = {
   CheckSensitiveOnPromptEnabled: boolean
   SensitiveWords: string
   'error_setting.hide_error_details': boolean
+  'error_setting.blocked_response_headers': string[]
   'fetch_setting.enable_ssrf_protection': boolean
   'fetch_setting.allow_private_ip': boolean
   'fetch_setting.domain_filter_mode': boolean

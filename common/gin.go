@@ -40,6 +40,7 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 			if _, err := bs.Seek(0, io.SeekStart); err != nil {
 				return nil, fmt.Errorf("failed to seek body storage: %w", err)
 			}
+			MarkRequestTiming(c, RequestTimingBodyRead)
 			return bs, nil
 		}
 	}
@@ -53,6 +54,7 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 				return nil, err
 			}
 			c.Set(KeyBodyStorage, bs)
+			MarkRequestTiming(c, RequestTimingBodyRead)
 			return bs, nil
 		}
 	}
@@ -78,6 +80,7 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 
 	// 缓存存储对象
 	c.Set(KeyBodyStorage, storage)
+	MarkRequestTiming(c, RequestTimingBodyRead)
 
 	return storage, nil
 }

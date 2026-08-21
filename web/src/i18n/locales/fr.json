@@ -716,6 +716,7 @@
     "Blend": "Fusion",
     "Block email aliases (e.g., user+alias@domain.com)": "Bloquer les alias d'e-mail (par exemple, utilisateur+alias@domaine.com)",
     "Blocked keywords": "Mots-clés bloqués",
+    "Blocked upstream response headers": "En-têtes de réponse en amont bloqués",
     "Blocks messages when sensitive keywords are detected.": "Bloque les messages lorsque des mots-clés sensibles sont détectés.",
     "Body param": "Paramètre de corps",
     "Border radius": "Rayon de bordure",
@@ -3423,6 +3424,7 @@
     "One contract. More choices.": "Un contrat. Plus de choix.",
     "One domain per line": "Un domaine par ligne",
     "One domain per line (only used when domain restriction is enabled)": "Un domaine par ligne (utilisé uniquement lorsque la restriction de domaine est activée)",
+    "One header name per line. Matching is case-insensitive; blocked values are saved only in administrator logs.": "Un nom d’en-tête par ligne. La correspondance ignore la casse ; les valeurs bloquées sont enregistrées uniquement dans les journaux administrateur.",
     "One IP or CIDR range per line": "Une IP ou plage CIDR par ligne",
     "One IP per line (empty for no restriction)": "Une IP par ligne (laisser vide pour aucune restriction)",
     "one keyword per line": "un mot-clé par ligne",
@@ -5404,6 +5406,7 @@
     "Upstream Response (billing-usage-gemini)": "Réponse amont (billing-usage-gemini)",
     "Upstream Response (billing-usage-openai-estimated)": "Réponse amont (billing-usage-openai-estimated)",
     "Upstream Response (billing-usage-openai)": "Réponse amont (billing-usage-openai)",
+    "Upstream Response ID": "ID de réponse en amont",
     "upstream services integrated": "services en amont intégrés",
     "Upstream task API": "API de tâches en amont",
     "Upstream Updates": "Mises à jour en amont",
@@ -5772,6 +5775,14 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Use at most 32 valid HTTP header names, one per line.": "Saisissez au maximum 32 noms d’en-tête HTTP valides, un par ligne.",
+    "Request Timeline": "Chronologie de la requête",
+    "Gateway Processing": "Traitement par la passerelle",
+    "Upstream Upload": "Envoi vers l'amont",
+    "Upstream Wait": "Attente de l'amont",
+    "First Response": "Première réponse",
+    "Longest Stage": "Étape la plus longue",
+    "Request Intake": "Réception de la requête"
   }
 }

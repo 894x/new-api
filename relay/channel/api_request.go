@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"regexp"
 	"strings"
 	"sync"
@@ -529,6 +530,18 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	if info.RequestTiming != nil {
+		info.RequestTiming.Mark(common2.RequestTimingUpstreamRequestStarted, time.Now())
+		trace := &httptrace.ClientTrace{
+			WroteRequest: func(traceInfo httptrace.WroteRequestInfo) {
+				if traceInfo.Err == nil {
+					info.RequestTiming.Mark(common2.RequestTimingUpstreamRequestWritten, time.Now())
+				}
+			},
+		}
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	}
+
 	resp, err := relayClient.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
@@ -537,6 +550,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if resp == nil {
 		return nil, errors.New("resp is nil")
 	}
+	info.RequestTiming.Mark(common2.RequestTimingUpstreamResponseHeaders, time.Now())
 	if common2.DebugEnabled {
 		policy := service.NormalizeHTTPTransportPolicy(info.ChannelSetting)
 		logger.LogDebug(c, fmt.Sprintf(
@@ -549,9 +563,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		))
 	}
 
-	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
-		c.Set(common2.UpstreamRequestIdKey, upID)
-	}
+	service.CaptureUpstreamResponseHeaders(c, resp.Header)
 
 	_ = req.Body.Close()
 	_ = c.Request.Body.Close()

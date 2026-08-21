@@ -27,9 +27,12 @@ import {
   FormControl,
   FormDescription,
   FormField,
+  FormItem,
   FormLabel,
+  FormMessage,
 } from '@/components/ui/form'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 
 import {
   SettingsForm,
@@ -40,9 +43,32 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
+const maxBlockedResponseHeaderCount = 32
+const maxBlockedResponseHeaderNameLength = 128
+const validHeaderNamePattern = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+
 const errorDetailSchema = z.object({
   error_setting: z.object({
     hide_error_details: z.boolean(),
+    blocked_response_headers: z.string().refine(
+      (value) => {
+        const headers = value
+          .split('\n')
+          .map((header) => header.trim())
+          .filter(Boolean)
+        return (
+          headers.length <= maxBlockedResponseHeaderCount &&
+          headers.every(
+            (header) =>
+              header.length <= maxBlockedResponseHeaderNameLength &&
+              validHeaderNamePattern.test(header)
+          )
+        )
+      },
+      {
+        message: 'Use at most 32 valid HTTP header names, one per line.',
+      }
+    ),
   }),
 })
 
@@ -51,6 +77,7 @@ type ErrorDetailFormValues = z.infer<typeof errorDetailSchema>
 type ErrorDetailSectionProps = {
   defaultValues: {
     'error_setting.hide_error_details': boolean
+    'error_setting.blocked_response_headers': string[]
   }
 }
 
@@ -59,6 +86,8 @@ const buildFormDefaults = (
 ): ErrorDetailFormValues => ({
   error_setting: {
     hide_error_details: defaults['error_setting.hide_error_details'],
+    blocked_response_headers:
+      defaults['error_setting.blocked_response_headers'].join('\n'),
   },
 })
 
@@ -74,12 +103,35 @@ export function ErrorDetailSection({ defaultValues }: ErrorDetailSectionProps) {
     form.reset(buildFormDefaults(defaultValues))
   }, [defaultValues, form])
 
-  const onSubmit = async (values: ErrorDetailFormValues) => {
-    const value = values.error_setting.hide_error_details
-    if (value !== defaultValues['error_setting.hide_error_details']) {
+  const onSubmit = async (values: ErrorDetailFormValues): Promise<void> => {
+    const hideErrorDetails = values.error_setting.hide_error_details
+    if (
+      hideErrorDetails !== defaultValues['error_setting.hide_error_details']
+    ) {
       await updateOption.mutateAsync({
         key: 'error_setting.hide_error_details',
-        value,
+        value: hideErrorDetails,
+      })
+    }
+
+    const seenHeaders = new Set<string>()
+    const blockedResponseHeaders = values.error_setting.blocked_response_headers
+      .split('\n')
+      .map((header) => header.trim())
+      .filter((header) => {
+        if (!header) return false
+        const normalized = header.toLowerCase()
+        if (seenHeaders.has(normalized)) return false
+        seenHeaders.add(normalized)
+        return true
+      })
+    if (
+      JSON.stringify(blockedResponseHeaders) !==
+      JSON.stringify(defaultValues['error_setting.blocked_response_headers'])
+    ) {
+      await updateOption.mutateAsync({
+        key: 'error_setting.blocked_response_headers',
+        value: JSON.stringify(blockedResponseHeaders),
       })
     }
   }
@@ -113,6 +165,28 @@ export function ErrorDetailSection({ defaultValues }: ErrorDetailSectionProps) {
                   />
                 </FormControl>
               </SettingsSwitchItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name='error_setting.blocked_response_headers'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Blocked upstream response headers')}</FormLabel>
+                <FormControl>
+                  <Textarea
+                    rows={5}
+                    placeholder={'X-Request-Id\nX-Trace-Id'}
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'One header name per line. Matching is case-insensitive; blocked values are saved only in administrator logs.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
             )}
           />
         </SettingsForm>

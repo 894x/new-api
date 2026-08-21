@@ -20,6 +20,7 @@ import (
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
 )
@@ -91,6 +92,7 @@ type RelayInfo struct {
 	TokenUnlimited    bool
 	StartTime         time.Time
 	FirstResponseTime time.Time
+	RequestTiming     *common.RequestTiming
 	isFirstResponse   bool
 	//SendLastReasoningResponse bool
 	IsStream               bool
@@ -139,6 +141,8 @@ type RelayInfo struct {
 	SubscriptionPlanTitle string
 	// RequestId is used for idempotent pre-consume/refund
 	RequestId string
+	// ResponseId is the gateway-owned ID returned by Chat Completions.
+	ResponseId string
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
@@ -472,12 +476,13 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	info := &RelayInfo{
 		Request: request,
 
-		RequestId:  reqId,
-		UserId:     common.GetContextKeyInt(c, constant.ContextKeyUserId),
-		UsingGroup: common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
-		UserGroup:  common.GetContextKeyString(c, constant.ContextKeyUserGroup),
-		UserQuota:  common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
-		UserEmail:  common.GetContextKeyString(c, constant.ContextKeyUserEmail),
+		RequestId:     reqId,
+		RequestTiming: common.GetRequestTiming(c),
+		UserId:        common.GetContextKeyInt(c, constant.ContextKeyUserId),
+		UsingGroup:    common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+		UserGroup:     common.GetContextKeyString(c, constant.ContextKeyUserGroup),
+		UserQuota:     common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
+		UserEmail:     common.GetContextKeyString(c, constant.ContextKeyUserEmail),
 
 		OriginModelName: common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
 
@@ -506,6 +511,10 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 
 	if info.RelayMode == relayconstant.RelayModeUnknown {
 		info.RelayMode = c.GetInt("relay_mode")
+	}
+	if info.RelayMode == relayconstant.RelayModeChatCompletions && c.Request.URL.Path == "/v1/chat/completions" {
+		info.ResponseId = uuid.NewString()
+		common.SetContextKey(c, constant.ContextKeyResponseId, info.ResponseId)
 	}
 
 	if strings.HasPrefix(c.Request.URL.Path, "/pg") {
@@ -808,7 +817,9 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 
 func (info *RelayInfo) SetFirstResponseTime() {
 	if info.isFirstResponse {
-		info.FirstResponseTime = time.Now()
+		now := time.Now()
+		info.FirstResponseTime = now
+		info.RequestTiming.Mark(common.RequestTimingFirstResponse, now)
 		info.isFirstResponse = false
 	}
 }

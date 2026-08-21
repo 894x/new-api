@@ -716,6 +716,7 @@
     "Blend": "Смешивание",
     "Block email aliases (e.g., user+alias@domain.com)": "Блокировать псевдонимы email (например, user+alias@domain.com)",
     "Blocked keywords": "Заблокированные ключевые слова",
+    "Blocked upstream response headers": "Блокируемые заголовки ответа вышестоящего сервиса",
     "Blocks messages when sensitive keywords are detected.": "Блокирует сообщения при обнаружении конфиденциальных ключевых слов.",
     "Body param": "Параметр тела запроса",
     "Border radius": "Радиус скругления",
@@ -3423,6 +3424,7 @@
     "One contract. More choices.": "Один контракт. Больше выбора.",
     "One domain per line": "Один домен на строку",
     "One domain per line (only used when domain restriction is enabled)": "Один домен на строку (используется только при включении ограничения домена)",
+    "One header name per line. Matching is case-insensitive; blocked values are saved only in administrator logs.": "Указывайте по одному имени заголовка в строке. Регистр не учитывается; заблокированные значения сохраняются только в журналах администратора.",
     "One IP or CIDR range per line": "Один IP или диапазон CIDR на строку",
     "One IP per line (empty for no restriction)": "Один IP на строку (пусто для отсутствия ограничений)",
     "one keyword per line": "одно ключевое слово на строку",
@@ -5404,6 +5406,7 @@
     "Upstream Response (billing-usage-gemini)": "Ответ upstream (billing-usage-gemini)",
     "Upstream Response (billing-usage-openai-estimated)": "Ответ upstream (billing-usage-openai-estimated)",
     "Upstream Response (billing-usage-openai)": "Ответ upstream (billing-usage-openai)",
+    "Upstream Response ID": "ID ответа вышестоящего сервиса",
     "upstream services integrated": "интеграций с вышестоящими сервисами",
     "Upstream task API": "API задач вышестоящего сервиса",
     "Upstream Updates": "Обновления вышестоящих моделей",
@@ -5772,6 +5775,14 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Use at most 32 valid HTTP header names, one per line.": "Укажите не более 32 допустимых имен HTTP-заголовков, по одному в строке.",
+    "Request Timeline": "Хронология запроса",
+    "Gateway Processing": "Обработка шлюзом",
+    "Upstream Upload": "Отправка на upstream",
+    "Upstream Wait": "Ожидание upstream",
+    "First Response": "Первый ответ",
+    "Longest Stage": "Самый долгий этап",
+    "Request Intake": "Приём запроса"
   }
 }

@@ -716,6 +716,7 @@
     "Blend": "Blend",
     "Block email aliases (e.g., user+alias@domain.com)": "Block email aliases (e.g., user+alias@domain.com)",
     "Blocked keywords": "Blocked keywords",
+    "Blocked upstream response headers": "Blocked upstream response headers",
     "Blocks messages when sensitive keywords are detected.": "Blocks messages when sensitive keywords are detected.",
     "Body param": "Body param",
     "Border radius": "Border radius",
@@ -3423,6 +3424,7 @@
     "One contract. More choices.": "One contract. More choices.",
     "One domain per line": "One domain per line",
     "One domain per line (only used when domain restriction is enabled)": "One domain per line (only used when domain restriction is enabled)",
+    "One header name per line. Matching is case-insensitive; blocked values are saved only in administrator logs.": "One header name per line. Matching is case-insensitive; blocked values are saved only in administrator logs.",
     "One IP or CIDR range per line": "One IP or CIDR range per line",
     "One IP per line (empty for no restriction)": "One IP per line (empty for no restriction)",
     "one keyword per line": "one keyword per line",
@@ -5404,6 +5406,7 @@
     "Upstream Response (billing-usage-gemini)": "Upstream Response (billing-usage-gemini)",
     "Upstream Response (billing-usage-openai-estimated)": "Upstream Response (billing-usage-openai-estimated)",
     "Upstream Response (billing-usage-openai)": "Upstream Response (billing-usage-openai)",
+    "Upstream Response ID": "Upstream Response ID",
     "upstream services integrated": "upstream services integrated",
     "Upstream task API": "Upstream task API",
     "Upstream Updates": "Upstream Updates",
@@ -5772,6 +5775,14 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Use at most 32 valid HTTP header names, one per line.": "Use at most 32 valid HTTP header names, one per line.",
+    "Request Timeline": "Request Timeline",
+    "Gateway Processing": "Gateway Processing",
+    "Upstream Upload": "Upstream Upload",
+    "Upstream Wait": "Upstream Wait",
+    "First Response": "First Response",
+    "Longest Stage": "Longest Stage",
+    "Request Intake": "Request Intake"
   }
 }

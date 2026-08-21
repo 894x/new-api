@@ -716,6 +716,7 @@
     "Blend": "混合",
     "Block email aliases (e.g., user+alias@domain.com)": "阻止电子邮件别名（例如，user+alias@domain.com）",
     "Blocked keywords": "已阻止的关键词",
+    "Blocked upstream response headers": "屏蔽的上游响应头",
     "Blocks messages when sensitive keywords are detected.": "检测到敏感关键词时阻止消息。",
     "Body param": "请求体参数",
     "Border radius": "圆角",
@@ -3423,6 +3424,7 @@
     "One contract. More choices.": "一套接口，更多选择。",
     "One domain per line": "每行一个域名",
     "One domain per line (only used when domain restriction is enabled)": "每行一个域名 (仅在启用域名限制时使用)",
+    "One header name per line. Matching is case-insensitive; blocked values are saved only in administrator logs.": "每行填写一个响应头名称。匹配不区分大小写；被屏蔽的值仅保存到管理员日志中。",
     "One IP or CIDR range per line": "每行一个 IP 或 CIDR 范围",
     "One IP per line (empty for no restriction)": "每行一个 IP (留空表示无限制)",
     "one keyword per line": "每行一个关键词",
@@ -5404,6 +5406,7 @@
     "Upstream Response (billing-usage-gemini)": "上游返回（billing-usage-gemini）",
     "Upstream Response (billing-usage-openai-estimated)": "上游返回（billing-usage-openai-estimated）",
     "Upstream Response (billing-usage-openai)": "上游返回（billing-usage-openai）",
+    "Upstream Response ID": "上游响应 ID",
     "upstream services integrated": "上游服务适配",
     "Upstream task API": "上游任务 API",
     "Upstream Updates": "上游更新",
@@ -5772,6 +5775,14 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Use at most 32 valid HTTP header names, one per line.": "每行填写一个有效的 HTTP 响应头名称，最多 32 个。",
+    "Request Timeline": "请求时间轴",
+    "Gateway Processing": "网关处理",
+    "Upstream Upload": "上游请求上传",
+    "Upstream Wait": "等待上游响应",
+    "First Response": "首次响应",
+    "Longest Stage": "最耗时阶段",
+    "Request Intake": "请求接收"
   }
 }

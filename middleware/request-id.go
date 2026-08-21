@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-gonic/gin"
@@ -9,6 +10,7 @@ import (
 
 func RequestId() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		common.StartRequestTiming(c, time.Now())
 		id := common.NewRequestId()
 		c.Set(common.RequestIdKey, id)
 		ctx := context.WithValue(c.Request.Context(), common.RequestIdKey, id)

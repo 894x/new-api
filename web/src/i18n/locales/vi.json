@@ -716,6 +716,7 @@
     "Blend": "Trộn",
     "Block email aliases (e.g., user+alias@domain.com)": "Chặn bí danh email (ví dụ: user+alias@domain.com)",
     "Blocked keywords": "Blocked keyword",
+    "Blocked upstream response headers": "Tiêu đề phản hồi thượng nguồn bị chặn",
     "Blocks messages when sensitive keywords are detected.": "Chặn tin nhắn khi phát hiện từ khóa nhạy cảm.",
     "Body param": "Tham số body",
     "Border radius": "Độ bo góc",
@@ -3423,6 +3424,7 @@
     "One contract. More choices.": "Một hợp đồng. Nhiều lựa chọn.",
     "One domain per line": "Một tên miền mỗi dòng",
     "One domain per line (only used when domain restriction is enabled)": "Mỗi dòng một tên miền (chỉ được sử dụng khi hạn chế tên miền được bật)",
+    "One header name per line. Matching is case-insensitive; blocked values are saved only in administrator logs.": "Mỗi dòng nhập một tên tiêu đề. Không phân biệt chữ hoa chữ thường; các giá trị bị chặn chỉ được lưu trong nhật ký quản trị viên.",
     "One IP or CIDR range per line": "Một IP hoặc dải CIDR mỗi dòng",
     "One IP per line (empty for no restriction)": "Mỗi IP một dòng (để trống nếu không giới hạn)",
     "one keyword per line": "Mỗi dòng một từ khóa",
@@ -5404,6 +5406,7 @@
     "Upstream Response (billing-usage-gemini)": "Phản hồi upstream (billing-usage-gemini)",
     "Upstream Response (billing-usage-openai-estimated)": "Phản hồi upstream (billing-usage-openai-estimated)",
     "Upstream Response (billing-usage-openai)": "Phản hồi upstream (billing-usage-openai)",
+    "Upstream Response ID": "ID phản hồi từ thượng nguồn",
     "upstream services integrated": "dịch vụ thượng nguồn tích hợp",
     "Upstream task API": "API tác vụ thượng nguồn",
     "Upstream Updates": "Cập nhật nguồn",
@@ -5772,6 +5775,14 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Use at most 32 valid HTTP header names, one per line.": "Nhập tối đa 32 tên tiêu đề HTTP hợp lệ, mỗi dòng một tên.",
+    "Request Timeline": "Dòng thời gian yêu cầu",
+    "Gateway Processing": "Xử lý tại cổng",
+    "Upstream Upload": "Gửi lên thượng nguồn",
+    "Upstream Wait": "Chờ thượng nguồn",
+    "First Response": "Phản hồi đầu tiên",
+    "Longest Stage": "Giai đoạn lâu nhất",
+    "Request Intake": "Tiếp nhận yêu cầu"
   }
 }
