@@ -82,8 +82,8 @@ func TestAssetLibraryActionEnforcesAccountOwnership(t *testing.T) {
 	assert.Equal(t, "NotFound.GroupId", response.ResponseMetadata.Error.Code)
 }
 
-func TestCreateAssetGroupRequiresEnabledAssetChannel(t *testing.T) {
-	setupAssetLibraryControllerTestDB(t)
+func TestCreateAssetGroupWithoutEnabledAssetChannel(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
@@ -95,10 +95,50 @@ func TestCreateAssetGroupRequiresEnabledAssetChannel(t *testing.T) {
 
 	AssetLibraryAction(context)
 
-	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-	var response assetLibraryResponse
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Result assetLibraryMutationResult `json:"Result"`
+	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
-	assert.Equal(t, "AssetLibraryUnavailable", response.ResponseMetadata.Error.Code)
+	assert.Regexp(t, `^group-na-[0-9a-f]{32}$`, response.Result.Id)
+	group, err := model.GetUserAssetGroup(1, response.Result.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "character", group.Name)
+	var replicaCount int64
+	require.NoError(t, db.Model(&model.UserAssetGroupReplica{}).Where("group_id = ?", group.Id).Count(&replicaCount).Error)
+	assert.Zero(t, replicaCount)
+}
+
+func TestCreateAssetWithoutEnabledAssetChannel(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	group := &model.UserAssetGroup{
+		Id: "group-na-0123456789abcdef0123456789abcdef", UserId: 1, Name: "character",
+		GroupType: "AIGC", ProjectName: "default",
+	}
+	require.NoError(t, db.Create(group).Error)
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost,
+		"/api/asset-library?Action=CreateAsset&Version=2024-01-01",
+		bytes.NewBufferString(`{"GroupId":"`+group.Id+`","URL":"https://example.com/portrait.png","AssetType":"Image","Name":"portrait"}`),
+	)
+	context.Set("id", 1)
+
+	AssetLibraryAction(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Result assetLibraryMutationResult `json:"Result"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Regexp(t, `^asset-na-[0-9a-f]{32}$`, response.Result.Id)
+	asset, err := model.GetUserAsset(1, response.Result.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "https://example.com/portrait.png", asset.SourceURL)
+	var replicaCount int64
+	require.NoError(t, db.Model(&model.UserAssetReplica{}).Where("asset_id = ?", asset.Id).Count(&replicaCount).Error)
+	assert.Zero(t, replicaCount)
 }
 
 func TestCreateAssetGroupRejectsValuesThatExceedDatabaseColumns(t *testing.T) {
@@ -307,7 +347,7 @@ func TestAssetLibraryResultDoesNotExposeChannelOrUpstreamError(t *testing.T) {
 	assert.Equal(t, "AssetProcessingFailed", result.Error.Code)
 }
 
-func TestAssetLibraryResultFallsBackToLogicalSourceURL(t *testing.T) {
+func TestAssetLibraryResultAlwaysUsesLogicalSourceURL(t *testing.T) {
 	setupAssetLibraryControllerTestDB(t)
 	asset := &model.UserAsset{
 		Id:          "asset-na-0123456789abcdef0123456789abcdef",
@@ -319,7 +359,10 @@ func TestAssetLibraryResultFallsBackToLogicalSourceURL(t *testing.T) {
 		ProjectName: "default",
 	}
 
-	result, err := buildAssetLibraryResult(asset, &service.AssetLibraryAssetDetails{Status: "Active"}, false)
+	result, err := buildAssetLibraryResult(asset, &service.AssetLibraryAssetDetails{
+		Status: "Active",
+		URL:    "https://upstream.example.com/private-preview.png",
+	}, false)
 
 	require.NoError(t, err)
 	assert.Equal(t, "https://example.com/portrait.png", result.URL)

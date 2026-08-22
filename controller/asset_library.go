@@ -105,15 +105,6 @@ func createAssetLibraryGroup(c *gin.Context, userId int, includeReplication bool
 		writeAssetLibraryError(c, "CreateAssetGroup", http.StatusBadRequest, "InvalidParameter.ProjectName", "ProjectName must not exceed 128 characters", nil)
 		return
 	}
-	count, err := model.CountEnabledChannelAssetConfigs()
-	if err != nil {
-		writeAssetLibraryInternalError(c, "CreateAssetGroup", err)
-		return
-	}
-	if count == 0 {
-		writeAssetLibraryError(c, "CreateAssetGroup", http.StatusServiceUnavailable, "AssetLibraryUnavailable", "no asset library channel is enabled", nil)
-		return
-	}
 	group := &model.UserAssetGroup{
 		Id:          "group-na-" + common.GetUUID(),
 		UserId:      userId,
@@ -170,15 +161,6 @@ func createAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool
 			writeAssetLibraryError(c, "CreateAsset", http.StatusBadRequest, "InvalidParameter.Name", "Name must not exceed 64 characters", nil)
 			return
 		}
-	}
-	count, err := model.CountEnabledChannelAssetConfigs()
-	if err != nil {
-		writeAssetLibraryInternalError(c, "CreateAsset", err)
-		return
-	}
-	if count == 0 {
-		writeAssetLibraryError(c, "CreateAsset", http.StatusServiceUnavailable, "AssetLibraryUnavailable", "no asset library channel is enabled", nil)
-		return
 	}
 	asset := &model.UserAsset{
 		Id:          "asset-na-" + common.GetUUID(),
@@ -534,9 +516,6 @@ func buildAssetLibraryResult(asset *model.UserAsset, details *service.AssetLibra
 		Replication:       summary,
 	}
 	if details != nil {
-		if strings.TrimSpace(details.URL) != "" {
-			result.URL = details.URL
-		}
 		result.Status = details.Status
 		if details.Error != nil && (details.Error.Code != "" || details.Error.Message != "") {
 			result.Error = &dto.AssetLibraryError{Code: "AssetProcessingFailed", Message: "Asset processing failed"}
