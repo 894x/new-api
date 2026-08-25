@@ -41,6 +41,13 @@ func TestChannelAssetLibraryRoutesUseSensitivePermissions(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodPost, "/:id/asset-library/sync", authz.ChannelSensitiveWrite, controller.SyncChannelAssetLibrary)
 }
 
+func TestAssetLibraryAdminRoutesUseChannelPermissions(t *testing.T) {
+	assertAssetLibraryAdminRoutePermission(t, http.MethodGet, "/assets/:id/replicas", authz.ChannelRead, controller.GetAdminAssetReplicaDetails)
+	assertAssetLibraryAdminRoutePermission(t, http.MethodPost, "/assets/:id/sync", authz.ChannelSensitiveWrite, controller.SyncAdminAssetReplicas)
+	assertAssetLibraryAdminRoutePermission(t, http.MethodGet, "/groups/:id/replicas", authz.ChannelRead, controller.GetAdminAssetGroupReplicaDetails)
+	assertAssetLibraryAdminRoutePermission(t, http.MethodPost, "/groups/:id/sync", authz.ChannelSensitiveWrite, controller.SyncAdminAssetGroupReplicas)
+}
+
 func TestChannelStatusRoutesRegisterWithoutConflict(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
@@ -54,6 +61,18 @@ func TestChannelStatusRoutesRegisterWithoutConflict(t *testing.T) {
 func assertChannelRoutePermission(t *testing.T, method string, path string, permission authz.Permission, handler any) {
 	t.Helper()
 	for _, route := range channelPermissionRoutes {
+		if route.method == method && route.path == path {
+			assert.Equal(t, permission, route.permission)
+			assert.Equal(t, reflect.ValueOf(handler).Pointer(), reflect.ValueOf(route.handler).Pointer())
+			return
+		}
+	}
+	t.Fatalf("route %s %s not found", method, path)
+}
+
+func assertAssetLibraryAdminRoutePermission(t *testing.T, method string, path string, permission authz.Permission, handler any) {
+	t.Helper()
+	for _, route := range assetLibraryAdminPermissionRoutes {
 		if route.method == method && route.path == path {
 			assert.Equal(t, permission, route.permission)
 			assert.Equal(t, reflect.ValueOf(handler).Pointer(), reflect.ValueOf(route.handler).Pointer())

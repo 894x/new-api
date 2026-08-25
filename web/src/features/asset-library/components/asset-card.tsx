@@ -33,6 +33,48 @@ function AssetCardComponent(props: { row: Row<Asset>; group?: AssetGroup }) {
   const { t } = useTranslation()
   const asset = props.row.original
 
+  if (!asset.Replication) {
+    return (
+      <div className='flex min-w-0 flex-col gap-3'>
+        <AssetThumbnail
+          asset={asset}
+          className='aspect-video h-auto w-full rounded-lg [&_svg]:size-12'
+        />
+
+        <div className='flex min-w-0 items-start gap-2'>
+          <div className='min-w-0 flex-1'>
+            <p
+              className='truncate font-medium'
+              title={asset.Name || t('Untitled asset')}
+            >
+              {asset.Name || t('Untitled asset')}
+            </p>
+            <p
+              className='text-muted-foreground truncate text-xs'
+              title={props.group?.Name || asset.GroupId}
+            >
+              {props.group?.Name || asset.GroupId}
+            </p>
+          </div>
+          <AssetRowActions row={props.row} />
+        </div>
+
+        <div className='flex flex-wrap gap-1'>
+          <StatusBadge
+            label={t(asset.AssetType)}
+            variant='info'
+            copyable={false}
+          />
+          <StatusBadge
+            label={t(asset.Status || 'Unknown')}
+            variant={getAssetStatusVariant(asset.Status)}
+            copyable={false}
+          />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className='flex min-w-0 flex-col gap-3'>
       <div className='flex items-start gap-3'>
@@ -61,25 +103,17 @@ function AssetCardComponent(props: { row: Row<Asset>; group?: AssetGroup }) {
         <AssetRowActions row={props.row} />
       </div>
 
-      <div
-        className={
-          asset.Replication
-            ? 'grid grid-cols-2 gap-3 text-sm'
-            : 'grid grid-cols-1 gap-3 text-sm'
-        }
-      >
+      <div className='grid grid-cols-2 gap-3 text-sm'>
         <div className='min-w-0'>
           <p className='text-muted-foreground text-xs'>{t('Asset Group')}</p>
           <p className='truncate'>{props.group?.Name || asset.GroupId}</p>
         </div>
-        {asset.Replication ? (
-          <div className='min-w-0'>
-            <p className='text-muted-foreground text-xs'>
-              {t('Channel availability')}
-            </p>
-            <ReplicationBadge replication={asset.Replication} />
-          </div>
-        ) : null}
+        <div className='min-w-0'>
+          <p className='text-muted-foreground text-xs'>
+            {t('Channel availability')}
+          </p>
+          <ReplicationBadge replication={asset.Replication} />
+        </div>
       </div>
     </div>
   )

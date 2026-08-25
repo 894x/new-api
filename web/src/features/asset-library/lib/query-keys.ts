@@ -22,11 +22,15 @@ export const assetLibraryQueryKeys = {
   assetList: (params: object) =>
     [...assetLibraryQueryKeys.assets(), 'list', params] as const,
   asset: (id: string) => [...assetLibraryQueryKeys.assets(), id] as const,
+  assetReplicas: (id: string) =>
+    [...assetLibraryQueryKeys.asset(id), 'replicas'] as const,
   groups: () => [...assetLibraryQueryKeys.all, 'groups'] as const,
   groupList: (params: object) =>
     [...assetLibraryQueryKeys.groups(), 'list', params] as const,
   groupOptions: () => [...assetLibraryQueryKeys.groups(), 'options'] as const,
   group: (id: string) => [...assetLibraryQueryKeys.groups(), id] as const,
+  groupReplicas: (id: string) =>
+    [...assetLibraryQueryKeys.group(id), 'replicas'] as const,
   channelConfig: (channelId: number) =>
     [...assetLibraryQueryKeys.all, 'channel-config', channelId] as const,
 }

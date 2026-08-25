@@ -20,10 +20,13 @@ import { api, type ApiRequestConfig } from '@/lib/api'
 
 import type {
   Asset,
+  AssetGroupReplicaDetailsResult,
   AssetGroup,
   AssetGroupsPage,
   AssetMutationResult,
   AssetLibraryResponse,
+  AssetLibrarySyncReport,
+  AssetReplicaDetailsResult,
   AssetsPage,
   ChannelAssetLibraryConfig,
   ChannelAssetLibraryConfigInput,
@@ -161,6 +164,76 @@ export function deleteAsset(id: string): Promise<void> {
 
 export function deleteAssetGroup(id: string): Promise<void> {
   return callAssetLibraryVoid('DeleteAssetGroup', { Id: id })
+}
+
+type AdminAssetLibraryEnvelope<TResult> = {
+  success?: boolean
+  message?: string
+  data?: TResult
+}
+
+function unwrapAdminAssetLibrary<TResult>(
+  value: AdminAssetLibraryEnvelope<TResult>
+): TResult {
+  if (value.success === false) {
+    throw new Error(value.message || 'Asset library admin request failed')
+  }
+  if (value.data === undefined) {
+    throw new Error('Asset library admin response is missing data')
+  }
+  return value.data
+}
+
+export async function getAdminAssetReplicaDetails(
+  assetId: string
+): Promise<AssetReplicaDetailsResult> {
+  const response = await api.get<
+    AdminAssetLibraryEnvelope<AssetReplicaDetailsResult>
+  >(
+    `/api/asset-library/admin/assets/${encodeURIComponent(assetId)}/replicas`,
+    assetLibraryRequestConfig
+  )
+  return unwrapAdminAssetLibrary(response.data)
+}
+
+export async function syncAdminAssetReplicas(
+  assetId: string,
+  channelIds: number[] = []
+): Promise<AssetLibrarySyncReport> {
+  const response = await api.post<
+    AdminAssetLibraryEnvelope<AssetLibrarySyncReport>
+  >(
+    `/api/asset-library/admin/assets/${encodeURIComponent(assetId)}/sync`,
+    { channel_ids: channelIds },
+    assetLibraryRequestConfig
+  )
+  return unwrapAdminAssetLibrary(response.data)
+}
+
+export async function getAdminAssetGroupReplicaDetails(
+  groupId: string
+): Promise<AssetGroupReplicaDetailsResult> {
+  const response = await api.get<
+    AdminAssetLibraryEnvelope<AssetGroupReplicaDetailsResult>
+  >(
+    `/api/asset-library/admin/groups/${encodeURIComponent(groupId)}/replicas`,
+    assetLibraryRequestConfig
+  )
+  return unwrapAdminAssetLibrary(response.data)
+}
+
+export async function syncAdminAssetGroupReplicas(
+  groupId: string,
+  channelIds: number[] = []
+): Promise<AssetLibrarySyncReport> {
+  const response = await api.post<
+    AdminAssetLibraryEnvelope<AssetLibrarySyncReport>
+  >(
+    `/api/asset-library/admin/groups/${encodeURIComponent(groupId)}/sync`,
+    { channel_ids: channelIds },
+    assetLibraryRequestConfig
+  )
+  return unwrapAdminAssetLibrary(response.data)
 }
 
 type ConfigEnvelope = {

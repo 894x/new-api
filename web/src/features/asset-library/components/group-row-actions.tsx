@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Row } from '@tanstack/react-table'
-import { MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
+import { Eye, MoreHorizontal, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -28,6 +28,12 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
+import { useAuthStore } from '@/stores/auth-store'
 
 import type { AssetGroup } from '../types'
 import { useAssetLibrary } from './asset-library-provider'
@@ -35,6 +41,17 @@ import { useAssetLibrary } from './asset-library-provider'
 export function GroupRowActions(props: { row: Row<AssetGroup> }) {
   const { t } = useTranslation()
   const { openGroupDialog } = useAssetLibrary()
+  const user = useAuthStore((state) => state.auth.user)
+  const canViewUpstreamDetails = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.READ
+  )
+  const canSyncUpstreams = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
+  )
   const group = props.row.original
 
   return (
@@ -50,7 +67,23 @@ export function GroupRowActions(props: { row: Row<AssetGroup> }) {
       >
         <MoreHorizontal className='size-4' />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align='end' className='w-40'>
+      <DropdownMenuContent align='end' className='w-52'>
+        {canViewUpstreamDetails || canSyncUpstreams ? (
+          <DropdownMenuItem
+            onClick={() => openGroupDialog('group-details', group)}
+          >
+            {t(
+              canViewUpstreamDetails ? 'View details' : 'Sync group and assets'
+            )}
+            <DropdownMenuShortcut>
+              {canViewUpstreamDetails ? (
+                <Eye className='size-4' />
+              ) : (
+                <RefreshCw className='size-4' />
+              )}
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem
           onClick={() => openGroupDialog('update-group', group)}
         >

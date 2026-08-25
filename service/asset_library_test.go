@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -226,6 +227,200 @@ func TestRefreshAssetLibraryAssetRefreshesEveryEnabledReplica(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, model.AssetReplicaStateReady, replica.State)
 	}
+}
+
+func TestGetAssetReplicaDetailsListsEveryConfiguredChannel(t *testing.T) {
+	db := setupAssetLibraryServiceTestDB(t)
+	require.NoError(t, db.Create(&[]model.Channel{
+		{Id: 31, Name: "Primary"},
+		{Id: 32, Name: "Disabled backup"},
+	}).Error)
+	require.NoError(t, db.Create(&[]model.ChannelAssetConfig{
+		{ChannelId: 31, Enabled: true, Backend: AssetLibraryBackendAction, BaseURL: "https://primary.example.com"},
+		{ChannelId: 32, Enabled: false, Backend: AssetLibraryBackendOpenAPI, BaseURL: "https://backup.example.com"},
+	}).Error)
+	assetId := "asset-na-11111111111111111111111111111111"
+	require.NoError(t, db.Create(&model.UserAssetReplica{
+		AssetId: assetId, ChannelId: 31, UpstreamAssetId: "Asset-primary",
+		State: model.AssetReplicaStateReady, UpstreamStatus: "Active",
+	}).Error)
+
+	details, err := GetAssetReplicaDetails(assetId)
+
+	require.NoError(t, err)
+	require.Len(t, details.Replicas, 2)
+	assert.Equal(t, "Primary", details.Replicas[0].ChannelName)
+	assert.True(t, details.Replicas[0].Enabled)
+	assert.Equal(t, model.AssetReplicaStateReady, details.Replicas[0].State)
+	assert.Equal(t, "Asset-primary", details.Replicas[0].UpstreamAssetId)
+	assert.Equal(t, "Disabled backup", details.Replicas[1].ChannelName)
+	assert.False(t, details.Replicas[1].Enabled)
+	assert.Equal(t, AssetReplicaStateNotSynced, details.Replicas[1].State)
+	assert.Empty(t, details.Replicas[1].UpstreamAssetId)
+	require.NotNil(t, details.Summary)
+	assert.Equal(t, 1, details.Summary.Total)
+	assert.Equal(t, 1, details.Summary.Ready)
+}
+
+func TestSyncAssetReplicasRefreshesExistingUpstreamReplica(t *testing.T) {
+	db := setupAssetLibraryServiceTestDB(t)
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests = append(requests, request.Method+" "+request.URL.Path)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"success": true,
+			"data": {"logical_id":"lass_existing","status":"Active"}
+		}`))
+	}))
+	t.Cleanup(server.Close)
+
+	require.NoError(t, db.Create(&model.Channel{Id: 33, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-key", Name: "Seedance SLS"}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 33, Enabled: true, Backend: AssetLibraryBackendSeedanceSLS,
+		BaseURL: server.URL, AuthType: AssetLibraryAuthBearer, APIKey: "sls-key",
+	}).Error)
+	group := &model.UserAssetGroup{Id: "group-na-22222222222222222222222222222222", UserId: 7, Name: "characters"}
+	asset := &model.UserAsset{
+		Id: "asset-na-22222222222222222222222222222222", UserId: 7, GroupId: group.Id,
+		SourceURL: "https://example.com/character.png", AssetType: "Image", Name: "character",
+	}
+	require.NoError(t, db.Create(group).Error)
+	require.NoError(t, db.Create(asset).Error)
+	require.NoError(t, db.Create(&model.UserAssetReplica{
+		AssetId: asset.Id, ChannelId: 33, UpstreamAssetId: "lass_existing",
+		State: model.AssetReplicaStateProcessing, UpstreamStatus: "Processing",
+	}).Error)
+
+	report, err := SyncAssetReplicas(t.Context(), asset, []int{33})
+
+	require.NoError(t, err)
+	assert.Empty(t, report.Errors)
+	assert.Equal(t, []string{"GET /v1/volcengine/assets/lass_existing"}, requests)
+	replica, err := model.GetUserAssetReplica(asset.Id, 33)
+	require.NoError(t, err)
+	assert.Equal(t, model.AssetReplicaStateReady, replica.State)
+	assert.Equal(t, "Active", replica.UpstreamStatus)
+}
+
+func TestManualSyncRequiresAtLeastOneEnabledChannel(t *testing.T) {
+	db := setupAssetLibraryServiceTestDB(t)
+	group := &model.UserAssetGroup{Id: "group-na-99999999999999999999999999999999", UserId: 7, Name: "characters"}
+	asset := &model.UserAsset{
+		Id: "asset-na-99999999999999999999999999999999", UserId: 7, GroupId: group.Id,
+		SourceURL: "https://example.com/character.png", AssetType: "Image", Name: "character",
+	}
+	require.NoError(t, db.Create(group).Error)
+	require.NoError(t, db.Create(asset).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 99, Enabled: false, Backend: AssetLibraryBackendAction,
+		BaseURL: "https://assets.example.com", AuthType: AssetLibraryAuthAKSK,
+		AccessKey: "ak", SecretKey: "sk",
+	}).Error)
+
+	_, assetErr := SyncAssetReplicas(t.Context(), asset, nil)
+	_, groupErr := SyncAssetGroupReplicas(t.Context(), group, nil)
+
+	require.ErrorContains(t, assetErr, "no enabled asset library channels")
+	require.ErrorContains(t, groupErr, "no enabled asset library channels")
+}
+
+func TestSyncAssetGroupReplicasSynchronizesEveryChildAsset(t *testing.T) {
+	db := setupAssetLibraryServiceTestDB(t)
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		count := requestCount.Add(1)
+		assert.Equal(t, http.MethodPost, request.Method)
+		assert.Equal(t, "/v1/volcengine/assets", request.URL.Path)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(fmt.Sprintf(`{
+			"success": true,
+			"data": {
+				"logical_id":"lass_child_%d",
+				"logical_group_id":"lasg_group",
+				"status":"Active"
+			}
+		}`, count)))
+	}))
+	t.Cleanup(server.Close)
+
+	require.NoError(t, db.Create(&model.Channel{Id: 34, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-key", Name: "Seedance SLS"}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 34, Enabled: true, Backend: AssetLibraryBackendSeedanceSLS,
+		BaseURL: server.URL, AuthType: AssetLibraryAuthBearer, APIKey: "sls-key",
+	}).Error)
+	group := &model.UserAssetGroup{Id: "group-na-33333333333333333333333333333333", UserId: 7, Name: "characters"}
+	require.NoError(t, db.Create(group).Error)
+	require.NoError(t, db.Create(&[]model.UserAsset{
+		{Id: "asset-na-33333333333333333333333333333331", UserId: 7, GroupId: group.Id, SourceURL: "https://example.com/a.png", AssetType: "Image", Name: "a"},
+		{Id: "asset-na-33333333333333333333333333333332", UserId: 7, GroupId: group.Id, SourceURL: "https://example.com/b.png", AssetType: "Image", Name: "b"},
+	}).Error)
+
+	report, err := SyncAssetGroupReplicas(t.Context(), group, []int{34})
+
+	require.NoError(t, err)
+	assert.Empty(t, report.Errors)
+	assert.Equal(t, int32(2), requestCount.Load())
+	groupReplica, err := model.GetUserAssetGroupReplica(group.Id, 34)
+	require.NoError(t, err)
+	assert.Equal(t, model.AssetReplicaStateReady, groupReplica.State)
+	assert.Equal(t, "lasg_group", groupReplica.UpstreamGroupId)
+	for _, assetId := range []string{
+		"asset-na-33333333333333333333333333333331",
+		"asset-na-33333333333333333333333333333332",
+	} {
+		replica, err := model.GetUserAssetReplica(assetId, 34)
+		require.NoError(t, err)
+		assert.Equal(t, model.AssetReplicaStateReady, replica.State)
+		assert.NotEmpty(t, replica.UpstreamAssetId)
+	}
+}
+
+func TestSyncAssetGroupReplicasContinuesAfterOneChildFails(t *testing.T) {
+	db := setupAssetLibraryServiceTestDB(t)
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		count := requestCount.Add(1)
+		writer.Header().Set("Content-Type", "application/json")
+		if count <= 2 {
+			writer.WriteHeader(http.StatusInternalServerError)
+			_, _ = writer.Write([]byte(`{"success":false,"message":"temporary failure"}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{
+			"success": true,
+			"data": {
+				"logical_id":"lass_second",
+				"logical_group_id":"lasg_group",
+				"status":"Active"
+			}
+		}`))
+	}))
+	t.Cleanup(server.Close)
+
+	require.NoError(t, db.Create(&model.Channel{Id: 35, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-key", Name: "Seedance SLS"}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 35, Enabled: true, Backend: AssetLibraryBackendSeedanceSLS,
+		BaseURL: server.URL, AuthType: AssetLibraryAuthBearer, APIKey: "sls-key",
+	}).Error)
+	group := &model.UserAssetGroup{Id: "group-na-66666666666666666666666666666666", UserId: 7, Name: "characters"}
+	require.NoError(t, db.Create(group).Error)
+	require.NoError(t, db.Create(&[]model.UserAsset{
+		{Id: "asset-na-66666666666666666666666666666661", UserId: 7, GroupId: group.Id, SourceURL: "https://example.com/a.png", AssetType: "Image", Name: "a", CreatedTime: 1},
+		{Id: "asset-na-66666666666666666666666666666662", UserId: 7, GroupId: group.Id, SourceURL: "https://example.com/b.png", AssetType: "Image", Name: "b", CreatedTime: 2},
+		{Id: "asset-na-66666666666666666666666666666663", UserId: 7, GroupId: group.Id, SourceURL: "https://example.com/c.png", AssetType: "Image", Name: "c", CreatedTime: 3},
+	}).Error)
+
+	report, err := SyncAssetGroupReplicas(t.Context(), group, []int{35})
+
+	require.NoError(t, err)
+	require.Len(t, report.Errors, 2)
+	assert.Equal(t, "asset-na-66666666666666666666666666666661", report.Errors[0].AssetId)
+	assert.Equal(t, "asset-na-66666666666666666666666666666662", report.Errors[1].AssetId)
+	assert.Equal(t, int32(3), requestCount.Load())
+	thirdReplica, err := model.GetUserAssetReplica("asset-na-66666666666666666666666666666663", 35)
+	require.NoError(t, err)
+	assert.Equal(t, model.AssetReplicaStateReady, thirdReplica.State)
 }
 
 func TestRefreshAssetLibraryAssetPrefersActiveReplicaWithPreviewURL(t *testing.T) {

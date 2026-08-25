@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -80,6 +82,92 @@ func TestAssetLibraryActionEnforcesAccountOwnership(t *testing.T) {
 	var response assetLibraryResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.Equal(t, "NotFound.GroupId", response.ResponseMetadata.Error.Code)
+}
+
+func TestGetAdminAssetReplicaDetailsRefreshesEveryUpstreamBeforeReturning(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls.Add(1)
+		assert.Equal(t, http.MethodGet, request.Method)
+		assert.Equal(t, "/v1/volcengine/assets/lass_admin", request.URL.Path)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"success": true,
+			"data": {"logical_id":"lass_admin","status":"Active"}
+		}`))
+	}))
+	t.Cleanup(server.Close)
+
+	require.NoError(t, db.Create(&model.Channel{Id: 41, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-key", Name: "Seedance SLS"}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 41, Enabled: false, Backend: service.AssetLibraryBackendSeedanceSLS,
+		BaseURL: server.URL, AuthType: service.AssetLibraryAuthBearer, APIKey: "sls-key",
+	}).Error)
+	group := &model.UserAssetGroup{Id: "group-na-44444444444444444444444444444444", UserId: 7, Name: "characters"}
+	asset := &model.UserAsset{
+		Id: "asset-na-44444444444444444444444444444444", UserId: 7, GroupId: group.Id,
+		AssetType: "Image", SourceURL: "https://example.com/admin.png",
+	}
+	require.NoError(t, db.Create(group).Error)
+	require.NoError(t, db.Create(asset).Error)
+	require.NoError(t, db.Create(&model.UserAssetReplica{
+		AssetId: asset.Id, ChannelId: 41, UpstreamAssetId: "lass_admin",
+		State: model.AssetReplicaStateProcessing, UpstreamStatus: "Processing",
+	}).Error)
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/asset-library/admin/assets/"+asset.Id+"/replicas", nil)
+	context.Params = gin.Params{{Key: "id", Value: asset.Id}}
+	context.Set("id", 7)
+
+	GetAdminAssetReplicaDetails(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Asset struct {
+				URL         string                   `json:"URL"`
+				Status      string                   `json:"Status"`
+				Replication *dto.AssetReplicaSummary `json:"Replication"`
+			} `json:"asset"`
+			Replicas []struct {
+				ChannelId      int    `json:"channel_id"`
+				State          string `json:"state"`
+				UpstreamStatus string `json:"upstream_status"`
+			} `json:"replicas"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.True(t, response.Success)
+	assert.Equal(t, "https://example.com/admin.png", response.Data.Asset.URL)
+	assert.Equal(t, "Active", response.Data.Asset.Status)
+	require.NotNil(t, response.Data.Asset.Replication)
+	assert.Zero(t, response.Data.Asset.Replication.Ready)
+	require.Len(t, response.Data.Replicas, 1)
+	assert.Equal(t, 41, response.Data.Replicas[0].ChannelId)
+	assert.Equal(t, model.AssetReplicaStateReady, response.Data.Replicas[0].State)
+	assert.Equal(t, "Active", response.Data.Replicas[0].UpstreamStatus)
+	assert.Equal(t, int32(1), calls.Load())
+}
+
+func TestGetAdminAssetReplicaDetailsEnforcesOwnership(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	asset := &model.UserAsset{Id: "asset-na-55555555555555555555555555555555", UserId: 8, GroupId: "group-na-55555555555555555555555555555555", AssetType: "Image"}
+	require.NoError(t, db.Create(asset).Error)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/asset-library/admin/assets/"+asset.Id+"/replicas", nil)
+	context.Params = gin.Params{{Key: "id", Value: asset.Id}}
+	context.Set("id", 7)
+
+	GetAdminAssetReplicaDetails(context)
+
+	assert.Equal(t, http.StatusNotFound, recorder.Code)
 }
 
 func TestCreateAssetGroupWithoutEnabledAssetChannel(t *testing.T) {

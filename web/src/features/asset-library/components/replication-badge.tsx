@@ -54,14 +54,17 @@ export function ReplicationBadge(props: { replication?: AssetReplicaSummary }) {
     <Tooltip>
       <TooltipTrigger
         render={
-          <span className='inline-flex max-w-full' tabIndex={0} role='status' />
+          <span
+            className='-ml-1.5 inline-flex max-w-full'
+            tabIndex={0}
+            role='status'
+          />
         }
       >
         <StatusBadge
           label={label}
           variant={getReplicationVariant(replication)}
           copyable={false}
-          className='-ml-1.5'
         />
       </TooltipTrigger>
       <TooltipContent>

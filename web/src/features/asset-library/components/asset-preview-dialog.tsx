@@ -16,18 +16,31 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
-import { ExternalLink, Loader2 } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ExternalLink, Loader2, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { Dialog } from '@/components/dialog'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
+import { useAuthStore } from '@/stores/auth-store'
 
-import { getAsset } from '../api'
-import { assetLibraryQueryKeys } from '../lib'
+import {
+  getAdminAssetReplicaDetails,
+  getAsset,
+  syncAdminAssetReplicas,
+} from '../api'
+import { assetLibraryQueryKeys, getAssetLibraryErrorMessage } from '../lib'
 import type { Asset } from '../types'
+import { AdminReplicaDetails } from './admin-replica-details'
 import { ReplicationBadge } from './replication-badge'
 
 function AssetMediaPreview(props: { asset: Asset }) {
@@ -88,36 +101,87 @@ export function AssetPreviewDialog(props: {
   asset?: Asset | null
 }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const user = useAuthStore((state) => state.auth.user)
+  const canViewReplicas = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.READ
+  )
+  const canSyncReplicas = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
+  )
   const assetId = props.asset?.Id || ''
-  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+  const assetQuery = useQuery({
     queryKey: assetLibraryQueryKeys.asset(assetId),
     queryFn: () => getAsset(assetId),
-    enabled: props.open && !!assetId,
+    enabled: props.open && !!assetId && !canViewReplicas,
     staleTime: 0,
     gcTime: 0,
   })
-  const asset = data || props.asset
-  let content = null
-  if (isLoading && !asset) {
-    content = <Skeleton className='h-72 w-full rounded-lg' />
-  } else if (isError) {
-    content = (
+  const replicaQuery = useQuery({
+    queryKey: assetLibraryQueryKeys.assetReplicas(assetId),
+    queryFn: () => getAdminAssetReplicaDetails(assetId),
+    enabled: props.open && !!assetId && canViewReplicas,
+    staleTime: 0,
+    gcTime: 0,
+  })
+  const syncMutation = useMutation({
+    mutationFn: (channelId?: number) =>
+      syncAdminAssetReplicas(assetId, channelId ? [channelId] : []),
+    onSuccess: async (report) => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: assetLibraryQueryKeys.assetReplicas(assetId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: assetLibraryQueryKeys.assets(),
+        }),
+      ])
+      if (report.Errors.length > 0) {
+        toast.warning(
+          t('Synchronization completed with {{count}} channel errors.', {
+            count: report.Errors.length,
+          }),
+          {
+            description: report.Errors.slice(0, 3)
+              .map((error) => `#${error.channel_id}: ${error.message}`)
+              .join('; '),
+          }
+        )
+      } else {
+        toast.success(t('Asset synchronization completed.'))
+      }
+    },
+    onError: (error) =>
+      toast.error(
+        getAssetLibraryErrorMessage(error, t('Failed to synchronize asset.'))
+      ),
+  })
+  const asset = replicaQuery.data?.asset || assetQuery.data || props.asset
+  let previewContent = null
+  if (assetQuery.isLoading && !asset) {
+    previewContent = <Skeleton className='h-72 w-full rounded-lg' />
+  } else if (assetQuery.isError) {
+    previewContent = (
       <div className='flex min-h-56 flex-col items-center justify-center gap-3 rounded-lg border'>
         <p className='text-muted-foreground text-sm'>
           {t('Failed to load asset preview.')}
         </p>
         <Button
           variant='outline'
-          onClick={() => refetch()}
-          disabled={isFetching}
+          onClick={() => assetQuery.refetch()}
+          disabled={assetQuery.isFetching}
         >
-          {isFetching && <Loader2 className='animate-spin' />}
+          {assetQuery.isFetching && <Loader2 className='animate-spin' />}
           {t('Retry')}
         </Button>
       </div>
     )
   } else if (asset) {
-    content = (
+    previewContent = (
       <div className='space-y-4'>
         <AssetMediaPreview asset={asset} />
         <div className='flex flex-wrap items-center gap-2'>
@@ -147,25 +211,123 @@ export function AssetPreviewDialog(props: {
     )
   }
 
+  let upstreamContent = null
+  if (replicaQuery.isLoading) {
+    upstreamContent = <Skeleton className='h-56 w-full rounded-lg' />
+  } else if (replicaQuery.isError) {
+    upstreamContent = (
+      <div className='flex min-h-56 flex-col items-center justify-center gap-3 rounded-lg border'>
+        <p className='text-muted-foreground text-sm'>
+          {t('Failed to load upstream synchronization details.')}
+        </p>
+        <Button
+          variant='outline'
+          onClick={() => replicaQuery.refetch()}
+          disabled={replicaQuery.isFetching}
+        >
+          {replicaQuery.isFetching && <Loader2 className='animate-spin' />}
+          {t('Retry')}
+        </Button>
+      </div>
+    )
+  } else if (replicaQuery.data) {
+    upstreamContent = (
+      <div className='flex flex-col gap-3'>
+        <div className='flex flex-wrap items-center justify-between gap-2'>
+          <ReplicationBadge replication={replicaQuery.data.summary} />
+          {canSyncReplicas ? (
+            <Button
+              variant='outline'
+              size='sm'
+              disabled={
+                syncMutation.isPending ||
+                !replicaQuery.data.replicas.some((replica) => replica.enabled)
+              }
+              onClick={() => syncMutation.mutate(undefined)}
+            >
+              {syncMutation.isPending &&
+              syncMutation.variables === undefined ? (
+                <Loader2 className='animate-spin' />
+              ) : (
+                <RefreshCw />
+              )}
+              {t('Sync all channels')}
+            </Button>
+          ) : null}
+        </div>
+        {replicaQuery.data.replicas.length > 0 ? (
+          <AdminReplicaDetails
+            replicas={replicaQuery.data.replicas}
+            resource='asset'
+            canSync={canSyncReplicas}
+            syncingChannelId={
+              syncMutation.isPending
+                ? (syncMutation.variables ?? 'all')
+                : undefined
+            }
+            onSync={(channelId) => syncMutation.mutate(channelId)}
+          />
+        ) : (
+          <p className='text-muted-foreground rounded-lg border p-6 text-center text-sm'>
+            {t('No upstream channels are configured for the asset library.')}
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  const content = canViewReplicas ? (
+    <Tabs defaultValue='preview'>
+      <TabsList>
+        <TabsTrigger value='preview'>{t('Preview')}</TabsTrigger>
+        <TabsTrigger value='upstreams'>{t('Upstream details')}</TabsTrigger>
+      </TabsList>
+      <TabsContent value='preview'>{previewContent}</TabsContent>
+      <TabsContent value='upstreams'>{upstreamContent}</TabsContent>
+    </Tabs>
+  ) : (
+    previewContent
+  )
+
+  const previewButton = asset?.URL ? (
+    <Button
+      variant='outline'
+      onClick={() => window.open(asset.URL, '_blank', 'noopener,noreferrer')}
+    >
+      <ExternalLink />
+      {t('Preview')}
+    </Button>
+  ) : null
+  const syncWithoutDetailsButton =
+    canSyncReplicas && !canViewReplicas ? (
+      <Button
+        variant='outline'
+        disabled={syncMutation.isPending}
+        onClick={() => syncMutation.mutate(undefined)}
+      >
+        {syncMutation.isPending ? (
+          <Loader2 className='animate-spin' />
+        ) : (
+          <RefreshCw />
+        )}
+        {t('Sync all channels')}
+      </Button>
+    ) : null
+
   return (
     <Dialog
       open={props.open}
       onOpenChange={props.onOpenChange}
       title={asset?.Name || t('Asset preview')}
       description={asset ? `asset://${asset.Id}` : undefined}
-      contentClassName='sm:max-w-3xl'
+      contentClassName={canViewReplicas ? 'sm:max-w-6xl' : 'sm:max-w-3xl'}
       contentHeight='auto'
       footer={
-        asset?.URL ? (
-          <Button
-            variant='outline'
-            onClick={() =>
-              window.open(asset.URL, '_blank', 'noopener,noreferrer')
-            }
-          >
-            <ExternalLink />
-            {t('Preview')}
-          </Button>
+        syncWithoutDetailsButton || previewButton ? (
+          <>
+            {syncWithoutDetailsButton}
+            {previewButton}
+          </>
         ) : undefined
       }
     >

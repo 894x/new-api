@@ -143,6 +143,48 @@ export type AssetLibraryDialogType =
   | 'delete-asset'
   | 'preview-asset'
   | 'create-group'
+  | 'group-details'
   | 'update-group'
   | 'delete-group'
   | null
+
+export type AssetChannelReplicaDetails = {
+  channel_id: number
+  channel_name: string
+  backend: string
+  enabled: boolean
+  state: string
+  upstream_asset_id: string
+  upstream_status: string
+  last_error_code?: string
+  last_error?: string
+  last_inference_time?: string
+  updated_time?: number
+}
+
+export type AssetGroupChannelReplicaDetails = {
+  channel_id: number
+  channel_name: string
+  backend: string
+  enabled: boolean
+  state: string
+  upstream_group_id: string
+  last_error?: string
+  updated_time?: number
+}
+
+export type AssetReplicaDetailsResult = {
+  asset: Asset
+  summary: AssetReplicaSummary
+  replicas: AssetChannelReplicaDetails[]
+}
+
+export type AssetGroupReplicaDetailsResult = {
+  summary: AssetReplicaSummary
+  replicas: AssetGroupChannelReplicaDetails[]
+}
+
+export type AssetLibrarySyncReport = {
+  Summary: AssetReplicaSummary
+  Errors: Array<{ channel_id: number; asset_id?: string; message: string }>
+}

@@ -20,6 +20,7 @@ import { AssetDeleteDialog, GroupDeleteDialog } from './asset-delete-dialog'
 import { useAssetLibrary } from './asset-library-provider'
 import { AssetMutateDialog } from './asset-mutate-dialog'
 import { AssetPreviewDialog } from './asset-preview-dialog'
+import { GroupDetailsDialog } from './group-details-dialog'
 import { GroupMutateDialog } from './group-mutate-dialog'
 
 export function AssetLibraryDialogs() {
@@ -46,6 +47,11 @@ export function AssetLibraryDialogs() {
         open={open === 'create-group' || open === 'update-group'}
         onOpenChange={(isOpen) => !isOpen && closeDialog()}
         group={open === 'update-group' ? currentGroup : null}
+      />
+      <GroupDetailsDialog
+        open={open === 'group-details'}
+        onOpenChange={(isOpen) => !isOpen && closeDialog()}
+        group={currentGroup}
       />
       <GroupDeleteDialog
         open={open === 'delete-group'}

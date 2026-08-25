@@ -135,6 +135,12 @@ func GetEnabledChannelAssetConfigs() ([]ChannelAssetConfig, error) {
 	return configs, err
 }
 
+func ListChannelAssetConfigs() ([]ChannelAssetConfig, error) {
+	var configs []ChannelAssetConfig
+	err := DB.Order("channel_id ASC").Find(&configs).Error
+	return configs, err
+}
+
 func CountChannelAssetReplicas(channelId int) (int64, error) {
 	var groupCount int64
 	if err := DB.Model(&UserAssetGroupReplica{}).Where("channel_id = ?", channelId).Count(&groupCount).Error; err != nil {

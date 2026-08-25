@@ -76,6 +76,32 @@ describe('ReplicationBadge', () => {
     assert.match(markup, /2 of 2 channels ready/)
   })
 
+  test('keeps the alignment offset outside the width-constrained badge', () => {
+    const markup = renderToStaticMarkup(
+      <I18nextProvider i18n={i18n}>
+        <ReplicationBadge
+          replication={{
+            Status: 'not_synced',
+            Ready: 0,
+            Processing: 0,
+            Failed: 0,
+            Total: 0,
+          }}
+        />
+      </I18nextProvider>
+    )
+
+    const triggerClasses = markup
+      .match(/<span class="([^"]*)"[^>]*role="status"/)?.[1]
+      .split(' ')
+    const badgeClasses = markup
+      .match(/data-slot="status-badge" class="([^"]*)"/)?.[1]
+      .split(' ')
+
+    assert.ok(triggerClasses?.includes('-ml-1.5'))
+    assert.equal(badgeClasses?.includes('-ml-1.5'), false)
+  })
+
   test('omits the channel section from a customer asset card', () => {
     const asset: Asset = {
       Id: 'asset-na-customer',
@@ -97,6 +123,62 @@ describe('ReplicationBadge', () => {
     )
 
     assert.doesNotMatch(markup, /Channel availability/)
+  })
+
+  test('renders customer asset cards with a media-first layout', () => {
+    const asset: Asset = {
+      Id: 'asset-na-media-first',
+      Name: 'Customer image',
+      URL: 'https://example.com/customer-image.png',
+      GroupId: 'group-na-customer',
+      AssetType: 'Image',
+      Status: 'Active',
+      ProjectName: 'default',
+      CreateTime: '2026-08-20T00:00:00Z',
+      UpdateTime: '2026-08-20T00:00:00Z',
+    }
+    const markup = renderToStaticMarkup(
+      <I18nextProvider i18n={i18n}>
+        <AssetLibraryProvider>
+          <AssetCard row={{ original: asset } as Row<Asset>} />
+        </AssetLibraryProvider>
+      </I18nextProvider>
+    )
+
+    assert.match(markup, /<img[^>]*class="[^"]*aspect-video/)
+    assert.doesNotMatch(markup, /asset-na-media-first/)
+  })
+
+  test('keeps admin asset cards compact with replication metadata', () => {
+    const asset: Asset = {
+      Id: 'asset-na-admin',
+      Name: 'Admin image',
+      URL: 'https://example.com/admin-image.png',
+      GroupId: 'group-na-admin',
+      AssetType: 'Image',
+      Status: 'Active',
+      ProjectName: 'default',
+      CreateTime: '2026-08-20T00:00:00Z',
+      UpdateTime: '2026-08-20T00:00:00Z',
+      Replication: {
+        Status: 'ready',
+        Ready: 1,
+        Processing: 0,
+        Failed: 0,
+        Total: 1,
+      },
+    }
+    const markup = renderToStaticMarkup(
+      <I18nextProvider i18n={i18n}>
+        <AssetLibraryProvider>
+          <AssetCard row={{ original: asset } as Row<Asset>} />
+        </AssetLibraryProvider>
+      </I18nextProvider>
+    )
+
+    assert.match(markup, /<img[^>]*class="[^"]*size-16/)
+    assert.match(markup, /asset-na-admin/)
+    assert.match(markup, /1 of 1 channels ready/)
   })
 
   test('omits the replication column from the customer asset table', () => {

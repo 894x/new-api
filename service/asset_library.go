@@ -17,8 +17,9 @@ import (
 )
 
 type assetLibraryChannelError struct {
-	ChannelId int
-	Message   string
+	ChannelId int    `json:"channel_id"`
+	AssetId   string `json:"asset_id,omitempty"`
+	Message   string `json:"message"`
 }
 
 type AssetLibraryReplicationReport struct {
@@ -49,6 +50,43 @@ type AssetLibraryAssetDetails struct {
 	CreateTime        string                 `json:"CreateTime"`
 	UpdateTime        string                 `json:"UpdateTime"`
 	LastInferenceTime string                 `json:"LastInferenceTime,omitempty"`
+}
+
+const AssetReplicaStateNotSynced = "not_synced"
+
+type AssetChannelReplicaDetails struct {
+	ChannelId         int    `json:"channel_id"`
+	ChannelName       string `json:"channel_name"`
+	Backend           string `json:"backend"`
+	Enabled           bool   `json:"enabled"`
+	State             string `json:"state"`
+	UpstreamAssetId   string `json:"upstream_asset_id"`
+	UpstreamStatus    string `json:"upstream_status"`
+	LastErrorCode     string `json:"last_error_code,omitempty"`
+	LastError         string `json:"last_error,omitempty"`
+	LastInferenceTime string `json:"last_inference_time,omitempty"`
+	UpdatedTime       int64  `json:"updated_time,omitempty"`
+}
+
+type AssetReplicaDetailsResult struct {
+	Summary  *dto.AssetReplicaSummary     `json:"summary"`
+	Replicas []AssetChannelReplicaDetails `json:"replicas"`
+}
+
+type AssetGroupChannelReplicaDetails struct {
+	ChannelId       int    `json:"channel_id"`
+	ChannelName     string `json:"channel_name"`
+	Backend         string `json:"backend"`
+	Enabled         bool   `json:"enabled"`
+	State           string `json:"state"`
+	UpstreamGroupId string `json:"upstream_group_id"`
+	LastError       string `json:"last_error,omitempty"`
+	UpdatedTime     int64  `json:"updated_time,omitempty"`
+}
+
+type AssetGroupReplicaDetailsResult struct {
+	Summary  *dto.AssetReplicaSummary          `json:"summary"`
+	Replicas []AssetGroupChannelReplicaDetails `json:"replicas"`
 }
 
 var assetLibraryChannelLocks sync.Map
@@ -225,6 +263,249 @@ func ReplicateAsset(ctx context.Context, asset *model.UserAsset) (*AssetLibraryR
 		return nil, summaryErr
 	}
 	return &AssetLibraryReplicationReport{Summary: summary, Errors: errorsByChannel}, nil
+}
+
+func GetAssetReplicaDetails(assetId string) (*AssetReplicaDetailsResult, error) {
+	configs, err := model.ListChannelAssetConfigs()
+	if err != nil {
+		return nil, err
+	}
+	replicas, err := model.ListUserAssetReplicas(assetId)
+	if err != nil {
+		return nil, err
+	}
+	channelNames, err := assetLibraryChannelNames(configs)
+	if err != nil {
+		return nil, err
+	}
+	replicasByChannel := make(map[int]model.UserAssetReplica, len(replicas))
+	for _, replica := range replicas {
+		replicasByChannel[replica.ChannelId] = replica
+	}
+	items := make([]AssetChannelReplicaDetails, 0, len(configs))
+	for _, config := range configs {
+		backend, err := effectiveAssetLibraryBackend(config.Backend, config.ChannelId)
+		if err != nil {
+			return nil, err
+		}
+		item := AssetChannelReplicaDetails{
+			ChannelId:   config.ChannelId,
+			ChannelName: channelNames[config.ChannelId],
+			Backend:     backend,
+			Enabled:     config.Enabled,
+			State:       AssetReplicaStateNotSynced,
+		}
+		if replica, ok := replicasByChannel[config.ChannelId]; ok {
+			item.State = replica.State
+			item.UpstreamAssetId = replica.UpstreamAssetId
+			item.UpstreamStatus = replica.UpstreamStatus
+			item.LastErrorCode = replica.LastErrorCode
+			item.LastError = replica.LastError
+			item.LastInferenceTime = replica.LastInferenceTime
+			item.UpdatedTime = replica.UpdatedTime
+		}
+		items = append(items, item)
+	}
+	summary, err := GetAssetReplicationSummary(assetId)
+	if err != nil {
+		return nil, err
+	}
+	return &AssetReplicaDetailsResult{Summary: summary, Replicas: items}, nil
+}
+
+func GetAssetGroupReplicaDetails(groupId string) (*AssetGroupReplicaDetailsResult, error) {
+	configs, err := model.ListChannelAssetConfigs()
+	if err != nil {
+		return nil, err
+	}
+	replicas, err := model.ListUserAssetGroupReplicas(groupId)
+	if err != nil {
+		return nil, err
+	}
+	channelNames, err := assetLibraryChannelNames(configs)
+	if err != nil {
+		return nil, err
+	}
+	replicasByChannel := make(map[int]model.UserAssetGroupReplica, len(replicas))
+	for _, replica := range replicas {
+		replicasByChannel[replica.ChannelId] = replica
+	}
+	items := make([]AssetGroupChannelReplicaDetails, 0, len(configs))
+	for _, config := range configs {
+		backend, err := effectiveAssetLibraryBackend(config.Backend, config.ChannelId)
+		if err != nil {
+			return nil, err
+		}
+		item := AssetGroupChannelReplicaDetails{
+			ChannelId:   config.ChannelId,
+			ChannelName: channelNames[config.ChannelId],
+			Backend:     backend,
+			Enabled:     config.Enabled,
+			State:       AssetReplicaStateNotSynced,
+		}
+		if replica, ok := replicasByChannel[config.ChannelId]; ok {
+			item.State = replica.State
+			item.UpstreamGroupId = replica.UpstreamGroupId
+			item.LastError = replica.LastError
+			item.UpdatedTime = replica.UpdatedTime
+		}
+		items = append(items, item)
+	}
+	summary, err := GetAssetGroupReplicationSummary(groupId)
+	if err != nil {
+		return nil, err
+	}
+	return &AssetGroupReplicaDetailsResult{Summary: summary, Replicas: items}, nil
+}
+
+func assetLibraryChannelNames(configs []model.ChannelAssetConfig) (map[int]string, error) {
+	ids := make([]int, 0, len(configs))
+	for _, config := range configs {
+		ids = append(ids, config.ChannelId)
+	}
+	names := make(map[int]string, len(ids))
+	if len(ids) == 0 {
+		return names, nil
+	}
+	channels, err := model.GetChannelsByIds(ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, channel := range channels {
+		names[channel.Id] = channel.Name
+	}
+	return names, nil
+}
+
+func SyncAssetReplicas(ctx context.Context, asset *model.UserAsset, channelIds []int) (*AssetLibraryReplicationReport, error) {
+	configs, err := selectedAssetLibraryConfigs(channelIds)
+	if err != nil {
+		return nil, err
+	}
+	errorsByChannel := make([]assetLibraryChannelError, 0)
+	for i := range configs {
+		config := &configs[i]
+		lock := getAssetLibraryChannelLock(config.ChannelId)
+		lock.Lock()
+		currentConfig, configErr := model.GetChannelAssetConfig(config.ChannelId)
+		if configErr == nil && !currentConfig.Enabled {
+			configErr = errors.New("asset library is not enabled for channel")
+		}
+		if configErr == nil {
+			replica, replicaErr := model.GetUserAssetReplica(asset.Id, config.ChannelId)
+			switch {
+			case replicaErr == nil && replica.UpstreamAssetId != "":
+				_, configErr = refreshAssetReplicaToChannelLocked(ctx, currentConfig, replica)
+			case replicaErr == nil || errors.Is(replicaErr, gorm.ErrRecordNotFound):
+				_, configErr = replicateAssetToChannelLocked(ctx, asset, currentConfig)
+			default:
+				configErr = replicaErr
+			}
+		}
+		lock.Unlock()
+		if configErr != nil {
+			errorsByChannel = append(errorsByChannel, assetLibraryChannelError{ChannelId: config.ChannelId, Message: assetLibraryStoredError(configErr)})
+		}
+	}
+	summary, err := GetAssetReplicationSummary(asset.Id)
+	if err != nil {
+		return nil, err
+	}
+	return &AssetLibraryReplicationReport{Summary: summary, Errors: errorsByChannel}, nil
+}
+
+func SyncAssetGroupReplicas(ctx context.Context, group *model.UserAssetGroup, channelIds []int) (*AssetLibraryReplicationReport, error) {
+	configs, err := selectedAssetLibraryConfigs(channelIds)
+	if err != nil {
+		return nil, err
+	}
+	assets, err := model.GetGroupAssetsForSync(group.Id)
+	if err != nil {
+		return nil, err
+	}
+	errorsByChannel := make([]assetLibraryChannelError, 0)
+	for i := range configs {
+		config := &configs[i]
+		lock := getAssetLibraryChannelLock(config.ChannelId)
+		lock.Lock()
+		currentConfig, configErr := model.GetChannelAssetConfig(config.ChannelId)
+		if configErr == nil && !currentConfig.Enabled {
+			configErr = errors.New("asset library is not enabled for channel")
+		}
+		if configErr == nil {
+			_, configErr = replicateAssetGroupToChannelLocked(ctx, group, currentConfig)
+		}
+		if configErr == nil {
+			for j := range assets {
+				asset := &assets[j]
+				replica, replicaErr := model.GetUserAssetReplica(asset.Id, config.ChannelId)
+				switch {
+				case replicaErr == nil && replica.UpstreamAssetId != "":
+					_, replicaErr = refreshAssetReplicaToChannelLocked(ctx, currentConfig, replica)
+				case replicaErr == nil || errors.Is(replicaErr, gorm.ErrRecordNotFound):
+					_, replicaErr = replicateAssetToChannelLocked(ctx, asset, currentConfig)
+				}
+				if replicaErr != nil {
+					errorsByChannel = appendAssetSyncError(
+						errorsByChannel,
+						config.ChannelId,
+						asset.Id,
+						assetLibraryStoredError(replicaErr),
+					)
+				}
+			}
+		}
+		lock.Unlock()
+		if configErr != nil {
+			errorsByChannel = append(errorsByChannel, assetLibraryChannelError{ChannelId: config.ChannelId, Message: assetLibraryStoredError(configErr)})
+		}
+	}
+	summary, err := GetAssetGroupReplicationSummary(group.Id)
+	if err != nil {
+		return nil, err
+	}
+	return &AssetLibraryReplicationReport{Summary: summary, Errors: errorsByChannel}, nil
+}
+
+func appendAssetSyncError(items []assetLibraryChannelError, channelId int, assetId string, message string) []assetLibraryChannelError {
+	const maxSyncErrors = 100
+	if len(items) >= maxSyncErrors {
+		return items
+	}
+	return append(items, assetLibraryChannelError{ChannelId: channelId, AssetId: assetId, Message: message})
+}
+
+func selectedAssetLibraryConfigs(channelIds []int) ([]model.ChannelAssetConfig, error) {
+	if len(channelIds) == 0 {
+		configs, err := model.GetEnabledChannelAssetConfigs()
+		if err != nil {
+			return nil, err
+		}
+		if len(configs) == 0 {
+			return nil, errors.New("no enabled asset library channels are available")
+		}
+		return configs, nil
+	}
+	seen := make(map[int]struct{}, len(channelIds))
+	configs := make([]model.ChannelAssetConfig, 0, len(channelIds))
+	for _, channelId := range channelIds {
+		if channelId <= 0 {
+			return nil, errors.New("channel id must be positive")
+		}
+		if _, ok := seen[channelId]; ok {
+			continue
+		}
+		seen[channelId] = struct{}{}
+		config, err := model.GetChannelAssetConfig(channelId)
+		if err != nil {
+			return nil, err
+		}
+		if !config.Enabled {
+			return nil, fmt.Errorf("asset library is not enabled for channel %d", channelId)
+		}
+		configs = append(configs, *config)
+	}
+	return configs, nil
 }
 
 func replicateAssetGroupToChannelLocked(ctx context.Context, group *model.UserAssetGroup, config *model.ChannelAssetConfig) (bool, error) {
@@ -629,6 +910,14 @@ func isAssetLibraryNotFound(err error) bool {
 }
 
 func RefreshAssetLibraryAsset(ctx context.Context, assetId string) (*AssetLibraryAssetDetails, error) {
+	return refreshAssetLibraryAsset(ctx, assetId, false)
+}
+
+func RefreshAdminAssetLibraryAsset(ctx context.Context, assetId string) (*AssetLibraryAssetDetails, error) {
+	return refreshAssetLibraryAsset(ctx, assetId, true)
+}
+
+func refreshAssetLibraryAsset(ctx context.Context, assetId string, includeDisabled bool) (*AssetLibraryAssetDetails, error) {
 	replicas, err := model.ListUserAssetReplicas(assetId)
 	if err != nil {
 		return nil, err
@@ -649,38 +938,22 @@ func RefreshAssetLibraryAsset(ctx context.Context, assetId string) (*AssetLibrar
 		}
 		replica = currentReplica
 		config, err := model.GetChannelAssetConfig(replica.ChannelId)
-		if err != nil || !config.Enabled {
+		if err != nil || (!includeDisabled && !config.Enabled) {
 			lock.Unlock()
 			continue
 		}
-		backend, backendErr := assetLibraryBackendForChannel(replica.ChannelId)
-		if backendErr != nil {
-			lock.Unlock()
-			refreshErrors = append(refreshErrors, backendErr)
-			continue
+		requestConfig := config
+		if includeDisabled && !config.Enabled {
+			inspectionConfig := *config
+			inspectionConfig.Enabled = true
+			requestConfig = &inspectionConfig
 		}
-		details, err := backend.GetAsset(ctx, config, replica.UpstreamAssetId)
+		details, err := refreshAssetReplicaToChannelLocked(ctx, requestConfig, replica)
+		lock.Unlock()
 		if err != nil {
-			replica.LastError = assetLibraryStoredError(err)
-			if upstreamErr, ok := err.(*AssetLibraryUpstreamError); ok {
-				replica.LastErrorCode = upstreamErr.Code
-			}
-			_ = model.SaveUserAssetReplica(replica)
-			lock.Unlock()
 			refreshErrors = append(refreshErrors, err)
 			continue
 		}
-		replica.UpstreamStatus = details.Status
-		replica.State = assetReplicaStateForStatus(details.Status)
-		replica.LastInferenceTime = details.LastInferenceTime
-		replica.LastErrorCode = ""
-		replica.LastError = ""
-		if details.Error != nil {
-			replica.LastErrorCode = details.Error.Code
-			replica.LastError = common.MaskSensitiveInfo(common.LocalLogPreview(details.Error.Message))
-		}
-		_ = model.SaveUserAssetReplica(replica)
-		lock.Unlock()
 		if selectedDetails == nil {
 			selectedDetails = details
 			continue
@@ -699,6 +972,38 @@ func RefreshAssetLibraryAsset(ctx context.Context, assetId string) (*AssetLibrar
 		return nil, errors.Join(refreshErrors...)
 	}
 	return nil, errors.New("asset has no available upstream replica")
+}
+
+func refreshAssetReplicaToChannelLocked(ctx context.Context, config *model.ChannelAssetConfig, replica *model.UserAssetReplica) (*AssetLibraryAssetDetails, error) {
+	backend, err := assetLibraryBackendForChannel(replica.ChannelId)
+	if err != nil {
+		return nil, err
+	}
+	details, err := backend.GetAsset(ctx, config, replica.UpstreamAssetId)
+	if err != nil {
+		replica.LastError = assetLibraryStoredError(err)
+		var upstreamErr *AssetLibraryUpstreamError
+		if errors.As(err, &upstreamErr) {
+			replica.LastErrorCode = upstreamErr.Code
+		}
+		if saveErr := model.SaveUserAssetReplica(replica); saveErr != nil {
+			return nil, errors.Join(err, saveErr)
+		}
+		return nil, err
+	}
+	replica.UpstreamStatus = details.Status
+	replica.State = assetReplicaStateForStatus(details.Status)
+	replica.LastInferenceTime = details.LastInferenceTime
+	replica.LastErrorCode = ""
+	replica.LastError = ""
+	if details.Error != nil {
+		replica.LastErrorCode = details.Error.Code
+		replica.LastError = common.MaskSensitiveInfo(common.LocalLogPreview(details.Error.Message))
+	}
+	if err := model.SaveUserAssetReplica(replica); err != nil {
+		return nil, err
+	}
+	return details, nil
 }
 
 func assetReplicaStateForStatus(status string) string {
