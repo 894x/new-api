@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest'
 import type { ParameterCapabilityConfig } from '../../types'
 import {
   evaluateParameterCapabilities,
+  parseParameterCapabilityConfigStrict,
   resolveParameterCapabilities,
   stringifyParameterCapabilityConfig,
   validateParameterCapabilityConfig,
@@ -102,6 +103,81 @@ describe('parameter capability resolution', () => {
 })
 
 describe('parameter capability configuration validation', () => {
+  it('keeps invalid JSON drafts distinguishable from an empty configuration', () => {
+    expect(parseParameterCapabilityConfigStrict('{"defaults":')).toEqual({
+      success: false,
+      error: 'invalid_json',
+    })
+  })
+
+  it('rejects JSON objects that do not match the capability configuration shape', () => {
+    expect(
+      parseParameterCapabilityConfigStrict(
+        JSON.stringify({
+          defaults: {
+            temperature: { suported: false },
+          },
+        })
+      )
+    ).toEqual({
+      success: false,
+      error: 'invalid_schema',
+    })
+  })
+
+  it('parses valid JSON without losing rule order or custom parameter paths', () => {
+    const result = parseParameterCapabilityConfigStrict(
+      JSON.stringify({
+        defaults: {},
+        rules: [
+          {
+            name: 'Kimi pattern',
+            selector: { type: 'pattern', value: 'kimi-k3*' },
+            parameters: {
+              'thinking.type': {
+                allowed_values: ['enabled'],
+                on_violation: 'reject',
+              },
+            },
+          },
+          {
+            name: 'Kimi exact',
+            selector: { type: 'exact', value: 'kimi-k3' },
+            parameters: {
+              temperature: { supported: false, on_violation: 'reject' },
+            },
+          },
+        ],
+      })
+    )
+
+    expect(result).toEqual({
+      success: true,
+      config: {
+        defaults: {},
+        rules: [
+          {
+            name: 'Kimi pattern',
+            selector: { type: 'pattern', value: 'kimi-k3*' },
+            parameters: {
+              'thinking.type': {
+                allowed_values: ['enabled'],
+                on_violation: 'reject',
+              },
+            },
+          },
+          {
+            name: 'Kimi exact',
+            selector: { type: 'exact', value: 'kimi-k3' },
+            parameters: {
+              temperature: { supported: false, on_violation: 'reject' },
+            },
+          },
+        ],
+      },
+    })
+  })
+
   it('rejects inverted ranges and clamp rules without a boundary', () => {
     const errors = validateParameterCapabilityConfig({
       defaults: {

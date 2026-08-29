@@ -104,6 +104,124 @@ export function createEmptyParameterCapabilityConfig(): ParameterCapabilityConfi
   return { defaults: {}, rules: [] }
 }
 
+export type ParameterCapabilityConfigParseResult =
+  | { success: true; config: ParameterCapabilityConfig }
+  | { success: false; error: 'invalid_json' | 'invalid_schema' }
+
+export function parseParameterCapabilityConfigStrict(
+  value: string
+): ParameterCapabilityConfigParseResult {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return { success: true, config: createEmptyParameterCapabilityConfig() }
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return { success: false, error: 'invalid_json' }
+  }
+
+  if (!isPlainRecord(parsed) || !hasOnlyKeys(parsed, ['defaults', 'rules'])) {
+    return { success: false, error: 'invalid_schema' }
+  }
+
+  const defaults = parsed.defaults ?? {}
+  const rules = parsed.rules ?? []
+  if (
+    !isParameterCapabilityMap(defaults) ||
+    !Array.isArray(rules) ||
+    !rules.every(isModelParameterCapabilityRule)
+  ) {
+    return { success: false, error: 'invalid_schema' }
+  }
+
+  return {
+    success: true,
+    config: {
+      defaults,
+      rules: rules.map((rule) => ({
+        ...(rule.name === undefined ? {} : { name: rule.name }),
+        selector: rule.selector,
+        parameters: rule.parameters ?? {},
+      })),
+    },
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  allowedKeys: readonly string[]
+): boolean {
+  const allowed = new Set(allowedKeys)
+  return Object.keys(value).every((key) => allowed.has(key))
+}
+
+function isParameterCapabilityMap(
+  value: unknown
+): value is Record<string, ParameterCapability> {
+  return (
+    isPlainRecord(value) && Object.values(value).every(isParameterCapability)
+  )
+}
+
+function isParameterCapability(value: unknown): value is ParameterCapability {
+  if (
+    !isPlainRecord(value) ||
+    !hasOnlyKeys(value, [
+      'supported',
+      'min',
+      'max',
+      'allowed_values',
+      'on_violation',
+    ])
+  ) {
+    return false
+  }
+
+  return (
+    (value.supported === undefined || typeof value.supported === 'boolean') &&
+    (value.min === undefined ||
+      (typeof value.min === 'number' && Number.isFinite(value.min))) &&
+    (value.max === undefined ||
+      (typeof value.max === 'number' && Number.isFinite(value.max))) &&
+    (value.allowed_values === undefined ||
+      (Array.isArray(value.allowed_values) &&
+        value.allowed_values.every((item) => typeof item === 'string'))) &&
+    (value.on_violation === undefined ||
+      value.on_violation === 'reject' ||
+      value.on_violation === 'drop' ||
+      value.on_violation === 'clamp')
+  )
+}
+
+function isModelParameterCapabilityRule(value: unknown): value is {
+  name?: string
+  selector: { type: 'pattern' | 'exact'; value: string }
+  parameters?: Record<string, ParameterCapability>
+} {
+  if (
+    !isPlainRecord(value) ||
+    !hasOnlyKeys(value, ['name', 'selector', 'parameters']) ||
+    (value.name !== undefined && typeof value.name !== 'string') ||
+    !isPlainRecord(value.selector) ||
+    !hasOnlyKeys(value.selector, ['type', 'value']) ||
+    (value.selector.type !== 'pattern' && value.selector.type !== 'exact') ||
+    typeof value.selector.value !== 'string'
+  ) {
+    return false
+  }
+
+  return (
+    value.parameters === undefined || isParameterCapabilityMap(value.parameters)
+  )
+}
+
 export function parseParameterCapabilityConfig(
   value: string
 ): ParameterCapabilityConfig {
