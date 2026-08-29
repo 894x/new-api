@@ -26,6 +26,7 @@ import type {
   GetLogStatsResponse,
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
+  LogExportRequest,
   UserInfo,
 } from './types'
 
@@ -83,6 +84,29 @@ export const getLogStats = (params: GetLogStatsParams = {}) =>
 export const getUserLogStats = (
   params: Omit<GetLogStatsParams, 'username' | 'channel'> = {}
 ) => fetchLogStats('/api/log', params, false)
+
+export async function exportLogs(
+  request: LogExportRequest
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await api.post('/api/log/export', request, {
+    responseType: 'blob',
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  const contentType = String(response.headers['content-type'] || '')
+  if (contentType.includes('application/json')) {
+    const text = await response.data.text()
+    const result = JSON.parse(text) as { message?: string }
+    throw new Error(result.message || 'Failed to export logs')
+  }
+
+  const disposition = String(response.headers['content-disposition'] || '')
+  const filenameMatch = disposition.match(/filename="?([^";]+)"?/i)
+  return {
+    blob: response.data as Blob,
+    filename: filenameMatch?.[1] || `usage-${request.view}-export.zip`,
+  }
+}
 
 export async function getUserInfo(
   userId: number

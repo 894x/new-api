@@ -491,6 +491,18 @@ export const STATIC_I18N_KEYS = [
   'Drawing task records',
   'Task Logs',
   'System task records',
+
+  // Usage log export fields resolved dynamically
+  'Token ID',
+  'Channel Name',
+  'Upstream Model Name',
+  'Cached Input Tokens',
+  'Model Ratio',
+  'Completion Ratio',
+  'Cache Ratio',
+  'Quota per USD',
+  'Original Amount (USD)',
+
   'Personal Center Area',
   'User personal functions',
   'Wallet Management',

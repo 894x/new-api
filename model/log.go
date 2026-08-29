@@ -350,6 +350,12 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	createdAt := common.GetTimestamp()
+	if params.Other == nil {
+		params.Other = make(map[string]interface{})
+	}
+	if _, exists := params.Other["quota_per_unit"]; !exists {
+		params.Other["quota_per_unit"] = common.QuotaPerUnit
+	}
 	otherStr := common.MapToJsonStr(params.Other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
@@ -429,6 +435,14 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		}
 	}
 	createdAt := common.GetTimestamp()
+	if params.Other == nil {
+		params.Other = make(map[string]interface{})
+	}
+	if params.LogType == LogTypeConsume {
+		if _, exists := params.Other["quota_per_unit"]; !exists {
+			params.Other["quota_per_unit"] = common.QuotaPerUnit
+		}
+	}
 	log := &Log{
 		UserId:    params.UserId,
 		Username:  username,
@@ -517,47 +531,134 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 		assignDisplayLogIds(logs, startIdx)
 	}
 
+	if err = populateLogChannelNames(logs); err != nil {
+		return logs, total, err
+	}
+
+	return logs, total, nil
+}
+
+type LogExportQuery struct {
+	StartTimestamp    int64
+	EndTimestamp      int64
+	ModelName         string
+	Username          string
+	TokenName         string
+	ChannelID         int
+	Group             string
+	RequestID         string
+	UpstreamRequestID string
+}
+
+func GetLogsForExport(query LogExportQuery, limit int) (logs []*Log, total int64, err error) {
+	tx := LOG_DB.Where("logs.type IN ?", []int{LogTypeConsume, LogTypeError})
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", query.ModelName); err != nil {
+		return nil, 0, err
+	}
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.username", query.Username); err != nil {
+		return nil, 0, err
+	}
+	if query.TokenName != "" {
+		tx = tx.Where("logs.token_name = ?", query.TokenName)
+	}
+	if query.RequestID != "" {
+		tx = tx.Where("logs.request_id = ?", query.RequestID)
+	}
+	if query.UpstreamRequestID != "" {
+		tx = tx.Where("logs.upstream_request_id = ?", query.UpstreamRequestID)
+	}
+	if query.StartTimestamp != 0 {
+		tx = tx.Where("logs.created_at >= ?", query.StartTimestamp)
+	}
+	if query.EndTimestamp != 0 {
+		tx = tx.Where("logs.created_at <= ?", query.EndTimestamp)
+	}
+	if query.ChannelID != 0 {
+		tx = tx.Where("logs.channel_id = ?", query.ChannelID)
+	}
+	if query.Group != "" {
+		tx = tx.Where("logs."+logGroupCol+" = ?", query.Group)
+	}
+	if err = tx.Model(&Log{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	order := "logs.created_at desc, logs.id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("logs.")
+	}
+	if err = tx.Order(order).Limit(limit + 1).Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		assignDisplayLogIds(logs, 0)
+	}
+	if err = populateLogChannelNames(logs); err != nil {
+		return logs, total, err
+	}
+	return logs, total, nil
+}
+
+func GetUsageLogsByRequestIDsForExport(requestIDs []string, limit int) (logs []*Log, truncated bool, err error) {
+	const requestIDBatchSize = 500
+	for start := 0; start < len(requestIDs); start += requestIDBatchSize {
+		end := min(start+requestIDBatchSize, len(requestIDs))
+		var batch []*Log
+		remaining := limit + 1 - len(logs)
+		if remaining <= 0 {
+			return logs, true, nil
+		}
+		err = LOG_DB.Where("logs.type IN ?", []int{LogTypeConsume, LogTypeError}).
+			Where("logs.request_id IN ?", requestIDs[start:end]).
+			Limit(remaining).
+			Find(&batch).Error
+		if err != nil {
+			return nil, false, err
+		}
+		logs = append(logs, batch...)
+		if len(logs) > limit {
+			return logs[:limit], true, nil
+		}
+	}
+	return logs, false, nil
+}
+
+func populateLogChannelNames(logs []*Log) error {
 	channelIds := types.NewSet[int]()
 	for _, log := range logs {
 		if log.ChannelId != 0 {
 			channelIds.Add(log.ChannelId)
 		}
 	}
-
-	if channelIds.Len() > 0 {
-		var channels []struct {
-			Id   int    `gorm:"column:id"`
-			Name string `gorm:"column:name"`
-		}
-		if common.MemoryCacheEnabled {
-			// Cache get channel
-			for _, channelId := range channelIds.Items() {
-				if cacheChannel, err := CacheGetChannel(channelId); err == nil {
-					channels = append(channels, struct {
-						Id   int    `gorm:"column:id"`
-						Name string `gorm:"column:name"`
-					}{
-						Id:   channelId,
-						Name: cacheChannel.Name,
-					})
-				}
-			}
-		} else {
-			// Bulk query channels from DB
-			if err = DB.Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
-				return logs, total, err
-			}
-		}
-		channelMap := make(map[int]string, len(channels))
-		for _, channel := range channels {
-			channelMap[channel.Id] = channel.Name
-		}
-		for i := range logs {
-			logs[i].ChannelName = channelMap[logs[i].ChannelId]
-		}
+	if channelIds.Len() == 0 {
+		return nil
 	}
 
-	return logs, total, err
+	var channels []struct {
+		Id   int    `gorm:"column:id"`
+		Name string `gorm:"column:name"`
+	}
+	if common.MemoryCacheEnabled {
+		for _, channelId := range channelIds.Items() {
+			if cacheChannel, err := CacheGetChannel(channelId); err == nil {
+				channels = append(channels, struct {
+					Id   int    `gorm:"column:id"`
+					Name string `gorm:"column:name"`
+				}{Id: channelId, Name: cacheChannel.Name})
+			}
+		}
+	} else if err := DB.Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
+		return err
+	}
+
+	channelMap := make(map[int]string, len(channels))
+	for _, channel := range channels {
+		channelMap[channel.Id] = channel.Name
+	}
+	for i := range logs {
+		logs[i].ChannelName = channelMap[logs[i].ChannelId]
+	}
+	return nil
 }
 
 const logSearchCountLimit = 10000
