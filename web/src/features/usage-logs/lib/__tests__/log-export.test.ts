@@ -19,9 +19,51 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { buildLogExportRequest, getLogExportFields } from '../log-export'
+import {
+  buildLogExportRequest,
+  getDefaultLogExportFields,
+  getLogExportFields,
+} from '../log-export'
 
 describe('usage log export', () => {
+  test('uses the reconciliation-focused upstream fields by default', () => {
+    assert.deepEqual(getDefaultLogExportFields('upstream'), [
+      'created_at',
+      'upstream_request_id',
+      'status',
+      'channel_name',
+      'model_name',
+      'upstream_model_name',
+      'input_tokens',
+      'cached_input_tokens',
+      'output_tokens',
+      'model_price',
+      'completion_ratio',
+      'cache_ratio',
+      'error_message',
+    ])
+  })
+
+  test('uses the customer reconciliation fields by default downstream', () => {
+    assert.deepEqual(getDefaultLogExportFields('downstream'), [
+      'created_at',
+      'request_id',
+      'status',
+      'user_id',
+      'username',
+      'token_name',
+      'group',
+      'model_name',
+      'input_tokens',
+      'cached_input_tokens',
+      'output_tokens',
+      'model_price',
+      'completion_ratio',
+      'cache_ratio',
+      'group_ratio',
+    ])
+  })
+
   test('never exposes upstream fields in the downstream field catalog', () => {
     const downstreamKeys = new Set(
       getLogExportFields('downstream').map((field) => field.key)

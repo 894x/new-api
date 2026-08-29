@@ -24,72 +24,98 @@ export interface LogExportField {
   key: string
   label: string
   upstreamOnly?: boolean
-  defaultSelected: boolean
 }
 
 const LOG_EXPORT_FIELDS: LogExportField[] = [
-  { key: 'created_at', label: 'Time', defaultSelected: true },
-  { key: 'request_id', label: 'Request ID', defaultSelected: true },
+  { key: 'created_at', label: 'Time' },
+  { key: 'request_id', label: 'Request ID' },
   {
     key: 'upstream_request_id',
     label: 'Upstream Request ID',
     upstreamOnly: true,
-    defaultSelected: true,
   },
-  { key: 'status', label: 'Status', defaultSelected: true },
-  { key: 'user_id', label: 'User ID', defaultSelected: true },
-  { key: 'username', label: 'Username', defaultSelected: true },
-  { key: 'token_id', label: 'Token ID', defaultSelected: false },
-  { key: 'token_name', label: 'Token Name', defaultSelected: true },
-  { key: 'group', label: 'Group', defaultSelected: true },
+  { key: 'status', label: 'Status' },
+  { key: 'user_id', label: 'User ID' },
+  { key: 'username', label: 'Username' },
+  { key: 'token_id', label: 'Token ID' },
+  { key: 'token_name', label: 'Token Name' },
+  { key: 'group', label: 'Group' },
   {
     key: 'channel_id',
     label: 'Channel ID',
     upstreamOnly: true,
-    defaultSelected: true,
   },
   {
     key: 'channel_name',
     label: 'Channel Name',
     upstreamOnly: true,
-    defaultSelected: true,
   },
-  { key: 'model_name', label: 'Model Name', defaultSelected: true },
+  { key: 'model_name', label: 'Model Name' },
   {
     key: 'upstream_model_name',
     label: 'Upstream Model Name',
     upstreamOnly: true,
-    defaultSelected: true,
   },
-  { key: 'input_tokens', label: 'Input Tokens', defaultSelected: true },
+  { key: 'input_tokens', label: 'Input Tokens' },
   {
     key: 'cached_input_tokens',
     label: 'Cached Input Tokens',
-    defaultSelected: true,
   },
-  { key: 'output_tokens', label: 'Output Tokens', defaultSelected: true },
-  { key: 'model_price', label: 'Model Price', defaultSelected: true },
-  { key: 'model_ratio', label: 'Model Ratio', defaultSelected: true },
+  { key: 'output_tokens', label: 'Output Tokens' },
+  { key: 'model_price', label: 'Model Price' },
+  { key: 'model_ratio', label: 'Model Ratio' },
   {
     key: 'completion_ratio',
     label: 'Completion Ratio',
-    defaultSelected: true,
   },
-  { key: 'cache_ratio', label: 'Cache Ratio', defaultSelected: true },
-  { key: 'group_ratio', label: 'Group Ratio', defaultSelected: true },
-  { key: 'quota_per_unit', label: 'Quota per USD', defaultSelected: true },
+  { key: 'cache_ratio', label: 'Cache Ratio' },
+  { key: 'group_ratio', label: 'Group Ratio' },
+  { key: 'quota_per_unit', label: 'Quota per USD' },
   {
     key: 'original_amount_usd',
     label: 'Original Amount (USD)',
-    defaultSelected: true,
   },
   {
     key: 'error_message',
     label: 'Error Message',
     upstreamOnly: true,
-    defaultSelected: true,
   },
 ]
+
+const DEFAULT_LOG_EXPORT_FIELDS: Record<LogExportView, string[]> = {
+  upstream: [
+    'created_at',
+    'upstream_request_id',
+    'status',
+    'channel_name',
+    'model_name',
+    'upstream_model_name',
+    'input_tokens',
+    'cached_input_tokens',
+    'output_tokens',
+    'model_price',
+    'completion_ratio',
+    'cache_ratio',
+    'error_message',
+  ],
+  downstream: [
+    'created_at',
+    'request_id',
+    'status',
+    'user_id',
+    'username',
+    'token_name',
+    'group',
+    'model_name',
+    'input_tokens',
+    'cached_input_tokens',
+    'output_tokens',
+    'model_price',
+    'completion_ratio',
+    'cache_ratio',
+    'group_ratio',
+  ],
+}
 
 export function getLogExportFields(view: LogExportView): LogExportField[] {
   if (view === 'upstream') return LOG_EXPORT_FIELDS
@@ -97,9 +123,7 @@ export function getLogExportFields(view: LogExportView): LogExportField[] {
 }
 
 export function getDefaultLogExportFields(view: LogExportView): string[] {
-  return getLogExportFields(view)
-    .filter((field) => field.defaultSelected)
-    .map((field) => field.key)
+  return [...DEFAULT_LOG_EXPORT_FIELDS[view]]
 }
 
 export function buildLogExportRequest(
