@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import {
+  Braces,
   CircleAlert,
   FlaskConical,
   Plus,
@@ -29,6 +30,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { Dialog } from '@/components/dialog'
+import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -65,6 +67,7 @@ import {
   isBillingSensitiveParameter,
   PARAMETER_CAPABILITY_CATALOG,
   parseParameterCapabilityConfig,
+  parseParameterCapabilityConfigStrict,
   resolveParameterCapabilities,
   stringifyParameterCapabilityConfig,
   validateParameterCapabilityConfig,
@@ -88,6 +91,24 @@ export interface ParameterCapabilityEditorDialogProps {
 }
 
 type ScopeSelection = { type: 'default' } | { type: 'rule'; index: number }
+type EditorTab = 'capabilities' | 'json' | 'validation'
+
+const PARAMETER_CAPABILITY_JSON_PLACEHOLDER = JSON.stringify(
+  {
+    defaults: {},
+    rules: [
+      {
+        name: 'Model constraints',
+        selector: { type: 'exact', value: 'model-name' },
+        parameters: {
+          temperature: { min: 0, max: 1, on_violation: 'reject' },
+        },
+      },
+    ],
+  },
+  null,
+  2
+)
 
 const SUPPORT_OPTIONS = [
   { value: 'inherit', label: 'Inherit' },
@@ -127,6 +148,10 @@ function ParameterCapabilityEditorSession(
   const [config, setConfig] = useState<ParameterCapabilityConfig>(() =>
     parseParameterCapabilityConfig(props.value)
   )
+  const [activeTab, setActiveTab] = useState<EditorTab>('capabilities')
+  const [jsonDraft, setJsonDraft] = useState(() =>
+    stringifyParameterCapabilityConfig(config)
+  )
   const [selection, setSelection] = useState<ScopeSelection>({
     type: 'default',
   })
@@ -134,7 +159,23 @@ function ParameterCapabilityEditorSession(
   const [customParameter, setCustomParameter] = useState('')
 
   const errors = validateParameterCapabilityConfig(config)
+  const jsonParseResult = parseParameterCapabilityConfigStrict(jsonDraft)
+  const jsonConfigErrors = jsonParseResult.success
+    ? validateParameterCapabilityConfig(jsonParseResult.config)
+    : []
+  let jsonErrorMessage = ''
+  if (!jsonParseResult.success) {
+    jsonErrorMessage =
+      jsonParseResult.error === 'invalid_json'
+        ? t('Invalid JSON')
+        : t('Parameter capability JSON does not match the expected structure.')
+  }
+  let displayedErrorCount = errors.length
+  if (activeTab === 'json') {
+    displayedErrorCount = jsonParseResult.success ? jsonConfigErrors.length : 1
+  }
   const errorKeyCounts = new Map<string, number>()
+  const jsonErrorKeyCounts = new Map<string, number>()
   const rules = config.rules || []
   const selectedRule =
     selection.type === 'rule' ? rules[selection.index] : undefined
@@ -230,12 +271,41 @@ function ParameterCapabilityEditorSession(
   }
 
   function handleSave(): void {
-    if (errors.length > 0) {
+    let nextConfig = config
+    if (activeTab === 'json') {
+      if (!jsonParseResult.success) {
+        toast.error(jsonErrorMessage)
+        return
+      }
+      nextConfig = jsonParseResult.config
+    }
+
+    if (validateParameterCapabilityConfig(nextConfig).length > 0) {
       toast.error(t('Fix parameter capability errors before saving.'))
       return
     }
-    props.onSave(stringifyParameterCapabilityConfig(config))
+    props.onSave(stringifyParameterCapabilityConfig(nextConfig))
     props.onOpenChange(false)
+  }
+
+  function handleTabChange(value: string): void {
+    const nextTab = value as EditorTab
+    if (nextTab === 'json') {
+      if (activeTab !== 'json') {
+        setJsonDraft(stringifyParameterCapabilityConfig(config))
+      }
+      setActiveTab(nextTab)
+      return
+    }
+
+    if (activeTab === 'json') {
+      if (!jsonParseResult.success) {
+        toast.error(jsonErrorMessage)
+        return
+      }
+      setConfig(jsonParseResult.config)
+    }
+    setActiveTab(nextTab)
   }
 
   function addCustomParameter(): void {
@@ -261,10 +331,12 @@ function ParameterCapabilityEditorSession(
       footer={
         <>
           <div className='mr-auto flex items-center gap-2 text-sm'>
-            <Badge variant={errors.length > 0 ? 'destructive' : 'secondary'}>
-              {errors.length > 0
+            <Badge
+              variant={displayedErrorCount > 0 ? 'destructive' : 'secondary'}
+            >
+              {displayedErrorCount > 0
                 ? t('{{count}} configuration error(s)', {
-                    count: errors.length,
+                    count: displayedErrorCount,
                   })
                 : t('Configuration valid')}
             </Badge>
@@ -282,12 +354,20 @@ function ParameterCapabilityEditorSession(
         </>
       }
     >
-      <Tabs defaultValue='capabilities' className='h-full gap-0'>
+      <Tabs
+        value={activeTab}
+        onValueChange={handleTabChange}
+        className='h-full gap-0'
+      >
         <div className='flex items-center justify-between border-b px-4 py-2'>
           <TabsList>
             <TabsTrigger value='capabilities'>
               <Settings2 data-icon='inline-start' />
               {t('Capabilities')}
+            </TabsTrigger>
+            <TabsTrigger value='json'>
+              <Braces data-icon='inline-start' />
+              {t('JSON Editor')}
             </TabsTrigger>
             <TabsTrigger value='validation'>
               <FlaskConical data-icon='inline-start' />
@@ -428,6 +508,50 @@ function ParameterCapabilityEditorSession(
               </ScrollArea>
             </div>
           </div>
+        </TabsContent>
+
+        <TabsContent value='json' className='min-h-0 overflow-auto p-5'>
+          <JsonCodeEditor
+            value={jsonDraft}
+            onChange={setJsonDraft}
+            placeholder={PARAMETER_CAPABILITY_JSON_PLACEHOLDER}
+            heightClassName='h-[520px] min-h-[360px] max-h-[calc(78vh-210px)]'
+            aria-invalid={
+              Boolean(jsonErrorMessage) || jsonConfigErrors.length > 0
+            }
+            ariaLabel={t('Model Parameter Capabilities JSON')}
+          />
+          <p className='text-muted-foreground mt-2 text-xs'>
+            {t('Edit JSON text directly. Format will be validated on save.')}
+          </p>
+          {jsonErrorMessage && (
+            <p className='text-destructive mt-2 text-sm'>{jsonErrorMessage}</p>
+          )}
+          {jsonParseResult.success && jsonConfigErrors.length > 0 && (
+            <Alert variant='destructive' className='mt-3'>
+              <CircleAlert aria-hidden='true' />
+              <AlertTitle>
+                {t('{{count}} configuration error(s)', {
+                  count: jsonConfigErrors.length,
+                })}
+              </AlertTitle>
+              <AlertDescription>
+                <ul className='list-disc space-y-1 pl-4'>
+                  {jsonConfigErrors.map((error) => {
+                    const baseKey = `${error.code}:${error.scope}:${error.path}`
+                    const occurrence =
+                      (jsonErrorKeyCounts.get(baseKey) || 0) + 1
+                    jsonErrorKeyCounts.set(baseKey, occurrence)
+                    return (
+                      <li key={`${baseKey}:${occurrence}`}>
+                        <CapabilityConfigErrorMessage error={error} />
+                      </li>
+                    )
+                  })}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
         </TabsContent>
 
         <TabsContent value='validation' className='min-h-0 overflow-hidden'>
