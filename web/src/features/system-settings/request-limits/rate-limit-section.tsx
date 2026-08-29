@@ -45,26 +45,8 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { isValidRateLimitJSON } from './rate-limit-validation'
 import { RateLimitVisualEditor } from './rate-limit-visual-editor'
-
-const isValidJSON = (value: string | undefined) => {
-  if (!value || value.trim() === '') return true
-  try {
-    const parsed = JSON.parse(value)
-    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return false
-    }
-    for (const [, val] of Object.entries(parsed)) {
-      if (!Array.isArray(val) || val.length !== 2) return false
-      if (typeof val[0] !== 'number' || typeof val[1] !== 'number') return false
-      if (val[0] < 0 || val[1] < 1) return false
-      if (val[0] > 2147483647 || val[1] > 2147483647) return false
-    }
-    return true
-  } catch {
-    return false
-  }
-}
 
 const createRateLimitSchema = (t: (key: string) => string) =>
   z.object({
@@ -72,10 +54,11 @@ const createRateLimitSchema = (t: (key: string) => string) =>
     ModelRequestRateLimitDurationMinutes: z.number().min(0),
     ModelRequestRateLimitCount: z.number().min(0).max(100000000),
     ModelRequestRateLimitSuccessCount: z.number().min(1).max(100000000),
+    ModelRequestRateLimitTPM: z.number().int().min(0).max(2147483647),
     ModelRequestRateLimitGroup: z
       .string()
       .optional()
-      .refine(isValidJSON, {
+      .refine(isValidRateLimitJSON, {
         message: t('Invalid JSON format or values out of allowed range'),
       }),
   })
@@ -146,7 +129,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
             )}
           />
 
-          <div className='grid gap-4 md:grid-cols-3'>
+          <div className='grid gap-4 md:grid-cols-2 xl:grid-cols-4'>
             <FormField
               control={form.control}
               name='ModelRequestRateLimitDurationMinutes'
@@ -161,7 +144,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -192,7 +175,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -223,7 +206,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 1)
+                          field.onChange(Number.parseInt(e.target.value) || 1)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -233,6 +216,39 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                   </FormControl>
                   <FormDescription>
                     {t('Only successful requests')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='ModelRequestRateLimitTPM'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Tokens per minute')}</FormLabel>
+                  <FormControl>
+                    <div className='flex items-center gap-2'>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={2147483647}
+                        step={1}
+                        {...field}
+                        onChange={(e) =>
+                          field.onChange(Number.parseInt(e.target.value) || 0)
+                        }
+                      />
+                      <span className='text-muted-foreground text-sm'>
+                        {t('tokens')}
+                      </span>
+                    </div>
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Estimated input is reserved before the request and reconciled with actual usage after the response. 0 = unlimited.'
+                    )}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -279,7 +295,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                       name={field.name}
                       onBlur={field.onBlur}
                       textareaRef={field.ref}
-                      placeholder={`{\n  "default": [200, 100],\n  "vip": [0, 1000]\n}`}
+                      placeholder={`{\n  "default": [200, 100, 60000],\n  "vip": [0, 1000, 0]\n}`}
                       aria-invalid={Boolean(
                         form.formState.errors.ModelRequestRateLimitGroup
                       )}
@@ -293,20 +309,20 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                       <ul className='list-inside list-disc space-y-0.5 pl-2'>
                         <li>
                           {t('JSON object:')}{' '}
-                          {`{"groupName": [maxRequests, maxSuccess]}`}
+                          {`{"groupName": [maxRequests, maxSuccess, tpm]}`}
                         </li>
                         <li>
                           {t('Example:')}{' '}
-                          {`{"default": [200, 100], "vip": [0, 1000]}`}
+                          {`{"default": [200, 100, 60000], "vip": [0, 1000, 0]}`}
                         </li>
                         <li>
                           {t(
-                            'maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647'
+                            'maxRequests ≥ 0, maxSuccess ≥ 1, tpm ≥ 0; all values ≤ 2,147,483,647'
                           )}
                         </li>
                         <li>
                           {t(
-                            'Group config overrides global limits, shares the same period'
+                            'Group config overrides global limits. Legacy two-value arrays remain supported and use unlimited TPM.'
                           )}
                         </li>
                       </ul>

@@ -185,7 +185,7 @@ func ModelRequestRateLimit() func(c *gin.Context) {
 		}
 
 		//获取分组的限流配置
-		groupTotalCount, groupSuccessCount, found := setting.GetGroupRateLimit(group)
+		groupTotalCount, groupSuccessCount, _, found := setting.GetGroupRateLimit(group)
 		if found {
 			totalMaxCount = groupTotalCount
 			successMaxCount = groupSuccessCount
