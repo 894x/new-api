@@ -49,6 +49,7 @@ func TestProcessChannelErrorRecordsRequestTiming(t *testing.T) {
 	processChannelError(
 		ctx,
 		types.ChannelError{ChannelId: 14, ChannelName: "from waninter"},
+		"mapped-kimi-k3",
 		types.NewErrorWithStatusCode(errors.New("upstream unavailable"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway),
 	)
 
@@ -56,11 +57,13 @@ func TestProcessChannelErrorRecordsRequestTiming(t *testing.T) {
 	require.NoError(t, db.Where("type = ?", model.LogTypeError).First(&log).Error)
 
 	var other struct {
-		AdminInfo struct {
+		UpstreamModelName string `json:"upstream_model_name"`
+		AdminInfo         struct {
 			RequestTiming common.RequestTimingSnapshot `json:"request_timing"`
 		} `json:"admin_info"`
 	}
 	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Equal(t, "mapped-kimi-k3", other.UpstreamModelName)
 	assert.Equal(t, receivedAt.UnixMilli(), other.AdminInfo.RequestTiming.RequestReceivedAtMs)
 	assert.Equal(t, receivedAt.Add(40*time.Millisecond).UnixMilli(), other.AdminInfo.RequestTiming.UpstreamResponseHeadersAtMs)
 	assert.GreaterOrEqual(t, other.AdminInfo.RequestTiming.RequestCompletedAtMs, receivedAt.Add(40*time.Millisecond).UnixMilli())

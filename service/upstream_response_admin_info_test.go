@@ -56,6 +56,7 @@ func TestGenerateTextOtherInfoAddsAdminOnlyRequestTiming(t *testing.T) {
 	}
 
 	other := GenerateTextOtherInfo(c, relayInfo, 1, 1, 1, 0, 1, 0, 1)
+	assert.Equal(t, common.QuotaPerUnit, other["quota_per_unit"])
 
 	adminInfo, ok := other["admin_info"].(map[string]interface{})
 	require.True(t, ok)

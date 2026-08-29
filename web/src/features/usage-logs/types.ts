@@ -340,6 +340,16 @@ export interface GetLogsParams {
   upstream_request_id?: string
 }
 
+export type LogExportView = 'upstream' | 'downstream'
+
+export interface LogExportRequest extends Omit<
+  GetLogsParams,
+  'p' | 'page_size' | 'type'
+> {
+  view: LogExportView
+  fields: string[]
+}
+
 export interface GetLogsResponse {
   success: boolean
   message?: string

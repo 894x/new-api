@@ -40,10 +40,11 @@ import {
 
 import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
 import { buildSearchParams } from '../lib/filter'
-import { getDefaultTimeRange } from '../lib/utils'
+import { buildApiParams, getDefaultTimeRange } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
 import { CommonLogsStats } from './common-logs-stats'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
+import { LogExportDialog } from './log-export-dialog'
 import {
   LogsFilterField,
   LogsFilterInput,
@@ -266,6 +267,17 @@ export function CommonLogsFilterBar<TData>(
   )
   const logTypeLabel =
     logTypeItems.find((type) => type.value === logType)?.label ?? t('All Types')
+  const exportParams = useMemo(
+    () =>
+      buildApiParams({
+        page: 1,
+        pageSize: 1,
+        searchParams,
+        columnFilters: props.table.getState().columnFilters,
+        isAdmin: true,
+      }),
+    [props.table, searchParams]
+  )
 
   const statsBar = (
     <div className='flex flex-wrap items-center gap-2'>
@@ -423,6 +435,7 @@ export function CommonLogsFilterBar<TData>(
         <>
           {props.densityToggle}
           {sensitiveToggle}
+          {isAdmin && <LogExportDialog params={exportParams} />}
         </>
       }
       primaryFilters={
