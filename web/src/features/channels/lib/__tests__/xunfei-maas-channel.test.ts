@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+
+import { test } from 'vitest'
 
 import { CHANNEL_TYPES, CHANNEL_TYPE_OPTIONS } from '../../constants'
 import { getChannelTypeConfig } from '../channel-type-config'

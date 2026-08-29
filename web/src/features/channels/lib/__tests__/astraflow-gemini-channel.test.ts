@@ -17,7 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+
+import { describe, test } from 'vitest'
 
 import {
   CHANNEL_TYPE_ASTRAFLOW_GEMINI,
@@ -42,7 +43,10 @@ describe('AstraFlow Gemini channel', () => {
       label: 'AstraFlow Gemini',
     })
     assert.equal(CHANNEL_TYPE_ASTRAFLOW_GEMINI, 103)
-    assert.equal(MODEL_FETCHABLE_TYPES.has(CHANNEL_TYPE_ASTRAFLOW_GEMINI), false)
+    assert.equal(
+      MODEL_FETCHABLE_TYPES.has(CHANNEL_TYPE_ASTRAFLOW_GEMINI),
+      false
+    )
     assert.equal(getChannelTypeIcon(CHANNEL_TYPE_ASTRAFLOW_GEMINI), 'Gemini')
     assert.equal(
       getKeyPromptForType(CHANNEL_TYPE_ASTRAFLOW_GEMINI),

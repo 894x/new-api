@@ -259,6 +259,7 @@ export interface ChannelBalanceResponse {
   message?: string
   balance?: number
   currency?: string
+  response_summary?: string
 }
 
 export interface FetchModelsResponse {

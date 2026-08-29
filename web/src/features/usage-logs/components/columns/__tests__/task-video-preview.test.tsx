@@ -17,11 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { after, afterEach, describe, test } from 'node:test'
 
 import type { CellContext, Row } from '@tanstack/react-table'
 import { Window } from 'happy-dom'
 import type React from 'react'
+import { afterAll, afterEach, describe, test } from 'vitest'
 
 import type { TaskLog } from '../../../types'
 
@@ -113,7 +113,7 @@ describe('task video preview', () => {
     document.body.replaceChildren()
   })
 
-  after(() => {
+  afterAll(() => {
     domWindow.close()
   })
 

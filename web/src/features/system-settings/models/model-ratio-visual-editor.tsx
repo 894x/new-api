@@ -299,8 +299,8 @@ const ModelRatioVisualEditorComponent = forwardRef<
   )
 
   const handleEdit = useCallback(
-      (model: ModelRow) => {
-        const editableModel = model.draft ?? model.saved ?? model
+    (model: ModelRow) => {
+      const editableModel = model.draft ?? model.saved ?? model
       let editBillingMode: PricingMode = 'per-token'
       if (editableModel.billingMode === 'tiered_expr') {
         editBillingMode = 'tiered_expr'
@@ -703,6 +703,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
           <DataTableToolbar
             table={table}
             searchPlaceholder={t('Search models...')}
+            searchDebounceMs={250}
             filters={[
               {
                 columnId: 'billingMode',

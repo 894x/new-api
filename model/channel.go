@@ -358,11 +358,25 @@ func (channel *Channel) Save() error {
 	return DB.Save(channel).Error
 }
 
-func (channel *Channel) SaveWithoutKey() error {
+// saveStatusState persists only the fields owned by the channel status flow.
+// Keeping this allowlist here prevents a stale channel snapshot from
+// overwriting credentials, accounting counters, or channel configuration.
+func (channel *Channel) saveStatusState() error {
+	return channel.saveStatusStateWithDB(DB)
+}
+
+func (channel *Channel) saveStatusStateWithDB(db *gorm.DB) error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
 	}
-	return DB.Omit("key").Save(channel).Error
+	updates := map[string]any{
+		"status":     channel.Status,
+		"other_info": channel.OtherInfo,
+	}
+	if channel.ChannelInfo.IsMultiKey {
+		updates["channel_info"] = channel.ChannelInfo
+	}
+	return db.Model(&Channel{}).Where("id = ?", channel.Id).Updates(updates).Error
 }
 
 func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
@@ -811,74 +825,56 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 		defer channelStatusLock.Unlock()
 	}
 
+	// ChannelInfo stores both multi-key status and the polling cursor. Hold the
+	// same per-channel lock from the first read through persistence so neither
+	// writer can save a stale JSON snapshot over the other.
+	pollingLock := GetChannelPollingLock(channelId)
+	pollingLock.Lock()
+	defer pollingLock.Unlock()
+
 	channel, err := GetChannelById(channelId, true)
 	if err != nil {
 		return false
-	} else {
-		if !channel.ChannelInfo.IsMultiKey && channel.Status == status {
-			return false
-		}
+	}
+	if !channel.ChannelInfo.IsMultiKey && channel.Status == status {
+		return false
+	}
 
-		if channel.ChannelInfo.IsMultiKey {
-			beforeStatus := channel.Status
-			// Protect map writes with the same per-channel lock used by readers
-			pollingLock := GetChannelPollingLock(channelId)
-			pollingLock.Lock()
-			handlerMultiKeyUpdate(channel, usingKey, status, reason)
-			pollingLock.Unlock()
-			statusChanged := beforeStatus != channel.Status
-			tx := DB.Begin()
-			if tx.Error != nil {
-				return false
-			}
-			if err = tx.Omit("key").Save(channel).Error; err != nil {
-				tx.Rollback()
-				common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
-				return false
-			}
-			if statusChanged {
-				if err = tx.Model(&Ability{}).Where("channel_id = ?", channelId).
-					Select("enabled").Update("enabled", channel.Status == common.ChannelStatusEnabled).Error; err != nil {
-					tx.Rollback()
-					common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
-					return false
-				}
-			}
-			if err = tx.Commit().Error; err != nil {
-				return false
-			}
-			if common.MemoryCacheEnabled {
-				InitChannelCache()
-			}
-			return true
-		} else {
-			info := channel.GetOtherInfo()
-			info["status_reason"] = reason
-			info["status_time"] = common.GetTimestamp()
-			channel.SetOtherInfo(info)
-			channel.Status = status
-		}
-		tx := DB.Begin()
-		if tx.Error != nil {
-			return false
-		}
-		if err = tx.Omit("key").Save(channel).Error; err != nil {
-			tx.Rollback()
-			common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
-			return false
-		}
+	statusChanged := true
+	if channel.ChannelInfo.IsMultiKey {
+		beforeStatus := channel.Status
+		handlerMultiKeyUpdate(channel, usingKey, status, reason)
+		statusChanged = beforeStatus != channel.Status
+	} else {
+		info := channel.GetOtherInfo()
+		info["status_reason"] = reason
+		info["status_time"] = common.GetTimestamp()
+		channel.SetOtherInfo(info)
+		channel.Status = status
+	}
+
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return false
+	}
+	if err = channel.saveStatusStateWithDB(tx); err != nil {
+		tx.Rollback()
+		common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
+		return false
+	}
+	if statusChanged {
 		if err = tx.Model(&Ability{}).Where("channel_id = ?", channelId).
 			Select("enabled").Update("enabled", channel.Status == common.ChannelStatusEnabled).Error; err != nil {
 			tx.Rollback()
 			common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
 			return false
 		}
-		if err = tx.Commit().Error; err != nil {
-			return false
-		}
-		if common.MemoryCacheEnabled {
-			InitChannelCache()
-		}
+	}
+	if err = tx.Commit().Error; err != nil {
+		return false
+	}
+	if common.MemoryCacheEnabled {
+		InitChannelCache()
 	}
 	return true
 }

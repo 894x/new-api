@@ -17,7 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+
+import { describe, it } from 'vitest'
 
 import { resolveHomePageTemplate } from '../use-home-page-content'
 
@@ -36,7 +37,10 @@ describe('resolveHomePageTemplate', () => {
 
   for (const [configuredTemplate, content, expected] of cases) {
     it(`resolves configured template ${configuredTemplate} with content ${content}`, () => {
-      assert.equal(resolveHomePageTemplate(configuredTemplate, content), expected)
+      assert.equal(
+        resolveHomePageTemplate(configuredTemplate, content),
+        expected
+      )
     })
   }
 })
