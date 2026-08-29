@@ -1,6 +1,9 @@
 package perfmetrics
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+	"time"
+)
 
 type Store interface {
 	Record(sample Sample)
@@ -8,14 +11,28 @@ type Store interface {
 }
 
 type Sample struct {
-	Model        string
-	Group        string
-	LatencyMs    int64
-	TtftMs       int64
-	HasTtft      bool
-	Success      bool
-	OutputTokens int64
-	GenerationMs int64
+	Model           string
+	Group           string
+	UserId          int
+	TokenId         int
+	LatencyMs       int64
+	TtftMs          int64
+	HasTtft         bool
+	TpotMs          int64
+	HasTpot         bool
+	Success         bool
+	InputTokens     int64
+	OutputTokens    int64
+	TotalTokens     int64
+	CacheReadTokens int64
+	GenerationMs    int64
+	CompletedAt     time.Time
+}
+
+type RelayTokenUsage struct {
+	InputTokens     int64
+	OutputTokens    int64
+	CacheReadTokens int64
 }
 
 type QueryParams struct {

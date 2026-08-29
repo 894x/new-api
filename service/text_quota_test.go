@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -21,6 +22,30 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPerformanceTokenUsagePrefersNormalizedTotalsAndCacheSignals(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     80,
+		CompletionTokens: 20,
+		InputTokens:      120,
+		OutputTokens:     25,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 30,
+		},
+	}
+
+	assert.Equal(t, perfmetrics.RelayTokenUsage{
+		InputTokens: 120, OutputTokens: 25, CacheReadTokens: 30,
+	}, performanceTokenUsage(usage))
+
+	usage.InputTokens = 0
+	usage.OutputTokens = 0
+	usage.PromptTokensDetails.CachedTokens = 0
+	usage.InputTokensDetails = &dto.InputTokenDetails{CachedTokens: 15}
+	assert.Equal(t, perfmetrics.RelayTokenUsage{
+		InputTokens: 80, OutputTokens: 20, CacheReadTokens: 15,
+	}, performanceTokenUsage(usage))
+}
 
 func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	gin.SetMode(gin.TestMode)

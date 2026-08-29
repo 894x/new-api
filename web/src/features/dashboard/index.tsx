@@ -113,6 +113,12 @@ const LazyFlowCharts = lazy(() =>
   }))
 )
 
+const LazyPerformanceAnalytics = lazy(() =>
+  import('@/features/performance-analytics').then((m) => ({
+    default: m.PerformanceAnalytics,
+  }))
+)
+
 function LogStatCardsFallback() {
   return (
     <div className='overflow-hidden rounded-lg border'>
@@ -182,6 +188,9 @@ const SECTION_META: Record<DashboardSectionId, { titleKey: string }> = {
   },
   models: {
     titleKey: 'Model Call Analytics',
+  },
+  performance: {
+    titleKey: 'Performance Analytics',
   },
   flow: {
     titleKey: 'Flow',
@@ -397,6 +406,13 @@ export function Dashboard() {
                   filters={userChartsFilters}
                   onFiltersChange={setUserChartsFilters}
                 />
+              </Suspense>
+            </FadeIn>
+          )}
+          {activeSection === 'performance' && (
+            <FadeIn>
+              <Suspense fallback={<ModelChartsFallback />}>
+                <LazyPerformanceAnalytics isAdmin={isAdmin} />
               </Suspense>
             </FadeIn>
           )}
