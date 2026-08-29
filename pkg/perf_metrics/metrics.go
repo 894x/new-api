@@ -12,9 +12,11 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
+	"github.com/bytedance/gopkg/util/gopool"
 )
 
 var hotBuckets sync.Map
+var pendingRecordings sync.WaitGroup
 
 // seriesSchema is a stable client cache/schema marker. Do not change it when
 // hiding fields or making response-only privacy hardening changes.
@@ -24,33 +26,67 @@ func Init() {
 	go flushLoop()
 }
 
-func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
+func RecordRelaySample(info *relaycommon.RelayInfo, success bool, usage RelayTokenUsage) {
+	RecordRelaySampleAt(info, success, usage, time.Now())
+}
+
+func RecordRelaySampleAt(info *relaycommon.RelayInfo, success bool, usage RelayTokenUsage, completedAt time.Time) {
 	if info == nil {
 		return
 	}
-	now := time.Now()
+	if completedAt.IsZero() {
+		completedAt = time.Now()
+	}
 	hasTtft := info.IsStream && info.HasSendResponse()
 	ttftMs := int64(0)
 	if hasTtft {
 		ttftMs = info.FirstResponseTime.Sub(info.StartTime).Milliseconds()
 	}
-	latencyMs := now.Sub(info.StartTime).Milliseconds()
+	latencyMs := completedAt.Sub(info.StartTime).Milliseconds()
 	generationMs := latencyMs
 	if hasTtft {
-		generationMs = now.Sub(info.FirstResponseTime).Milliseconds()
+		generationMs = completedAt.Sub(info.FirstResponseTime).Milliseconds()
 	}
 	if generationMs <= 0 {
 		generationMs = latencyMs
 	}
+	inputTokens := max(usage.InputTokens, 0)
+	outputTokens := max(usage.OutputTokens, 0)
+	cacheReadTokens := max(usage.CacheReadTokens, 0)
+	totalTokens := inputTokens + outputTokens
+	if totalTokens < inputTokens {
+		totalTokens = math.MaxInt64
+	}
+	hasTpot := success && hasTtft && outputTokens > 1 && generationMs > 0
+	tpotMs := int64(0)
+	if hasTpot {
+		tpotMs = generationMs / (outputTokens - 1)
+	}
 	Record(Sample{
-		Model:        info.OriginModelName,
-		Group:        info.UsingGroup,
-		LatencyMs:    latencyMs,
-		TtftMs:       ttftMs,
-		HasTtft:      hasTtft,
-		Success:      success,
-		OutputTokens: outputTokens,
-		GenerationMs: generationMs,
+		Model:           info.OriginModelName,
+		Group:           info.UsingGroup,
+		UserId:          info.UserId,
+		TokenId:         info.TokenId,
+		LatencyMs:       latencyMs,
+		TtftMs:          ttftMs,
+		HasTtft:         hasTtft,
+		TpotMs:          tpotMs,
+		HasTpot:         hasTpot,
+		Success:         success,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		TotalTokens:     totalTokens,
+		CacheReadTokens: cacheReadTokens,
+		GenerationMs:    generationMs,
+		CompletedAt:     completedAt,
+	})
+}
+
+func RecordRelaySampleAsync(info *relaycommon.RelayInfo, success bool, usage RelayTokenUsage, completedAt time.Time) {
+	pendingRecordings.Add(1)
+	gopool.Go(func() {
+		defer pendingRecordings.Done()
+		RecordRelaySampleAt(info, success, usage, completedAt)
 	})
 }
 
@@ -66,13 +102,18 @@ func Record(sample Sample) {
 		sample.LatencyMs = 0
 	}
 
+	recordedAt := sample.CompletedAt
+	if recordedAt.IsZero() {
+		recordedAt = time.Now()
+	}
 	key := bucketKey{
 		model:    sample.Model,
 		group:    sample.Group,
-		bucketTs: bucketStart(time.Now().Unix()),
+		bucketTs: bucketStart(recordedAt.Unix()),
 	}
 	actual, _ := hotBuckets.LoadOrStore(key, &atomicBucket{})
 	actual.(*atomicBucket).add(sample)
+	recordDetail(sample, recordedAt)
 	recordRedis(key, sample)
 }
 

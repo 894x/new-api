@@ -3,6 +3,7 @@ package service
 import (
 	"strings"
 
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 )
 
@@ -22,6 +23,35 @@ func effectiveBillingUsage(usage *dto.Usage) *dto.Usage {
 		return billingUsage
 	}
 	return usage
+}
+
+func performanceTokenUsage(usage *dto.Usage) perfmetrics.RelayTokenUsage {
+	usage = effectiveBillingUsage(usage)
+	if usage == nil {
+		return perfmetrics.RelayTokenUsage{}
+	}
+
+	inputTokens := usage.InputTokens
+	if inputTokens <= 0 {
+		inputTokens = usage.PromptTokens
+	}
+	outputTokens := usage.OutputTokens
+	if outputTokens <= 0 {
+		outputTokens = usage.CompletionTokens
+	}
+	cacheReadTokens := usage.PromptTokensDetails.CachedTokens
+	if cacheReadTokens <= 0 && usage.InputTokensDetails != nil {
+		cacheReadTokens = usage.InputTokensDetails.CachedTokens
+	}
+	if cacheReadTokens <= 0 {
+		cacheReadTokens = usage.PromptCacheHitTokens
+	}
+
+	return perfmetrics.RelayTokenUsage{
+		InputTokens:     int64(inputTokens),
+		OutputTokens:    int64(outputTokens),
+		CacheReadTokens: int64(cacheReadTokens),
+	}
 }
 
 func usageBillingPathForLog(isLocalCountTokens bool, usage *dto.Usage) string {

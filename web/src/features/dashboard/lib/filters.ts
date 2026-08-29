@@ -167,3 +167,46 @@ export function buildQueryParams(
     ...(filters?.username && { username: filters.username }),
   }
 }
+
+export interface PerformanceAnalyticsFilterState {
+  model: string
+  startTimestamp: number
+  endTimestamp: number
+  userId?: number
+  tokenId?: number
+}
+
+export interface PerformanceAnalyticsQueryParams {
+  model: string
+  start_timestamp: number
+  end_timestamp: number
+  user_id?: number
+  token_id?: number
+}
+
+export function buildPerformanceAnalyticsParams(
+  filters: PerformanceAnalyticsFilterState,
+  isAdmin: boolean
+): PerformanceAnalyticsQueryParams {
+  const params: PerformanceAnalyticsQueryParams = {
+    model: filters.model,
+    start_timestamp: filters.startTimestamp,
+    end_timestamp: filters.endTimestamp,
+  }
+
+  if (!isAdmin) {
+    if (filters.tokenId && filters.tokenId > 0) {
+      params.token_id = filters.tokenId
+    }
+    return params
+  }
+
+  if (filters.userId && filters.userId > 0) {
+    params.user_id = filters.userId
+    if (filters.tokenId && filters.tokenId > 0) {
+      params.token_id = filters.tokenId
+    }
+  }
+
+  return params
+}

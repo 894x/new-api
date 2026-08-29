@@ -41,6 +41,13 @@ func SetApiRouter(router *gin.Engine) {
 			perfMetricsRoute.GET("/summary", controller.GetPerfMetricsSummary)
 			perfMetricsRoute.GET("", controller.GetPerfMetrics)
 		}
+		perfAnalyticsRoute := apiRouter.Group("/perf-analytics")
+		{
+			perfAnalyticsRoute.GET("/self", middleware.UserAuth(), controller.GetPerfAnalyticsSelf)
+			perfAnalyticsRoute.GET("/admin", middleware.AdminAuth(), controller.GetPerfAnalyticsAdmin)
+			perfAnalyticsRoute.GET("/self/options", middleware.UserAuth(), controller.GetPerfAnalyticsSelfOptions)
+			perfAnalyticsRoute.GET("/admin/options", middleware.AdminAuth(), controller.GetPerfAnalyticsAdminOptions)
+		}
 		apiRouter.GET("/rankings", middleware.HeaderNavModuleAuth("rankings"), controller.GetRankings)
 		apiRouter.GET("/verification", middleware.EmailVerificationRateLimit(), middleware.TurnstileCheck(), controller.SendEmailVerification)
 		apiRouter.GET("/reset_password", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.SendPasswordResetEmail)
