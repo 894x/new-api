@@ -59,14 +59,16 @@ export function RateLimitVisualEditor({
       .map(([groupName, limits]) => {
         if (
           Array.isArray(limits) &&
-          limits.length === 2 &&
+          (limits.length === 2 || limits.length === 3) &&
           typeof limits[0] === 'number' &&
-          typeof limits[1] === 'number'
+          typeof limits[1] === 'number' &&
+          (limits[2] === undefined || typeof limits[2] === 'number')
         ) {
           return {
             groupName,
             maxRequests: limits[0],
             maxSuccess: limits[1],
+            maxTPM: limits[2] ?? 0,
           }
         }
         return null
@@ -93,7 +95,7 @@ export function RateLimitVisualEditor({
       delete parsed[editData.groupName]
     }
 
-    parsed[data.groupName] = [data.maxRequests, data.maxSuccess]
+    parsed[data.groupName] = [data.maxRequests, data.maxSuccess, data.maxTPM]
 
     onChange(JSON.stringify(parsed, null, 2))
   }
@@ -176,6 +178,19 @@ export function RateLimitVisualEditor({
             cell: (limit) => (
               <span className='font-mono'>
                 {limit.maxSuccess.toLocaleString()}
+              </span>
+            ),
+          },
+          {
+            id: 'tpm',
+            header: t('TPM'),
+            className: 'text-right',
+            cellClassName: 'text-right',
+            cell: (limit) => (
+              <span className='font-mono'>
+                {limit.maxTPM === 0
+                  ? t('Unlimited')
+                  : limit.maxTPM.toLocaleString()}
               </span>
             ),
           },

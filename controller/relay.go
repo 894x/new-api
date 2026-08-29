@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,7 +129,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
-	needCountToken := constant.CountToken
+	tpmLimit := service.ResolveModelRequestTPMLimit(c)
+	needCountToken := constant.CountToken || tpmLimit > 0
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
 	if needSensitiveCheck || needCountToken {
@@ -146,10 +148,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}
 
-	tokens, err := service.EstimateRequestToken(c, meta, relayInfo)
-	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeCountTokenFailed)
-		return
+	tokens := 0
+	if needCountToken {
+		tokens, err = service.EstimateRequestToken(c, meta, relayInfo)
+		if err != nil {
+			newAPIError = types.NewError(err, types.ErrorCodeCountTokenFailed)
+			return
+		}
 	}
 
 	relayInfo.SetEstimatePromptTokens(tokens)
@@ -179,6 +184,26 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
 		}
 	}()
+
+	if tpmLimit > 0 {
+		allowed, retryAfter, limitErr := service.ReserveModelRequestTPM(c, relayInfo.UserId, tpmLimit, tokens)
+		if limitErr != nil {
+			newAPIError = types.NewError(limitErr, types.ErrorCodeModelRequestTPMCheckFailed, types.ErrOptionWithSkipRetry())
+			return
+		}
+		if !allowed {
+			if retryAfter > 0 {
+				c.Header("Retry-After", strconv.FormatInt(retryAfter, 10))
+			}
+			newAPIError = types.NewErrorWithStatusCode(
+				fmt.Errorf("您已达到 Token 限制：每分钟最多使用 %d tokens", tpmLimit),
+				types.ErrorCodeModelRequestTPMLimitExceeded,
+				http.StatusTooManyRequests,
+				types.ErrOptionWithSkipRetry(),
+			)
+			return
+		}
+	}
 
 	retryParam := &service.RetryParam{
 		Ctx:               c,

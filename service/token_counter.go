@@ -177,11 +177,6 @@ func getImageToken(c *gin.Context, fileMeta *types.FileMeta, model string, strea
 }
 
 func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
-	// 是否统计token
-	if !constant.CountToken {
-		return 0, nil
-	}
-
 	if meta == nil {
 		return 0, errors.New("token count meta is nil")
 	}

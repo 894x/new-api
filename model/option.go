@@ -142,6 +142,7 @@ func InitOptionMap() {
 	common.OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(setting.ModelRequestRateLimitCount)
 	common.OptionMap["ModelRequestRateLimitDurationMinutes"] = strconv.Itoa(setting.ModelRequestRateLimitDurationMinutes)
 	common.OptionMap["ModelRequestRateLimitSuccessCount"] = strconv.Itoa(setting.ModelRequestRateLimitSuccessCount)
+	common.OptionMap["ModelRequestRateLimitTPM"] = strconv.Itoa(setting.ModelRequestRateLimitTPM)
 	common.OptionMap["ModelRequestRateLimitGroup"] = setting.ModelRequestRateLimitGroup2JSONString()
 	common.OptionMap["ModelRatio"] = ratio_setting.ModelRatio2JSONString()
 	common.OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString()
@@ -214,6 +215,9 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
+	}
+	if key == "ModelRequestRateLimitTPM" {
+		return setting.ValidateModelRequestRateLimitTPM(value)
 	}
 	if key == "error_setting.blocked_response_headers" {
 		_, err := operation_setting.ValidateBlockedResponseHeadersJSON(value)
@@ -564,6 +568,8 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.ModelRequestRateLimitDurationMinutes, _ = strconv.Atoi(value)
 	case "ModelRequestRateLimitSuccessCount":
 		setting.ModelRequestRateLimitSuccessCount, _ = strconv.Atoi(value)
+	case "ModelRequestRateLimitTPM":
+		setting.ModelRequestRateLimitTPM, _ = strconv.Atoi(value)
 	case "ModelRequestRateLimitGroup":
 		err = setting.UpdateModelRequestRateLimitGroupByJSONString(value)
 	case "RetryTimes":
