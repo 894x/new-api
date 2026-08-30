@@ -16,16 +16,18 @@ func TestGetModelChannelCapabilitiesReturnsReadOnlyAggregate(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	priority := int64(4)
 	weight := uint(8)
+	paramOverride := `{"operations":[{"mode":"set","path":"max_tokens","value":null}]}`
 	channel := model.Channel{
-		Id:       6203,
-		Type:     1,
-		Key:      "key",
-		Status:   common.ChannelStatusEnabled,
-		Name:     "capability-test",
-		Models:   "model-a",
-		Group:    "default",
-		Priority: &priority,
-		Weight:   &weight,
+		Id:            6203,
+		Type:          1,
+		Key:           "key",
+		Status:        common.ChannelStatusEnabled,
+		Name:          "capability-test",
+		Models:        "model-a",
+		Group:         "default",
+		Priority:      &priority,
+		Weight:        &weight,
+		ParamOverride: &paramOverride,
 	}
 	require.NoError(t, db.Create(&channel).Error)
 	require.NoError(t, channel.AddAbilities(nil))
@@ -38,6 +40,7 @@ func TestGetModelChannelCapabilitiesReturnsReadOnlyAggregate(t *testing.T) {
 	GetModelChannelCapabilities(ctx)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"value":null`)
 	var response struct {
 		Success bool                           `json:"success"`
 		Data    model.ModelChannelCapabilities `json:"data"`
@@ -46,5 +49,11 @@ func TestGetModelChannelCapabilitiesReturnsReadOnlyAggregate(t *testing.T) {
 	assert.True(t, response.Success)
 	assert.Equal(t, "model-a", response.Data.Model)
 	require.Len(t, response.Data.Channels, 1)
-	assert.Equal(t, channel.Id, response.Data.Channels[0].ChannelId)
+	capability := response.Data.Channels[0]
+	assert.Equal(t, channel.Id, capability.ChannelId)
+	assert.True(t, capability.ParameterOverrideConfigured)
+	assert.Equal(t, "operations", capability.ParameterOverrideMode)
+	require.Len(t, capability.ParameterOverrideOperations, 1)
+	assert.Equal(t, "max_tokens", capability.ParameterOverrideOperations[0].Path)
+	assert.True(t, capability.ParameterOverrideOperations[0].ValueConfigured)
 }

@@ -40,6 +40,38 @@ import { getModelChannelCapabilities } from '../../api'
 import { modelsQueryKeys } from '../../lib'
 import type { Model, ModelChannelCapability } from '../../types'
 
+const PARAMETER_OVERRIDE_MODE_LABELS: Record<string, string> = {
+  set: 'Set',
+  delete: 'Delete',
+  copy: 'Copy',
+  move: 'Move',
+  append: 'Append',
+  prepend: 'Prepend',
+  trim_prefix: 'Trim Prefix',
+  trim_suffix: 'Trim Suffix',
+  ensure_prefix: 'Ensure Prefix',
+  ensure_suffix: 'Ensure Suffix',
+  trim_space: 'Trim Space',
+  to_lower: 'To Lower',
+  to_upper: 'To Upper',
+  replace: 'Replace',
+  regex_replace: 'Regex Replace',
+  set_header: 'Set Header',
+  delete_header: 'Delete Header',
+  copy_header: 'Copy Header',
+  move_header: 'Move Header',
+  pass_headers: 'Pass Headers',
+  sync_fields: 'Sync Fields',
+  return_error: 'Return Error',
+  prune_objects: 'Prune Object Items',
+}
+
+const PARAMETER_OVERRIDE_FORMAT_LABELS: Record<string, string> = {
+  legacy: 'Legacy',
+  operations: 'Operations format',
+  mixed: 'Mixed',
+}
+
 type ModelChannelCapabilitiesDrawerProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -70,6 +102,179 @@ function CapabilityValue(props: {
     parts.push(`${t('On violation')}: ${props.capability.on_violation}`)
   }
   return <span>{parts.length > 0 ? parts.join(' · ') : t('Configured')}</span>
+}
+
+function formatOverrideValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === undefined) return ''
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function ParameterOverrideRules(props: { channel: ModelChannelCapability }) {
+  const { t } = useTranslation()
+  const operations = props.channel.parameter_override_operations ?? []
+  const legacyEntries = Object.entries(
+    props.channel.parameter_override_legacy ?? {}
+  ).sort(([left], [right]) => left.localeCompare(right))
+
+  return (
+    <div className='flex flex-col gap-3'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <p className='text-sm font-medium'>{t('Parameter override rules')}</p>
+        {props.channel.parameter_override_configured && (
+          <Badge variant='outline'>
+            {t(
+              PARAMETER_OVERRIDE_FORMAT_LABELS[
+                props.channel.parameter_override_mode
+              ] ?? props.channel.parameter_override_mode
+            )}
+          </Badge>
+        )}
+      </div>
+
+      {!props.channel.parameter_override_configured ? (
+        <p className='text-muted-foreground text-sm'>{t('Not configured')}</p>
+      ) : (
+        <>
+          {operations.length > 0 && (
+            <Alert>
+              <AlertTitle>{t('Evaluated at request time')}</AlertTitle>
+              <AlertDescription>
+                {t(
+                  'Conditions use the request body and routing context, so the final result can vary by request.'
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {legacyEntries.length > 0 && (
+            <div className='flex flex-col gap-2'>
+              <p className='text-muted-foreground text-xs font-medium'>
+                {t('Legacy overrides')}
+              </p>
+              <div className='grid gap-2 sm:grid-cols-2'>
+                {legacyEntries.map(([path, value]) => (
+                  <div key={path} className='rounded-md border p-3 text-sm'>
+                    <p className='font-mono font-medium'>{path}</p>
+                    <pre className='text-muted-foreground mt-1 max-h-32 overflow-auto text-xs break-all whitespace-pre-wrap'>
+                      {formatOverrideValue(value)}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {operations.length > 0 && (
+            <div className='flex flex-col gap-2'>
+              <p className='text-muted-foreground text-xs font-medium'>
+                {t('Ordered operations')}
+              </p>
+              {operations.map((operation, index) => (
+                <div
+                  key={operation.order}
+                  className='flex flex-col gap-3 rounded-md border p-3'
+                >
+                  <div className='flex flex-wrap items-start justify-between gap-2'>
+                    <div>
+                      <p className='text-sm font-medium'>
+                        {operation.description ||
+                          t('Rule {{number}}', { number: index + 1 })}
+                      </p>
+                      {operation.description && (
+                        <p className='text-muted-foreground text-xs'>
+                          {t('Rule {{number}}', { number: index + 1 })}
+                        </p>
+                      )}
+                    </div>
+                    <Badge variant='secondary'>
+                      {t(
+                        PARAMETER_OVERRIDE_MODE_LABELS[operation.mode] ??
+                          operation.mode
+                      )}
+                    </Badge>
+                  </div>
+
+                  <div className='grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4'>
+                    {operation.path && (
+                      <div>
+                        <p className='text-muted-foreground'>{t('Path')}</p>
+                        <p className='font-mono break-all'>{operation.path}</p>
+                      </div>
+                    )}
+                    {operation.from && (
+                      <div>
+                        <p className='text-muted-foreground'>{t('Source')}</p>
+                        <p className='font-mono break-all'>{operation.from}</p>
+                      </div>
+                    )}
+                    {operation.to && (
+                      <div>
+                        <p className='text-muted-foreground'>{t('Target')}</p>
+                        <p className='font-mono break-all'>{operation.to}</p>
+                      </div>
+                    )}
+                    {(operation.value_configured ??
+                      operation.value !== undefined) && (
+                      <div>
+                        <p className='text-muted-foreground'>{t('Value')}</p>
+                        <pre className='max-h-32 overflow-auto font-mono break-all whitespace-pre-wrap'>
+                          {formatOverrideValue(operation.value)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className='flex flex-wrap gap-2'>
+                    {operation.keep_origin && (
+                      <Badge variant='outline'>
+                        {t('Keep original value')}
+                      </Badge>
+                    )}
+                    {(operation.conditions ?? []).length === 0 && (
+                      <Badge variant='outline'>{t('Always applies')}</Badge>
+                    )}
+                  </div>
+
+                  {(operation.conditions ?? []).length > 0 && (
+                    <div className='flex flex-col gap-2'>
+                      <p className='text-muted-foreground text-xs font-medium'>
+                        {t('Conditions')} · {operation.logic || 'OR'}
+                      </p>
+                      {(operation.conditions ?? []).map((condition) => (
+                        <div
+                          key={condition.order}
+                          className='bg-muted/50 flex flex-wrap items-center gap-2 rounded-md px-3 py-2 text-xs'
+                        >
+                          <code>{condition.path}</code>
+                          <Badge variant='outline'>{condition.mode}</Badge>
+                          <code className='break-all'>
+                            {formatOverrideValue(condition.value)}
+                          </code>
+                          {condition.invert && (
+                            <Badge variant='outline'>{t('Inverted')}</Badge>
+                          )}
+                          {condition.pass_missing_key && (
+                            <Badge variant='outline'>
+                              {t('Pass when missing')}
+                            </Badge>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
 }
 
 function ChannelCapabilityCard(props: { channel: ModelChannelCapability }) {
@@ -193,6 +398,10 @@ function ChannelCapabilityCard(props: { channel: ModelChannelCapability }) {
           )}
         </div>
       </div>
+
+      <Separator />
+
+      <ParameterOverrideRules channel={props.channel} />
     </section>
   )
 }

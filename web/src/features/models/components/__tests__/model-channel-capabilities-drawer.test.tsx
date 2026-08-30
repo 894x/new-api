@@ -101,6 +101,31 @@ function installCapabilityFixture(): void {
               },
               video_capabilities_configured: true,
               video_resolutions: ['720p', '1080p'],
+              parameter_override_configured: true,
+              parameter_override_mode: 'mixed',
+              parameter_override_legacy: { temperature: 0.2 },
+              parameter_override_operations: [
+                {
+                  order: 1,
+                  description: 'cap output length',
+                  mode: 'set',
+                  path: 'max_tokens',
+                  value: null,
+                  value_configured: true,
+                  keep_origin: false,
+                  logic: 'AND',
+                  conditions: [
+                    {
+                      order: 1,
+                      path: 'original_model',
+                      mode: 'full',
+                      value: 'public-model',
+                      invert: false,
+                      pass_missing_key: false,
+                    },
+                  ],
+                },
+              ],
             },
             {
               channel_id: 6202,
@@ -121,6 +146,9 @@ function installCapabilityFixture(): void {
               parameter_capabilities_configured: false,
               video_capabilities_configured: false,
               video_resolutions: [],
+              parameter_override_configured: false,
+              parameter_override_mode: 'none',
+              parameter_override_operations: [],
               configuration_error: 'invalid channel settings',
             },
           ],
@@ -172,11 +200,21 @@ describe('model channel capabilities drawer', () => {
     expect(screen.getByText('default')).toBeInTheDocument()
     expect(screen.getByText(/vip/)).toBeInTheDocument()
     expect(screen.getByText('openai-response')).toBeInTheDocument()
-    expect(screen.getByText('temperature')).toBeInTheDocument()
+    expect(screen.getAllByText('temperature')).toHaveLength(2)
     expect(screen.getByText('top_p')).toBeInTheDocument()
     expect(screen.getByText('720p')).toBeInTheDocument()
     expect(screen.getByText('1080p')).toBeInTheDocument()
-    expect(screen.getAllByText('Not configured')).toHaveLength(2)
+    expect(screen.getAllByText('Not configured')).toHaveLength(3)
+    expect(screen.getAllByText('Parameter override rules')).toHaveLength(2)
+    expect(screen.getByText('Mixed')).toBeInTheDocument()
+    expect(screen.getByText('Evaluated at request time')).toBeInTheDocument()
+    expect(screen.getByText('Ordered operations')).toBeInTheDocument()
+    expect(screen.getByText('Legacy overrides')).toBeInTheDocument()
+    expect(screen.getByText('cap output length')).toBeInTheDocument()
+    expect(screen.getByText('max_tokens')).toBeInTheDocument()
+    expect(screen.getByText('null')).toBeInTheDocument()
+    expect(screen.getByText('original_model')).toBeInTheDocument()
+    expect(screen.getByText('public-model')).toBeInTheDocument()
     expect(screen.getByText('invalid channel settings')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /save/i })).toBeNull()
   })

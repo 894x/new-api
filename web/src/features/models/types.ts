@@ -35,6 +35,29 @@ export interface ModelParameterCapability {
   on_violation?: 'reject' | 'drop' | 'clamp'
 }
 
+export interface ModelChannelParameterOverrideCondition {
+  order: number
+  path: string
+  mode: string
+  value: unknown
+  invert: boolean
+  pass_missing_key: boolean
+}
+
+export interface ModelChannelParameterOverrideOperation {
+  order: number
+  description?: string
+  path?: string
+  mode: string
+  value?: unknown
+  value_configured?: boolean
+  keep_origin: boolean
+  from?: string
+  to?: string
+  conditions: ModelChannelParameterOverrideCondition[]
+  logic: string
+}
+
 export interface ModelChannelCapability {
   channel_id: number
   channel_name: string
@@ -55,6 +78,10 @@ export interface ModelChannelCapability {
   parameter_capabilities?: Record<string, ModelParameterCapability>
   video_capabilities_configured: boolean
   video_resolutions: string[]
+  parameter_override_configured: boolean
+  parameter_override_mode: 'none' | 'legacy' | 'operations' | 'mixed'
+  parameter_override_legacy?: Record<string, unknown>
+  parameter_override_operations: ModelChannelParameterOverrideOperation[]
   configuration_error?: string
 }
 
