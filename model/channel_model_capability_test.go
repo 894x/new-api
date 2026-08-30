@@ -240,7 +240,7 @@ func TestListModelChannelCapabilitiesRedactsSensitiveOverrideValues(t *testing.T
 	clearChannelModelRoutingTables(t)
 	priority := int64(0)
 	weight := uint(0)
-	paramOverride := `{"api_key":"legacy-secret","operations":[{"mode":"set_header","path":"Authorization","value":"Bearer upstream-secret"},{"mode":"set","path":"credentials.token","value":"nested-secret","conditions":[{"path":"request_headers.Authorization","mode":"full","value":"Bearer client-secret"}]},{"mode":"set","path":"max_tokens","value":2048}]}`
+	paramOverride := `{"api_key":"legacy-secret","app_secret":"custom-legacy-secret","operations":[{"mode":"set_header","path":"Authorization","value":"Bearer upstream-secret"},{"mode":"set","path":"credentials.token","value":"nested-secret","conditions":[{"path":"request_headers.Authorization","mode":"full","value":"Bearer client-secret"}]},{"mode":"set","path":"max_tokens","value":2048},{"mode":"set","path":"custom.auth_token","value":"custom-operation-secret"},{"mode":"replace","path":"custom_setting","from":"old-custom-secret","to":"new-custom-secret"}]}`
 	channel := &Channel{
 		Id:            6206,
 		Type:          1,
@@ -262,16 +262,24 @@ func TestListModelChannelCapabilitiesRedactsSensitiveOverrideValues(t *testing.T
 	require.Len(t, result.Channels, 1)
 	capability := result.Channels[0]
 	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideLegacy["api_key"])
-	require.Len(t, capability.ParameterOverrideOperations, 3)
+	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideLegacy["app_secret"])
+	require.Len(t, capability.ParameterOverrideOperations, 5)
 	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideOperations[0].Value)
 	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideOperations[1].Value)
 	require.Len(t, capability.ParameterOverrideOperations[1].Conditions, 1)
 	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideOperations[1].Conditions[0].Value)
 	assert.Equal(t, float64(2048), capability.ParameterOverrideOperations[2].Value)
+	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideOperations[3].Value)
+	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideOperations[4].From)
+	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideOperations[4].To)
 	responseJSON, err := common.Marshal(capability)
 	require.NoError(t, err)
 	assert.NotContains(t, string(responseJSON), "legacy-secret")
 	assert.NotContains(t, string(responseJSON), "upstream-secret")
 	assert.NotContains(t, string(responseJSON), "nested-secret")
 	assert.NotContains(t, string(responseJSON), "client-secret")
+	assert.NotContains(t, string(responseJSON), "custom-legacy-secret")
+	assert.NotContains(t, string(responseJSON), "custom-operation-secret")
+	assert.NotContains(t, string(responseJSON), "old-custom-secret")
+	assert.NotContains(t, string(responseJSON), "new-custom-secret")
 }

@@ -63,49 +63,74 @@ type ModelChannelCapabilities struct {
 
 const modelChannelCapabilityRedactedValue = "[REDACTED]"
 
-func isSensitiveModelChannelOverridePath(path string) bool {
-	segments := strings.FieldsFunc(strings.ToLower(path), func(character rune) bool {
-		switch character {
-		case '.', '[', ']', '/', '\\':
-			return true
-		default:
-			return false
-		}
-	})
-	for _, segment := range segments {
-		segment = strings.ReplaceAll(strings.TrimSpace(segment), "-", "_")
-		switch segment {
-		case "authorization", "proxy_authorization", "api_key", "apikey", "x_api_key", "x_goog_api_key",
-			"cookie", "set_cookie", "password", "secret", "client_secret", "access_token", "refresh_token",
-			"private_key", "credential", "credentials", "token":
-			return true
-		}
+func isDisplaySafeModelChannelOverridePath(path string) bool {
+	switch strings.ToLower(strings.TrimSpace(path)) {
+	case "model", "original_model", "upstream_model",
+		"temperature", "top_p", "top_k", "min_p",
+		"max_tokens", "max_completion_tokens", "max_output_tokens",
+		"n", "seed", "stop", "presence_penalty", "frequency_penalty", "repetition_penalty",
+		"logprobs", "top_logprobs", "service_tier", "verbosity", "modalities",
+		"reasoning_effort", "reasoning.effort", "output_config.effort", "generationconfig.thinkingconfig.thinkinglevel",
+		"size", "quality", "style", "resolution", "duration", "seconds",
+		"user_group", "token_group", "using_group", "is_retry", "retry.is_retry", "last_error.code":
+		return true
+	default:
+		return false
 	}
-	return false
 }
 
-func redactModelChannelCapabilityOverrideValue(value any) any {
+func modelChannelCapabilityOverrideDisplayValue(path string, value any) any {
+	if !isDisplaySafeModelChannelOverridePath(path) {
+		return modelChannelCapabilityRedactedValue
+	}
+	switch typedValue := value.(type) {
+	case nil, string, bool, float64:
+		return value
+	case []any:
+		displayValue := make([]any, len(typedValue))
+		for index, nestedValue := range typedValue {
+			displayValue[index] = modelChannelCapabilityOverrideDisplayValue(path, nestedValue)
+		}
+		return displayValue
+	default:
+		return modelChannelCapabilityRedactedValue
+	}
+}
+
+func redactModelChannelCapabilityOverrideConfig(value any) any {
 	switch typedValue := value.(type) {
 	case map[string]any:
 		redacted := make(map[string]any, len(typedValue))
 		mode, _ := typedValue["mode"].(string)
 		path, _ := typedValue["path"].(string)
-		redactConfiguredValue := strings.EqualFold(strings.TrimSpace(mode), "set_header") || isSensitiveModelChannelOverridePath(path)
+		_, hasMode := typedValue["mode"]
+		_, hasValue := typedValue["value"]
+		if strings.TrimSpace(path) != "" && (hasMode || hasValue) {
+			for key, nestedValue := range typedValue {
+				switch {
+				case strings.EqualFold(strings.TrimSpace(key), "value"):
+					redacted[key] = modelChannelCapabilityOverrideDisplayValue(path, nestedValue)
+				case (strings.EqualFold(strings.TrimSpace(key), "from") || strings.EqualFold(strings.TrimSpace(key), "to")) &&
+					(strings.EqualFold(strings.TrimSpace(mode), "replace") || strings.EqualFold(strings.TrimSpace(mode), "regex_replace")):
+					redacted[key] = modelChannelCapabilityOverrideDisplayValue(path, nestedValue)
+				default:
+					redacted[key] = redactModelChannelCapabilityOverrideConfig(nestedValue)
+				}
+			}
+			return redacted
+		}
 		for key, nestedValue := range typedValue {
-			switch {
-			case isSensitiveModelChannelOverridePath(key):
-				redacted[key] = modelChannelCapabilityRedactedValue
-			case strings.EqualFold(strings.TrimSpace(key), "value") && redactConfiguredValue:
-				redacted[key] = modelChannelCapabilityRedactedValue
-			default:
-				redacted[key] = redactModelChannelCapabilityOverrideValue(nestedValue)
+			if strings.EqualFold(strings.TrimSpace(key), "operations") {
+				redacted[key] = redactModelChannelCapabilityOverrideConfig(nestedValue)
+			} else {
+				redacted[key] = modelChannelCapabilityOverrideDisplayValue(key, nestedValue)
 			}
 		}
 		return redacted
 	case []any:
 		redacted := make([]any, len(typedValue))
 		for index, nestedValue := range typedValue {
-			redacted[index] = redactModelChannelCapabilityOverrideValue(nestedValue)
+			redacted[index] = redactModelChannelCapabilityOverrideConfig(nestedValue)
 		}
 		return redacted
 	default:
@@ -254,14 +279,19 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 						operation.KeepOrigin, _ = operationMap["keep_origin"].(bool)
 						operation.From, _ = operationMap["from"].(string)
 						operation.To, _ = operationMap["to"].(string)
+						if strings.EqualFold(strings.TrimSpace(operation.Mode), "replace") || strings.EqualFold(strings.TrimSpace(operation.Mode), "regex_replace") {
+							if _, exists := operationMap["from"]; exists {
+								operation.From, _ = modelChannelCapabilityOverrideDisplayValue(operation.Path, operation.From).(string)
+							}
+							if _, exists := operationMap["to"]; exists {
+								operation.To, _ = modelChannelCapabilityOverrideDisplayValue(operation.Path, operation.To).(string)
+							}
+						}
 						if logic, ok := operationMap["logic"].(string); ok {
 							operation.Logic = logic
 						}
 						if value, exists := operationMap["value"]; exists {
-							operation.Value = redactModelChannelCapabilityOverrideValue(value)
-							if strings.EqualFold(strings.TrimSpace(operation.Mode), "set_header") || isSensitiveModelChannelOverridePath(operation.Path) {
-								operation.Value = modelChannelCapabilityRedactedValue
-							}
+							operation.Value = modelChannelCapabilityOverrideDisplayValue(operation.Path, value)
 							operation.ValueConfigured = true
 						}
 
@@ -281,11 +311,8 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 									operation.Conditions = append(operation.Conditions, ModelChannelParameterOverrideCondition{
 										Path:  trimmedPath,
 										Mode:  "full",
-										Value: redactModelChannelCapabilityOverrideValue(conditions[path]),
+										Value: modelChannelCapabilityOverrideDisplayValue(trimmedPath, conditions[path]),
 									})
-									if isSensitiveModelChannelOverridePath(trimmedPath) {
-										operation.Conditions[len(operation.Conditions)-1].Value = modelChannelCapabilityRedactedValue
-									}
 								}
 								if len(operation.Conditions) == 0 {
 									operationsFormat = false
@@ -308,10 +335,7 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 										Path:  path,
 										Mode:  conditionMode,
 									}
-									condition.Value = redactModelChannelCapabilityOverrideValue(conditionMap["value"])
-									if isSensitiveModelChannelOverridePath(condition.Path) {
-										condition.Value = modelChannelCapabilityRedactedValue
-									}
+									condition.Value = modelChannelCapabilityOverrideDisplayValue(condition.Path, conditionMap["value"])
 									condition.Invert, _ = conditionMap["invert"].(bool)
 									condition.PassMissingKey, _ = conditionMap["pass_missing_key"].(bool)
 									operation.Conditions = append(operation.Conditions, condition)
@@ -337,15 +361,11 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 					capability.ParameterOverrideLegacy = make(map[string]any)
 					for key, value := range paramOverride {
 						if !strings.EqualFold(strings.TrimSpace(key), "operations") {
-							if isSensitiveModelChannelOverridePath(key) {
-								capability.ParameterOverrideLegacy[key] = modelChannelCapabilityRedactedValue
-							} else {
-								capability.ParameterOverrideLegacy[key] = redactModelChannelCapabilityOverrideValue(value)
-							}
+							capability.ParameterOverrideLegacy[key] = modelChannelCapabilityOverrideDisplayValue(key, value)
 						}
 					}
 				} else {
-					capability.ParameterOverrideLegacy, _ = redactModelChannelCapabilityOverrideValue(paramOverride).(map[string]any)
+					capability.ParameterOverrideLegacy, _ = redactModelChannelCapabilityOverrideConfig(paramOverride).(map[string]any)
 				}
 
 				hasLegacy := len(capability.ParameterOverrideLegacy) > 0
