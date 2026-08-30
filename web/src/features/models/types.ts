@@ -22,6 +22,53 @@ import { z } from 'zod'
 // Model Types
 // ============================================================================
 
+export interface ModelChannelCapabilityGroup {
+  group: string
+  enabled: boolean
+}
+
+export interface ModelParameterCapability {
+  supported?: boolean
+  min?: number
+  max?: number
+  allowed_values?: string[]
+  on_violation?: 'reject' | 'drop' | 'clamp'
+}
+
+export interface ModelChannelCapability {
+  channel_id: number
+  channel_name: string
+  channel_type: number
+  channel_status: number
+  model: string
+  default_priority: number
+  default_weight: number
+  priority_override: number | null
+  weight_override: number | null
+  effective_priority: number
+  effective_weight: number
+  groups: ModelChannelCapabilityGroup[]
+  upstream_model: string
+  model_mapped: boolean
+  endpoint_types: string[]
+  parameter_capabilities_configured: boolean
+  parameter_capabilities?: Record<string, ModelParameterCapability>
+  video_capabilities_configured: boolean
+  video_resolutions: string[]
+  configuration_error?: string
+}
+
+export interface ModelChannelCapabilities {
+  model: string
+  channels: ModelChannelCapability[]
+}
+
+export interface ModelChannelCapabilitiesResponse {
+  success: boolean
+  message?: string
+  data?: ModelChannelCapabilities
+}
+
 /**
  * Bound channel information
  */

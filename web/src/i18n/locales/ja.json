@@ -5919,6 +5919,15 @@
     "Includes cache hit rate, RPM, and TPM throughput.": "キャッシュヒット率、RPM、TPM のスループットを含みます。",
     "Input and output tokens processed per minute": "1 分あたりに処理された入出力トークン数",
     "Requests completed per minute": "1 分あたりの完了リクエスト数",
-    "Share of input tokens served from cache": "キャッシュから提供された入力トークンの割合"
+    "Share of input tokens served from cache": "キャッシュから提供された入力トークンの割合",
+    "View channel capabilities": "チャネル機能を表示",
+    "Configuration error": "設定エラー",
+    "Model mapping": "モデルマッピング",
+    "Parameter capabilities": "パラメータ機能",
+    "Video capabilities": "動画機能",
+    "Model channel capabilities": "モデルのチャネル機能",
+    "Read-only view of routing and effective channel capabilities for {{model}}.": "{{model}} のルーティングと各チャネルで有効な機能を読み取り専用で表示します。",
+    "Failed to load channel capabilities": "チャネル機能の読み込みに失敗しました",
+    "Enabled channels": "有効なチャネル"
   }
 }

@@ -23,6 +23,7 @@ func TestChannelModelRoutingOverrideRoutesUseChannelPermissions(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodPatch, "/:id/model-routing-overrides", authz.ChannelWrite, controller.PatchChannelModelRoutingOverrides)
 	assertChannelRoutePermission(t, http.MethodGet, "/model-routing-overrides", authz.ChannelRead, controller.GetModelChannelRoutingOverrides)
 	assertChannelRoutePermission(t, http.MethodPatch, "/model-routing-overrides", authz.ChannelWrite, controller.PatchModelChannelRoutingOverrides)
+	assertChannelRoutePermission(t, http.MethodGet, "/model-capabilities", authz.ChannelRead, controller.GetModelChannelCapabilities)
 }
 
 func TestChannelDeleteRoutesUseSensitiveWritePermission(t *testing.T) {

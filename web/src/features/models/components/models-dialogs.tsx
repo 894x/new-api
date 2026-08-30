@@ -23,6 +23,7 @@ import { PrefillGroupManagement } from './dialogs/prefill-group-management'
 import { SyncWizardDialog } from './dialogs/sync-wizard-dialog'
 import { UpstreamConflictDialog } from './dialogs/upstream-conflict-dialog'
 import { VendorMutateDialog } from './dialogs/vendor-mutate-dialog'
+import { ModelChannelCapabilitiesDrawer } from './drawers/model-channel-capabilities-drawer'
 import { ModelMutateDrawer } from './drawers/model-mutate-drawer'
 import { useModels } from './models-provider'
 
@@ -47,6 +48,12 @@ export function ModelsDialogs() {
 
       <ModelDocumentEditorDialog
         open={open === 'edit-document'}
+        onOpenChange={(v) => !v && setOpen(null)}
+        model={currentRow}
+      />
+
+      <ModelChannelCapabilitiesDrawer
+        open={open === 'view-channel-capabilities'}
         onOpenChange={(v) => !v && setOpen(null)}
         model={currentRow}
       />

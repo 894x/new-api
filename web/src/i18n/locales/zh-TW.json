@@ -5919,6 +5919,15 @@
     "Includes cache hit rate, RPM, and TPM throughput.": "包含快取命中率、RPM 與 TPM 吞吐量。",
     "Input and output tokens processed per minute": "每分鐘處理的輸入與輸出 Token 數",
     "Requests completed per minute": "每分鐘完成的請求數",
-    "Share of input tokens served from cache": "由快取提供的輸入 Token 比例"
+    "Share of input tokens served from cache": "由快取提供的輸入 Token 比例",
+    "View channel capabilities": "查看渠道能力",
+    "Configuration error": "設定錯誤",
+    "Model mapping": "模型映射",
+    "Parameter capabilities": "參數能力",
+    "Video capabilities": "影片能力",
+    "Model channel capabilities": "模型渠道能力",
+    "Read-only view of routing and effective channel capabilities for {{model}}.": "唯讀查看 {{model}} 的路由和各渠道實際生效的能力。",
+    "Failed to load channel capabilities": "載入渠道能力失敗",
+    "Enabled channels": "已啟用渠道"
   }
 }

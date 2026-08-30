@@ -5919,6 +5919,15 @@
     "Includes cache hit rate, RPM, and TPM throughput.": "Включает долю попаданий в кэш и пропускную способность RPM и TPM.",
     "Input and output tokens processed per minute": "Обработано входных и выходных токенов в минуту",
     "Requests completed per minute": "Завершённых запросов в минуту",
-    "Share of input tokens served from cache": "Доля входных токенов, полученных из кэша"
+    "Share of input tokens served from cache": "Доля входных токенов, полученных из кэша",
+    "View channel capabilities": "Просмотреть возможности каналов",
+    "Configuration error": "Ошибка конфигурации",
+    "Model mapping": "Сопоставление модели",
+    "Parameter capabilities": "Возможности параметров",
+    "Video capabilities": "Возможности видео",
+    "Model channel capabilities": "Возможности каналов модели",
+    "Read-only view of routing and effective channel capabilities for {{model}}.": "Просмотр маршрутизации и фактических возможностей каналов для {{model}} только для чтения.",
+    "Failed to load channel capabilities": "Не удалось загрузить возможности каналов",
+    "Enabled channels": "Включённые каналы"
   }
 }

@@ -18,7 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
 import type { Row } from '@tanstack/react-table'
-import { FileCode2, Pencil, Power, PowerOff, Trash2 } from 'lucide-react'
+import {
+  FileCode2,
+  Network,
+  Pencil,
+  Power,
+  PowerOff,
+  Trash2,
+} from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -34,6 +41,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   handleDeleteModel,
@@ -52,9 +65,15 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const model = row.original
   const { setOpen, setCurrentRow } = useModels()
   const queryClient = useQueryClient()
+  const user = useAuthStore((state) => state.auth.user)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
 
   const isEnabled = isModelEnabled(model)
+  const canReadChannels = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.READ
+  )
 
   const handleEdit = () => {
     setCurrentRow(model)
@@ -68,6 +87,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const handleEditDocument = () => {
     setCurrentRow(model)
     setOpen('edit-document')
+  }
+
+  const handleViewChannelCapabilities = () => {
+    setCurrentRow(model)
+    setOpen('view-channel-capabilities')
   }
 
   const toggleLabel = isEnabled ? t('Disable') : t('Enable')
@@ -89,6 +113,24 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         </TooltipTrigger>
         <TooltipContent>{t('Edit')}</TooltipContent>
       </Tooltip>
+
+      {model.name_rule === 0 && canReadChannels && (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                onClick={handleViewChannelCapabilities}
+                aria-label={t('View channel capabilities')}
+              />
+            }
+          >
+            <Network />
+          </TooltipTrigger>
+          <TooltipContent>{t('View channel capabilities')}</TooltipContent>
+        </Tooltip>
+      )}
 
       <Tooltip>
         <TooltipTrigger

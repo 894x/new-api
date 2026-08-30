@@ -5919,6 +5919,15 @@
     "Includes cache hit rate, RPM, and TPM throughput.": "Inclut le taux de cache et les débits RPM et TPM.",
     "Input and output tokens processed per minute": "Jetons d’entrée et de sortie traités par minute",
     "Requests completed per minute": "Requêtes terminées par minute",
-    "Share of input tokens served from cache": "Part des jetons d’entrée servis depuis le cache"
+    "Share of input tokens served from cache": "Part des jetons d’entrée servis depuis le cache",
+    "View channel capabilities": "Voir les capacités des canaux",
+    "Configuration error": "Erreur de configuration",
+    "Model mapping": "Mappage du modèle",
+    "Parameter capabilities": "Capacités des paramètres",
+    "Video capabilities": "Capacités vidéo",
+    "Model channel capabilities": "Capacités des canaux du modèle",
+    "Read-only view of routing and effective channel capabilities for {{model}}.": "Vue en lecture seule du routage et des capacités effectives des canaux pour {{model}}.",
+    "Failed to load channel capabilities": "Échec du chargement des capacités des canaux",
+    "Enabled channels": "Canaux activés"
   }
 }

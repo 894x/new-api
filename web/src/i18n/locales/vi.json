@@ -5919,6 +5919,15 @@
     "Includes cache hit rate, RPM, and TPM throughput.": "Bao gồm tỷ lệ trúng bộ nhớ đệm và thông lượng RPM, TPM.",
     "Input and output tokens processed per minute": "Số token đầu vào và đầu ra được xử lý mỗi phút",
     "Requests completed per minute": "Số yêu cầu hoàn tất mỗi phút",
-    "Share of input tokens served from cache": "Tỷ lệ token đầu vào được phục vụ từ bộ nhớ đệm"
+    "Share of input tokens served from cache": "Tỷ lệ token đầu vào được phục vụ từ bộ nhớ đệm",
+    "View channel capabilities": "Xem khả năng của kênh",
+    "Configuration error": "Lỗi cấu hình",
+    "Model mapping": "Ánh xạ mô hình",
+    "Parameter capabilities": "Khả năng tham số",
+    "Video capabilities": "Khả năng video",
+    "Model channel capabilities": "Khả năng kênh của mô hình",
+    "Read-only view of routing and effective channel capabilities for {{model}}.": "Chế độ chỉ đọc cho định tuyến và khả năng thực tế của các kênh đối với {{model}}.",
+    "Failed to load channel capabilities": "Không thể tải khả năng của kênh",
+    "Enabled channels": "Kênh đã bật"
   }
 }
