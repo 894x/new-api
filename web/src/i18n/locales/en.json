@@ -3297,6 +3297,7 @@
     "No discount tiers configured. Click \"Add discount tier\" to get started.": "No discount tiers configured. Click \"Add discount tier\" to get started.",
     "No document is live": "No document is live",
     "No duplicate keys found": "No duplicate keys found",
+    "No enabled channels support this exact model.": "No enabled channels support this exact model.",
     "No enabled tokens available": "No enabled tokens available",
     "No encryption": "No encryption",
     "No endpoints configured. Switch to JSON mode or add rows to define endpoints.": "No endpoints configured. Switch to JSON mode or add rows to define endpoints.",

@@ -65,6 +65,7 @@ import type {
   ModelRoutingOverridePatch,
   ModelRoutingOverridesResponse,
 } from '../types'
+import { ChannelStatusFilter } from './channel-status-filter'
 
 type ModelRoutingOverridesEditorProps = {
   channelId?: number
@@ -271,6 +272,7 @@ type ModelRoutingOverrideRowsProps = {
 function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const [showAllChannels, setShowAllChannels] = useState(false)
   const [draftState, setDraftState] = useState(() =>
     createModelRoutingOverrideDraftState(props.rows)
   )
@@ -290,6 +292,10 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
       ),
     [serialization.errors]
   )
+  const visibleRows =
+    props.showChannel && !showAllChannels
+      ? props.rows.filter((row) => row.channel_status === 1)
+      : props.rows
 
   const mutation = useMutation({
     mutationFn: async (
@@ -355,15 +361,23 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
 
   return (
     <div className='space-y-3'>
-      <div className='space-y-1'>
-        <h3 className='text-sm font-semibold'>
-          {t('Model routing overrides')}
-        </h3>
-        <p className='text-muted-foreground text-sm'>
-          {t(
-            'Leave a field empty to inherit the channel default. Zero is saved as an explicit override.'
-          )}
-        </p>
+      <div className='flex flex-wrap items-start justify-between gap-3'>
+        <div className='space-y-1'>
+          <h3 className='text-sm font-semibold'>
+            {t('Model routing overrides')}
+          </h3>
+          <p className='text-muted-foreground text-sm'>
+            {t(
+              'Leave a field empty to inherit the channel default. Zero is saved as an explicit override.'
+            )}
+          </p>
+        </div>
+        {props.showChannel && props.rows.length > 0 && (
+          <ChannelStatusFilter
+            showAll={showAllChannels}
+            onShowAllChange={setShowAllChannels}
+          />
+        )}
       </div>
 
       {!props.canWrite && (
@@ -380,13 +394,21 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
         </Alert>
       )}
 
-      {props.rows.length === 0 ? (
+      {props.rows.length === 0 && (
         <div className='text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm'>
           {props.showChannel
             ? t('No channels support this exact model.')
             : t('This channel has no configured models.')}
         </div>
-      ) : (
+      )}
+
+      {props.rows.length > 0 && visibleRows.length === 0 && (
+        <div className='text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm'>
+          {t('No enabled channels support this exact model.')}
+        </div>
+      )}
+
+      {visibleRows.length > 0 && (
         <div className='rounded-lg border'>
           <Table>
             <TableHeader>
@@ -402,7 +424,7 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {props.rows.map((row) => {
+              {visibleRows.map((row) => {
                 const key = getModelRoutingOverrideKey(
                   row.channel_id,
                   row.model

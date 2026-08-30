@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -34,6 +35,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ChannelStatusFilter } from '@/features/channels/components/channel-status-filter'
 import { getChannelTypeLabel } from '@/features/channels/lib/channel-utils'
 
 import { getModelChannelCapabilities } from '../../api'
@@ -413,6 +415,7 @@ export function ModelChannelCapabilitiesDrawer(
   props: ModelChannelCapabilitiesDrawerProps
 ) {
   const { t } = useTranslation()
+  const [showAllChannels, setShowAllChannels] = useState(false)
   const modelName = props.model?.model_name ?? ''
   const capabilityQuery = useQuery({
     queryKey: modelsQueryKeys.channelCapabilities(modelName),
@@ -423,6 +426,9 @@ export function ModelChannelCapabilitiesDrawer(
   const enabledChannelCount = channels.filter(
     (channel) => channel.channel_status === 1
   ).length
+  const visibleChannels = showAllChannels
+    ? channels
+    : channels.filter((channel) => channel.channel_status === 1)
   const groups = new Set(
     channels.flatMap((channel) => channel.groups.map((group) => group.group))
   )
@@ -486,13 +492,30 @@ export function ModelChannelCapabilitiesDrawer(
                 </div>
               </div>
 
-              {channels.length === 0 ? (
+              {channels.length > 0 && (
+                <div className='flex justify-end'>
+                  <ChannelStatusFilter
+                    showAll={showAllChannels}
+                    onShowAllChange={setShowAllChannels}
+                  />
+                </div>
+              )}
+
+              {channels.length === 0 && (
                 <div className='text-muted-foreground rounded-lg border border-dashed p-8 text-center text-sm'>
                   {t('No channels support this exact model.')}
                 </div>
-              ) : (
+              )}
+
+              {channels.length > 0 && visibleChannels.length === 0 && (
+                <div className='text-muted-foreground rounded-lg border border-dashed p-8 text-center text-sm'>
+                  {t('No enabled channels support this exact model.')}
+                </div>
+              )}
+
+              {visibleChannels.length > 0 && (
                 <div className='flex flex-col gap-4'>
-                  {channels.map((channel) => (
+                  {visibleChannels.map((channel) => (
                     <ChannelCapabilityCard
                       key={channel.channel_id}
                       channel={channel}

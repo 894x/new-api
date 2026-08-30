@@ -3297,6 +3297,7 @@
     "No discount tiers configured. Click \"Add discount tier\" to get started.": "割引ティアは設定されていません。「割引ティアを追加」をクリックして開始してください。",
     "No document is live": "公開中のドキュメントはありません",
     "No duplicate keys found": "重複キーが見つかりませんでした",
+    "No enabled channels support this exact model.": "この完全一致モデルをサポートする有効なチャネルはありません。",
     "No enabled tokens available": "有効なトークンがありません",
     "No encryption": "暗号化なし",
     "No endpoints configured. Switch to JSON mode or add rows to define endpoints.": "エンドポイントが設定されていません。JSONモードに切り替えるか、エンドポイントを定義するために行を追加してください。",

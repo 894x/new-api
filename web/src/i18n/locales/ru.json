@@ -3297,6 +3297,7 @@
     "No discount tiers configured. Click \"Add discount tier\" to get started.": "Не настроены уровни скидок. Нажмите \"Добавить уровень скидки\", чтобы начать.",
     "No document is live": "Нет опубликованного документа",
     "No duplicate keys found": "Дубликаты ключей не найдены",
+    "No enabled channels support this exact model.": "Нет включённых каналов, поддерживающих эту точную модель.",
     "No enabled tokens available": "Нет доступных активных токенов",
     "No encryption": "Без шифрования",
     "No endpoints configured. Switch to JSON mode or add rows to define endpoints.": "Конечные точки не настроены. Переключитесь в режим JSON или добавьте строки для определения конечных точек.",

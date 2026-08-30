@@ -3297,6 +3297,7 @@
     "No discount tiers configured. Click \"Add discount tier\" to get started.": "未配置折扣等级。点击“添加折扣等级”即可开始使用。",
     "No document is live": "当前没有已发布文档",
     "No duplicate keys found": "未发现重复密钥",
+    "No enabled channels support this exact model.": "没有已启用的渠道支持这个精确模型。",
     "No enabled tokens available": "当前没有可用的启用令牌",
     "No encryption": "无加密",
     "No endpoints configured. Switch to JSON mode or add rows to define endpoints.": "未配置端点。切换到 JSON 模式或添加行来定义端点。",

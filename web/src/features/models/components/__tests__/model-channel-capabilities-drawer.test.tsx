@@ -180,6 +180,35 @@ afterEach(() => {
 })
 
 describe('model channel capabilities drawer', () => {
+  test('shows enabled channels by default and reveals disabled channels after selecting all', async () => {
+    installCapabilityFixture()
+
+    renderWithProviders(
+      <ModelChannelCapabilitiesDrawer
+        open
+        onOpenChange={() => undefined}
+        model={model}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Primary channel')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Fallback channel')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Enabled' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+
+    expect(screen.getByText('Fallback channel')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+  })
+
   test('shows routing, mapping, groups, endpoints, effective capabilities, and unknown configuration states', async () => {
     installCapabilityFixture()
 
@@ -194,6 +223,7 @@ describe('model channel capabilities drawer', () => {
     await waitFor(() => {
       expect(screen.getByText('Primary channel')).toBeInTheDocument()
     })
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
     expect(
       screen.getByRole('heading', { name: 'Model channel capabilities' })
     ).toBeInTheDocument()
