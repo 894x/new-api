@@ -129,6 +129,7 @@ func TestListModelChannelCapabilitiesReportsInvalidReadOnlyConfigurationWithoutP
 	require.NoError(t, err)
 	require.Len(t, result.Channels, 1)
 	assert.NotEmpty(t, result.Channels[0].ConfigurationError)
+	assert.Equal(t, []string{"openai"}, result.Channels[0].EndpointTypes)
 	assert.False(t, result.Channels[0].ParameterCapabilitiesConfigured)
 	assert.False(t, result.Channels[0].VideoCapabilitiesConfigured)
 	var persisted Channel
@@ -233,4 +234,44 @@ func TestListModelChannelCapabilitiesFallsBackToLegacyForInvalidConditions(t *te
 	assert.Equal(t, "legacy", capability.ParameterOverrideMode)
 	assert.Contains(t, capability.ParameterOverrideLegacy, "operations")
 	assert.Empty(t, capability.ParameterOverrideOperations)
+}
+
+func TestListModelChannelCapabilitiesRedactsSensitiveOverrideValues(t *testing.T) {
+	clearChannelModelRoutingTables(t)
+	priority := int64(0)
+	weight := uint(0)
+	paramOverride := `{"api_key":"legacy-secret","operations":[{"mode":"set_header","path":"Authorization","value":"Bearer upstream-secret"},{"mode":"set","path":"credentials.token","value":"nested-secret","conditions":[{"path":"request_headers.Authorization","mode":"full","value":"Bearer client-secret"}]},{"mode":"set","path":"max_tokens","value":2048}]}`
+	channel := &Channel{
+		Id:            6206,
+		Type:          1,
+		Key:           "test-key",
+		Status:        common.ChannelStatusEnabled,
+		Name:          "sensitive-override-channel",
+		Weight:        &weight,
+		Models:        "public-model",
+		Group:         "default",
+		Priority:      &priority,
+		ParamOverride: &paramOverride,
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+
+	result, err := ListModelChannelCapabilities("public-model")
+
+	require.NoError(t, err)
+	require.Len(t, result.Channels, 1)
+	capability := result.Channels[0]
+	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideLegacy["api_key"])
+	require.Len(t, capability.ParameterOverrideOperations, 3)
+	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideOperations[0].Value)
+	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideOperations[1].Value)
+	require.Len(t, capability.ParameterOverrideOperations[1].Conditions, 1)
+	assert.Equal(t, "[REDACTED]", capability.ParameterOverrideOperations[1].Conditions[0].Value)
+	assert.Equal(t, float64(2048), capability.ParameterOverrideOperations[2].Value)
+	responseJSON, err := common.Marshal(capability)
+	require.NoError(t, err)
+	assert.NotContains(t, string(responseJSON), "legacy-secret")
+	assert.NotContains(t, string(responseJSON), "upstream-secret")
+	assert.NotContains(t, string(responseJSON), "nested-secret")
+	assert.NotContains(t, string(responseJSON), "client-secret")
 }

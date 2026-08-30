@@ -72,6 +72,8 @@ const PARAMETER_OVERRIDE_FORMAT_LABELS: Record<string, string> = {
   mixed: 'Mixed',
 }
 
+const PARAMETER_OVERRIDE_REDACTED_VALUE = '[REDACTED]'
+
 type ModelChannelCapabilitiesDrawerProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -104,7 +106,8 @@ function CapabilityValue(props: {
   return <span>{parts.length > 0 ? parts.join(' · ') : t('Configured')}</span>
 }
 
-function formatOverrideValue(value: unknown): string {
+function formatOverrideValue(value: unknown, hiddenLabel: string): string {
+  if (value === PARAMETER_OVERRIDE_REDACTED_VALUE) return hiddenLabel
   if (typeof value === 'string') return value
   if (value === undefined) return ''
   try {
@@ -161,7 +164,7 @@ function ParameterOverrideRules(props: { channel: ModelChannelCapability }) {
                   <div key={path} className='rounded-md border p-3 text-sm'>
                     <p className='font-mono font-medium'>{path}</p>
                     <pre className='text-muted-foreground mt-1 max-h-32 overflow-auto text-xs break-all whitespace-pre-wrap'>
-                      {formatOverrideValue(value)}
+                      {formatOverrideValue(value, t('Hidden'))}
                     </pre>
                   </div>
                 ))}
@@ -223,7 +226,7 @@ function ParameterOverrideRules(props: { channel: ModelChannelCapability }) {
                       <div>
                         <p className='text-muted-foreground'>{t('Value')}</p>
                         <pre className='max-h-32 overflow-auto font-mono break-all whitespace-pre-wrap'>
-                          {formatOverrideValue(operation.value)}
+                          {formatOverrideValue(operation.value, t('Hidden'))}
                         </pre>
                       </div>
                     )}
@@ -253,7 +256,7 @@ function ParameterOverrideRules(props: { channel: ModelChannelCapability }) {
                           <code>{condition.path}</code>
                           <Badge variant='outline'>{condition.mode}</Badge>
                           <code className='break-all'>
-                            {formatOverrideValue(condition.value)}
+                            {formatOverrideValue(condition.value, t('Hidden'))}
                           </code>
                           {condition.invert && (
                             <Badge variant='outline'>{t('Inverted')}</Badge>

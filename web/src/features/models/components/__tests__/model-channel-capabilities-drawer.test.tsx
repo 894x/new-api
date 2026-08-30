@@ -103,7 +103,10 @@ function installCapabilityFixture(): void {
               video_resolutions: ['720p', '1080p'],
               parameter_override_configured: true,
               parameter_override_mode: 'mixed',
-              parameter_override_legacy: { temperature: 0.2 },
+              parameter_override_legacy: {
+                api_key: '[REDACTED]',
+                temperature: 0.2,
+              },
               parameter_override_operations: [
                 {
                   order: 1,
@@ -210,6 +213,7 @@ describe('model channel capabilities drawer', () => {
     expect(screen.getByText('Evaluated at request time')).toBeInTheDocument()
     expect(screen.getByText('Ordered operations')).toBeInTheDocument()
     expect(screen.getByText('Legacy overrides')).toBeInTheDocument()
+    expect(screen.getByText('Hidden')).toBeInTheDocument()
     expect(screen.getByText('cap output length')).toBeInTheDocument()
     expect(screen.getByText('max_tokens')).toBeInTheDocument()
     expect(screen.getByText('null')).toBeInTheDocument()

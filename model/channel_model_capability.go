@@ -61,6 +61,58 @@ type ModelChannelCapabilities struct {
 	Channels []ModelChannelCapability `json:"channels"`
 }
 
+const modelChannelCapabilityRedactedValue = "[REDACTED]"
+
+func isSensitiveModelChannelOverridePath(path string) bool {
+	segments := strings.FieldsFunc(strings.ToLower(path), func(character rune) bool {
+		switch character {
+		case '.', '[', ']', '/', '\\':
+			return true
+		default:
+			return false
+		}
+	})
+	for _, segment := range segments {
+		segment = strings.ReplaceAll(strings.TrimSpace(segment), "-", "_")
+		switch segment {
+		case "authorization", "proxy_authorization", "api_key", "apikey", "x_api_key", "x_goog_api_key",
+			"cookie", "set_cookie", "password", "secret", "client_secret", "access_token", "refresh_token",
+			"private_key", "credential", "credentials", "token":
+			return true
+		}
+	}
+	return false
+}
+
+func redactModelChannelCapabilityOverrideValue(value any) any {
+	switch typedValue := value.(type) {
+	case map[string]any:
+		redacted := make(map[string]any, len(typedValue))
+		mode, _ := typedValue["mode"].(string)
+		path, _ := typedValue["path"].(string)
+		redactConfiguredValue := strings.EqualFold(strings.TrimSpace(mode), "set_header") || isSensitiveModelChannelOverridePath(path)
+		for key, nestedValue := range typedValue {
+			switch {
+			case isSensitiveModelChannelOverridePath(key):
+				redacted[key] = modelChannelCapabilityRedactedValue
+			case strings.EqualFold(strings.TrimSpace(key), "value") && redactConfiguredValue:
+				redacted[key] = modelChannelCapabilityRedactedValue
+			default:
+				redacted[key] = redactModelChannelCapabilityOverrideValue(nestedValue)
+			}
+		}
+		return redacted
+	case []any:
+		redacted := make([]any, len(typedValue))
+		for index, nestedValue := range typedValue {
+			redacted[index] = redactModelChannelCapabilityOverrideValue(nestedValue)
+		}
+		return redacted
+	default:
+		return value
+	}
+}
+
 func (channel *Channel) ResolveUpstreamModelName(modelName string) (string, bool, error) {
 	modelName = strings.TrimSpace(modelName)
 	mappingJSON := channel.GetModelMapping()
@@ -206,7 +258,10 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 							operation.Logic = logic
 						}
 						if value, exists := operationMap["value"]; exists {
-							operation.Value = value
+							operation.Value = redactModelChannelCapabilityOverrideValue(value)
+							if strings.EqualFold(strings.TrimSpace(operation.Mode), "set_header") || isSensitiveModelChannelOverridePath(operation.Path) {
+								operation.Value = modelChannelCapabilityRedactedValue
+							}
 							operation.ValueConfigured = true
 						}
 
@@ -226,8 +281,11 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 									operation.Conditions = append(operation.Conditions, ModelChannelParameterOverrideCondition{
 										Path:  trimmedPath,
 										Mode:  "full",
-										Value: conditions[path],
+										Value: redactModelChannelCapabilityOverrideValue(conditions[path]),
 									})
+									if isSensitiveModelChannelOverridePath(trimmedPath) {
+										operation.Conditions[len(operation.Conditions)-1].Value = modelChannelCapabilityRedactedValue
+									}
 								}
 								if len(operation.Conditions) == 0 {
 									operationsFormat = false
@@ -250,7 +308,10 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 										Path:  path,
 										Mode:  conditionMode,
 									}
-									condition.Value, _ = conditionMap["value"]
+									condition.Value = redactModelChannelCapabilityOverrideValue(conditionMap["value"])
+									if isSensitiveModelChannelOverridePath(condition.Path) {
+										condition.Value = modelChannelCapabilityRedactedValue
+									}
 									condition.Invert, _ = conditionMap["invert"].(bool)
 									condition.PassMissingKey, _ = conditionMap["pass_missing_key"].(bool)
 									operation.Conditions = append(operation.Conditions, condition)
@@ -276,11 +337,15 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 					capability.ParameterOverrideLegacy = make(map[string]any)
 					for key, value := range paramOverride {
 						if !strings.EqualFold(strings.TrimSpace(key), "operations") {
-							capability.ParameterOverrideLegacy[key] = value
+							if isSensitiveModelChannelOverridePath(key) {
+								capability.ParameterOverrideLegacy[key] = modelChannelCapabilityRedactedValue
+							} else {
+								capability.ParameterOverrideLegacy[key] = redactModelChannelCapabilityOverrideValue(value)
+							}
 						}
 					}
 				} else {
-					capability.ParameterOverrideLegacy = paramOverride
+					capability.ParameterOverrideLegacy, _ = redactModelChannelCapabilityOverrideValue(paramOverride).(map[string]any)
 				}
 
 				hasLegacy := len(capability.ParameterOverrideLegacy) > 0
@@ -299,9 +364,6 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 		if channel.OtherSettings != "" {
 			if err := common.UnmarshalJsonStr(channel.OtherSettings, &settings); err != nil {
 				configurationErrors = append(configurationErrors, fmt.Sprintf("invalid channel settings: %v", err))
-				capability.ConfigurationError = strings.Join(configurationErrors, "; ")
-				result.Channels = append(result.Channels, capability)
-				continue
 			}
 		}
 
