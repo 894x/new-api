@@ -18,7 +18,7 @@ const (
 	maxParameterCapabilitiesPerScope = 128
 )
 
-var parameterCapabilityPathPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*$`)
+var parameterCapabilityPathPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*(?:\.(?:[A-Za-z_][A-Za-z0-9_-]*|\*))*$`)
 
 var billingSensitiveParameterPaths = map[string]struct{}{
 	"max_tokens":                          {},
@@ -57,11 +57,12 @@ type ParameterCapabilitySelector struct {
 }
 
 type ParameterCapability struct {
-	Supported     *bool    `json:"supported,omitempty"`
-	Min           *float64 `json:"min,omitempty"`
-	Max           *float64 `json:"max,omitempty"`
-	AllowedValues []string `json:"allowed_values,omitempty"`
-	OnViolation   string   `json:"on_violation,omitempty"`
+	Supported              *bool    `json:"supported,omitempty"`
+	Min                    *float64 `json:"min,omitempty"`
+	Max                    *float64 `json:"max,omitempty"`
+	AllowedValues          []string `json:"allowed_values,omitempty"`
+	OnViolation            string   `json:"on_violation,omitempty"`
+	ParticipateInSelection *bool    `json:"participate_in_selection,omitempty"`
 }
 
 func (c *ParameterCapabilityConfig) Validate() error {
@@ -133,6 +134,25 @@ func (c *ParameterCapabilityConfig) Resolve(model string) map[string]ParameterCa
 	return result
 }
 
+func (c *ParameterCapabilityConfig) HasSelectionConstraints() bool {
+	if c == nil {
+		return false
+	}
+	for _, capability := range c.Defaults {
+		if capability.ParticipateInSelection != nil && *capability.ParticipateInSelection {
+			return true
+		}
+	}
+	for _, rule := range c.Rules {
+		for _, capability := range rule.Parameters {
+			if capability.ParticipateInSelection != nil && *capability.ParticipateInSelection {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func validateParameterCapabilityMap(parameters map[string]ParameterCapability) error {
 	if len(parameters) > maxParameterCapabilitiesPerScope {
 		return fmt.Errorf("too many parameters in one scope: %d", len(parameters))
@@ -177,6 +197,9 @@ func mergeParameterCapabilityMap(target map[string]ParameterCapability, source m
 		}
 		if override.OnViolation != "" {
 			base.OnViolation = override.OnViolation
+		}
+		if override.ParticipateInSelection != nil {
+			base.ParticipateInSelection = override.ParticipateInSelection
 		}
 		target[path] = base
 	}

@@ -64,6 +64,7 @@ func TestGetModelRequestExtractsCanonicalVideoResolution(t *testing.T) {
 			assert.True(t, shouldSelect)
 			assert.Equal(t, "video-model", request.Model)
 			assert.Equal(t, test.want, request.VideoResolution)
+			assert.JSONEq(t, test.body, string(request.RequestBody))
 		})
 	}
 }
@@ -75,6 +76,7 @@ func TestGetModelRequestDoesNotApplyResolutionToNonVideoRequests(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, shouldSelect)
 	assert.Empty(t, request.VideoResolution)
+	assert.JSONEq(t, `{"model":"chat-model","size":"1920x1080"}`, string(request.RequestBody))
 }
 
 func TestGetModelRequestRejectsInvalidVideoResolution(t *testing.T) {

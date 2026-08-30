@@ -100,6 +100,55 @@ describe('parameter capability resolution', () => {
     expect(rejected.compatible).toBe(false)
     expect(rejected.request).toEqual({ top_k: 10 })
   })
+
+  it('evaluates every concrete value matched by an array wildcard path', () => {
+    const result = evaluateParameterCapabilities(
+      {
+        defaults: {
+          'messages.*.content.*.image_url': {
+            supported: false,
+            on_violation: 'reject',
+          },
+        },
+      },
+      'model-a',
+      {
+        messages: [
+          { role: 'system', content: 'describe the image' },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'what is this?' },
+              { type: 'image_url', image_url: { url: 'example' } },
+            ],
+          },
+        ],
+      }
+    )
+
+    expect(result.compatible).toBe(false)
+    expect(result.evaluations).toEqual([
+      expect.objectContaining({
+        parameter: 'messages.1.content.1.image_url',
+        status: 'rejected',
+      }),
+    ])
+  })
+
+  it('drops every array entry matched by a wildcard path', () => {
+    const result = evaluateParameterCapabilities(
+      {
+        defaults: {
+          'tools.*': { supported: false, on_violation: 'drop' },
+        },
+      },
+      'model-a',
+      { tools: [{ name: 'a' }, { name: 'b' }, { name: 'c' }] }
+    )
+
+    expect(result.request).toEqual({ tools: [] })
+    expect(result.evaluations).toHaveLength(3)
+  })
 })
 
 describe('parameter capability configuration validation', () => {
@@ -176,6 +225,58 @@ describe('parameter capability configuration validation', () => {
         ],
       },
     })
+  })
+
+  it('accepts array wildcard paths and preserves channel-selection participation', () => {
+    const result = parseParameterCapabilityConfigStrict(
+      JSON.stringify({
+        defaults: {
+          'messages.*.content.*.image_url': {
+            supported: false,
+            participate_in_selection: true,
+          },
+        },
+      })
+    )
+
+    expect(result).toEqual({
+      success: true,
+      config: {
+        defaults: {
+          'messages.*.content.*.image_url': {
+            supported: false,
+            participate_in_selection: true,
+          },
+        },
+        rules: [],
+      },
+    })
+    expect(
+      validateParameterCapabilityConfig(
+        result.success ? result.config : { defaults: {}, rules: [] }
+      )
+    ).toEqual([])
+  })
+
+  it('lets an exact rule disable inherited channel-selection participation', () => {
+    const resolved = resolveParameterCapabilities(
+      {
+        defaults: {
+          tools: { supported: false, participate_in_selection: true },
+        },
+        rules: [
+          {
+            selector: { type: 'exact', value: 'tool-model' },
+            parameters: {
+              tools: { participate_in_selection: false },
+            },
+          },
+        ],
+      },
+      'tool-model'
+    )
+
+    expect(resolved.tools.capability.participate_in_selection).toBe(false)
   })
 
   it('rejects inverted ranges and clamp rules without a boundary', () => {

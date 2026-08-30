@@ -205,12 +205,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}
 
+	selectionRequestBody, _ := common.GetContextKeyType[[]byte](c, constant.ContextKeySelectionRequestBody)
 	retryParam := &service.RetryParam{
 		Ctx:               c,
 		TokenGroup:        relayInfo.TokenGroup,
 		ModelName:         relayInfo.OriginModelName,
 		RequestPath:       c.Request.URL.Path,
 		VideoResolution:   common.GetContextKeyString(c, constant.ContextKeyVideoResolution),
+		RequestBody:       selectionRequestBody,
 		AllowedChannelIds: assetAllowedChannelIds(c),
 		Retry:             common.GetPointer(0),
 	}
@@ -577,12 +579,14 @@ func RelayTask(c *gin.Context) {
 		}
 	}()
 
+	selectionRequestBody, _ := common.GetContextKeyType[[]byte](c, constant.ContextKeySelectionRequestBody)
 	retryParam := &service.RetryParam{
 		Ctx:               c,
 		TokenGroup:        relayInfo.TokenGroup,
 		ModelName:         relayInfo.OriginModelName,
 		RequestPath:       c.Request.URL.Path,
 		VideoResolution:   common.GetContextKeyString(c, constant.ContextKeyVideoResolution),
+		RequestBody:       selectionRequestBody,
 		AllowedChannelIds: assetAllowedChannelIds(c),
 		Retry:             common.GetPointer(0),
 	}

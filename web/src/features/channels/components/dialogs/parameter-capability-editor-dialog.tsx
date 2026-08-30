@@ -101,7 +101,11 @@ const PARAMETER_CAPABILITY_JSON_PLACEHOLDER = JSON.stringify(
         name: 'Model constraints',
         selector: { type: 'exact', value: 'model-name' },
         parameters: {
-          temperature: { min: 0, max: 1, on_violation: 'reject' },
+          'messages.*.content.*.image_url': {
+            supported: false,
+            on_violation: 'reject',
+            participate_in_selection: true,
+          },
         },
       },
     ],
@@ -124,6 +128,12 @@ const ACTION_OPTIONS: Array<{
   { value: 'drop', label: 'Drop parameter' },
   { value: 'clamp', label: 'Clamp to range' },
 ]
+
+const SELECTION_OPTIONS = [
+  { value: 'inherit', label: 'Inherit' },
+  { value: 'enabled', label: 'Use for channel selection' },
+  { value: 'disabled', label: 'Do not use for channel selection' },
+] as const
 
 export function ParameterCapabilityEditorDialog(
   props: ParameterCapabilityEditorDialogProps
@@ -817,6 +827,16 @@ function ParameterCapabilityRow(props: {
     value: option.value,
     label: t(option.label),
   }))
+  const selectionItems = SELECTION_OPTIONS.map((option) => ({
+    value: option.value,
+    label: t(option.label),
+  }))
+  const selectionValue =
+    capability.participate_in_selection === undefined
+      ? 'inherit'
+      : capability.participate_in_selection
+        ? 'enabled'
+        : 'disabled'
   return (
     <div className='flex flex-col gap-4 rounded-lg border p-4'>
       <div className='flex items-center gap-3'>
@@ -843,7 +863,7 @@ function ParameterCapabilityRow(props: {
           <Trash2 aria-hidden='true' />
         </Button>
       </div>
-      <FieldGroup className='grid grid-cols-2 gap-3 lg:grid-cols-5'>
+      <FieldGroup className='grid grid-cols-2 gap-3 lg:grid-cols-6'>
         <Field>
           <FieldLabel htmlFor={`${props.path}-support`}>
             {t('Support status')}
@@ -960,6 +980,35 @@ function ParameterCapabilityRow(props: {
                       item.value !== 'reject'
                     }
                   >
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field>
+          <FieldLabel htmlFor={`${props.path}-selection`}>
+            {t('Channel selection')}
+          </FieldLabel>
+          <Select
+            items={selectionItems}
+            value={selectionValue}
+            onValueChange={(value) =>
+              props.onChange({
+                ...capability,
+                participate_in_selection:
+                  value === 'inherit' ? undefined : value === 'enabled',
+              })
+            }
+          >
+            <SelectTrigger id={`${props.path}-selection`} className='w-full'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                {selectionItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
                     {item.label}
                   </SelectItem>
                 ))}

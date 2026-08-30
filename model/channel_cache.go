@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayparam"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
@@ -25,6 +27,7 @@ var channelsIDM map[int]*Channel                                      // all cha
 // path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var channel2videoCapabilityConfig map[int]*dto.VideoCapabilityConfig
+var channel2parameterCapabilityConfig map[int]*dto.ParameterCapabilityConfig
 var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
@@ -35,6 +38,7 @@ func InitChannelCache() {
 	newChannelId2channel := make(map[int]*Channel)
 	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
 	newChannel2videoCapabilityConfig := make(map[int]*dto.VideoCapabilityConfig)
+	newChannel2parameterCapabilityConfig := make(map[int]*dto.ParameterCapabilityConfig)
 	var channels []*Channel
 	if err := DB.Find(&channels).Error; err != nil {
 		common.SysLog(fmt.Sprintf("failed to sync channels from database: %v", err))
@@ -49,6 +53,9 @@ func InitChannelCache() {
 		}
 		if config := channel.GetOtherSettings().VideoCapabilities; config != nil {
 			newChannel2videoCapabilityConfig[channel.Id] = config
+		}
+		if config := channel.GetOtherSettings().ParameterCapabilities; config != nil {
+			newChannel2parameterCapabilityConfig[channel.Id] = config
 		}
 	}
 	var abilities []*Ability
@@ -110,6 +117,7 @@ func InitChannelCache() {
 	channelsIDM = newChannelId2channel
 	channel2advancedCustomConfig = newChannel2advancedCustomConfig
 	channel2videoCapabilityConfig = newChannel2videoCapabilityConfig
+	channel2parameterCapabilityConfig = newChannel2parameterCapabilityConfig
 	channelSyncLock.Unlock()
 	// Lock ordering: InvalidatePricingCache acquires updatePricingLock, and
 	// GetPricing (holding updatePricingLock) nests channelSyncLock.RLock via
@@ -140,28 +148,55 @@ func GetRandomSatisfiedChannelWithFilter(group string, model string, retry int, 
 // GetRandomSatisfiedChannelWithFilters selects a channel after applying request
 // path, video resolution, and optional asset-replica constraints.
 func GetRandomSatisfiedChannelWithFilters(group string, model string, retry int, requestPath string, videoResolution string, allowedChannelIds map[int]struct{}) (*Channel, error) {
+	return GetRandomSatisfiedChannelWithSelectionFilters(group, model, retry, ChannelSelectionFilters{
+		RequestPath:       requestPath,
+		VideoResolution:   videoResolution,
+		AllowedChannelIds: allowedChannelIds,
+	})
+}
+
+func GetRandomSatisfiedChannelWithSelectionFilters(group string, model string, retry int, filters ChannelSelectionFilters) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannelWithFilters(group, model, retry, requestPath, videoResolution, allowedChannelIds)
+		return GetChannelWithSelectionFilters(group, model, retry, filters)
 	}
 
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
-	// First, try to find channels with the exact model name.
-	routings := filterChannelsByRequestPathAndModel(group2model2channels[group][model], requestPath, model)
-	routings = filterChannelRoutingsByAllowedIds(routings, allowedChannelIds)
-
-	// If no channels found, try to find channels with the normalized model name.
+	// First, try the exact model abilities. If all exact candidates fail request
+	// constraints, normalized-model abilities remain eligible as a fallback.
+	routings, resolutionCandidateCount, parameterCandidateCount, firstParameterViolation, selectionErr := filterCachedChannelSelectionCandidates(
+		group2model2channels[group][model], filters, model,
+	)
 	if len(routings) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		routings = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
-		routings = filterChannelRoutingsByAllowedIds(routings, allowedChannelIds)
+		if normalizedModel != "" && normalizedModel != model {
+			var normalizedResolutionCandidateCount int
+			var normalizedParameterCandidateCount int
+			var normalizedViolation error
+			var normalizedErr error
+			routings, normalizedResolutionCandidateCount, normalizedParameterCandidateCount, normalizedViolation, normalizedErr = filterCachedChannelSelectionCandidates(
+				group2model2channels[group][normalizedModel], filters, model,
+			)
+			if selectionErr == nil {
+				selectionErr = normalizedErr
+			}
+			resolutionCandidateCount += normalizedResolutionCandidateCount
+			parameterCandidateCount += normalizedParameterCandidateCount
+			if firstParameterViolation == nil {
+				firstParameterViolation = normalizedViolation
+			}
+		}
 	}
-	resolutionCandidates := routings
-	routings = filterChannelRoutingsByVideoResolution(routings, channel2videoCapabilityConfig, model, videoResolution)
-	if videoResolution != "" && len(resolutionCandidates) > 0 && len(routings) == 0 {
-		return nil, newVideoResolutionUnsupportedError(model, videoResolution)
+	if len(routings) == 0 && selectionErr != nil {
+		return nil, selectionErr
+	}
+	if len(routings) == 0 && filters.VideoResolution != "" && resolutionCandidateCount > 0 && parameterCandidateCount == 0 {
+		return nil, newVideoResolutionUnsupportedError(model, filters.VideoResolution)
+	}
+	if len(routings) == 0 && firstParameterViolation != nil && parameterCandidateCount > 0 {
+		return nil, newParameterCapabilityUnsupportedError(model, firstParameterViolation)
 	}
 
 	if len(routings) == 0 {
@@ -217,6 +252,50 @@ func GetRandomSatisfiedChannelWithFilters(group string, model string, retry int,
 		return channel, nil
 	}
 	return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+}
+
+func filterCachedChannelSelectionCandidates(routings []cachedChannelRouting, filters ChannelSelectionFilters, requestModel string) ([]cachedChannelRouting, int, int, error, error) {
+	routings = filterChannelsByRequestPathAndModel(routings, filters.RequestPath, requestModel)
+	routings = filterChannelRoutingsByAllowedIds(routings, filters.AllowedChannelIds)
+	resolutionCandidateCount := len(routings)
+	routings = filterChannelRoutingsByVideoResolution(routings, channel2videoCapabilityConfig, requestModel, filters.VideoResolution)
+	parameterCandidateCount := len(routings)
+	filtered, firstViolation, err := filterChannelRoutingsBySelectionParameters(routings, channel2parameterCapabilityConfig, channelsIDM, requestModel, filters.RequestBody)
+	return filtered, resolutionCandidateCount, parameterCandidateCount, firstViolation, err
+}
+
+func filterChannelRoutingsBySelectionParameters(routings []cachedChannelRouting, configs map[int]*dto.ParameterCapabilityConfig, channels map[int]*Channel, requestModel string, requestBody []byte) ([]cachedChannelRouting, error, error) {
+	if len(requestBody) == 0 || len(routings) == 0 {
+		return routings, nil, nil
+	}
+	filtered := make([]cachedChannelRouting, 0, len(routings))
+	var firstViolation error
+	var firstConfigurationError error
+	for _, routing := range routings {
+		channel := channels[routing.ChannelId]
+		if channel == nil {
+			filtered = append(filtered, routing)
+			continue
+		}
+		supported, err := supportsSelectionParameters(channel, configs[routing.ChannelId], requestModel, requestBody)
+		if err != nil {
+			var violation *relayparam.CapabilityViolationError
+			if !errors.As(err, &violation) {
+				if firstConfigurationError == nil {
+					firstConfigurationError = err
+				}
+				continue
+			}
+			if firstViolation == nil {
+				firstViolation = violation
+			}
+			continue
+		}
+		if supported {
+			filtered = append(filtered, routing)
+		}
+	}
+	return filtered, firstViolation, firstConfigurationError
 }
 
 func filterChannelRoutingsByAllowedIds(routings []cachedChannelRouting, allowedChannelIds map[int]struct{}) []cachedChannelRouting {
@@ -353,6 +432,9 @@ func CacheUpdateChannel(channel *Channel) {
 	if channel2videoCapabilityConfig == nil {
 		channel2videoCapabilityConfig = make(map[int]*dto.VideoCapabilityConfig)
 	}
+	if channel2parameterCapabilityConfig == nil {
+		channel2parameterCapabilityConfig = make(map[int]*dto.ParameterCapabilityConfig)
+	}
 	delete(channel2advancedCustomConfig, channel.Id)
 	if channel.Type == constant.ChannelTypeAdvancedCustom {
 		if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
@@ -362,6 +444,10 @@ func CacheUpdateChannel(channel *Channel) {
 	delete(channel2videoCapabilityConfig, channel.Id)
 	if config := channel.GetOtherSettings().VideoCapabilities; config != nil {
 		channel2videoCapabilityConfig[channel.Id] = config
+	}
+	delete(channel2parameterCapabilityConfig, channel.Id)
+	if config := channel.GetOtherSettings().ParameterCapabilities; config != nil {
+		channel2parameterCapabilityConfig[channel.Id] = config
 	}
 	logger.LogDebug(nil, "CacheUpdateChannel after: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, channel.ChannelInfo.MultiKeyPollingIndex)
 	// Lock ordering: do NOT hold channelSyncLock while calling

@@ -16,6 +16,7 @@ type RetryParam struct {
 	ModelName       string
 	RequestPath     string
 	VideoResolution string
+	RequestBody     []byte
 
 	// AllowedChannelIds is nil for ordinary requests. A non-nil map restricts
 	// selection to channels that can resolve every local asset reference.
@@ -121,11 +122,16 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, err = model.GetRandomSatisfiedChannelWithFilters(autoGroup, param.ModelName, priorityRetry, param.RequestPath, param.VideoResolution, param.AllowedChannelIds)
-			if err != nil && !errors.Is(err, model.ErrVideoResolutionUnsupported) {
+			channel, err = model.GetRandomSatisfiedChannelWithSelectionFilters(autoGroup, param.ModelName, priorityRetry, model.ChannelSelectionFilters{
+				RequestPath:       param.RequestPath,
+				VideoResolution:   param.VideoResolution,
+				RequestBody:       param.RequestBody,
+				AllowedChannelIds: param.AllowedChannelIds,
+			})
+			if err != nil && !errors.Is(err, model.ErrVideoResolutionUnsupported) && !errors.Is(err, model.ErrParameterCapabilityUnsupported) {
 				return nil, autoGroup, err
 			}
-			if errors.Is(err, model.ErrVideoResolutionUnsupported) {
+			if errors.Is(err, model.ErrVideoResolutionUnsupported) || errors.Is(err, model.ErrParameterCapabilityUnsupported) {
 				lastSelectionErr = err
 			}
 			if channel == nil {
@@ -168,7 +174,12 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			return nil, selectGroup, lastSelectionErr
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannelWithFilters(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, param.VideoResolution, param.AllowedChannelIds)
+		channel, err = model.GetRandomSatisfiedChannelWithSelectionFilters(param.TokenGroup, param.ModelName, param.GetRetry(), model.ChannelSelectionFilters{
+			RequestPath:       param.RequestPath,
+			VideoResolution:   param.VideoResolution,
+			RequestBody:       param.RequestBody,
+			AllowedChannelIds: param.AllowedChannelIds,
+		})
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
