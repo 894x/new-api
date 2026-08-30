@@ -210,7 +210,7 @@ func TestListModelChannelCapabilitiesFallsBackToLegacyForInvalidConditions(t *te
 	clearChannelModelRoutingTables(t)
 	priority := int64(0)
 	weight := uint(0)
-	paramOverride := `{"operations":[{"mode":"set","path":"max_tokens","conditions":[{"path":"","mode":"full"}]}]}`
+	paramOverride := `{"operations":[{"mode":"set","path":"max_tokens","api_key":"fallback-secret","conditions":[{"path":"","mode":"full"}]}]}`
 	channel := &Channel{
 		Id:            6205,
 		Type:          1,
@@ -234,6 +234,9 @@ func TestListModelChannelCapabilitiesFallsBackToLegacyForInvalidConditions(t *te
 	assert.Equal(t, "legacy", capability.ParameterOverrideMode)
 	assert.Contains(t, capability.ParameterOverrideLegacy, "operations")
 	assert.Empty(t, capability.ParameterOverrideOperations)
+	responseJSON, err := common.Marshal(capability)
+	require.NoError(t, err)
+	assert.NotContains(t, string(responseJSON), "fallback-secret")
 }
 
 func TestListModelChannelCapabilitiesRedactsSensitiveOverrideValues(t *testing.T) {

@@ -107,14 +107,22 @@ func redactModelChannelCapabilityOverrideConfig(value any) any {
 		_, hasValue := typedValue["value"]
 		if strings.TrimSpace(path) != "" && (hasMode || hasValue) {
 			for key, nestedValue := range typedValue {
+				normalizedKey := strings.ToLower(strings.TrimSpace(key))
 				switch {
-				case strings.EqualFold(strings.TrimSpace(key), "value"):
+				case normalizedKey == "value":
 					redacted[key] = modelChannelCapabilityOverrideDisplayValue(path, nestedValue)
-				case (strings.EqualFold(strings.TrimSpace(key), "from") || strings.EqualFold(strings.TrimSpace(key), "to")) &&
+				case (normalizedKey == "from" || normalizedKey == "to") &&
 					(strings.EqualFold(strings.TrimSpace(mode), "replace") || strings.EqualFold(strings.TrimSpace(mode), "regex_replace")):
 					redacted[key] = modelChannelCapabilityOverrideDisplayValue(path, nestedValue)
-				default:
+				case normalizedKey == "conditions":
 					redacted[key] = redactModelChannelCapabilityOverrideConfig(nestedValue)
+				case normalizedKey == "mode", normalizedKey == "path", normalizedKey == "description",
+					normalizedKey == "keep_origin", normalizedKey == "logic", normalizedKey == "invert",
+					normalizedKey == "pass_missing_key", normalizedKey == "order",
+					normalizedKey == "from", normalizedKey == "to":
+					redacted[key] = nestedValue
+				default:
+					redacted[key] = modelChannelCapabilityRedactedValue
 				}
 			}
 			return redacted
@@ -130,11 +138,16 @@ func redactModelChannelCapabilityOverrideConfig(value any) any {
 	case []any:
 		redacted := make([]any, len(typedValue))
 		for index, nestedValue := range typedValue {
-			redacted[index] = redactModelChannelCapabilityOverrideConfig(nestedValue)
+			switch nestedValue.(type) {
+			case map[string]any, []any:
+				redacted[index] = redactModelChannelCapabilityOverrideConfig(nestedValue)
+			default:
+				redacted[index] = modelChannelCapabilityRedactedValue
+			}
 		}
 		return redacted
 	default:
-		return value
+		return modelChannelCapabilityRedactedValue
 	}
 }
 
