@@ -43,6 +43,7 @@ type DialogType =
   | 'prefill-groups'
   | 'description'
   | 'edit-document'
+  | 'view-channel-capabilities'
   | null
 
 type ModelsContextType = {

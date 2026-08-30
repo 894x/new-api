@@ -449,6 +449,20 @@ func GetModelChannelRoutingOverrides(c *gin.Context) {
 	common.ApiSuccess(c, routings)
 }
 
+func GetModelChannelCapabilities(c *gin.Context) {
+	modelName := strings.TrimSpace(c.Query("model"))
+	if modelName == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	capabilities, err := model.ListModelChannelCapabilities(modelName)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, capabilities)
+}
+
 func PatchChannelModelRoutingOverrides(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {

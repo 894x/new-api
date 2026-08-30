@@ -38,6 +38,7 @@ import type {
   SyncOverwritePayload,
   DeploymentSettingsResponse,
   ListDeploymentsResponse,
+  ModelChannelCapabilitiesResponse,
 } from './types'
 
 // ============================================================================
@@ -70,6 +71,19 @@ export async function searchModels(
 export async function getModel(id: number): Promise<GetModelResponse> {
   const res = await api.get(`/api/models/${id}`)
   return res.data
+}
+
+export async function getModelChannelCapabilities(
+  model: string
+): Promise<ModelChannelCapabilitiesResponse> {
+  const res = await api.get('/api/channel/model-capabilities', {
+    params: { model },
+  })
+  const response = res.data as ModelChannelCapabilitiesResponse
+  if (!response.success || !response.data) {
+    throw new Error(response.message || 'Failed to load channel capabilities')
+  }
+  return response
 }
 
 /**
