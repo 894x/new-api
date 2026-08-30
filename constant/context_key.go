@@ -8,10 +8,11 @@ const (
 	ContextKeyEstimatedTokens            ContextKey = "estimated_tokens"
 	ContextKeyModelRequestTPMReservation ContextKey = "model_request_tpm_reservation"
 
-	ContextKeyOriginalModel    ContextKey = "original_model"
-	ContextKeyRequestStartTime ContextKey = "request_start_time"
-	ContextKeyVideoResolution  ContextKey = "video_resolution"
-	ContextKeyResponseId       ContextKey = "response_id"
+	ContextKeyOriginalModel        ContextKey = "original_model"
+	ContextKeyRequestStartTime     ContextKey = "request_start_time"
+	ContextKeyVideoResolution      ContextKey = "video_resolution"
+	ContextKeySelectionRequestBody ContextKey = "selection_request_body"
+	ContextKeyResponseId           ContextKey = "response_id"
 
 	/* token related keys */
 	ContextKeyTokenUnlimited         ContextKey = "token_unlimited_quota"

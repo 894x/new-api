@@ -33,6 +33,11 @@ export const PARAMETER_CAPABILITY_CATALOG = [
   { path: 'tool_choice', category: 'Tools', kind: 'enum' },
   { path: 'parallel_tool_calls', category: 'Tools', kind: 'presence' },
   { path: 'response_format.type', category: 'Output', kind: 'enum' },
+  {
+    path: 'messages.*.content.*.image_url',
+    category: 'Multimodal',
+    kind: 'presence',
+  },
   { path: 'size', category: 'Multimodal', kind: 'enum' },
   { path: 'quality', category: 'Multimodal', kind: 'enum' },
 ] as const
@@ -78,7 +83,7 @@ export interface ParameterCapabilityConfigError {
 }
 
 const PARAMETER_PATH_PATTERN =
-  /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*$/
+  /^[A-Za-z_][A-Za-z0-9_-]*(?:\.(?:[A-Za-z_][A-Za-z0-9_-]*|\*))*$/
 const BILLING_SENSITIVE_PARAMETER_PATHS = new Set([
   'max_tokens',
   'max_completion_tokens',
@@ -179,6 +184,7 @@ function isParameterCapability(value: unknown): value is ParameterCapability {
       'max',
       'allowed_values',
       'on_violation',
+      'participate_in_selection',
     ])
   ) {
     return false
@@ -196,7 +202,9 @@ function isParameterCapability(value: unknown): value is ParameterCapability {
     (value.on_violation === undefined ||
       value.on_violation === 'reject' ||
       value.on_violation === 'drop' ||
-      value.on_violation === 'clamp')
+      value.on_violation === 'clamp') &&
+    (value.participate_in_selection === undefined ||
+      typeof value.participate_in_selection === 'boolean')
   )
 }
 
@@ -310,85 +318,87 @@ export function evaluateParameterCapabilities(
   const resolved = resolveParameterCapabilities(config, model)
 
   for (const parameter of Object.keys(resolved).sort()) {
-    const current = getPathValue(request, parameter)
-    if (!current.exists) continue
     const capability = resolved[parameter].capability
     const action = capability.on_violation || 'reject'
-    let reason: CapabilityEvaluation['reason'] | '' = ''
-    let constraint: number | string | undefined
-    let clampValue: number | undefined
+    const currentValues = getPathValues(request, parameter)
+    if (action === 'drop') currentValues.reverse()
+    for (const current of currentValues) {
+      let reason: CapabilityEvaluation['reason'] | '' = ''
+      let constraint: number | string | undefined
+      let clampValue: number | undefined
 
-    if (capability.supported === false) {
-      reason = 'unsupported'
-    } else if (capability.min !== undefined || capability.max !== undefined) {
-      if (typeof current.value !== 'number') {
-        reason = 'number_required'
-      } else if (
-        capability.min !== undefined &&
-        current.value < capability.min
-      ) {
-        reason = 'minimum'
-        constraint = capability.min
-        clampValue = capability.min
-      } else if (
-        capability.max !== undefined &&
-        current.value > capability.max
-      ) {
-        reason = 'maximum'
-        constraint = capability.max
-        clampValue = capability.max
+      if (capability.supported === false) {
+        reason = 'unsupported'
+      } else if (capability.min !== undefined || capability.max !== undefined) {
+        if (typeof current.value !== 'number') {
+          reason = 'number_required'
+        } else if (
+          capability.min !== undefined &&
+          current.value < capability.min
+        ) {
+          reason = 'minimum'
+          constraint = capability.min
+          clampValue = capability.min
+        } else if (
+          capability.max !== undefined &&
+          current.value > capability.max
+        ) {
+          reason = 'maximum'
+          constraint = capability.max
+          clampValue = capability.max
+        }
       }
-    }
 
-    if (
-      !reason &&
-      capability.allowed_values?.length &&
-      !capability.allowed_values.includes(String(current.value))
-    ) {
-      reason = 'allowed_values'
-      constraint = capability.allowed_values.join(', ')
-    }
+      if (
+        !reason &&
+        capability.allowed_values?.length &&
+        !capability.allowed_values.includes(String(current.value))
+      ) {
+        reason = 'allowed_values'
+        constraint = capability.allowed_values.join(', ')
+      }
 
-    if (!reason) {
+      if (!reason) {
+        evaluations.push({
+          parameter: current.path,
+          status: 'compatible',
+          reason: 'compatible',
+          from: current.value,
+        })
+        continue
+      }
+
+      if (action === 'drop') {
+        deletePathValue(request, current.path)
+        evaluations.push({
+          parameter: current.path,
+          status: 'dropped',
+          reason,
+          constraint,
+          from: current.value,
+        })
+        continue
+      }
+      if (action === 'clamp' && clampValue !== undefined) {
+        setPathValue(request, current.path, clampValue)
+        evaluations.push({
+          parameter: current.path,
+          status: 'clamped',
+          reason,
+          constraint,
+          from: current.value,
+          to: clampValue,
+        })
+        continue
+      }
       evaluations.push({
-        parameter,
-        status: 'compatible',
-        reason: 'compatible',
-        from: current.value,
-      })
-      continue
-    }
-
-    if (action === 'drop') {
-      deletePathValue(request, parameter)
-      evaluations.push({
-        parameter,
-        status: 'dropped',
+        parameter: current.path,
+        status: 'rejected',
         reason,
         constraint,
         from: current.value,
       })
-      continue
     }
-    if (action === 'clamp' && clampValue !== undefined) {
-      setPathValue(request, parameter, clampValue)
-      evaluations.push({
-        parameter,
-        status: 'clamped',
-        reason,
-        constraint,
-        from: current.value,
-        to: clampValue,
-      })
-      continue
-    }
-    evaluations.push({
-      parameter,
-      status: 'rejected',
-      reason,
-      constraint,
-      from: current.value,
-    })
   }
 
   return {
@@ -465,17 +475,49 @@ function validateCapabilityMap(
   }
 }
 
-function getPathValue(
+function getPathValues(
   object: Record<string, unknown>,
   path: string
-): { exists: boolean; value?: unknown } {
+): Array<{ path: string; value: unknown }> {
   const parts = path.split('.')
-  let current: unknown = object
-  for (const part of parts) {
-    if (!isRecord(current) || !(part in current)) return { exists: false }
-    current = current[part]
+  const matches: Array<{ path: string; value: unknown }> = []
+
+  function visit(current: unknown, index: number, concrete: string[]): void {
+    if (index === parts.length) {
+      matches.push({ path: concrete.join('.'), value: current })
+      return
+    }
+    const part = parts[index]
+    if (part === '*') {
+      if (Array.isArray(current)) {
+        current.forEach((value, arrayIndex) =>
+          visit(value, index + 1, [...concrete, String(arrayIndex)])
+        )
+      } else if (isRecord(current)) {
+        for (const key of Object.keys(current).sort()) {
+          visit(current[key], index + 1, [...concrete, key])
+        }
+      }
+      return
+    }
+    if (Array.isArray(current)) {
+      const arrayIndex = Number(part)
+      if (
+        Number.isInteger(arrayIndex) &&
+        arrayIndex >= 0 &&
+        arrayIndex < current.length
+      ) {
+        visit(current[arrayIndex], index + 1, [...concrete, part])
+      }
+      return
+    }
+    if (isRecord(current) && part in current) {
+      visit(current[part], index + 1, [...concrete, part])
+    }
   }
-  return { exists: true, value: current }
+
+  visit(object, 0, [])
+  return matches
 }
 
 function setPathValue(
@@ -484,24 +526,70 @@ function setPathValue(
   value: unknown
 ): void {
   const parts = path.split('.')
-  let current = object
+  let current: unknown = object
   for (let index = 0; index < parts.length - 1; index += 1) {
     const part = parts[index]
-    if (!isRecord(current[part])) current[part] = {}
-    current = current[part] as Record<string, unknown>
+    if (Array.isArray(current)) {
+      const arrayIndex = Number(part)
+      if (
+        !Number.isInteger(arrayIndex) ||
+        arrayIndex < 0 ||
+        arrayIndex >= current.length
+      )
+        return
+      current = current[arrayIndex]
+      continue
+    }
+    if (!isRecord(current) || !(part in current)) return
+    current = current[part]
   }
-  current[parts.at(-1) as string] = value
+  const last = parts.at(-1) as string
+  if (Array.isArray(current)) {
+    const arrayIndex = Number(last)
+    if (
+      Number.isInteger(arrayIndex) &&
+      arrayIndex >= 0 &&
+      arrayIndex < current.length
+    ) {
+      current[arrayIndex] = value
+    }
+  } else if (isRecord(current)) {
+    current[last] = value
+  }
 }
 
 function deletePathValue(object: Record<string, unknown>, path: string): void {
   const parts = path.split('.')
-  let current = object
+  let current: unknown = object
   for (let index = 0; index < parts.length - 1; index += 1) {
-    const next = current[parts[index]]
-    if (!isRecord(next)) return
-    current = next
+    const part = parts[index]
+    if (Array.isArray(current)) {
+      const arrayIndex = Number(part)
+      if (
+        !Number.isInteger(arrayIndex) ||
+        arrayIndex < 0 ||
+        arrayIndex >= current.length
+      )
+        return
+      current = current[arrayIndex]
+      continue
+    }
+    if (!isRecord(current) || !(part in current)) return
+    current = current[part]
   }
-  delete current[parts.at(-1) as string]
+  const last = parts.at(-1) as string
+  if (Array.isArray(current)) {
+    const arrayIndex = Number(last)
+    if (
+      Number.isInteger(arrayIndex) &&
+      arrayIndex >= 0 &&
+      arrayIndex < current.length
+    ) {
+      current.splice(arrayIndex, 1)
+    }
+  } else if (isRecord(current)) {
+    delete current[last]
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

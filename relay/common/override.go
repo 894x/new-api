@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/relaykit/relayparam"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
@@ -1623,73 +1623,7 @@ func isPathBasedOperation(mode string) bool {
 }
 
 func resolveOperationPaths(data []byte, path string) ([]string, error) {
-	if !strings.Contains(path, "*") {
-		return []string{path}, nil
-	}
-	return expandWildcardPaths(data, path)
-}
-
-func expandWildcardPaths(data []byte, path string) ([]string, error) {
-	var root interface{}
-	if err := common.Unmarshal(data, &root); err != nil {
-		return nil, err
-	}
-
-	segments := strings.Split(path, ".")
-	paths := collectWildcardPaths(root, segments, nil)
-	return lo.Uniq(paths), nil
-}
-
-func collectWildcardPaths(node interface{}, segments []string, prefix []string) []string {
-	if len(segments) == 0 {
-		return []string{strings.Join(prefix, ".")}
-	}
-
-	segment := strings.TrimSpace(segments[0])
-	if segment == "" {
-		return nil
-	}
-	isLast := len(segments) == 1
-
-	if segment == "*" {
-		switch typed := node.(type) {
-		case map[string]interface{}:
-			keys := lo.Keys(typed)
-			sort.Strings(keys)
-			return lo.FlatMap(keys, func(key string, _ int) []string {
-				return collectWildcardPaths(typed[key], segments[1:], append(prefix, key))
-			})
-		case []interface{}:
-			return lo.FlatMap(lo.Range(len(typed)), func(index int, _ int) []string {
-				return collectWildcardPaths(typed[index], segments[1:], append(prefix, strconv.Itoa(index)))
-			})
-		default:
-			return nil
-		}
-	}
-
-	switch typed := node.(type) {
-	case map[string]interface{}:
-		if isLast {
-			return []string{strings.Join(append(prefix, segment), ".")}
-		}
-		next, exists := typed[segment]
-		if !exists {
-			return nil
-		}
-		return collectWildcardPaths(next, segments[1:], append(prefix, segment))
-	case []interface{}:
-		index, err := strconv.Atoi(segment)
-		if err != nil || index < 0 || index >= len(typed) {
-			return nil
-		}
-		if isLast {
-			return []string{strings.Join(append(prefix, segment), ".")}
-		}
-		return collectWildcardPaths(typed[index], segments[1:], append(prefix, segment))
-	default:
-		return nil
-	}
+	return relayparam.ResolveJSONPaths(data, path, true)
 }
 
 func deleteValue(data []byte, path string) ([]byte, error) {

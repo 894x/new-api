@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayparam"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/samber/lo"
@@ -105,34 +106,39 @@ func GetChannelWithFilter(group string, model string, retry int, requestPath str
 // GetChannelWithFilters selects a DB-backed channel after applying request
 // path, video resolution, and optional asset-replica constraints.
 func GetChannelWithFilters(group string, model string, retry int, requestPath string, videoResolution string, allowedChannelIds map[int]struct{}) (*Channel, error) {
+	return GetChannelWithSelectionFilters(group, model, retry, ChannelSelectionFilters{
+		RequestPath:       requestPath,
+		VideoResolution:   videoResolution,
+		AllowedChannelIds: allowedChannelIds,
+	})
+}
+
+func GetChannelWithSelectionFilters(group string, model string, retry int, filters ChannelSelectionFilters) (*Channel, error) {
 	var abilities []Ability
-	allowedChannelIdSlice := make([]int, 0, len(allowedChannelIds))
-	if allowedChannelIds != nil {
-		if len(allowedChannelIds) == 0 {
+	allowedChannelIdSlice := make([]int, 0, len(filters.AllowedChannelIds))
+	if filters.AllowedChannelIds != nil {
+		if len(filters.AllowedChannelIds) == 0 {
 			return nil, nil
 		}
-		for channelId := range allowedChannelIds {
+		for channelId := range filters.AllowedChannelIds {
 			allowedChannelIdSlice = append(allowedChannelIdSlice, channelId)
 		}
 	}
 
 	query := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
-	if allowedChannelIds != nil {
+	if filters.AllowedChannelIds != nil {
 		query = query.Where("channel_id IN ?", allowedChannelIdSlice)
 	}
 	err := query.Order("weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
-	abilities, pathEligibleCount, err := filterAbilitiesByRequestPathModelAndVideoResolution(abilities, requestPath, model, videoResolution)
-	if err != nil {
-		return nil, err
-	}
+	abilities, pathEligibleCount, parameterCandidateCount, firstParameterViolation, selectionErr := filterAbilitiesBySelectionFilters(abilities, filters, model)
 	if len(abilities) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		if normalizedModel != "" && normalizedModel != model {
 			query = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, normalizedModel, true)
-			if allowedChannelIds != nil {
+			if filters.AllowedChannelIds != nil {
 				query = query.Where("channel_id IN ?", allowedChannelIdSlice)
 			}
 			err = query.Order("weight DESC").Find(&abilities).Error
@@ -140,15 +146,28 @@ func GetChannelWithFilters(group string, model string, retry int, requestPath st
 				return nil, err
 			}
 			var normalizedPathEligibleCount int
-			abilities, normalizedPathEligibleCount, err = filterAbilitiesByRequestPathModelAndVideoResolution(abilities, requestPath, model, videoResolution)
-			if err != nil {
-				return nil, err
+			var normalizedParameterCandidateCount int
+			var normalizedParameterViolation error
+			var normalizedSelectionErr error
+			abilities, normalizedPathEligibleCount, normalizedParameterCandidateCount, normalizedParameterViolation, normalizedSelectionErr = filterAbilitiesBySelectionFilters(abilities, filters, model)
+			if selectionErr == nil {
+				selectionErr = normalizedSelectionErr
 			}
 			pathEligibleCount += normalizedPathEligibleCount
+			parameterCandidateCount += normalizedParameterCandidateCount
+			if firstParameterViolation == nil {
+				firstParameterViolation = normalizedParameterViolation
+			}
 		}
 	}
-	if videoResolution != "" && pathEligibleCount > 0 && len(abilities) == 0 {
-		return nil, newVideoResolutionUnsupportedError(model, videoResolution)
+	if len(abilities) == 0 && selectionErr != nil {
+		return nil, selectionErr
+	}
+	if filters.VideoResolution != "" && pathEligibleCount > 0 && parameterCandidateCount == 0 {
+		return nil, newVideoResolutionUnsupportedError(model, filters.VideoResolution)
+	}
+	if firstParameterViolation != nil && parameterCandidateCount > 0 && len(abilities) == 0 {
+		return nil, newParameterCapabilityUnsupportedError(model, firstParameterViolation)
 	}
 	if len(abilities) == 0 {
 		return nil, nil
@@ -183,13 +202,12 @@ func GetChannelWithFilters(group string, model string, retry int, requestPath st
 	return &channel, err
 }
 
-// filterAbilitiesByRequestPathModelAndVideoResolution filters DB-backed
-// candidates before priority selection. Path checks apply only to Advanced
-// Custom channels; video resolution checks are per public model and preserve
-// wildcard behavior when the channel or model has no capability rule.
-func filterAbilitiesByRequestPathModelAndVideoResolution(abilities []Ability, requestPath string, model string, videoResolution string) ([]Ability, int, error) {
-	if (requestPath == "" && videoResolution == "") || len(abilities) == 0 {
-		return abilities, len(abilities), nil
+// filterAbilitiesBySelectionFilters loads each candidate channel once, then
+// applies request path, video resolution, and parameter constraints before
+// priority and weight selection.
+func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelectionFilters, model string) ([]Ability, int, int, error, error) {
+	if (filters.RequestPath == "" && filters.VideoResolution == "" && len(filters.RequestBody) == 0) || len(abilities) == 0 {
+		return abilities, len(abilities), len(abilities), nil, nil
 	}
 
 	channelIds := make([]int, 0, len(abilities))
@@ -201,37 +219,67 @@ func filterAbilitiesByRequestPathModelAndVideoResolution(abilities []Ability, re
 		seen[ability.ChannelId] = struct{}{}
 		channelIds = append(channelIds, ability.ChannelId)
 	}
-
 	var channels []*Channel
 	if err := DB.Where("id IN ?", channelIds).Find(&channels).Error; err != nil {
-		return nil, 0, fmt.Errorf("load channels for capability filtering: %w", err)
+		return nil, 0, 0, nil, fmt.Errorf("load channels for capability filtering: %w", err)
 	}
-
+	channelsByID := make(map[int]*Channel, len(channels))
 	advancedConfigs := make(map[int]*dto.AdvancedCustomConfig)
 	videoConfigs := make(map[int]*dto.VideoCapabilityConfig)
+	parameterConfigs := make(map[int]*dto.ParameterCapabilityConfig)
 	for _, channel := range channels {
+		channelsByID[channel.Id] = channel
+		settings := channel.GetOtherSettings()
 		if channel.Type == constant.ChannelTypeAdvancedCustom {
-			advancedConfigs[channel.Id] = channel.GetOtherSettings().AdvancedCustom
+			advancedConfigs[channel.Id] = settings.AdvancedCustom
 		}
-		if config := channel.GetOtherSettings().VideoCapabilities; config != nil {
-			videoConfigs[channel.Id] = config
+		if settings.VideoCapabilities != nil {
+			videoConfigs[channel.Id] = settings.VideoCapabilities
+		}
+		if settings.ParameterCapabilities != nil {
+			parameterConfigs[channel.Id] = settings.ParameterCapabilities
 		}
 	}
 
 	filtered := make([]Ability, 0, len(abilities))
 	pathEligibleCount := 0
+	parameterCandidateCount := 0
+	var firstViolation error
+	var firstConfigurationError error
 	for _, ability := range abilities {
-		config, isAdvancedCustom := advancedConfigs[ability.ChannelId]
-		if requestPath != "" && isAdvancedCustom && (config == nil || !config.SupportsPathForModel(requestPath, model)) {
+		advancedConfig, isAdvancedCustom := advancedConfigs[ability.ChannelId]
+		if filters.RequestPath != "" && isAdvancedCustom && (advancedConfig == nil || !advancedConfig.SupportsPathForModel(filters.RequestPath, model)) {
 			continue
 		}
 		pathEligibleCount++
-		if !videoConfigs[ability.ChannelId].SupportsResolution(model, videoResolution) {
+		if !videoConfigs[ability.ChannelId].SupportsResolution(model, filters.VideoResolution) {
 			continue
 		}
-		filtered = append(filtered, ability)
+		parameterCandidateCount++
+		channel := channelsByID[ability.ChannelId]
+		if channel == nil {
+			filtered = append(filtered, ability)
+			continue
+		}
+		supported, checkErr := supportsSelectionParameters(channel, parameterConfigs[ability.ChannelId], model, filters.RequestBody)
+		if checkErr != nil {
+			var violation *relayparam.CapabilityViolationError
+			if !errors.As(checkErr, &violation) {
+				if firstConfigurationError == nil {
+					firstConfigurationError = checkErr
+				}
+				continue
+			}
+			if firstViolation == nil {
+				firstViolation = violation
+			}
+			continue
+		}
+		if supported {
+			filtered = append(filtered, ability)
+		}
 	}
-	return filtered, pathEligibleCount, nil
+	return filtered, pathEligibleCount, parameterCandidateCount, firstViolation, firstConfigurationError
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {

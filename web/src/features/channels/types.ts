@@ -151,6 +151,7 @@ export interface ParameterCapability {
   max?: number
   allowed_values?: string[]
   on_violation?: ParameterCapabilityAction
+  participate_in_selection?: boolean
 }
 
 export interface ModelParameterCapabilityRule {

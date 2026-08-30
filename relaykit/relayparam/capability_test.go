@@ -78,3 +78,85 @@ func TestApplyCapabilitiesCanDropNonNumericValueForNumericConstraint(t *testing.
 	require.Len(t, changes, 1)
 	assert.Equal(t, dto.ParameterCapabilityActionDrop, changes[0].Action)
 }
+
+func TestApplyCapabilitiesRejectsUnsupportedValueMatchedThroughArrayWildcards(t *testing.T) {
+	disabled := false
+	config := &dto.ParameterCapabilityConfig{Defaults: map[string]dto.ParameterCapability{
+		"messages.*.content.*.image_url": {
+			Supported: &disabled,
+		},
+	}}
+	request := []byte(`{
+		"messages": [
+			{"role":"system","content":"describe the image"},
+			{"role":"user","content":[
+				{"type":"text","text":"what is this?"},
+				{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}
+			]}
+		]
+	}`)
+
+	_, _, err := ApplyCapabilities(request, config, "vision-disabled-model")
+	var violation *CapabilityViolationError
+	require.ErrorAs(t, err, &violation)
+	assert.Equal(t, "messages.1.content.1.image_url", violation.Parameter)
+	assert.Equal(t, "parameter is not supported", violation.Reason)
+}
+
+func TestCheckSelectionCapabilitiesRejectsParticipatingWildcardConstraintWithoutMutatingRequest(t *testing.T) {
+	disabled := false
+	participates := true
+	config := &dto.ParameterCapabilityConfig{Defaults: map[string]dto.ParameterCapability{
+		"messages.*.content.*.image_url": {
+			Supported:              &disabled,
+			OnViolation:            dto.ParameterCapabilityActionDrop,
+			ParticipateInSelection: &participates,
+		},
+	}}
+	request := []byte(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}]}`)
+	original := append([]byte(nil), request...)
+
+	err := CheckSelectionCapabilities(request, config, "vision-disabled-model")
+	var violation *CapabilityViolationError
+	require.ErrorAs(t, err, &violation)
+	assert.Equal(t, "messages.0.content.0.image_url", violation.Parameter)
+	assert.Equal(t, original, request)
+}
+
+func TestCheckSelectionCapabilitiesIgnoresNonParticipatingAndMissingParameters(t *testing.T) {
+	disabled := false
+	participates := false
+	config := &dto.ParameterCapabilityConfig{Defaults: map[string]dto.ParameterCapability{
+		"messages.*.content.*.image_url": {
+			Supported:              &disabled,
+			ParticipateInSelection: &participates,
+		},
+		"tools": {Supported: &disabled},
+	}}
+
+	require.NoError(t, CheckSelectionCapabilities(
+		[]byte(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}]}`),
+		config,
+		"model-a",
+	))
+
+	participates = true
+	require.NoError(t, CheckSelectionCapabilities([]byte(`{"messages":[{"role":"user","content":"hello"}]}`), config, "model-a"))
+}
+
+func TestApplyCapabilitiesDropsEveryArrayEntryMatchedByWildcard(t *testing.T) {
+	disabled := false
+	config := &dto.ParameterCapabilityConfig{Defaults: map[string]dto.ParameterCapability{
+		"tools.*": {Supported: &disabled, OnViolation: dto.ParameterCapabilityActionDrop},
+	}}
+
+	result, changes, err := ApplyCapabilities(
+		[]byte(`{"tools":[{"name":"a"},{"name":"b"},{"name":"c"}]}`),
+		config,
+		"model-a",
+	)
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"tools":[]}`, string(result))
+	assert.Len(t, changes, 3)
+}

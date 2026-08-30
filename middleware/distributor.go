@@ -30,6 +30,7 @@ type ModelRequest struct {
 	Model           string `json:"model"`
 	Group           string `json:"group,omitempty"`
 	VideoResolution string `json:"-"`
+	RequestBody     []byte `json:"-"`
 }
 
 func Distribute() func(c *gin.Context) {
@@ -43,6 +44,9 @@ func Distribute() func(c *gin.Context) {
 			return
 		}
 		common.SetContextKey(c, constant.ContextKeyVideoResolution, modelRequest.VideoResolution)
+		if len(modelRequest.RequestBody) > 0 {
+			common.SetContextKey(c, constant.ContextKeySelectionRequestBody, modelRequest.RequestBody)
+		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -60,6 +64,15 @@ func Distribute() func(c *gin.Context) {
 			}
 			if !channel.SupportsVideoResolution(modelRequest.Model, modelRequest.VideoResolution) {
 				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": fmt.Sprintf("model %s does not support video resolution %s on channel %d", modelRequest.Model, modelRequest.VideoResolution, channel.Id)}))
+				return
+			}
+			parametersSupported, capabilityErr := channel.SupportsSelectionParameters(modelRequest.Model, modelRequest.RequestBody)
+			if capabilityErr != nil || !parametersSupported {
+				capabilityMessage := model.ErrParameterCapabilityUnsupported.Error()
+				if capabilityErr != nil {
+					capabilityMessage = capabilityErr.Error()
+				}
+				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": capabilityMessage}))
 				return
 			}
 			if assetConstrained {
@@ -119,9 +132,14 @@ func Distribute() func(c *gin.Context) {
 				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
+					parametersSupported := false
+					if err == nil && preferred != nil {
+						parametersSupported, err = preferred.SupportsSelectionParameters(modelRequest.Model, modelRequest.RequestBody)
+					}
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
 						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) &&
 						preferred.SupportsVideoResolution(modelRequest.Model, modelRequest.VideoResolution) &&
+						parametersSupported &&
 						channelAllowedForAssets(preferred.Id, allowedChannelIds, assetConstrained) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
@@ -155,11 +173,12 @@ func Distribute() func(c *gin.Context) {
 						TokenGroup:        usingGroup,
 						RequestPath:       c.Request.URL.Path,
 						VideoResolution:   modelRequest.VideoResolution,
+						RequestBody:       modelRequest.RequestBody,
 						AllowedChannelIds: allowedChannelIds,
 						Retry:             common.GetPointer(0),
 					})
 					if err != nil {
-						if errors.Is(err, model.ErrVideoResolutionUnsupported) {
+						if errors.Is(err, model.ErrVideoResolutionUnsupported) || errors.Is(err, model.ErrParameterCapabilityUnsupported) {
 							abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 							return
 						}
@@ -272,8 +291,9 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 	c.Request.Body = io.NopCloser(storage)
 
 	return &ModelRequest{
-		Model: model,
-		Group: group,
+		Model:       model,
+		Group:       group,
+		RequestBody: requestBody,
 	}, nil
 }
 
@@ -340,6 +360,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 				return nil, false, requestErr
 			}
 			modelRequest.Model = req.Model
+			modelRequest.RequestBody = req.RequestBody
 			relayMode = relayconstant.RelayModeVideoSubmit
 		} else if c.Request.Method == http.MethodGet {
 			relayMode = relayconstant.RelayModeVideoFetchByID
@@ -367,6 +388,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			}
 			if req != nil {
 				modelRequest.Model = req.Model
+				modelRequest.RequestBody = req.RequestBody
 			}
 		} else if c.Request.Method == http.MethodGet {
 			relayMode = relayconstant.RelayModeVideoFetchByID
@@ -383,6 +405,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 				return nil, false, err
 			}
 			modelRequest.Model = req.Model
+			modelRequest.RequestBody = req.RequestBody
 			relayMode = relayconstant.RelayModeVideoSubmit
 		} else if c.Request.Method == http.MethodGet {
 			relayMode = relayconstant.RelayModeVideoFetchByID
@@ -406,6 +429,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			return nil, false, err
 		}
 		modelRequest.Model = req.Model
+		modelRequest.RequestBody = req.RequestBody
 	}
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/realtime") {
 		//wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01
@@ -442,6 +466,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			// 先尝试从请求读取
 			if req, err := getModelFromRequest(c); err == nil && req.Model != "" {
 				modelRequest.Model = req.Model
+				modelRequest.RequestBody = req.RequestBody
 			}
 			modelRequest.Model = common.GetStringIfEmpty(modelRequest.Model, "whisper-1")
 			relayMode = relayconstant.RelayModeAudioTranslation
@@ -449,6 +474,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			// 先尝试从请求读取
 			if req, err := getModelFromRequest(c); err == nil && req.Model != "" {
 				modelRequest.Model = req.Model
+				modelRequest.RequestBody = req.RequestBody
 			}
 			modelRequest.Model = common.GetStringIfEmpty(modelRequest.Model, "whisper-1")
 			relayMode = relayconstant.RelayModeAudioTranscription
@@ -463,12 +489,23 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		}
 		modelRequest.Model = req.Model
 		modelRequest.Group = req.Group
+		modelRequest.RequestBody = req.RequestBody
 		common.SetContextKey(c, constant.ContextKeyTokenGroup, modelRequest.Group)
 	}
 
 	if videoSubmitRequest {
 		if err := setVideoRequestResolution(c, &modelRequest); err != nil {
 			return nil, false, err
+		}
+	}
+	if shouldSelectChannel && len(modelRequest.RequestBody) == 0 && strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json") {
+		storage, bodyErr := common.GetBodyStorage(c)
+		if bodyErr != nil {
+			return nil, false, bodyErr
+		}
+		modelRequest.RequestBody, bodyErr = storage.Bytes()
+		if bodyErr != nil {
+			return nil, false, bodyErr
 		}
 	}
 	return &modelRequest, shouldSelectChannel, nil

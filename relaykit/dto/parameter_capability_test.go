@@ -92,3 +92,52 @@ func TestParameterCapabilityConfigValidateRejectsUnsafeConfiguration(t *testing.
 		})
 	}
 }
+
+func TestParameterCapabilityConfigValidateAcceptsArrayWildcardPath(t *testing.T) {
+	supported := true
+	config := ParameterCapabilityConfig{Defaults: map[string]ParameterCapability{
+		"messages.*.content.*.image_url": {
+			Supported: &supported,
+		},
+	}}
+
+	require.NoError(t, config.Validate())
+}
+
+func TestParameterCapabilityConfigResolveCanDisableInheritedSelectionParticipation(t *testing.T) {
+	participates := true
+	doesNotParticipate := false
+	config := ParameterCapabilityConfig{
+		Defaults: map[string]ParameterCapability{
+			"messages.*.content.*.image_url": {ParticipateInSelection: &participates},
+		},
+		Rules: []ModelParameterCapabilityRule{{
+			Selector: ParameterCapabilitySelector{Type: ParameterCapabilitySelectorExact, Value: "vision-model"},
+			Parameters: map[string]ParameterCapability{
+				"messages.*.content.*.image_url": {ParticipateInSelection: &doesNotParticipate},
+			},
+		}},
+	}
+
+	require.NoError(t, config.Validate())
+	resolved := config.Resolve("vision-model")
+	require.NotNil(t, resolved["messages.*.content.*.image_url"].ParticipateInSelection)
+	assert.False(t, *resolved["messages.*.content.*.image_url"].ParticipateInSelection)
+}
+
+func TestParameterCapabilityConfigHasSelectionConstraintsOnlyForEnabledEntries(t *testing.T) {
+	disabled := false
+	enabled := true
+	config := &ParameterCapabilityConfig{Defaults: map[string]ParameterCapability{
+		"temperature": {ParticipateInSelection: &disabled},
+	}}
+
+	assert.False(t, config.HasSelectionConstraints())
+	config.Rules = []ModelParameterCapabilityRule{{
+		Selector: ParameterCapabilitySelector{Type: ParameterCapabilitySelectorPattern, Value: "vision-*"},
+		Parameters: map[string]ParameterCapability{
+			"messages.*.content.*.image_url": {ParticipateInSelection: &enabled},
+		},
+	}}
+	assert.True(t, config.HasSelectionConstraints())
+}
