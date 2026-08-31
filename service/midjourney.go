@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 func CovertMjpActionToModelName(mjAction string) string {
@@ -36,10 +37,22 @@ func PrepareMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.
 	if task == nil {
 		return false, errors.New("Midjourney task is nil")
 	}
+	existingDiscountSettlementID := task.DiscountSettlementID
 	task.Quota = 0
 	task.TokenId = 0
 	task.BillingChannelId = 0
+	task.OriginalQuota = 0
+	task.RefundedQuota = 0
+	task.ChargeState = ""
+	task.RefundState = ""
+	task.BillingSource = ""
+	task.SubscriptionId = 0
+	task.UsingGroup = ""
+	task.OriginModelName = ""
+	task.DiscountSettlementID = ""
+	task.DiscountPolicySnapshot = ""
 	if !shouldBill {
+		task.ChargeState = model.TaskChargeStateUncharged
 		return false, nil
 	}
 	if relayInfo == nil {
@@ -48,19 +61,59 @@ func PrepareMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.
 	if quota < 0 {
 		return false, errors.New("quota cannot be negative")
 	}
-	if relayInfo.BillingSource == BillingSourceSubscription {
+	if relayInfo.BillingSource == BillingSourceSubscription && relayInfo.GroupModelDiscountSnapshot == nil {
 		return false, errors.New("legacy Midjourney billing does not support subscriptions")
+	}
+	discountPolicySnapshot := ""
+	if relayInfo.GroupModelDiscountSnapshot != nil {
+		if relayInfo.PriceData.OriginalQuota < 0 {
+			return false, errors.New("original quota cannot be negative")
+		}
+		snapshotJSON, err := common.Marshal(relayInfo.GroupModelDiscountSnapshot)
+		if err != nil {
+			return false, fmt.Errorf("marshal Midjourney monthly discount snapshot: %w", err)
+		}
+		discountPolicySnapshot = string(snapshotJSON)
 	}
 
 	task.Quota = quota
+	task.OriginalQuota = quota
+	if relayInfo.PriceData.OriginalQuota > 0 {
+		task.OriginalQuota = relayInfo.PriceData.OriginalQuota
+	}
+	task.BillingSource = relayInfo.BillingSource
+	if task.BillingSource == "" {
+		task.BillingSource = BillingSourceWallet
+	}
+	task.SubscriptionId = relayInfo.SubscriptionId
+	task.UsingGroup = relayInfo.UsingGroup
+	task.OriginModelName = relayInfo.OriginModelName
 	task.BillingChannelId = task.ChannelId
 	if relayInfo.ChannelMeta != nil && relayInfo.ChannelId > 0 {
 		task.BillingChannelId = relayInfo.ChannelId
 	}
+	if relayInfo.GroupModelDiscountSnapshot != nil {
+		if !relayInfo.IsPlayground {
+			task.TokenId = relayInfo.TokenId
+		}
+		if task.OriginalQuota > 0 {
+			// The provider's task id is neither globally unique nor under our
+			// control. Give each gateway task its own durable settlement key;
+			// preserve an existing key so persisted retries and historical
+			// `mj:<upstream-id>` rows keep their original accounting identity.
+			if existingDiscountSettlementID != "" {
+				task.DiscountSettlementID = existingDiscountSettlementID
+			} else {
+				task.DiscountSettlementID = "mj:" + uuid.NewString()
+			}
+		}
+		task.DiscountPolicySnapshot = discountPolicySnapshot
+	}
+	task.ChargeState = model.TaskChargeStatePrepared
 	return true, nil
 }
 
-// SettleMidjourneyTaskBilling charges a persisted legacy task and records the applied stages.
+// SettleMidjourneyTaskBilling persists a fail-closed intent before charging a legacy task.
 func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.Midjourney, prepared bool) (bool, error) {
 	if !prepared {
 		return false, nil
@@ -71,69 +124,395 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 	if task == nil || task.Id == 0 {
 		return false, errors.New("Midjourney task must be persisted before billing")
 	}
-
-	result, billingErr := postConsumeQuotaWithResult(relayInfo, task.Quota, 0, true)
-	if !result.FundingApplied {
-		task.Quota = 0
-		task.TokenId = 0
-		task.BillingChannelId = 0
-		if updateErr := task.UpdateBillingState(); updateErr != nil {
-			return false, errors.Join(billingErr, fmt.Errorf("clear Midjourney billing state: %w", updateErr))
-		}
-		return false, billingErr
+	if task.ChargeState != model.TaskChargeStatePrepared {
+		return false, fmt.Errorf("Midjourney billing state %s cannot be claimed", task.ChargeState)
 	}
 
-	task.TokenId = 0
-	if result.TokenApplied {
+	previousChargeState := task.ChargeState
+	previousTokenID := task.TokenId
+	task.ChargeState = model.TaskChargeStatePendingReconcile
+	if !relayInfo.IsPlayground {
 		task.TokenId = relayInfo.TokenId
 	}
-	if updateErr := task.UpdateBillingState(); updateErr != nil {
-		return true, errors.Join(billingErr, fmt.Errorf("update Midjourney billing state: %w", updateErr))
+	claimed, updateErr := task.ClaimBillingState(previousChargeState)
+	if updateErr != nil {
+		task.ChargeState = previousChargeState
+		task.TokenId = previousTokenID
+		return false, fmt.Errorf("persist pending Midjourney billing intent: %w", updateErr)
 	}
-	return true, billingErr
+	if !claimed {
+		task.ChargeState = previousChargeState
+		task.TokenId = previousTokenID
+		return false, errors.New("Midjourney billing intent was claimed by another owner")
+	}
+
+	_, billingErr := postConsumeQuotaWithResult(relayInfo, task.Quota, 0, true)
+	if billingErr != nil {
+		return false, billingErr
+	}
+	task.ChargeState = model.TaskChargeStateCharged
+	claimed, updateErr = task.ClaimBillingState(model.TaskChargeStatePendingReconcile)
+	if updateErr != nil {
+		task.ChargeState = model.TaskChargeStatePendingReconcile
+		return false, fmt.Errorf("update Midjourney billing state: %w", updateErr)
+	}
+	if !claimed {
+		task.ChargeState = model.TaskChargeStatePendingReconcile
+		return false, errors.New("Midjourney final billing state was claimed by another owner")
+	}
+	return true, nil
+}
+
+// SettleMidjourneyTaskModelCharge extends the legacy post-consume path with
+// the captured user-group + origin-model monthly policy. Active policies must
+// have pre-consumed true original quota before the upstream request; this
+// coordinator persists the exact tiered net amount for every later consumer.
+func SettleMidjourneyTaskModelCharge(
+	c *gin.Context,
+	relayInfo *relaycommon.RelayInfo,
+	task *model.Midjourney,
+	prepared bool,
+) (bool, GroupModelDiscountDecision, error) {
+	decision := GroupModelDiscountDecision{}
+	if relayInfo == nil || relayInfo.GroupModelDiscountSnapshot == nil {
+		billed, err := SettleMidjourneyTaskBilling(relayInfo, task, prepared)
+		if task != nil {
+			decision.OriginalQuota = task.OriginalQuota
+			decision.ChargedQuota = task.Quota
+		}
+		return billed, decision, err
+	}
+	if !prepared {
+		return false, decision, nil
+	}
+	if task == nil || task.Id == 0 {
+		return false, decision, errors.New("Midjourney task must be persisted before billing")
+	}
+	if task.ChargeState != model.TaskChargeStatePrepared {
+		return false, decision, fmt.Errorf("Midjourney monthly billing state %s cannot be claimed", task.ChargeState)
+	}
+	initialChargeState := task.ChargeState
+
+	decision, settleErr := SettleModelCharge(
+		c,
+		relayInfo,
+		task.DiscountSettlementID,
+		task.OriginalQuota,
+		task.Quota,
+		model.BillingUsageDelta{
+			UserID:            task.UserId,
+			ChannelID:         task.GetBillingChannelId(),
+			RequestCountDelta: 1,
+		},
+	)
+	if settleErr != nil || decision.RequiresReconciliation {
+		if settleErr == nil {
+			settleErr = ErrGroupModelDiscountSettlementPending
+		}
+		if !decision.Applied {
+			task.Quota = 0
+			task.TokenId = 0
+			task.DiscountSettlementID = ""
+			task.ChargeState = model.TaskChargeStateUncharged
+			claimed, updateErr := task.ClaimBillingState(initialChargeState)
+			if updateErr != nil {
+				return false, decision, errors.Join(settleErr, fmt.Errorf("persist unfunded Midjourney billing failure: %w", updateErr))
+			}
+			if !claimed {
+				return false, decision, errors.Join(settleErr, errors.New("unfunded Midjourney billing state was claimed by another owner"))
+			}
+			return false, decision, settleErr
+		}
+		task.Quota = decision.ChargedQuota
+		task.ChargeState = model.TaskChargeStatePendingReconcile
+		if decision.Applied {
+			task.DiscountSettlementID = decision.RequestID
+		}
+		claimed, updateErr := task.ClaimBillingState(initialChargeState)
+		if updateErr != nil {
+			if decision.Applied {
+				updateErr = errors.Join(updateErr, model.MarkGroupModelDiscountPendingReconcile(
+					decision.RequestID,
+					model.GroupModelDiscountPendingActionUnknownManual,
+				))
+			}
+			return false, decision, errors.Join(settleErr, fmt.Errorf("persist pending Midjourney monthly billing state: %w", updateErr))
+		}
+		if !claimed {
+			return false, decision, errors.Join(settleErr, errors.New("pending Midjourney billing state was claimed by another owner"))
+		}
+		return false, decision, settleErr
+	}
+	if decision.Reused {
+		// The replay's fresh admission reserve was returned by
+		// SettleModelCharge(0). This row did not fund the historical charge and
+		// therefore must not carry a refundable quota/settlement marker or emit
+		// another consume log/stat update.
+		task.Quota = 0
+		task.TokenId = 0
+		task.DiscountSettlementID = ""
+		task.ChargeState = model.TaskChargeStateReused
+		claimed, updateErr := task.ClaimBillingState(initialChargeState)
+		if updateErr != nil {
+			return false, decision, errors.Join(settleErr, fmt.Errorf("clear replayed Midjourney billing state: %w", updateErr))
+		}
+		if !claimed {
+			return false, decision, errors.Join(settleErr, errors.New("replayed Midjourney billing state was claimed by another owner"))
+		}
+		return false, decision, settleErr
+	}
+
+	task.Quota = decision.ChargedQuota
+	task.TokenId = 0
+	if !relayInfo.IsPlayground && decision.ChargedQuota > 0 {
+		task.TokenId = relayInfo.TokenId
+	}
+	task.ChargeState = model.TaskChargeStateCharged
+	claimed, updateErr := task.ClaimBillingState(initialChargeState)
+	if updateErr != nil {
+		handoffErr := task.MarkBillingRecoveryPending(initialChargeState)
+		if handoffErr != nil {
+			manualErr := model.MarkGroupModelDiscountPendingReconcile(
+				decision.RequestID,
+				model.GroupModelDiscountPendingActionUnknownManual,
+			)
+			return false, decision, errors.Join(
+				fmt.Errorf("persist Midjourney monthly billing state: %w", updateErr),
+				fmt.Errorf("persist Midjourney billing recovery handoff: %w", handoffErr),
+				manualErr,
+			)
+		}
+		return false, decision, fmt.Errorf("persist Midjourney monthly billing state: %w", updateErr)
+	}
+	if !claimed {
+		return false, decision, errors.New("Midjourney monthly billing state was claimed by another owner")
+	}
+	return true, decision, nil
+}
+
+func MidjourneyTaskNeedsRefund(task *model.Midjourney) bool {
+	if task == nil {
+		return false
+	}
+	recoverMidjourneyInitialGroupModelSettlement(task)
+	if task.Quota != 0 {
+		return true
+	}
+	if task.DiscountSettlementID == "" || task.RefundState == model.TaskRefundStateCommitted {
+		return false
+	}
+	return task.ChargeState == "" || task.ChargeState == model.TaskChargeStateCharged
+}
+
+func recoverMidjourneyInitialGroupModelSettlement(task *model.Midjourney) bool {
+	return task != nil && task.RecoverSettledInitialBilling()
 }
 
 // RefundMidjourneyQuota reverses every accounting element recorded for a billed legacy task.
 func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason string) bool {
-	quota := task.Quota
-	if quota == 0 {
-		return true
-	}
-
-	if err := model.IncreaseUserQuota(task.UserId, quota, false); err != nil {
-		logger.LogWarn(ctx, fmt.Sprintf("退还 Midjourney 用户额度失败 task %s: %s", task.MjId, err.Error()))
+	if task == nil {
 		return false
 	}
-
-	if task.TokenId > 0 {
-		tokenKey := resolveTokenKey(ctx, task.TokenId, task.MjId)
-		if tokenKey != "" {
-			if err := model.IncreaseTokenQuota(task.TokenId, tokenKey, quota); err != nil {
-				logger.LogWarn(ctx, fmt.Sprintf("退还 Midjourney 令牌额度失败 task %s: %s", task.MjId, err.Error()))
+	recoverMidjourneyInitialGroupModelSettlement(task)
+	if task.ChargeState != "" && task.ChargeState != model.TaskChargeStateCharged {
+		logger.LogWarn(ctx, fmt.Sprintf("Midjourney 任务 %s 计费状态为 %s，跳过自动退款并等待对账", task.MjId, task.ChargeState))
+		return false
+	}
+	quota := task.Quota
+	if quota < 0 {
+		logger.LogError(ctx, fmt.Sprintf("Midjourney 任务 %s 的退款额度不能为负数: %d", task.MjId, quota))
+		return false
+	}
+	if task.RefundState == model.TaskRefundStateCommitted {
+		return true
+	}
+	if task.RefundedQuota > 0 {
+		quota = task.RefundedQuota
+		if task.RefundState == "" {
+			// Compatibility with rows written before staged refunds: this marker
+			// was stored only after funding, token, and accounting were returned.
+			task.RefundState = model.TaskRefundStateAccountingApplied
+		}
+	}
+	if quota == 0 && task.RefundState == "" {
+		if task.DiscountSettlementID == "" {
+			return true
+		}
+		if err := model.BeginGroupModelDiscountSettlementReverse(task.DiscountSettlementID); err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("零额度 Midjourney 退款前门禁失败 task %s: %s", task.MjId, err.Error()))
+			return false
+		}
+		task.RefundState = model.TaskRefundStateAccountingPending
+		if err := task.UpdateBillingState(); err != nil {
+			task.RefundState = ""
+			if cancelErr := model.CancelGroupModelDiscountSettlementReverse(task.DiscountSettlementID); cancelErr != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("取消零额度 Midjourney 退款门禁失败 task %s: %s", task.MjId, cancelErr.Error()))
 			}
+			logger.LogError(ctx, fmt.Sprintf("持久化零额度 Midjourney 账本退款状态失败 task %s: %s", task.MjId, err.Error()))
+			return false
 		}
 	}
 
+	switch task.RefundState {
+	case model.TaskRefundStateFundingPending, model.TaskRefundStateTokenPending:
+		logger.LogWarn(ctx, fmt.Sprintf("Midjourney 任务 %s 退款停留在模糊阶段 %s，禁止自动重放并等待对账", task.MjId, task.RefundState))
+		return false
+	case model.TaskRefundStateAccountingPending:
+		if task.DiscountSettlementID == "" || !completeMidjourneyDiscountRefundAccounting(task, quota) {
+			logger.LogWarn(ctx, fmt.Sprintf("Midjourney 任务 %s 退款统计阶段缺少可确认的账本证据", task.MjId))
+			return false
+		}
+	case "":
+		if task.DiscountSettlementID != "" {
+			if err := model.BeginGroupModelDiscountSettlementReverse(task.DiscountSettlementID); err != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("Midjourney 退款前门禁失败 task %s: %s", task.MjId, err.Error()))
+				return false
+			}
+		}
+		task.RefundState = model.TaskRefundStateFundingPending
+		if err := task.UpdateBillingState(); err != nil {
+			task.RefundState = ""
+			if task.DiscountSettlementID != "" {
+				if cancelErr := model.CancelGroupModelDiscountSettlementReverse(task.DiscountSettlementID); cancelErr != nil {
+					logger.LogWarn(ctx, fmt.Sprintf("取消未出资 Midjourney 退款门禁失败 task %s: %s", task.MjId, cancelErr.Error()))
+				}
+			}
+			logger.LogError(ctx, fmt.Sprintf("持久化 Midjourney 退款资金 pending 失败 task %s: %s", task.MjId, err.Error()))
+			return false
+		}
+		var fundingErr error
+		if task.BillingSource == BillingSourceSubscription && task.SubscriptionId > 0 {
+			fundingErr = model.PostConsumeUserSubscriptionDelta(task.SubscriptionId, -int64(quota))
+		} else {
+			fundingErr = model.IncreaseUserQuota(task.UserId, quota, false)
+		}
+		if fundingErr != nil {
+			if task.DiscountSettlementID != "" {
+				if markErr := model.MarkGroupModelDiscountSettlementReverseFundingUnknown(task.DiscountSettlementID); markErr != nil {
+					logger.LogWarn(ctx, fmt.Sprintf("标记 Midjourney 退款资金结果未知失败 task %s: %s", task.MjId, markErr.Error()))
+				}
+			}
+			logger.LogWarn(ctx, fmt.Sprintf("退还 Midjourney 资金来源失败并保持 pending 等待对账 task %s: %s", task.MjId, fundingErr.Error()))
+			return false
+		}
+		task.RefundedQuota = quota
+		task.RefundState = model.TaskRefundStateFundingApplied
+		if err := task.UpdateBillingState(); err != nil {
+			task.RefundState = model.TaskRefundStateFundingPending
+			logger.LogError(ctx, fmt.Sprintf("Midjourney 资金已退但持久化 applied 失败，等待人工对账 task %s: %s", task.MjId, err.Error()))
+			return false
+		}
+	}
+
+	if task.RefundState == model.TaskRefundStateFundingApplied {
+		task.RefundState = model.TaskRefundStateTokenPending
+		if err := task.UpdateBillingState(); err != nil {
+			task.RefundState = model.TaskRefundStateFundingApplied
+			logger.LogError(ctx, fmt.Sprintf("持久化 Midjourney 令牌退款 pending 失败 task %s: %s", task.MjId, err.Error()))
+			return false
+		}
+		if task.TokenId > 0 {
+			tokenKey := resolveTokenKey(ctx, task.TokenId, task.MjId)
+			if tokenKey == "" {
+				logger.LogError(ctx, fmt.Sprintf("Midjourney 资金已退但无法解析令牌，保持 pending 等待对账 task %s", task.MjId))
+				return false
+			}
+			if err := model.IncreaseTokenQuota(task.TokenId, tokenKey, quota); err != nil {
+				logger.LogError(ctx, fmt.Sprintf("Midjourney 资金已退但令牌退款失败，保持 pending 等待对账 task %s: %s", task.MjId, err.Error()))
+				return false
+			}
+		}
+		task.RefundState = model.TaskRefundStateTokenApplied
+		if err := task.UpdateBillingState(); err != nil {
+			task.RefundState = model.TaskRefundStateTokenPending
+			logger.LogError(ctx, fmt.Sprintf("Midjourney 令牌已退但持久化 applied 失败，等待人工对账 task %s: %s", task.MjId, err.Error()))
+			return false
+		}
+	}
+
+	if task.RefundState == model.TaskRefundStateTokenApplied {
+		task.RefundState = model.TaskRefundStateAccountingPending
+		if err := task.UpdateBillingState(); err != nil {
+			task.RefundState = model.TaskRefundStateTokenApplied
+			logger.LogError(ctx, fmt.Sprintf("持久化 Midjourney 统计退款 pending 失败 task %s: %s", task.MjId, err.Error()))
+			return false
+		}
+		billingChannelId := task.GetBillingChannelId()
+		var accountingErr error
+		if task.DiscountSettlementID != "" {
+			accountingErr = model.ReverseGroupModelDiscountSettlementWithUsage(
+				task.DiscountSettlementID,
+				model.BillingUsageDelta{UserID: task.UserId, ChannelID: billingChannelId, QuotaDelta: -quota},
+			)
+		} else {
+			// Legacy rows have no ledger/accounting idempotency evidence. Keep
+			// their historical best-effort stats update after the staged funding
+			// markers so a stats-target failure cannot replay the fund refund.
+			model.UpdateUserUsedQuota(task.UserId, -quota)
+			model.UpdateChannelUsedQuota(billingChannelId, -quota)
+		}
+		if accountingErr != nil {
+			logger.LogError(ctx, fmt.Sprintf("Midjourney 退款统计与账本提交失败 task %s: %s", task.MjId, accountingErr.Error()))
+			return false
+		}
+		task.RefundState = model.TaskRefundStateAccountingApplied
+		if err := task.UpdateBillingState(); err != nil {
+			task.RefundState = model.TaskRefundStateAccountingPending
+			logger.LogError(ctx, fmt.Sprintf("Midjourney 统计已退但持久化 applied 失败，等待人工对账 task %s: %s", task.MjId, err.Error()))
+			return false
+		}
+	}
+	if task.RefundState != model.TaskRefundStateAccountingApplied {
+		logger.LogWarn(ctx, fmt.Sprintf("Midjourney 任务 %s 退款状态 %s 不可自动继续", task.MjId, task.RefundState))
+		return false
+	}
+
 	billingChannelId := task.GetBillingChannelId()
-	model.UpdateUserUsedQuota(task.UserId, -quota)
-	model.UpdateChannelUsedQuota(billingChannelId, -quota)
+	previousQuota := task.Quota
+	task.Quota = 0
+	task.RefundState = model.TaskRefundStateCommitted
+	if err := task.UpdateBillingState(); err != nil {
+		task.Quota = previousQuota
+		task.RefundState = model.TaskRefundStateAccountingApplied
+		logger.LogError(ctx, fmt.Sprintf("Midjourney 退款完成但提交状态失败 task %s: %s", task.MjId, err.Error()))
+		return false
+	}
+
+	modelName := task.OriginModelName
+	if modelName == "" {
+		modelName = CovertMjpActionToModelName(task.Action)
+	}
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
 		LogType:   model.LogTypeRefund,
 		Content:   "",
 		ChannelId: billingChannelId,
-		ModelName: CovertMjpActionToModelName(task.Action),
+		ModelName: modelName,
 		Quota:     quota,
 		TokenId:   task.TokenId,
+		Group:     task.UsingGroup,
 		Other: map[string]interface{}{
 			"task_id": task.MjId,
 			"reason":  reason,
 		},
 	})
+	return true
+}
 
-	task.Quota = 0
+func completeMidjourneyDiscountRefundAccounting(task *model.Midjourney, quota int) bool {
+	if task == nil || task.DiscountSettlementID == "" {
+		return false
+	}
+	delta := model.BillingUsageDelta{
+		UserID: task.UserId, ChannelID: task.GetBillingChannelId(), QuotaDelta: -quota,
+	}
+	if err := model.ReverseGroupModelDiscountSettlementWithUsage(task.DiscountSettlementID, delta); err != nil {
+		return false
+	}
+	task.RefundState = model.TaskRefundStateAccountingApplied
 	if err := task.UpdateBillingState(); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("Midjourney 退款成功但清除 quota 失败 task %s: %s", task.MjId, err.Error()))
+		task.RefundState = model.TaskRefundStateAccountingPending
+		return false
 	}
 	return true
 }

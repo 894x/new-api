@@ -16,8 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Code2, Eye, HelpCircle } from 'lucide-react'
-import { memo, useCallback, useMemo, useState, type ReactNode } from 'react'
+import { AlertTriangle, Code2, Eye, HelpCircle } from 'lucide-react'
+import {
+  memo,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import type { UseFormReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
@@ -33,6 +40,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -61,6 +69,7 @@ import {
 import { SettingsPageActionsPortal } from '../components/settings-page-context'
 import { safeJsonParse } from '../utils/json-parser'
 import { safeNumberFieldProps } from '../utils/numeric-field'
+import { GroupModelTieredRatioEditor } from './group-model-tiered-ratio-editor'
 import { GroupRatioVisualEditor } from './group-ratio-visual-editor'
 import { GroupSpecialUsableRulesEditor } from './group-special-usable-editor'
 
@@ -73,6 +82,7 @@ type GroupFormValues = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   GroupSpecialUsableGroup: string
+  ModelTieredRatios: string
 }
 
 type GroupRatioFormProps = {
@@ -89,6 +99,35 @@ export const GroupRatioForm = memo(function GroupRatioForm({
   const { t } = useTranslation()
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
   const [guideOpen, setGuideOpen] = useState(false)
+  const tieredDraftError = useRef<string | null>(null)
+
+  const handleTieredValidationChange = useCallback(
+    (error: string | null) => {
+      tieredDraftError.current = error
+      if (error) {
+        form.setError('ModelTieredRatios', { type: 'manual', message: error })
+        return
+      }
+      if (form.getFieldState('ModelTieredRatios').error?.type === 'manual') {
+        form.clearErrors('ModelTieredRatios')
+      }
+    },
+    [form]
+  )
+
+  const submitGroupForm = useCallback(
+    async (values: GroupFormValues) => {
+      if (tieredDraftError.current) {
+        form.setError('ModelTieredRatios', {
+          type: 'manual',
+          message: tieredDraftError.current,
+        })
+        return
+      }
+      await onSave(values)
+    },
+    [form, onSave]
+  )
 
   const handleFieldChange = useCallback(
     (field: keyof GroupFormValues, value: string) => {
@@ -101,17 +140,25 @@ export const GroupRatioForm = memo(function GroupRatioForm({
   )
 
   const toggleEditMode = useCallback(() => {
-    setEditMode((prev) => (prev === 'visual' ? 'json' : 'visual'))
-  }, [])
+    if (editMode === 'visual') {
+      handleTieredValidationChange(null)
+      setEditMode('json')
+      return
+    }
+    setEditMode('visual')
+  }, [editMode, handleTieredValidationChange])
 
   const watchedGroupRatio = form.watch('GroupRatio')
   const watchedUserUsableGroups = form.watch('UserUsableGroups')
   const watchedTopupGroupRatio = form.watch('TopupGroupRatio')
-  const groupNames = useMemo(() => {
+  const pricingGroupNames = useMemo(() => {
     const ratioMap = safeJsonParse<Record<string, number>>(watchedGroupRatio, {
       fallback: {},
       silent: true,
     })
+    return Object.keys(ratioMap)
+  }, [watchedGroupRatio])
+  const groupNames = useMemo(() => {
     const usableMap = safeJsonParse<Record<string, string>>(
       watchedUserUsableGroups,
       { fallback: {}, silent: true }
@@ -122,12 +169,12 @@ export const GroupRatioForm = memo(function GroupRatioForm({
     )
     return [
       ...new Set([
-        ...Object.keys(ratioMap),
+        ...pricingGroupNames,
         ...Object.keys(usableMap),
         ...Object.keys(topupMap),
       ]),
     ]
-  }, [watchedGroupRatio, watchedUserUsableGroups, watchedTopupGroupRatio])
+  }, [pricingGroupNames, watchedUserUsableGroups, watchedTopupGroupRatio])
 
   return (
     <div className='space-y-6'>
@@ -153,12 +200,21 @@ export const GroupRatioForm = memo(function GroupRatioForm({
 
       <GroupPricingGuide open={guideOpen} onOpenChange={setGuideOpen} />
 
+      <Alert className='border-warning/40 bg-warning/5'>
+        <AlertTriangle className='text-warning' />
+        <AlertDescription>
+          {t(
+            'Saving policy changes can still succeed, but if the current billing period already has usage, later settlement will fail with a policy hash conflict when progress basis, tiers, timezone, or end time change. Set a new effective_from (usually the change time) to open a new period; if it is in the future, the fixed GroupRatio applies until then.'
+          )}
+        </AlertDescription>
+      </Alert>
+
       <Form {...form}>
         <SettingsPageActionsPortal>
           <Button
             type='button'
             size='sm'
-            onClick={form.handleSubmit(onSave)}
+            onClick={form.handleSubmit(submitGroupForm)}
             disabled={isSaving}
           >
             {isSaving ? t('Saving...') : t('Save group ratios')}
@@ -216,6 +272,22 @@ export const GroupRatioForm = memo(function GroupRatioForm({
 
             <FormField
               control={form.control}
+              name='ModelTieredRatios'
+              render={({ field, fieldState }) => (
+                <FormItem data-invalid={fieldState.invalid}>
+                  <GroupModelTieredRatioEditor
+                    value={field.value}
+                    groupOptions={pricingGroupNames}
+                    onChange={field.onChange}
+                    onValidationChange={handleTieredValidationChange}
+                  />
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
               name='DefaultUseAutoGroup'
               render={({ field }) => (
                 <SettingsSwitchItem>
@@ -238,7 +310,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
             />
           </div>
         ) : (
-          <SettingsForm onSubmit={form.handleSubmit(onSave)}>
+          <SettingsForm onSubmit={form.handleSubmit(submitGroupForm)}>
             <FormField
               control={form.control}
               name='GroupRatio'
@@ -442,6 +514,31 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                 </SettingsSwitchItem>
               )}
             />
+
+            <FormField
+              control={form.control}
+              name='ModelTieredRatios'
+              render={({ field, fieldState }) => (
+                <FormItem data-invalid={fieldState.invalid}>
+                  <FormLabel>{t('Monthly tiered discounts')}</FormLabel>
+                  <FormControl>
+                    <JsonCodeEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Canonical shape: { group: { progress_basis, models } }. Use progress_basis: "charged" to advance thresholds by the high-precision settled amount after the current tier discount; "original" uses the original model price.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
           </SettingsForm>
         )}
       </Form>
@@ -547,7 +644,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   {t('Find the ratio.')}
                 </span>{' '}
                 {t(
-                  'Look for a special ratio rule matching this user group and this billing group. If one exists, use its ratio. Otherwise use the billing group base ratio from the pricing table.'
+                  "Look for a special ratio rule matching this user group and billing group. If one exists, it takes priority. Otherwise, use an active monthly tiered policy for the billing group and origin model; if none matches, use the billing group's fixed ratio."
                 )}
               </li>
               <li>
@@ -555,7 +652,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   {t('Charge.')}
                 </span>{' '}
                 {t(
-                  'Cost = model price × that one ratio. Nothing else from the group settings enters the formula.'
+                  "With a monthly tiered policy, the group's progress-basis switch chooses whether thresholds advance by the original model price or the high-precision settled amount after the tier discount. Requests crossing a threshold are split between tiers. Without a matching policy, cost = model price × fixed ratio."
                 )}
               </li>
             </ol>
@@ -564,13 +661,18 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                 'Common pitfall: the user group base ratio is NOT a personal discount. It only applies when the user group itself is the billing group.'
               )}
             </p>
+            <p className='border-warning/40 bg-warning/5 rounded-lg border px-3 py-2 text-sm leading-6'>
+              {t(
+                'Saving policy changes can still succeed, but if the current billing period already has usage, later settlement will fail with a policy hash conflict when progress basis, tiers, timezone, or end time change. Set a new effective_from (usually the change time) to open a new period; if it is in the future, the fixed GroupRatio applies until then.'
+              )}
+            </p>
           </section>
 
           <section className='space-y-3'>
             <h3 className='text-sm font-semibold'>{t('Worked example')}</h3>
             <p className='text-muted-foreground text-sm leading-6'>
               {t(
-                'The admin configured three groups and one special ratio rule:'
+                'The admin configured three groups and one special ratio rule, with no monthly tiered policy:'
               )}
             </p>
 

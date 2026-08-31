@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -11,19 +12,24 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 2
+const userCacheSchemaVersion = 3
+
+var ErrUserQuotaCachePending = errors.New("user quota cache mutation is pending")
+
+var ErrUserQuotaCacheStale = errors.New("user quota cache snapshot is stale")
 
 type UserBase struct {
-	Id          int    `json:"id"`
-	Group       string `json:"group"`
-	Email       string `json:"email"`
-	Quota       int    `json:"quota"`
-	Status      int    `json:"status"`
-	Role        int    `json:"role"`
-	Username    string `json:"username"`
-	Setting     string `json:"setting"`
-	AuthVersion int64  `json:"-"`
-	CacheSchema int    `json:"-"`
+	Id           int    `json:"id"`
+	Group        string `json:"group"`
+	Email        string `json:"email"`
+	Quota        int    `json:"quota"`
+	QuotaVersion int64  `json:"-"`
+	Status       int    `json:"status"`
+	Role         int    `json:"role"`
+	Username     string `json:"username"`
+	Setting      string `json:"setting"`
+	AuthVersion  int64  `json:"-"`
+	CacheSchema  int    `json:"-"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -51,6 +57,18 @@ func getUserCacheKey(userId int) string {
 	return fmt.Sprintf("user:%d", userId)
 }
 
+func getUserQuotaCacheFenceKey(userId int) string {
+	return fmt.Sprintf("quota:user:fence:%d", userId)
+}
+
+func userQuotaCacheMutationPending(userId int) (bool, error) {
+	if !common.RedisEnabled {
+		return false, nil
+	}
+	count, err := common.RDB.Exists(context.Background(), getUserQuotaCacheFenceKey(userId)).Result()
+	return count > 0, err
+}
+
 func userCacheTTLSeconds() int {
 	ttl := common.RedisKeyCacheSeconds()
 	if ttl <= 0 {
@@ -67,6 +85,68 @@ func invalidateUserCache(userId int) error {
 	return common.RedisDelKey(getUserCacheKey(userId))
 }
 
+// invalidateUserQuotaCacheForMutation prevents a reader that already holds a
+// pre-mutation database snapshot from publishing stale quota after the
+// balance write. The fence intentionally remains until its TTL expires; reads
+// during that interval use the database without repopulating Redis.
+func invalidateUserQuotaCacheForMutation(userId int) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	if userId <= 0 {
+		return fmt.Errorf("invalid user id")
+	}
+	const script = `
+redis.call('SET', KEYS[2], '1', 'EX', ARGV[1])
+redis.call('DEL', KEYS[1])
+return 1`
+	return common.RDB.Eval(
+		context.Background(),
+		script,
+		[]string{getUserCacheKey(userId), getUserQuotaCacheFenceKey(userId)},
+		tokenCacheFenceSeconds,
+	).Err()
+}
+
+func prepareUserQuotaCacheMutation(userId int, operation string) {
+	if !common.RedisEnabled {
+		return
+	}
+	if err := invalidateUserQuotaCacheForMutation(userId); err != nil {
+		common.SysError(fmt.Sprintf("starting %s without a user quota cache fence: %v", operation, err))
+	}
+}
+
+func finalizeUserQuotaCacheMutation(userId int, operation string) {
+	if !common.RedisEnabled {
+		return
+	}
+	if err := invalidateUserQuotaCacheForMutation(userId); err != nil {
+		common.SysError(fmt.Sprintf("committed %s but failed to finalize user quota cache fence: %v", operation, err))
+	}
+}
+
+func discardUserQuotaCacheSnapshot(userId int, quotaVersion int64) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	const script = `
+if redis.call('HEXISTS', KEYS[1], 'QuotaVersion') == 1
+  and tonumber(redis.call('HGET', KEYS[1], 'QuotaVersion')) == tonumber(ARGV[1]) then
+  redis.call('SET', KEYS[2], '1', 'EX', ARGV[2])
+  redis.call('DEL', KEYS[1])
+  return 1
+end
+return 0`
+	return common.RDB.Eval(
+		context.Background(),
+		script,
+		[]string{getUserCacheKey(userId), getUserQuotaCacheFenceKey(userId)},
+		quotaVersion,
+		tokenCacheFenceSeconds,
+	).Err()
+}
+
 func populateUserCache(user User) error {
 	if !common.RedisEnabled {
 		return nil
@@ -75,8 +155,8 @@ func populateUserCache(user User) error {
 }
 
 // updateUserCache refreshes non-quota user cache fields.
-// Quota is maintained by atomic quota delta paths and must not be overwritten
-// by stale user snapshots from profile/settings updates.
+// Quota is maintained by versioned database mutations and must not be
+// overwritten by profile/settings snapshots that did not request quota data.
 func updateUserCache(user User) error {
 	if !common.RedisEnabled {
 		return nil
@@ -108,6 +188,9 @@ func GetUserCache(userId int) (*UserBase, error) {
 			if errors.Is(err, ErrUserAuthCachePending) {
 				return nil, err
 			}
+			if errors.Is(err, ErrUserQuotaCachePending) {
+				return user.ToBaseUser(), nil
+			}
 			common.SysLog("failed to synchronously populate user cache: " + err.Error())
 		}
 	}
@@ -134,6 +217,21 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 	if floor > userCache.AuthVersion {
 		return nil, ErrUserAuthCachePending
 	}
+	var persisted struct {
+		QuotaVersion int64
+	}
+	if err := DB.Model(&User{}).
+		Select("COALESCE(quota_version, 0) AS quota_version").
+		Where("id = ?", userId).
+		Take(&persisted).Error; err != nil {
+		return nil, err
+	}
+	if persisted.QuotaVersion != userCache.QuotaVersion {
+		if err := discardUserQuotaCacheSnapshot(userId, userCache.QuotaVersion); err != nil {
+			return nil, errors.Join(ErrUserQuotaCacheStale, err)
+		}
+		return nil, ErrUserQuotaCacheStale
+	}
 	return &userCache, nil
 }
 
@@ -150,18 +248,6 @@ func cacheIncrUserQuota(userId int, delta int64) error {
 
 func cacheDecrUserQuota(userId int, delta int64) error {
 	return cacheIncrUserQuota(userId, -delta)
-}
-
-// syncCreditUserQuotaCache 在授信事务（充值/兑换等）提交后同步把增量补进缓存
-// 余额。预扣以缓存值为准（存在期间），授信不能绕过它，否则新到账的额度在
-// 缓存过期前不可用；缓存未命中无需处理，下次读取会从已提交的数据库余额水合。
-func syncCreditUserQuotaCache(userId int, quota int, operation string) {
-	if quota <= 0 {
-		return
-	}
-	if err := cacheIncrUserQuota(userId, int64(quota)); err != nil {
-		common.SysLog(fmt.Sprintf("failed to sync %s credit to user quota cache: %s", operation, err.Error()))
-	}
 }
 
 // Helper functions to get individual fields if needed

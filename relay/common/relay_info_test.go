@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	rootcommon "github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -155,6 +159,38 @@ func TestGenRelayInfoCapturesRequestReasoningEffort(t *testing.T) {
 			assert.Equal(t, tt.expected, info.ReasoningEffort)
 		})
 	}
+}
+
+func TestGenRelayInfoFreezesMonthlyDiscountResolverAtAdmission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalTiered := ratio_setting.ModelTieredRatios2JSONString()
+	originalContracts := ratio_setting.GroupGroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(originalTiered))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(originalContracts))
+	})
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(`{
+		"vip":{"gpt-5":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.9}]}}
+	}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	rootcommon.SetContextKey(ctx, constant.ContextKeyUserGroup, "ordinary-user")
+	rootcommon.SetContextKey(ctx, constant.ContextKeyUsingGroup, "vip")
+	rootcommon.SetContextKey(ctx, constant.ContextKeyOriginalModel, "gpt-5")
+	rootcommon.SetContextKey(ctx, constant.ContextKeyRequestStartTime, time.Unix(10, 0))
+	info, err := GenRelayInfo(ctx, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{Model: "gpt-5"}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, info.GroupModelDiscountResolver)
+
+	require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(`{
+		"vip":{"gpt-5":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.4}]}}
+	}`))
+	snapshot, active, err := info.ResolveGroupModelDiscount()
+	require.NoError(t, err)
+	require.True(t, active)
+	assert.Equal(t, 0.9, snapshot.Tiers[0].Ratio)
 }
 
 func TestInitChannelMetaRestoresRequestReasoningEffortForRetry(t *testing.T) {

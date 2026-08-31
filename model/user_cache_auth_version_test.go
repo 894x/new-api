@@ -77,12 +77,13 @@ func TestPendingUserAuthFenceRejectsStaleCacheWrite(t *testing.T) {
 	server := useUserCacheMiniRedis(t)
 	const userID = 4201
 	require.NoError(t, SetUserAuthVersionFence(userID, 2))
+	require.NoError(t, invalidateUserQuotaCacheForMutation(userID))
 
 	err := writeUserCache(&UserBase{
 		Id: userID, Group: "default", Username: "stale", AuthVersion: 1,
 	}, true)
 
-	assert.ErrorIs(t, err, ErrUserAuthCachePending)
+	assert.ErrorIs(t, err, ErrUserAuthCachePending, "the authentication fence must take precedence when both fences are active")
 	assert.False(t, server.Exists(getUserCacheKey(userID)))
 }
 

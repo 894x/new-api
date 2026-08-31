@@ -53,6 +53,39 @@ func writeUserCache(user *UserBase, includeQuota bool) error {
 	if user.AuthVersion <= 0 {
 		return fmt.Errorf("invalid user auth version")
 	}
+	// Preserve the existing authentication fence precedence before doing the
+	// quota-version check below. The Lua script repeats this guard to cover a
+	// concurrent authentication change after this read.
+	authFloor, err := getUserAuthVersionFloor(user.Id)
+	if err != nil {
+		return err
+	}
+	if authFloor > user.AuthVersion {
+		return ErrUserAuthCachePending
+	}
+	quotaVersionVerified := false
+	if includeQuota {
+		var persisted struct {
+			QuotaVersion int64
+		}
+		result := DB.Model(&User{}).
+			Select("COALESCE(quota_version, 0) AS quota_version").
+			Where("id = ?", user.Id).
+			Find(&persisted)
+		if result.Error != nil {
+			return result.Error
+		}
+		// Some auth-cache tests intentionally publish a synthetic user without a
+		// database row. Real DB snapshots always have one and must match its
+		// durable quota generation before Redis publication.
+		if result.RowsAffected == 1 && persisted.QuotaVersion != user.QuotaVersion {
+			return ErrUserQuotaCacheStale
+		}
+		quotaVersionVerified = result.RowsAffected == 1
+		if quotaVersionVerified {
+			runQuotaCacheRaceHook(userQuotaCacheAfterVersionCheckHook())
+		}
+	}
 	includeQuotaArg := "0"
 	if includeQuota {
 		includeQuotaArg = "1"
@@ -65,6 +98,19 @@ local committed = tonumber(redis.call('GET', KEYS[3]) or '0')
 local current = tonumber(redis.call('HGET', KEYS[1], 'AuthVersion') or '0')
 if pending > incoming or committed > incoming or current > incoming then
   return 0
+end
+if ARGV[10] == '1' and redis.call('EXISTS', KEYS[4]) == 1 then
+  return 2
+end
+local currentSchema = tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0')
+if currentSchema > 0 and currentSchema ~= tonumber(ARGV[9]) then
+  redis.call('DEL', KEYS[1])
+end
+local incomingQuotaVersion = tonumber(ARGV[12])
+local quotaVersionExists = redis.call('HEXISTS', KEYS[1], 'QuotaVersion')
+local currentQuotaVersion = tonumber(redis.call('HGET', KEYS[1], 'QuotaVersion') or '-1')
+if ARGV[10] == '1' and quotaVersionExists == 1 and currentQuotaVersion > incomingQuotaVersion then
+  return 3
 end
 if committed < incoming then
   redis.call('SET', KEYS[3], ARGV[1])
@@ -79,21 +125,46 @@ redis.call('HSET', KEYS[1],
   'Id', ARGV[2], 'Group', ARGV[3], 'Email', ARGV[4],
   'Status', ARGV[5], 'Role', ARGV[6], 'Username', ARGV[7],
   'Setting', ARGV[8], 'AuthVersion', ARGV[1], 'CacheSchema', ARGV[9])
-if ARGV[10] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
-  redis.call('HSET', KEYS[1], 'Quota', ARGV[11])
+if ARGV[10] == '1' and (redis.call('HEXISTS', KEYS[1], 'Quota') == 0
+  or quotaVersionExists == 0 or incomingQuotaVersion > currentQuotaVersion) then
+  redis.call('HSET', KEYS[1], 'Quota', ARGV[11], 'QuotaVersion', ARGV[12])
 end
-redis.call('EXPIRE', KEYS[1], ARGV[12])
+redis.call('EXPIRE', KEYS[1], ARGV[13])
 return 1`
 	result, err := common.RDB.Eval(context.Background(), script,
-		[]string{getUserCacheKey(user.Id), getUserAuthFenceKey(user.Id), getUserAuthVersionKey(user.Id)},
+		[]string{getUserCacheKey(user.Id), getUserAuthFenceKey(user.Id), getUserAuthVersionKey(user.Id), getUserQuotaCacheFenceKey(user.Id)},
 		user.AuthVersion, user.Id, user.Group, user.Email, user.Status, user.Role,
-		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, ttl,
+		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, user.QuotaVersion, ttl,
 	).Int()
 	if err != nil {
 		return err
 	}
+	if result == 2 {
+		return ErrUserQuotaCachePending
+	}
+	if result == 3 {
+		return ErrUserQuotaCacheStale
+	}
 	if result == 0 {
 		return ErrUserAuthCachePending
+	}
+	if includeQuota && quotaVersionVerified {
+		var persisted struct {
+			QuotaVersion int64
+		}
+		postResult := DB.Model(&User{}).
+			Select("COALESCE(quota_version, 0) AS quota_version").
+			Where("id = ?", user.Id).
+			Find(&persisted)
+		if postResult.Error != nil || postResult.RowsAffected != 1 || persisted.QuotaVersion != user.QuotaVersion {
+			if discardErr := discardUserQuotaCacheSnapshot(user.Id, user.QuotaVersion); discardErr != nil {
+				return discardErr
+			}
+			if postResult.Error != nil {
+				return postResult.Error
+			}
+			return ErrUserQuotaCacheStale
+		}
 	}
 	return nil
 }

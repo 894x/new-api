@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/pkg/groupdiscount"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"gorm.io/gorm"
 )
 
 type TaskStatus string
@@ -46,24 +49,29 @@ const (
 const TaskRefundLegacyCutoff int64 = 1771718400 // 2026-02-22 00:00:00 UTC
 
 type Task struct {
-	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
-	CreatedAt  int64                 `json:"created_at" gorm:"index"`
-	UpdatedAt  int64                 `json:"updated_at"`
-	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
-	Platform   constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
-	UserId     int                   `json:"user_id" gorm:"index"`
-	Group      string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
-	ChannelId  int                   `json:"channel_id" gorm:"index"`
-	Quota      int                   `json:"quota"`
-	Action     string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
-	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
-	FailReason string                `json:"fail_reason"`
-	SubmitTime int64                 `json:"submit_time" gorm:"index"`
-	StartTime  int64                 `json:"start_time" gorm:"index"`
-	FinishTime int64                 `json:"finish_time" gorm:"index"`
-	Progress   string                `json:"progress" gorm:"type:varchar(20);index"`
-	Properties Properties            `json:"properties" gorm:"type:json"`
-	Username   string                `json:"username,omitempty" gorm:"-"`
+	ID        int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
+	CreatedAt int64                 `json:"created_at" gorm:"index"`
+	UpdatedAt int64                 `json:"updated_at"`
+	TaskID    string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
+	Platform  constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
+	UserId    int                   `json:"user_id" gorm:"index"`
+	Group     string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
+	ChannelId int                   `json:"channel_id" gorm:"index"`
+	Quota     int                   `json:"quota"`
+	// nil preserves polling compatibility for rows created before the billing
+	// readiness gate. New prepared/pending rows stay false until their billing
+	// state is durably confirmed.
+	BillingReady           *bool      `json:"-" gorm:"index"`
+	BillingRecoveryPending bool       `json:"-" gorm:"index"`
+	Action                 string     `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
+	Status                 TaskStatus `json:"status" gorm:"type:varchar(20);index"` // 任务状态
+	FailReason             string     `json:"fail_reason"`
+	SubmitTime             int64      `json:"submit_time" gorm:"index"`
+	StartTime              int64      `json:"start_time" gorm:"index"`
+	FinishTime             int64      `json:"finish_time" gorm:"index"`
+	Progress               string     `json:"progress" gorm:"type:varchar(20);index"`
+	Properties             Properties `json:"properties" gorm:"type:json"`
+	Username               string     `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
@@ -114,13 +122,38 @@ type TaskPrivateData struct {
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
-	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
-	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
-	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
-	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
-	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
-	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+	ModelPrice                 float64                 `json:"model_price,omitempty"`                   // 模型单价
+	GroupRatio                 float64                 `json:"group_ratio,omitempty"`                   // 分组倍率
+	ModelRatio                 float64                 `json:"model_ratio,omitempty"`                   // 模型倍率
+	OtherRatios                map[string]float64      `json:"other_ratios,omitempty"`                  // 附加倍率（时长、分辨率等）
+	OriginModelName            string                  `json:"origin_model_name,omitempty"`             // 模型名称，必须为OriginModelName
+	OriginalQuota              int                     `json:"original_quota,omitempty"`                // 分组折扣前的原始额度
+	NetQuota                   int                     `json:"net_quota,omitempty"`                     // 提交阶段最终结算额度
+	PendingNetQuota            int                     `json:"pending_net_quota,omitempty"`             // 固定折扣提交/差额结算目标；task.Quota 保留最后确认值
+	DiscountSettlementID       string                  `json:"discount_settlement_id,omitempty"`        // 持久化账本幂等键
+	DiscountAdjustmentID       string                  `json:"discount_adjustment_id,omitempty"`        // 完成阶段账本调整幂等键
+	RefundedQuota              int                     `json:"refunded_quota,omitempty"`                // 已完成资金及统计退款的额度
+	ChargeState                string                  `json:"charge_state,omitempty"`                  // 计费状态；非 charged 状态不得自动退款或重算
+	RefundState                string                  `json:"refund_state,omitempty"`                  // 退款阶段；模糊 pending 状态必须人工对账
+	GroupModelDiscountSnapshot *groupdiscount.Snapshot `json:"group_model_discount_snapshot,omitempty"` // 提交时冻结的月度策略
+	PerCallBilling             bool                    `json:"per_call_billing,omitempty"`              // 按次计费：跳过轮询阶段的差额结算
 }
+
+const (
+	TaskChargeStatePrepared         = "prepared"
+	TaskChargeStateCharged          = "charged"
+	TaskChargeStateUncharged        = "uncharged"
+	TaskChargeStateReused           = "reused"
+	TaskChargeStatePendingReconcile = "pending_reconcile"
+
+	TaskRefundStateFundingPending    = "funding_pending"
+	TaskRefundStateFundingApplied    = "funding_applied"
+	TaskRefundStateTokenPending      = "token_pending"
+	TaskRefundStateTokenApplied      = "token_applied"
+	TaskRefundStateAccountingPending = "accounting_pending"
+	TaskRefundStateAccountingApplied = "accounting_applied"
+	TaskRefundStateCommitted         = "committed"
+)
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
 // 旧数据没有 UpstreamTaskID 时，TaskID 本身就是上游 ID
@@ -295,9 +328,11 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 }
 
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
+	recoverTaskBillingRowsBeforePolling()
 	var tasks []*Task
 	err := DB.Where("progress != ?", "100%").
 		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		Where("(billing_ready IS NULL OR billing_ready = ?)", true).
 		Where("submit_time < ?", cutoffUnix).
 		Order("submit_time").
 		Limit(limit).
@@ -309,10 +344,17 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 }
 
 func GetAllUnFinishSyncTasks(limit int) []*Task {
+	recoverTaskBillingRowsBeforePolling()
 	var tasks []*Task
 	var err error
 	// get all tasks progress is not 100%
-	err = DB.Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Limit(limit).Order("id").Find(&tasks).Error
+	err = DB.Where("progress != ?", "100%").
+		Where("status != ?", TaskStatusFailure).
+		Where("status != ?", TaskStatusSuccess).
+		Where("(billing_ready IS NULL OR billing_ready = ?)", true).
+		Limit(limit).
+		Order("id").
+		Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -324,11 +366,13 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 // whether the async_task_poll system task needs to run; when no task is pending
 // the scheduler skips creating a row entirely.
 func HasUnfinishedSyncTasks() bool {
+	recoverTaskBillingRowsBeforePolling()
 	var id int64
 	err := DB.Model(&Task{}).
 		Where("progress != ?", "100%").
 		Where("status != ?", TaskStatusFailure).
 		Where("status != ?", TaskStatusSuccess).
+		Where("(billing_ready IS NULL OR billing_ready = ?)", true).
 		Limit(1).
 		Pluck("id", &id).Error
 	return err == nil && id != 0
@@ -367,6 +411,22 @@ func (Task *Task) Insert() error {
 	var err error
 	err = DB.Create(Task).Error
 	return err
+}
+
+func (t *Task) BeforeCreate(_ *gorm.DB) error {
+	t.syncBillingReady()
+	return nil
+}
+
+func (t *Task) syncBillingReady() {
+	billingContext := t.PrivateData.BillingContext
+	if billingContext == nil || billingContext.ChargeState == "" {
+		return
+	}
+	ready := billingContext.ChargeState != TaskChargeStatePrepared &&
+		billingContext.ChargeState != TaskChargeStatePendingReconcile &&
+		!t.BillingRecoveryPending
+	t.BillingReady = &ready
 }
 
 type taskSnapshot struct {
@@ -409,6 +469,118 @@ func (Task *Task) Update() error {
 
 func (t *Task) UpdateQuota() error {
 	return DB.Model(t).Update("quota", t.Quota).Error
+}
+
+// UpdateBillingState persists the task's charge marker together with its
+// private billing snapshot. Refund and adjustment flows use this instead of
+// updating quota alone so a retry cannot repeat an already-applied fund move.
+func (t *Task) UpdateBillingState() error {
+	t.syncBillingReady()
+	return DB.Model(t).
+		Select("quota", "private_data", "billing_ready", "billing_recovery_pending").
+		Updates(t).Error
+}
+
+// ConfirmBillingState atomically publishes a completed initial charge. Polling
+// cannot observe the task until this compare-and-set wins.
+func (t *Task) ConfirmBillingState() (bool, error) {
+	t.syncBillingReady()
+	if t.BillingReady == nil || !*t.BillingReady {
+		return false, errors.New("task billing state is not ready to confirm")
+	}
+	result := DB.Model(&Task{}).
+		Where("id = ? AND billing_ready = ? AND billing_recovery_pending = ?", t.ID, false, false).
+		Select("quota", "private_data", "billing_ready", "billing_recovery_pending").
+		Updates(t)
+	return result.RowsAffected == 1, result.Error
+}
+
+// MarkBillingRecoveryPending is the post-settlement handoff used only when a
+// dynamic ledger is settled but the task-side final snapshot could not be
+// written. Keeping this marker separate from BillingReady prevents an active
+// or replayed prepared submission from being mistaken for a recoverable row.
+func (t *Task) MarkBillingRecoveryPending() error {
+	result := DB.Model(&Task{}).
+		Where("id = ? AND billing_ready = ? AND billing_recovery_pending = ?", t.ID, false, false).
+		Updates(map[string]any{
+			"billing_ready":            false,
+			"billing_recovery_pending": true,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("task billing recovery handoff was not claimed")
+	}
+	ready := false
+	t.BillingReady = &ready
+	t.BillingRecoveryPending = true
+	return nil
+}
+
+// RecoverSettledInitialBilling promotes only an explicitly handed-off dynamic
+// settlement. It never performs funding, token, statistics, or upstream work.
+func (t *Task) RecoverSettledInitialBilling() bool {
+	if t == nil || t.ID == 0 || !t.BillingRecoveryPending || t.PrivateData.BillingContext == nil {
+		return false
+	}
+	billingContext := t.PrivateData.BillingContext
+	if billingContext.DiscountSettlementID == "" || billingContext.DiscountAdjustmentID != "" ||
+		(billingContext.ChargeState != TaskChargeStatePrepared &&
+			billingContext.ChargeState != TaskChargeStatePendingReconcile) {
+		return false
+	}
+	settlement, err := GetGroupModelDiscountSettlement(billingContext.DiscountSettlementID)
+	if err != nil || settlement.Status != GroupModelDiscountStatusSettled ||
+		!settlement.AccountingApplied || settlement.UserID != t.UserId ||
+		settlement.AccountingUserID != t.UserId || settlement.AccountingChannelID != t.ChannelId ||
+		settlement.AccountingQuotaDelta < 0 || settlement.AccountingRequestCountDelta != 1 ||
+		settlement.AccountingQuotaDelta != int(settlement.ChargedQuota) ||
+		settlement.OriginalQuota != int64(billingContext.OriginalQuota) {
+		return false
+	}
+
+	previousQuota := t.Quota
+	previousNetQuota := billingContext.NetQuota
+	previousChargeState := billingContext.ChargeState
+	previousRecoveryPending := t.BillingRecoveryPending
+	previousBillingReady := t.BillingReady
+	t.Quota = settlement.AccountingQuotaDelta
+	billingContext.NetQuota = settlement.AccountingQuotaDelta
+	billingContext.ChargeState = TaskChargeStateCharged
+	t.BillingRecoveryPending = false
+	t.syncBillingReady()
+	result := DB.Model(&Task{}).
+		Where("id = ? AND billing_ready = ? AND billing_recovery_pending = ?", t.ID, false, true).
+		Select("quota", "private_data", "billing_ready", "billing_recovery_pending").
+		Updates(t)
+	if result.Error != nil || result.RowsAffected != 1 {
+		t.Quota = previousQuota
+		billingContext.NetQuota = previousNetQuota
+		billingContext.ChargeState = previousChargeState
+		t.BillingRecoveryPending = previousRecoveryPending
+		t.BillingReady = previousBillingReady
+		return false
+	}
+	return true
+}
+
+func recoverTaskBillingRowsBeforePolling() {
+	var tasks []*Task
+	if err := DB.Where("billing_recovery_pending = ?", true).Find(&tasks).Error; err != nil {
+		return
+	}
+	for _, task := range tasks {
+		task.RecoverSettledInitialBilling()
+	}
+}
+
+// GetTaskBillingState reloads only the durable evidence needed to reconcile a
+// completion-stage discount adjustment without replaying its funding delta.
+func GetTaskBillingState(id int64) (*Task, error) {
+	var task Task
+	err := DB.Select("id", "quota", "private_data", "billing_ready", "billing_recovery_pending").First(&task, id).Error
+	return &task, err
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).

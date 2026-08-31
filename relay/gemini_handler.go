@@ -80,6 +80,49 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 				if containPrice {
 					info.OriginModelName = noThinkingModelName
 					info.UpstreamModelName = noThinkingModelName
+
+					// Admission priced the client-visible base model before the
+					// Gemini adapter inspected thinkingBudget. Reprice the effective
+					// no-thinking model before sending upstream so fixed model prices,
+					// expression snapshots, and the monthly group/model scope all use
+					// the same identity. ResolveGroupModelDiscount rebinds through the
+					// request-frozen resolver, so this does not observe live policy
+					// changes made after admission.
+					info.TieredBillingSnapshot = nil
+					priceData, priceErr := helper.ModelPriceHelper(
+						c,
+						info,
+						info.GetEstimatePromptTokens(),
+						request.GetTokenCountMeta(),
+					)
+					if priceErr != nil {
+						return types.NewErrorWithStatusCode(
+							priceErr,
+							types.ErrorCodeModelPriceError,
+							http.StatusBadRequest,
+							types.ErrOptionWithSkipRetry(),
+						)
+					}
+
+					targetQuota := priceData.QuotaToPreConsume
+					if info.Billing == nil {
+						if targetQuota > 0 {
+							if apiErr := service.PreConsumeBilling(c, targetQuota, info); apiErr != nil {
+								return apiErr
+							}
+						}
+					} else {
+						if targetQuota > 0 {
+							if reserveErr := info.Billing.ReserveForAdmission(targetQuota); reserveErr != nil {
+								return types.NewError(
+									reserveErr,
+									types.ErrorCodeUpdateDataError,
+									types.ErrOptionWithSkipRetry(),
+								)
+							}
+						}
+						info.FinalPreConsumedQuota = info.Billing.GetPreConsumedQuota()
+					}
 				}
 			}
 		}

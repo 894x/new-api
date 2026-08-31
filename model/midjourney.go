@@ -1,5 +1,11 @@
 package model
 
+import (
+	"errors"
+
+	"gorm.io/gorm"
+)
+
 type Midjourney struct {
 	Id          int    `json:"id"`
 	Code        int    `json:"code"`
@@ -26,6 +32,19 @@ type Midjourney struct {
 
 	TokenId          int `json:"-" gorm:"default:0"`
 	BillingChannelId int `json:"-" gorm:"default:0"`
+
+	OriginalQuota          int    `json:"-"`
+	RefundedQuota          int    `json:"-"`
+	ChargeState            string `json:"-" gorm:"type:varchar(32)"`
+	RefundState            string `json:"-" gorm:"type:varchar(32)"`
+	BillingSource          string `json:"-" gorm:"type:varchar(32)"`
+	SubscriptionId         int    `json:"-"`
+	UsingGroup             string `json:"-" gorm:"type:varchar(128)"`
+	OriginModelName        string `json:"-" gorm:"type:varchar(255)"`
+	DiscountSettlementID   string `json:"-" gorm:"type:varchar(191);index"`
+	DiscountPolicySnapshot string `json:"-" gorm:"type:text"`
+	BillingReady           *bool  `json:"-" gorm:"index"`
+	BillingRecoveryPending bool   `json:"-" gorm:"index"`
 }
 
 // TaskQueryParams 用于包含所有搜索条件的结构体，可以根据需求添加更多字段
@@ -94,10 +113,15 @@ func GetAllTasks(startIdx int, num int, queryParams TaskQueryParams) []*Midjourn
 }
 
 func GetAllUnFinishTasks() []*Midjourney {
+	recoverMidjourneyBillingRowsBeforePolling()
 	var tasks []*Midjourney
 	var err error
 	// get all tasks progress is not 100%
-	err = DB.Where("progress != ?", "100%").Find(&tasks).Error
+	err = DB.Where("progress != ?", "100%").
+		Where("(billing_ready IS NULL OR billing_ready = ?)", true).
+		Where("(billing_ready IS NOT NULL OR charge_state IS NULL OR charge_state = ? OR charge_state NOT IN ?)",
+			"", []string{TaskChargeStatePrepared, TaskChargeStatePendingReconcile}).
+		Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -109,9 +133,13 @@ func GetAllUnFinishTasks() []*Midjourney {
 // whether the midjourney_poll system task needs to run; when no task is pending
 // the scheduler skips creating a row entirely.
 func HasUnfinishedMidjourneyTasks() bool {
+	recoverMidjourneyBillingRowsBeforePolling()
 	var id int
 	err := DB.Model(&Midjourney{}).
 		Where("progress != ?", "100%").
+		Where("(billing_ready IS NULL OR billing_ready = ?)", true).
+		Where("(billing_ready IS NOT NULL OR charge_state IS NULL OR charge_state = ? OR charge_state NOT IN ?)",
+			"", []string{TaskChargeStatePrepared, TaskChargeStatePendingReconcile}).
 		Limit(1).
 		Pluck("id", &id).Error
 	return err == nil && id != 0
@@ -167,6 +195,21 @@ func (midjourney *Midjourney) Insert() error {
 	return err
 }
 
+func (midjourney *Midjourney) BeforeCreate(_ *gorm.DB) error {
+	midjourney.syncBillingReady()
+	return nil
+}
+
+func (midjourney *Midjourney) syncBillingReady() {
+	if midjourney.ChargeState == "" {
+		return
+	}
+	ready := midjourney.ChargeState != TaskChargeStatePrepared &&
+		midjourney.ChargeState != TaskChargeStatePendingReconcile &&
+		!midjourney.BillingRecoveryPending
+	midjourney.BillingReady = &ready
+}
+
 func (midjourney *Midjourney) Update() error {
 	var err error
 	err = DB.Save(midjourney).Error
@@ -174,9 +217,116 @@ func (midjourney *Midjourney) Update() error {
 }
 
 func (midjourney *Midjourney) UpdateBillingState() error {
+	midjourney.syncBillingReady()
 	return DB.Model(midjourney).
-		Select("quota", "token_id", "billing_channel_id").
+		Select(
+			"quota", "token_id", "billing_channel_id", "original_quota", "refunded_quota",
+			"charge_state", "refund_state",
+			"billing_source", "subscription_id", "using_group", "origin_model_name",
+			"discount_settlement_id", "discount_policy_snapshot", "billing_ready", "billing_recovery_pending",
+		).
 		Updates(midjourney).Error
+}
+
+// ClaimBillingState persists the pending intent only while this row still has
+// the caller's observed charge state. A stale concurrent owner must not move
+// the same external funding/token charge twice.
+func (midjourney *Midjourney) ClaimBillingState(fromState string) (bool, error) {
+	midjourney.syncBillingReady()
+	result := DB.Model(&Midjourney{}).
+		Where("id = ? AND charge_state = ? AND billing_recovery_pending = ?", midjourney.Id, fromState, false).
+		Select(
+			"quota", "token_id", "billing_channel_id", "original_quota", "refunded_quota",
+			"charge_state", "refund_state",
+			"billing_source", "subscription_id", "using_group", "origin_model_name",
+			"discount_settlement_id", "discount_policy_snapshot", "billing_ready", "billing_recovery_pending",
+		).
+		Updates(midjourney)
+	return result.RowsAffected == 1, result.Error
+}
+
+// MarkBillingRecoveryPending hands a settled dynamic ledger to the local
+// recovery pass after the final Midjourney snapshot write failed.
+func (midjourney *Midjourney) MarkBillingRecoveryPending(fromState string) error {
+	result := DB.Model(&Midjourney{}).
+		Where(
+			"id = ? AND charge_state = ? AND billing_recovery_pending = ?",
+			midjourney.Id, fromState, false,
+		).
+		Updates(map[string]any{
+			"billing_ready":            false,
+			"billing_recovery_pending": true,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("Midjourney billing recovery handoff was not claimed")
+	}
+	ready := false
+	midjourney.BillingReady = &ready
+	midjourney.BillingRecoveryPending = true
+	return nil
+}
+
+// RecoverSettledInitialBilling promotes only an explicitly handed-off dynamic
+// settlement and never performs upstream, funding, token, or statistics work.
+func (midjourney *Midjourney) RecoverSettledInitialBilling() bool {
+	if midjourney == nil || midjourney.Id == 0 || !midjourney.BillingRecoveryPending ||
+		midjourney.DiscountSettlementID == "" ||
+		(midjourney.ChargeState != TaskChargeStatePrepared &&
+			midjourney.ChargeState != TaskChargeStatePendingReconcile) {
+		return false
+	}
+	settlement, err := GetGroupModelDiscountSettlement(midjourney.DiscountSettlementID)
+	billingChannelID := midjourney.GetBillingChannelId()
+	if err != nil || settlement.Status != GroupModelDiscountStatusSettled ||
+		!settlement.AccountingApplied || settlement.UserID != midjourney.UserId ||
+		settlement.AccountingUserID != midjourney.UserId || settlement.AccountingChannelID != billingChannelID ||
+		settlement.AccountingQuotaDelta < 0 || settlement.AccountingRequestCountDelta != 1 ||
+		settlement.AccountingQuotaDelta != int(settlement.ChargedQuota) ||
+		settlement.OriginalQuota != int64(midjourney.OriginalQuota) {
+		return false
+	}
+
+	previousQuota := midjourney.Quota
+	previousChargeState := midjourney.ChargeState
+	previousRecoveryPending := midjourney.BillingRecoveryPending
+	previousBillingReady := midjourney.BillingReady
+	midjourney.Quota = settlement.AccountingQuotaDelta
+	midjourney.ChargeState = TaskChargeStateCharged
+	midjourney.BillingRecoveryPending = false
+	midjourney.syncBillingReady()
+	result := DB.Model(&Midjourney{}).
+		Where(
+			"id = ? AND charge_state = ? AND billing_ready = ? AND billing_recovery_pending = ?",
+			midjourney.Id, previousChargeState, false, true,
+		).
+		Select(
+			"quota", "token_id", "billing_channel_id", "original_quota", "refunded_quota",
+			"charge_state", "refund_state", "billing_source", "subscription_id", "using_group",
+			"origin_model_name", "discount_settlement_id", "discount_policy_snapshot",
+			"billing_ready", "billing_recovery_pending",
+		).
+		Updates(midjourney)
+	if result.Error != nil || result.RowsAffected != 1 {
+		midjourney.Quota = previousQuota
+		midjourney.ChargeState = previousChargeState
+		midjourney.BillingRecoveryPending = previousRecoveryPending
+		midjourney.BillingReady = previousBillingReady
+		return false
+	}
+	return true
+}
+
+func recoverMidjourneyBillingRowsBeforePolling() {
+	var tasks []*Midjourney
+	if err := DB.Where("billing_recovery_pending = ?", true).Find(&tasks).Error; err != nil {
+		return
+	}
+	for _, task := range tasks {
+		task.RecoverSettledInitialBilling()
+	}
 }
 
 func (midjourney *Midjourney) GetBillingChannelId() int {
@@ -197,12 +347,6 @@ func (midjourney *Midjourney) UpdateWithStatus(fromStatus string) (bool, error) 
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
-}
-
-func MjBulkUpdate(mjIds []string, params map[string]any) error {
-	return DB.Model(&Midjourney{}).
-		Where("mj_id in (?)", mjIds).
-		Updates(params).Error
 }
 
 func MjBulkUpdateByTaskIds(taskIDs []int, params map[string]any) error {

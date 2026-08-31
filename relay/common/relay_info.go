@@ -11,12 +11,14 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/groupdiscount"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/relayparam"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -167,6 +169,16 @@ type RelayInfo struct {
 	// and again before settlement. Non-nil only when billing mode is "tiered_expr".
 	TieredBillingSnapshot *billingexpr.BillingSnapshot
 	BillingRequestInput   *billingexpr.RequestInput
+	// GroupModelDiscountSnapshot freezes a monthly group/model discount policy
+	// selected for the current routing attempt. Nil means the legacy fixed group
+	// ratio applies. Resolver freezes every possible group at request admission,
+	// or immediately after a continuation restores its previously unknown model.
+	GroupModelDiscountSnapshot *groupdiscount.Snapshot
+	GroupModelDiscountResolver *groupdiscount.FrozenResolver
+	// GroupModelDiscountResolverOriginModel records which origin model the
+	// resolver was bound to. Continuation/task requests can learn their model
+	// only after admission; a mismatch requires one rebind before pricing.
+	GroupModelDiscountResolverOriginModel string
 
 	Request dto.Request
 
@@ -189,6 +201,43 @@ type RelayInfo struct {
 	*ResponsesUsageInfo
 	*ChannelMeta
 	*TaskRelayInfo
+}
+
+// ResolveGroupModelDiscount resolves the current routing group's policy from
+// the request-frozen resolver. Manually constructed RelayInfo values capture
+// the same immutable resolver on their first pricing use for compatibility.
+func (info *RelayInfo) ResolveGroupModelDiscount() (groupdiscount.Snapshot, bool, error) {
+	if info == nil {
+		return groupdiscount.Snapshot{}, false, nil
+	}
+	if info.GroupModelDiscountResolver == nil || info.GroupModelDiscountResolverOriginModel != info.OriginModelName {
+		info.BindGroupModelDiscountResolver()
+	}
+	return info.GroupModelDiscountResolver.Resolve(info.UsingGroup)
+}
+
+// BindGroupModelDiscountResolver freezes the current monthly policy set for
+// the now-known origin model. It is used when a task continuation restores its
+// client-visible model from the durable origin task after initial admission.
+func (info *RelayInfo) BindGroupModelDiscountResolver() {
+	if info == nil {
+		return
+	}
+	if info.GroupModelDiscountResolver != nil {
+		info.GroupModelDiscountResolver = info.GroupModelDiscountResolver.WithOriginModel(info.OriginModelName)
+	} else {
+		requestAt := info.StartTime
+		if requestAt.IsZero() {
+			requestAt = time.Now()
+		}
+		info.GroupModelDiscountResolver = ratio_setting.CaptureModelTieredDiscountResolver(
+			info.UserGroup,
+			info.OriginModelName,
+			requestAt,
+		)
+	}
+	info.GroupModelDiscountResolverOriginModel = info.OriginModelName
+	info.GroupModelDiscountSnapshot = nil
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
@@ -549,6 +598,12 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	if info.RelayMode == relayconstant.RelayModeUnknown {
 		info.RelayMode = c.GetInt("relay_mode")
 	}
+	info.GroupModelDiscountResolver = ratio_setting.CaptureModelTieredDiscountResolver(
+		info.UserGroup,
+		info.OriginModelName,
+		info.StartTime,
+	)
+	info.GroupModelDiscountResolverOriginModel = info.OriginModelName
 	if info.RelayMode == relayconstant.RelayModeChatCompletions && c.Request.URL.Path == "/v1/chat/completions" {
 		info.ResponseId = uuid.NewString()
 		common.SetContextKey(c, constant.ContextKeyResponseId, info.ResponseId)

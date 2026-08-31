@@ -100,10 +100,17 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 			return errors.New("签到失败，请稍后重试")
 		}
 
-		// 步骤2: 在事务中增加用户额度
-		if err := tx.Model(&User{}).Where("id = ?", userId).
-			Update("quota", gorm.Expr("quota + ?", quotaAwarded)).Error; err != nil {
-			return errors.New("签到失败：更新额度出错")
+		// 步骤2: 余额写入前发布 fence 并删除旧哈希；事务提交后由
+		// quota_version 保护任意延迟的旧数据库快照，缓存保持冷状态。
+		if quotaAwarded > 0 {
+			prepareUserQuotaCacheMutation(userId, "check-in quota credit")
+			if err := tx.Model(&User{}).Where("id = ?", userId).
+				Updates(map[string]interface{}{
+					"quota":         gorm.Expr("quota + ?", quotaAwarded),
+					"quota_version": gorm.Expr("COALESCE(quota_version, 0) + 1"),
+				}).Error; err != nil {
+				return errors.New("签到失败：更新额度出错")
+			}
 		}
 
 		return nil
@@ -112,11 +119,9 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 	if err != nil {
 		return nil, err
 	}
-
-	// 事务成功后，异步更新缓存
-	go func() {
-		_ = cacheIncrUserQuota(userId, int64(quotaAwarded))
-	}()
+	if quotaAwarded > 0 {
+		finalizeUserQuotaCacheMutation(userId, "checkin quota credit")
+	}
 
 	return checkin, nil
 }

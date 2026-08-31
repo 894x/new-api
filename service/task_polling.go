@@ -90,7 +90,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 			continue
 		}
 		timedOutCount++
-		if !isLegacy && task.Quota != 0 {
+		if !isLegacy && taskNeedsBillingRefund(task) {
 			RefundTaskQuota(ctx, task, reason)
 		}
 	}
@@ -311,7 +311,7 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 			logger.LogError(ctx, fmt.Sprintf("UpdateSunoTask task %s error: %v", task.TaskID, err))
 		} else if !won {
 			logger.LogWarn(ctx, fmt.Sprintf("Task %s CAS lost or no-op update, skip billing", task.TaskID))
-		} else if isFailure && prevStatus != model.TaskStatusFailure && task.Quota != 0 {
+		} else if isFailure && prevStatus != model.TaskStatusFailure && taskNeedsBillingRefund(task) {
 			RefundTaskQuota(ctx, task, task.FailReason)
 		}
 	}
@@ -542,7 +542,6 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 
 	shouldRefund := false
 	shouldSettle := false
-	quota := task.Quota
 
 	task.Status = model.TaskStatus(taskResult.Status)
 	switch taskResult.Status {
@@ -581,7 +580,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		task.FailReason = taskResult.Reason
 		logger.LogInfo(ctx, fmt.Sprintf("Task %s failed: %s", task.TaskID, task.FailReason))
 		taskResult.Progress = taskcommon.ProgressComplete
-		if quota != 0 {
+		if taskNeedsBillingRefund(task) {
 			shouldRefund = true
 		}
 	default:
@@ -669,6 +668,17 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	}
 	// 1. 优先让 adaptor 决定最终额度
 	if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
+		if bc := task.PrivateData.BillingContext; bc != nil && bc.DiscountSettlementID != "" {
+			// Adaptor quota has no pre-group original contract. Prefer the
+			// token path when available; otherwise fail closed instead of
+			// corrupting the monthly original-quota cursor.
+			if taskResult.TotalTokens > 0 {
+				RecalculateTaskQuotaByTokens(ctx, task, taskResult.TotalTokens)
+			} else {
+				logger.LogError(ctx, fmt.Sprintf("任务 %s adaptor 计费缺少月度折扣原始额度，保持提交结算", task.TaskID))
+			}
+			return
+		}
 		RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整")
 		return
 	}

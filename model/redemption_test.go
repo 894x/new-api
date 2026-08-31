@@ -126,7 +126,10 @@ func setupRedeemFixture(t *testing.T, quota int) (userId int, key string) {
 }
 
 func TestRedeemCreditsQuotaExactlyOnce(t *testing.T) {
+	useUserCacheMiniRedis(t)
 	userId, key := setupRedeemFixture(t, 500)
+	_, err := GetUserCache(userId)
+	require.NoError(t, err)
 
 	quota, err := Redeem(key, userId)
 	require.NoError(t, err)
@@ -135,6 +138,9 @@ func TestRedeemCreditsQuotaExactlyOnce(t *testing.T) {
 	var user User
 	require.NoError(t, DB.First(&user, "id = ?", userId).Error)
 	assert.Equal(t, 500, user.Quota)
+	assert.EqualValues(t, 1, user.QuotaVersion)
+	_, err = cacheGetUserBase(userId)
+	assert.Error(t, err, "redemption credit must leave Redis cold behind the quota fence")
 
 	var redemption Redemption
 	require.NoError(t, DB.First(&redemption, "name = ?", "redeem-test").Error)

@@ -124,6 +124,38 @@ type OptionUpdateRequest struct {
 	Value any    `json:"value"`
 }
 
+type groupPricingOptionUpdateRequest struct {
+	GroupRatio        string `json:"group_ratio"`
+	ModelTieredRatios string `json:"model_tiered_ratios"`
+}
+
+func UpdateGroupPricingOptions(c *gin.Context) {
+	var request groupPricingOptionUpdateRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "无效的参数",
+		})
+		return
+	}
+
+	if err := model.UpdateOptionsBulk(map[string]string{
+		"GroupRatio":                             request.GroupRatio,
+		ratio_setting.ModelTieredRatiosOptionKey: request.ModelTieredRatios,
+	}); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	recordManageAudit(c, "option.update", map[string]interface{}{
+		"keys": []string{"GroupRatio", ratio_setting.ModelTieredRatiosOptionKey},
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+	})
+}
+
 func UpdateOption(c *gin.Context) {
 	var option OptionUpdateRequest
 	err := common.DecodeJson(c.Request.Body, &option)
@@ -296,6 +328,15 @@ func UpdateOption(c *gin.Context) {
 		}
 	case "GroupRatio":
 		err = ratio_setting.CheckGroupRatio(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	case ratio_setting.ModelTieredRatiosOptionKey:
+		err = ratio_setting.CheckModelTieredRatios(option.Value.(string))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,

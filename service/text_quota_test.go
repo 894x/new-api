@@ -872,6 +872,186 @@ func TestCalculateTextQuotaSummaryFixedPriceAppliesImageCountOnceAndAllowsOverri
 	require.Equal(t, 120000, summary.Quota)
 }
 
+func TestCalculateTextQuotaSummaryKeepsOriginalQuotaBeforeGroupDiscount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	priceData := hosttypes.PriceData{
+		ModelRatio:      2,
+		CompletionRatio: 2,
+		GroupRatioInfo: hosttypes.GroupRatioInfo{
+			GroupRatio: 0.5,
+		},
+	}
+	priceData.AddOtherRatio("batch", 3)
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-original-quota-test",
+		PriceData:       priceData,
+		StartTime:       time.Now(),
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{
+		PromptTokens:     100,
+		CompletionTokens: 50,
+		TotalTokens:      150,
+	})
+
+	// ((100 + 50*2) * modelRatio 2) * batch 3 = 1200 before group.
+	assert.Equal(t, 1200, summary.OriginalQuota)
+	assert.Equal(t, 600, summary.Quota)
+}
+
+func TestCalculateTextQuotaSummaryInactiveMonthlyPolicyIgnoresOriginalOverflowClamp(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	for _, test := range []struct {
+		name       string
+		groupRatio float64
+		wantQuota  int
+	}{
+		{name: "zero group", groupRatio: 0, wantQuota: 0},
+		{name: "tiny legal net", groupRatio: 0.25, wantQuota: 1_073_741_824},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			relayInfo := &relaycommon.RelayInfo{
+				OriginModelName: "legacy-original-overflow",
+				PriceData: hosttypes.PriceData{
+					ModelRatio: float64(common.MaxQuota) * 2,
+					GroupRatioInfo: hosttypes.GroupRatioInfo{
+						GroupRatio: test.groupRatio,
+					},
+				},
+				StartTime: time.Now(),
+			}
+
+			summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{
+				PromptTokens: 1,
+				TotalTokens:  1,
+			})
+
+			assert.Equal(t, test.wantQuota, summary.Quota)
+			assert.Nil(t, relayInfo.QuotaClamp, "inactive monthly pricing must audit only the actual legacy net charge")
+		})
+	}
+}
+
+func TestPostTextConsumeQuotaInactiveTieredPolicyIgnoresOriginalOverflowClamp(t *testing.T) {
+	truncate(t)
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	const expr = `tier("base", p * 8589934588)`
+	billing := &groupDiscountBillingRecorder{}
+	relayInfo := &relaycommon.RelayInfo{
+		RequestId:       "inactive-tiered-original-overflow",
+		OriginModelName: "inactive-tiered-original-overflow",
+		StartTime:       time.Now(),
+		Billing:         billing,
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:  "tiered_expr",
+			ExprString:   expr,
+			ExprHash:     billingexpr.ExprHashString(expr),
+			GroupRatio:   0.25,
+			QuotaPerUnit: testQuotaPerUnit,
+		},
+		PriceData: hosttypes.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{
+				GroupRatio: 0.25,
+			},
+		},
+	}
+
+	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 1, TotalTokens: 1}, nil)
+
+	require.Len(t, billing.settleCalls, 1)
+	assert.Equal(t, 1_073_741_824, billing.settleCalls[0])
+	assert.Nil(t, relayInfo.QuotaClamp, "inactive tiered pricing must ignore only the overflowing informational original")
+}
+
+func TestPostTextConsumeQuotaPropagatesReservationFailureBeforeFunding(t *testing.T) {
+	truncate(t)
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	snapshot := testGroupModelDiscountSnapshot()
+	billing := &groupDiscountBillingRecorder{preConsumed: 100, needsRefund: true}
+	relayInfo := &relaycommon.RelayInfo{
+		RequestId:                  "",
+		UserId:                     7301,
+		UsingGroup:                 snapshot.UsingGroup,
+		OriginModelName:            snapshot.OriginModel,
+		StartTime:                  time.Now(),
+		Billing:                    billing,
+		GroupModelDiscountSnapshot: &snapshot,
+		ChannelMeta:                &relaycommon.ChannelMeta{ChannelId: 7302},
+		PriceData: hosttypes.PriceData{
+			ModelRatio: 1,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+	}
+
+	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 1, TotalTokens: 1}, nil)
+
+	settlementErr := TakeGroupModelDiscountAdmissionError(ctx)
+	require.Error(t, settlementErr)
+	assert.Empty(t, billing.settleCalls, "reservation failure must reach the controller before any funding action")
+	assert.Zero(t, billing.refundCalls, "the controller owns the single admission refund")
+}
+
+func TestCalculateTextQuotaSummaryPreservesMinimumChargeBeforeAndAfterGroup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-minimum-original-quota-test",
+		PriceData: hosttypes.PriceData{
+			ModelRatio: 0.4,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{
+				GroupRatio: 0.5,
+			},
+		},
+		StartTime: time.Now(),
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{
+		PromptTokens: 1,
+		TotalTokens:  1,
+	})
+
+	assert.Equal(t, 1, summary.OriginalQuota, "a positive billable original amount must remain ledger-eligible")
+	assert.Equal(t, 1, summary.Quota, "the legacy fixed-ratio minimum charge must remain compatible")
+}
+
+func TestCalculateTextQuotaSummaryToolSurchargeOriginalExcludesGroupDiscount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "o1",
+		PriceData: hosttypes.PriceData{
+			GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 0.5},
+		},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
+			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+				dto.BuildInToolWebSearchPreview: {CallCount: 1},
+			},
+		},
+		StartTime: time.Now(),
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{})
+
+	// web_search_preview is $10/1K calls: 10/1000*QuotaPerUnit.
+	expectedOriginal := common.QuotaFromDecimal(decimal.NewFromFloat(10.0 / 1000).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
+	assert.Equal(t, expectedOriginal, summary.OriginalQuota)
+	assert.Equal(t, expectedOriginal/2, summary.Quota)
+}
+
 func TestCalculateTextToolCallSurchargeGeneralizedBuiltInTools(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
