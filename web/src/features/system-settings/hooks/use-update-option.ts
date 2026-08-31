@@ -40,15 +40,20 @@ const STATUS_RELATED_KEYS = new Set([
   'oidc.display_name',
 ])
 
-export function useUpdateOption() {
+type UseUpdateOptionOptions = {
+  deferSystemOptionsInvalidation?: boolean
+}
+
+export function useUpdateOption(options?: UseUpdateOptionOptions) {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (request: UpdateOptionRequest) => updateSystemOption(request),
     onSuccess: (data, variables) => {
       if (data.success) {
-        // Always refresh system-options
-        queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        if (!options?.deferSystemOptionsInvalidation) {
+          queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        }
 
         if (
           variables.key === 'HomePageTemplate' ||

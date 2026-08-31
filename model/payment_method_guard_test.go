@@ -218,7 +218,7 @@ func TestRechargeEpayCreditsQuotaExactlyOnce(t *testing.T) {
 
 func TestRechargeEpayKeepsRedisAndDatabaseCreditInSync(t *testing.T) {
 	truncateTables(t)
-	useUserCacheMiniRedis(t)
+	server := useUserCacheMiniRedis(t)
 
 	oldQuotaPerUnit := common.QuotaPerUnit
 	common.QuotaPerUnit = 5
@@ -232,16 +232,26 @@ func TestRechargeEpayKeepsRedisAndDatabaseCreditInSync(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, alreadyDone)
 	assert.Equal(t, 17, getUserQuotaForPaymentGuardTest(t, user.Id))
-	cached, err := cacheGetUserBase(user.Id)
+	var reloadedUser User
+	require.NoError(t, DB.First(&reloadedUser, user.Id).Error)
+	assert.EqualValues(t, 1, reloadedUser.QuotaVersion)
+	_, err = cacheGetUserBase(user.Id)
+	assert.Error(t, err, "a committed top-up must leave Redis cold behind its quota fence")
+
+	server.FastForward(time.Duration(tokenCacheFenceSeconds+1) * time.Second)
+	cached, err := GetUserCache(user.Id)
 	require.NoError(t, err)
 	assert.Equal(t, 17, cached.Quota)
+	assert.EqualValues(t, 1, cached.QuotaVersion)
 
 	alreadyDone, err = RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
 	require.NoError(t, err)
 	assert.True(t, alreadyDone)
 	cached, err = cacheGetUserBase(user.Id)
 	require.NoError(t, err)
-	assert.Equal(t, 17, cached.Quota)
+	assert.Equal(t, 17, cached.Quota, "an idempotent replay must not fence or mutate the hydrated cache")
+	require.NoError(t, DB.First(&reloadedUser, user.Id).Error)
+	assert.EqualValues(t, 1, reloadedUser.QuotaVersion, "an idempotent replay must not advance quota_version")
 }
 
 func TestRechargeEpayUpdatesPaymentMethodToActual(t *testing.T) {

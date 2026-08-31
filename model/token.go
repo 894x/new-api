@@ -7,7 +7,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
 )
 
@@ -21,6 +20,7 @@ type Token struct {
 	AccessedTime       int64          `json:"accessed_time" gorm:"bigint"`
 	ExpiredTime        int64          `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
 	RemainQuota        int            `json:"remain_quota" gorm:"default:0"`
+	QuotaVersion       int64          `json:"-" gorm:"type:bigint;column:quota_version"`
 	UnlimitedQuota     bool           `json:"unlimited_quota"`
 	ModelLimitsEnabled bool           `json:"model_limits_enabled"`
 	ModelLimits        string         `json:"model_limits" gorm:"type:text"`
@@ -309,11 +309,27 @@ func (token *Token) Insert() error {
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (token *Token) Update() (err error) {
 	// 写库前失效缓存并设置 fence，防止并发读者把过期快照重新写回缓存。
-	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
-		common.SysLog("failed to invalidate token cache before update: " + cacheErr.Error())
+	prepareTokenQuotaCacheMutation(token.Key, "token update")
+	runQuotaCacheRaceHook(tokenQuotaCacheBeforeDBMutationHook())
+	if err := DB.Model(token).Updates(map[string]interface{}{
+		"name":                 token.Name,
+		"status":               token.Status,
+		"expired_time":         token.ExpiredTime,
+		"remain_quota":         token.RemainQuota,
+		"quota_version":        gorm.Expr("COALESCE(quota_version, 0) + 1"),
+		"unlimited_quota":      token.UnlimitedQuota,
+		"model_limits_enabled": token.ModelLimitsEnabled,
+		"model_limits":         token.ModelLimits,
+		"allow_ips":            token.AllowIps,
+		"group":                token.Group,
+		"cross_group_retry":    token.CrossGroupRetry,
+		"auto_groups":          token.AutoGroups,
+	}).Error; err != nil {
+		return err
 	}
-	return DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "auto_groups").Updates(token).Error
+	runQuotaCacheRaceHook(tokenQuotaCacheAfterDBMutationHook())
+	finalizeTokenQuotaCacheMutation(token.Key, "token update")
+	return nil
 }
 
 func (token *Token) SelectUpdate() (err error) {
@@ -378,20 +394,15 @@ func IncreaseTokenQuota(tokenId int, key string, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	if common.RedisEnabled {
-		gopool.Go(func() {
-			// 守卫式增量：哈希不存在时跳过，由下次读取从数据库水合，
-			// 绝不创建只有配额字段的残缺哈希。
-			if _, err := cacheApplyTokenQuotaDelta(tokenId, key, int64(quota)); err != nil {
-				common.SysLog("failed to increase token quota: " + err.Error())
-			}
-		})
-	}
-	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeTokenQuota, tokenId, quota)
+	if quota == 0 {
 		return nil
 	}
-	return increaseTokenQuota(tokenId, quota)
+	prepareTokenQuotaCacheMutation(key, "token quota increase")
+	if err := increaseTokenQuota(tokenId, quota); err != nil {
+		return err
+	}
+	finalizeTokenQuotaCacheMutation(key, "token quota increase")
+	return nil
 }
 
 func increaseTokenQuota(id int, quota int) (err error) {
@@ -399,6 +410,7 @@ func increaseTokenQuota(id int, quota int) (err error) {
 		map[string]interface{}{
 			"remain_quota":  gorm.Expr("remain_quota + ?", quota),
 			"used_quota":    gorm.Expr("used_quota - ?", quota),
+			"quota_version": gorm.Expr("COALESCE(quota_version, 0) + 1"),
 			"accessed_time": common.GetTimestamp(),
 		},
 	).Error
@@ -409,18 +421,79 @@ func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	if common.RedisEnabled {
-		gopool.Go(func() {
-			if _, err := cacheApplyTokenQuotaDelta(id, key, int64(-quota)); err != nil {
-				common.SysLog("failed to decrease token quota: " + err.Error())
-			}
-		})
-	}
-	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeTokenQuota, id, -quota)
+	if quota == 0 {
 		return nil
 	}
-	return decreaseTokenQuota(id, quota)
+	prepareTokenQuotaCacheMutation(key, "token quota decrease")
+	if err := decreaseTokenQuota(id, quota); err != nil {
+		return err
+	}
+	finalizeTokenQuotaCacheMutation(key, "token quota decrease")
+	return nil
+}
+
+// ReserveTokenQuotaForBilling synchronously persists a ledger-backed token
+// debit. It bypasses the batch queue so ledger confirmation cannot outrun the
+// database balance mutation.
+func ReserveTokenQuotaForBilling(id int, key string, quota int, unlimited bool) (bool, error) {
+	if id <= 0 || strings.TrimSpace(key) == "" || quota < 0 {
+		return false, errors.New("invalid billing token quota reserve")
+	}
+	if quota == 0 {
+		return true, nil
+	}
+
+	prepareTokenQuotaCacheMutation(key, "billing token quota reserve")
+
+	query := DB.Model(&Token{}).Where("id = ?", id)
+	if !unlimited {
+		query = query.Where("remain_quota >= ?", quota)
+	}
+	result := query.Updates(map[string]interface{}{
+		"remain_quota":  gorm.Expr("remain_quota - ?", quota),
+		"used_quota":    gorm.Expr("used_quota + ?", quota),
+		"quota_version": gorm.Expr("COALESCE(quota_version, 0) + 1"),
+		"accessed_time": common.GetTimestamp(),
+	})
+	if result.Error == nil && result.RowsAffected == 1 {
+		runQuotaCacheRaceHook(tokenQuotaCacheAfterDBMutationHook())
+		finalizeTokenQuotaCacheMutation(key, "billing token quota reserve")
+		return true, nil
+	}
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if !unlimited {
+		return false, nil
+	}
+	return false, gorm.ErrRecordNotFound
+}
+
+// RefundTokenQuotaForBilling fences and clears the live token cache before it
+// synchronously persists a ledger-backed credit. The surviving fence prevents
+// a delayed pre-refund database snapshot from repopulating stale quota.
+func RefundTokenQuotaForBilling(id int, key string, quota int) error {
+	if id <= 0 || strings.TrimSpace(key) == "" || quota < 0 {
+		return errors.New("invalid billing token quota refund")
+	}
+	if quota == 0 {
+		return nil
+	}
+	prepareTokenQuotaCacheMutation(key, "billing token quota refund")
+	result := DB.Model(&Token{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"remain_quota":  gorm.Expr("remain_quota + ?", quota),
+		"used_quota":    gorm.Expr("used_quota - ?", quota),
+		"quota_version": gorm.Expr("COALESCE(quota_version, 0) + 1"),
+		"accessed_time": common.GetTimestamp(),
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	finalizeTokenQuotaCacheMutation(key, "billing token quota refund")
+	return nil
 }
 
 func decreaseTokenQuota(id int, quota int) (err error) {
@@ -428,6 +501,7 @@ func decreaseTokenQuota(id int, quota int) (err error) {
 		map[string]interface{}{
 			"remain_quota":  gorm.Expr("remain_quota - ?", quota),
 			"used_quota":    gorm.Expr("used_quota + ?", quota),
+			"quota_version": gorm.Expr("COALESCE(quota_version, 0) + 1"),
 			"accessed_time": common.GetTimestamp(),
 		},
 	).Error

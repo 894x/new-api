@@ -256,6 +256,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		default:
 			newAPIError = relayHandler(c, relayInfo)
 		}
+		if newAPIError == nil {
+			if settlementErr := service.TakeGroupModelDiscountAdmissionError(c); settlementErr != nil {
+				newAPIError = types.NewErrorWithStatusCode(
+					settlementErr,
+					types.ErrorCodeUpdateDataError,
+					http.StatusInternalServerError,
+					types.ErrOptionWithSkipRetry(),
+				)
+			}
+		}
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
@@ -573,10 +583,9 @@ func RelayTask(c *gin.Context) {
 
 	var result *relay.TaskSubmitResult
 	var taskErr *taskdto.TaskError
+	settlementStarted := false
 	defer func() {
-		if taskErr != nil && relayInfo.Billing != nil {
-			relayInfo.Billing.Refund(c)
-		}
+		refundTaskBillingOnFailure(c, relayInfo, taskErr, settlementStarted)
 	}()
 
 	selectionRequestBody, _ := common.GetContextKeyType[[]byte](c, constant.ContextKeySelectionRequestBody)
@@ -655,38 +664,222 @@ func RelayTask(c *gin.Context) {
 		logger.LogInfo(c, retryLogStr)
 	}
 
-	// ── 成功：结算 + 日志 + 插入任务 ──
+	// ── 成功：先插入 prepared 任务，再结算并原子更新 task 计费快照 ──
 	if taskErr == nil {
-		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
-			common.SysError("settle task billing error: " + settleErr.Error())
-		}
-		service.LogTaskConsumption(c, relayInfo)
-
+		settlementKey := "task:" + relayInfo.PublicTaskID
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
 		task.PrivateData.BillingSource = relayInfo.BillingSource
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.NodeName = common.NodeName
-		task.PrivateData.BillingContext = &model.TaskBillingContext{
-			ModelPrice:      relayInfo.PriceData.ModelPrice,
-			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-			ModelRatio:      relayInfo.PriceData.ModelRatio,
-			OtherRatios:     relayInfo.PriceData.OtherRatios(),
-			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+		var discountSnapshot = relayInfo.GroupModelDiscountSnapshot
+		if discountSnapshot != nil {
+			frozenSnapshot := *discountSnapshot
+			discountSnapshot = &frozenSnapshot
 		}
-		task.Quota = result.Quota
+		task.PrivateData.BillingContext = &model.TaskBillingContext{
+			ModelPrice:                 relayInfo.PriceData.ModelPrice,
+			GroupRatio:                 relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+			ModelRatio:                 relayInfo.PriceData.ModelRatio,
+			OtherRatios:                relayInfo.PriceData.OtherRatios(),
+			OriginModelName:            relayInfo.OriginModelName,
+			OriginalQuota:              result.OriginalQuota,
+			NetQuota:                   0,
+			DiscountSettlementID:       settlementKey,
+			ChargeState:                model.TaskChargeStatePrepared,
+			GroupModelDiscountSnapshot: discountSnapshot,
+			PerCallBilling:             common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+		}
+		if relayInfo.GroupModelDiscountSnapshot == nil {
+			task.PrivateData.BillingContext.DiscountSettlementID = ""
+		}
+		task.Quota = 0
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
 		if insertErr := task.Insert(); insertErr != nil {
 			common.SysError("insert task error: " + insertErr.Error())
+			taskErr = service.TaskErrorWrapperLocal(insertErr, "insert_task_failed", http.StatusInternalServerError)
+		} else {
+			decision, settleErr := settlePersistedTaskSubmission(
+				c, relayInfo, task, settlementKey, result.OriginalQuota, result.Quota,
+			)
+			settlementStarted = decision.FundingStarted
+			billingContext := task.PrivateData.BillingContext
+
+			if settleErr != nil {
+				common.SysError("settle task billing error: " + settleErr.Error())
+				taskErr = service.TaskErrorWrapperLocal(settleErr, "settle_task_billing_failed", http.StatusInternalServerError)
+			} else {
+				relayInfo.PriceData.Quota = task.Quota
+				if billingContext.ChargeState == model.TaskChargeStateCharged {
+					service.LogTaskConsumption(c, relayInfo, decision)
+				}
+				if writeErr := result.WriteResponse(c); writeErr != nil {
+					common.SysError("write task response error: " + writeErr.Error())
+				}
+			}
 		}
 	}
 
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
 	}
+}
+
+func settlePersistedTaskSubmission(
+	c *gin.Context,
+	relayInfo *relaycommon.RelayInfo,
+	task *model.Task,
+	settlementKey string,
+	originalQuota int,
+	intendedQuota int,
+) (service.GroupModelDiscountDecision, error) {
+	if task == nil || task.PrivateData.BillingContext == nil {
+		return service.GroupModelDiscountDecision{}, errors.New("persisted task billing context is missing")
+	}
+	if originalQuota < 0 || intendedQuota < 0 {
+		return service.GroupModelDiscountDecision{
+			AdmissionRefundSafe: true,
+			RequestID:           settlementKey,
+			OriginalQuota:       originalQuota,
+			ChargedQuota:        intendedQuota,
+		}, fmt.Errorf("task billing quota cannot be negative: original=%d intended=%d", originalQuota, intendedQuota)
+	}
+	billingContext := task.PrivateData.BillingContext
+	isFixedGroupRatio := relayInfo != nil && relayInfo.GroupModelDiscountSnapshot == nil
+	if isFixedGroupRatio {
+		decision := service.GroupModelDiscountDecision{
+			RequestID:     settlementKey,
+			OriginalQuota: originalQuota,
+			ChargedQuota:  intendedQuota,
+		}
+		if billingContext.ChargeState == model.TaskChargeStatePendingReconcile {
+			decision.RequiresReconciliation = true
+			return decision, errors.New("fixed task billing requires manual reconciliation")
+		}
+
+		previousOriginalQuota := billingContext.OriginalQuota
+		previousNetQuota := billingContext.NetQuota
+		previousPendingNetQuota := billingContext.PendingNetQuota
+		previousChargeState := billingContext.ChargeState
+		billingContext.OriginalQuota = originalQuota
+		billingContext.NetQuota = intendedQuota
+		billingContext.PendingNetQuota = intendedQuota
+		billingContext.ChargeState = model.TaskChargeStatePendingReconcile
+		if updateErr := task.UpdateBillingState(); updateErr != nil {
+			billingContext.OriginalQuota = previousOriginalQuota
+			billingContext.NetQuota = previousNetQuota
+			billingContext.PendingNetQuota = previousPendingNetQuota
+			billingContext.ChargeState = previousChargeState
+			decision.AdmissionRefundSafe = true
+			return decision, fmt.Errorf("persist pending fixed task billing intent: %w", updateErr)
+		}
+
+		decision, settleErr := service.SettleModelCharge(c, relayInfo, settlementKey, originalQuota, intendedQuota)
+		if settleErr != nil || decision.RequiresReconciliation {
+			task.Quota = 0
+			billingContext.NetQuota = intendedQuota
+			billingContext.PendingNetQuota = intendedQuota
+			billingContext.ChargeState = model.TaskChargeStatePendingReconcile
+			return decision, settleErr
+		}
+
+		task.Quota = decision.ChargedQuota
+		billingContext.NetQuota = decision.ChargedQuota
+		billingContext.PendingNetQuota = 0
+		billingContext.ChargeState = model.TaskChargeStateCharged
+		confirmed, updateErr := task.ConfirmBillingState()
+		if updateErr != nil {
+			task.Quota = 0
+			billingContext.NetQuota = intendedQuota
+			billingContext.PendingNetQuota = intendedQuota
+			billingContext.ChargeState = model.TaskChargeStatePendingReconcile
+			return decision, fmt.Errorf("persist fixed task billing state: %w", updateErr)
+		}
+		if !confirmed {
+			task.Quota = 0
+			billingContext.NetQuota = intendedQuota
+			billingContext.PendingNetQuota = intendedQuota
+			billingContext.ChargeState = model.TaskChargeStatePendingReconcile
+			return decision, errors.New("fixed task billing state was claimed by another owner")
+		}
+		return decision, nil
+	}
+
+	decision, settleErr := service.SettleModelCharge(c, relayInfo, settlementKey, originalQuota, intendedQuota)
+	applyTaskSettlementDecision(task, decision, settleErr)
+	if billingContext.ChargeState == model.TaskChargeStatePendingReconcile {
+		if updateErr := task.UpdateBillingState(); updateErr != nil {
+			return decision, fmt.Errorf("persist task billing state: %w", updateErr)
+		}
+		return decision, settleErr
+	}
+
+	confirmed, updateErr := task.ConfirmBillingState()
+	if updateErr != nil {
+		if settleErr == nil && decision.Applied && !decision.Reused &&
+			billingContext.ChargeState == model.TaskChargeStateCharged {
+			handoffErr := task.MarkBillingRecoveryPending()
+			if handoffErr != nil {
+				manualErr := model.MarkGroupModelDiscountPendingReconcile(
+					decision.RequestID,
+					model.GroupModelDiscountPendingActionUnknownManual,
+				)
+				return decision, errors.Join(
+					fmt.Errorf("persist task billing state: %w", updateErr),
+					fmt.Errorf("persist task billing recovery handoff: %w", handoffErr),
+					manualErr,
+				)
+			}
+		}
+		return decision, fmt.Errorf("persist task billing state: %w", updateErr)
+	}
+	if !confirmed {
+		return decision, errors.New("task billing state was claimed by another owner")
+	}
+	return decision, settleErr
+}
+
+// applyTaskSettlementDecision records the durable task-side evidence for a
+// settlement attempt. An error from the funding/settlement boundary is always
+// ambiguous: only an error-free replay may clear the fresh task's markers.
+func applyTaskSettlementDecision(task *model.Task, decision service.GroupModelDiscountDecision, settleErr error) {
+	if task == nil || task.PrivateData.BillingContext == nil {
+		return
+	}
+	billingContext := task.PrivateData.BillingContext
+	if settleErr != nil && decision.AdmissionRefundSafe && !decision.Applied && billingContext.DiscountSettlementID != "" {
+		task.Quota = 0
+		billingContext.NetQuota = 0
+		billingContext.DiscountSettlementID = ""
+		billingContext.ChargeState = model.TaskChargeStateUncharged
+		return
+	}
+	billingContext.NetQuota = decision.ChargedQuota
+	task.Quota = decision.ChargedQuota
+	if decision.Applied {
+		billingContext.DiscountSettlementID = decision.RequestID
+	}
+
+	switch {
+	case settleErr != nil || decision.RequiresReconciliation:
+		billingContext.ChargeState = model.TaskChargeStatePendingReconcile
+	case decision.Reused:
+		task.Quota = 0
+		billingContext.NetQuota = 0
+		billingContext.DiscountSettlementID = ""
+		billingContext.ChargeState = model.TaskChargeStateReused
+	default:
+		billingContext.ChargeState = model.TaskChargeStateCharged
+	}
+}
+
+func refundTaskBillingOnFailure(c *gin.Context, relayInfo *relaycommon.RelayInfo, taskErr *taskdto.TaskError, settlementStarted bool) {
+	if taskErr == nil || settlementStarted || relayInfo == nil || relayInfo.Billing == nil {
+		return
+	}
+	relayInfo.Billing.Refund(c)
 }
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）

@@ -93,6 +93,7 @@ type User struct {
 	VerificationCode string                     `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
 	AccessToken      *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
 	Quota            int                        `json:"quota" gorm:"type:int;default:0"`
+	QuotaVersion     int64                      `json:"-" gorm:"type:bigint;column:quota_version"`
 	UsedQuota        int                        `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
 	RequestCount     int                        `json:"request_count" gorm:"type:int;default:0;"`               // request number
 	Group            string                     `json:"group" gorm:"type:varchar(64);default:'default'"`
@@ -114,16 +115,17 @@ type User struct {
 
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
-		Id:          user.Id,
-		Group:       user.Group,
-		Quota:       user.Quota,
-		Status:      user.Status,
-		Role:        user.Role,
-		Username:    user.Username,
-		Setting:     user.Setting,
-		Email:       user.Email,
-		AuthVersion: user.AuthVersion,
-		CacheSchema: userCacheSchemaVersion,
+		Id:           user.Id,
+		Group:        user.Group,
+		Quota:        user.Quota,
+		QuotaVersion: user.QuotaVersion,
+		Status:       user.Status,
+		Role:         user.Role,
+		Username:     user.Username,
+		Setting:      user.Setting,
+		Email:        user.Email,
+		AuthVersion:  user.AuthVersion,
+		CacheSchema:  userCacheSchemaVersion,
 	}
 	return cache
 }
@@ -549,6 +551,7 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	if float64(quota) < common.QuotaPerUnit {
 		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(common.QuotaFromFloat(common.QuotaPerUnit)))
 	}
+	prepareUserQuotaCacheMutation(user.Id, "affiliate quota transfer")
 
 	// 开始数据库事务
 	tx := DB.Begin()
@@ -568,17 +571,29 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 		return errors.New("邀请额度不足！")
 	}
 
-	// 更新用户额度
-	user.AffQuota -= quota
-	user.Quota += quota
-
-	// 保存用户状态
-	if err := tx.Save(user).Error; err != nil {
-		return err
+	result := tx.Model(&User{}).
+		Where("id = ? AND aff_quota >= ?", user.Id, quota).
+		Updates(map[string]interface{}{
+			"aff_quota":     gorm.Expr("aff_quota - ?", quota),
+			"quota":         gorm.Expr("quota + ?", quota),
+			"quota_version": gorm.Expr("COALESCE(quota_version, 0) + 1"),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("邀请额度不足！")
 	}
 
 	// 提交事务
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	finalizeUserQuotaCacheMutation(user.Id, "affiliate quota transfer")
+	user.AffQuota -= quota
+	user.Quota += quota
+	user.QuotaVersion++
+	return nil
 }
 
 func (user *User) prepareForInsert(tx *gorm.DB) error {
@@ -1270,50 +1285,135 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 	return userBase.GetSetting(), nil
 }
 
-func IncreaseUserQuota(id int, quota int, db bool) (err error) {
+func IncreaseUserQuota(id int, quota int, _ bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheIncrUserQuota(id, int64(quota))
-		if err != nil {
-			common.SysLog("failed to increase user quota: " + err.Error())
-		}
-	})
-	if !db && common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, quota)
+	if quota == 0 {
 		return nil
 	}
-	return increaseUserQuota(id, quota)
+	prepareUserQuotaCacheMutation(id, "user quota increase")
+	if err := increaseUserQuota(id, quota); err != nil {
+		return err
+	}
+	finalizeUserQuotaCacheMutation(id, "user quota increase")
+	return nil
 }
 
 func increaseUserQuota(id int, quota int) (err error) {
-	err = DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", quota)).Error
+	err = DB.Model(&User{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"quota":         gorm.Expr("quota + ?", quota),
+		"quota_version": gorm.Expr("COALESCE(quota_version, 0) + 1"),
+	}).Error
 	if err != nil {
 		return err
 	}
 	return err
 }
 
-func DecreaseUserQuota(id int, quota int, db bool) (err error) {
+func DecreaseUserQuota(id int, quota int, _ bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheDecrUserQuota(id, int64(quota))
-		if err != nil {
-			common.SysLog("failed to decrease user quota: " + err.Error())
-		}
-	})
-	if !db && common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, -quota)
+	if quota == 0 {
 		return nil
 	}
-	return decreaseUserQuota(id, quota)
+	prepareUserQuotaCacheMutation(id, "user quota decrease")
+	if err := decreaseUserQuota(id, quota); err != nil {
+		return err
+	}
+	finalizeUserQuotaCacheMutation(id, "user quota decrease")
+	return nil
+}
+
+// SetUserQuota replaces a user's absolute wallet balance. It is intended for
+// administrative overrides and uses the same durable generation and cache
+// fencing contract as additive quota mutations.
+func SetUserQuota(id int, quota int) error {
+	if id <= 0 {
+		return errors.New("invalid user id")
+	}
+	prepareUserQuotaCacheMutation(id, "absolute user quota override")
+	result := DB.Model(&User{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"quota":         quota,
+		"quota_version": gorm.Expr("COALESCE(quota_version, 0) + 1"),
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	finalizeUserQuotaCacheMutation(id, "absolute user quota override")
+	return nil
+}
+
+// ReserveUserQuotaForBilling synchronously persists a ledger-backed debit.
+// When strict is true, insufficient quota is reported without changing either
+// cache or database. This path deliberately bypasses the batch-update queue so
+// a durable billing ledger can never be confirmed ahead of its balance write.
+func ReserveUserQuotaForBilling(id int, quota int, strict bool) (bool, error) {
+	if id <= 0 || quota < 0 {
+		return false, errors.New("invalid billing user quota reserve")
+	}
+	if quota == 0 {
+		return true, nil
+	}
+	prepareUserQuotaCacheMutation(id, "billing user quota reserve")
+	runQuotaCacheRaceHook(userQuotaCacheBeforeDBMutationHook())
+
+	query := DB.Model(&User{}).Where("id = ?", id)
+	if strict {
+		query = query.Where("quota >= ?", quota)
+	}
+	result := query.Updates(map[string]interface{}{
+		"quota":         gorm.Expr("quota - ?", quota),
+		"quota_version": gorm.Expr("COALESCE(quota_version, 0) + 1"),
+	})
+	if result.Error == nil && result.RowsAffected == 1 {
+		runQuotaCacheRaceHook(userQuotaCacheAfterDBMutationHook())
+		finalizeUserQuotaCacheMutation(id, "billing user quota reserve")
+		return true, nil
+	}
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if strict {
+		return false, nil
+	}
+	return false, gorm.ErrRecordNotFound
+}
+
+// RefundUserQuotaForBilling fences and clears the live quota cache before it
+// synchronously persists a ledger-backed credit. The surviving fence prevents
+// a delayed pre-refund database snapshot from repopulating stale quota.
+func RefundUserQuotaForBilling(id int, quota int) error {
+	if id <= 0 || quota < 0 {
+		return errors.New("invalid billing user quota refund")
+	}
+	if quota == 0 {
+		return nil
+	}
+	prepareUserQuotaCacheMutation(id, "billing user quota refund")
+	result := DB.Model(&User{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"quota":         gorm.Expr("quota + ?", quota),
+		"quota_version": gorm.Expr("COALESCE(quota_version, 0) + 1"),
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	finalizeUserQuotaCacheMutation(id, "billing user quota refund")
+	return nil
 }
 
 func decreaseUserQuota(id int, quota int) (err error) {
-	err = DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota - ?", quota)).Error
+	err = DB.Model(&User{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"quota":         gorm.Expr("quota - ?", quota),
+		"quota_version": gorm.Expr("COALESCE(quota_version, 0) + 1"),
+	}).Error
 	if err != nil {
 		return err
 	}
@@ -1385,20 +1485,18 @@ func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
 	//}
 }
 
-func updateUserQuotaUsedQuotaAndRequestCount(id int, quota int, usedQuota int, requestCount int) {
-	if quota == 0 && usedQuota == 0 && requestCount == 0 {
+func updateUserUsedQuotaAndRequestCountBatch(id int, usedQuota int, requestCount int) {
+	if usedQuota == 0 && requestCount == 0 {
 		return
 	}
 
-	err := DB.Model(&User{}).Where("id = ?", id).Updates(
-		map[string]interface{}{
-			"quota":         gorm.Expr("quota + ?", quota),
-			"used_quota":    gorm.Expr("used_quota + ?", usedQuota),
-			"request_count": gorm.Expr("request_count + ?", requestCount),
-		},
-	).Error
+	updates := map[string]interface{}{
+		"used_quota":    gorm.Expr("used_quota + ?", usedQuota),
+		"request_count": gorm.Expr("request_count + ?", requestCount),
+	}
+	err := DB.Model(&User{}).Where("id = ?", id).Updates(updates).Error
 	if err != nil {
-		common.SysLog("failed to batch update user quota, used quota and request count: " + err.Error())
+		common.SysLog("failed to batch update user used quota and request count: " + err.Error())
 	}
 }
 

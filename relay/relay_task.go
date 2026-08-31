@@ -1,10 +1,12 @@
 package relay
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
@@ -26,9 +29,89 @@ type TaskSubmitResult struct {
 	UpstreamTaskID string
 	TaskData       []byte
 	Platform       constant.TaskPlatform
-	Quota          int
+	Quota          int // fixed-group fallback quota; controller replaces it with the settled net amount
+	OriginalQuota  int // true pre-group amount used by monthly group/model tier calculation
+	responseStatus int
+	responseHeader http.Header
+	responseBody   []byte
 	//PerCallPrice   types.PriceData
 }
+
+// WriteResponse publishes the upstream success response only after the task's
+// durable billing state has been inserted and finalized by the controller.
+func (r *TaskSubmitResult) WriteResponse(c *gin.Context) error {
+	if r == nil || c == nil || c.Writer == nil {
+		return errors.New("task response target is nil")
+	}
+	for key, values := range r.responseHeader {
+		c.Writer.Header()[key] = append([]string(nil), values...)
+	}
+	status := r.responseStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	c.Writer.WriteHeader(status)
+	if len(r.responseBody) == 0 {
+		c.Writer.WriteHeaderNow()
+		return nil
+	}
+	_, err := c.Writer.Write(r.responseBody)
+	return err
+}
+
+type taskBufferedResponseWriter struct {
+	original gin.ResponseWriter
+	header   http.Header
+	body     bytes.Buffer
+	status   int
+	size     int
+}
+
+func newTaskBufferedResponseWriter(original gin.ResponseWriter) *taskBufferedResponseWriter {
+	return &taskBufferedResponseWriter{
+		original: original,
+		header:   original.Header().Clone(),
+		status:   http.StatusOK,
+		size:     -1,
+	}
+}
+
+func (w *taskBufferedResponseWriter) Header() http.Header { return w.header }
+
+func (w *taskBufferedResponseWriter) WriteHeader(code int) {
+	if code > 0 && !w.Written() {
+		w.status = code
+	}
+}
+
+func (w *taskBufferedResponseWriter) WriteHeaderNow() {
+	if !w.Written() {
+		w.size = 0
+	}
+}
+
+func (w *taskBufferedResponseWriter) Write(data []byte) (int, error) {
+	w.WriteHeaderNow()
+	n, err := w.body.Write(data)
+	w.size += n
+	return n, err
+}
+
+func (w *taskBufferedResponseWriter) WriteString(value string) (int, error) {
+	return w.Write([]byte(value))
+}
+
+func (w *taskBufferedResponseWriter) Status() int   { return w.status }
+func (w *taskBufferedResponseWriter) Size() int     { return w.size }
+func (w *taskBufferedResponseWriter) Written() bool { return w.size >= 0 }
+func (w *taskBufferedResponseWriter) Flush()        { w.WriteHeaderNow() }
+func (w *taskBufferedResponseWriter) CloseNotify() <-chan bool {
+	return w.original.CloseNotify()
+}
+func (w *taskBufferedResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.original.Hijack()
+}
+func (w *taskBufferedResponseWriter) Pusher() http.Pusher { return w.original.Pusher() }
 
 // ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：
 // 查找原始任务、从中提取模型名称、将渠道锁定到原始任务的渠道
@@ -65,6 +148,7 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	}
 
 	// 从原始任务推导模型名称
+	restoredOriginModel := false
 	if info.OriginModelName == "" {
 		if originTask.Properties.OriginModelName != "" {
 			info.OriginModelName = originTask.Properties.OriginModelName
@@ -77,6 +161,10 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 				info.OriginModelName = m
 			}
 		}
+		restoredOriginModel = info.OriginModelName != ""
+	}
+	if restoredOriginModel {
+		info.BindGroupModelDiscountResolver()
 	}
 
 	// 锁定到原始任务的渠道（重试时复用同一渠道，轮换 key）
@@ -201,18 +289,18 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
 	if !common.StringsContains(constant.TaskPricePatches, modelName) {
-		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
-		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
-		info.PriceData.Quota = quota
-		noteTaskQuotaClamp(info, clamp)
+		if ratios := info.PriceData.OtherRatios(); len(ratios) > 0 {
+			if _, ok := recalcQuotaFromRatios(info, ratios); !ok {
+				return nil, service.TaskErrorWrapperLocal(errors.New("invalid task billing ratios"), "model_price_error", http.StatusBadRequest)
+			}
+		}
 	}
 
-	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
-	if info.Billing == nil && !info.PriceData.FreeModel {
-		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
-			return nil, service.TaskErrorFromAPIError(apiErr)
-		}
+	// 7. Reserve the safe amount for every routing attempt. A retry can switch
+	// groups and reprice the task, so an existing billing session may need to be
+	// raised before any request body is built or sent upstream.
+	if taskErr := reserveTaskSubmitQuota(c, info); taskErr != nil {
+		return nil, taskErr
 	}
 
 	// 8. 构建请求体
@@ -231,7 +319,14 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
 	}
 
-	// 10. 返回 OtherRatios 给下游（header 必须在 DoResponse 写 body 之前设置）
+	// 10. Buffer the successful downstream response until the controller has
+	// durably inserted and finalized the task billing row. This prevents a 200
+	// from escaping when persistence or settlement fails after upstream submit.
+	originalWriter := c.Writer
+	bufferedWriter := newTaskBufferedResponseWriter(originalWriter)
+	c.Writer = bufferedWriter
+
+	// 返回 OtherRatios 给下游（header 必须在 DoResponse 写 body 之前设置）
 	otherRatios := info.PriceData.OtherRatios()
 	if otherRatios == nil {
 		otherRatios = map[string]float64{}
@@ -241,6 +336,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 11. 解析响应
 	upstreamTaskID, taskData, taskErr := adaptor.DoResponse(c, resp, info)
+	c.Writer = originalWriter
 	if taskErr != nil {
 		return nil, taskErr
 	}
@@ -261,23 +357,92 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		TaskData:       taskData,
 		Platform:       platform,
 		Quota:          finalQuota,
+		OriginalQuota:  info.PriceData.OriginalQuota,
+		responseStatus: bufferedWriter.Status(),
+		responseHeader: bufferedWriter.Header().Clone(),
+		responseBody:   append([]byte(nil), bufferedWriter.body.Bytes()...),
 	}, nil
 }
 
-// recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
-// 公式: baseQuota × ∏(ratio) — 其中 baseQuota 是不含 OtherRatios 的基础额度。
+func reserveTaskSubmitQuota(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError {
+	if info == nil {
+		return service.TaskErrorWrapperLocal(errors.New("relay info is nil"), "pre_consume_quota_failed", http.StatusInternalServerError)
+	}
+	targetQuota := taskQuotaToPreConsume(info)
+	if info.Billing == nil {
+		if info.PriceData.FreeModel && info.GroupModelDiscountSnapshot == nil {
+			return nil
+		}
+		info.ForcePreConsume = true
+		if apiErr := service.PreConsumeBilling(c, targetQuota, info); apiErr != nil {
+			return service.TaskErrorFromAPIError(apiErr)
+		}
+		return nil
+	}
+
+	reserveErr := info.Billing.ReserveForAdmission(targetQuota)
+	if reserveErr != nil {
+		var apiErr *relaytypes.NewAPIError
+		if errors.As(reserveErr, &apiErr) {
+			taskErr := service.TaskErrorFromAPIError(apiErr)
+			taskErr.LocalError = true
+			return taskErr
+		}
+		return service.TaskErrorWrapperLocal(reserveErr, "pre_consume_quota_failed", http.StatusInternalServerError)
+	}
+	info.FinalPreConsumedQuota = info.Billing.GetPreConsumedQuota()
+	return nil
+}
+
+func taskQuotaToPreConsume(info *relaycommon.RelayInfo) int {
+	if info == nil {
+		return 0
+	}
+	if info.GroupModelDiscountSnapshot != nil {
+		return info.PriceData.OriginalQuota
+	}
+	return info.PriceData.Quota
+}
+
+// recalcQuotaFromRatios 根据 adjustedRatios 从冻结的模型价格输入重新计算
+// 原价与结算价。不得通过已取整、已乘分组倍率的 quota 反向除倍率恢复原价。
 func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, bool) {
-	// 从 PriceData 获取不含 OtherRatios 的基础价格
-	baseQuota := info.PriceData.RemoveOtherRatiosFromFloat(float64(info.PriceData.Quota))
 	priceData := info.PriceData
 	if !priceData.ReplaceOtherRatios(ratios) {
 		return 0, false
 	}
-	// 应用新的 ratios
-	result := priceData.ApplyOtherRatiosToFloat(baseQuota)
-	quota, clamp := common.QuotaFromFloatChecked(result)
-	noteTaskQuotaClamp(info, clamp)
-	return quota, true
+
+	var originalBase float64
+	if priceData.UsePrice {
+		originalBase = priceData.ModelPrice * common.QuotaPerUnit
+	} else {
+		originalBase = priceData.ModelRatio / 2 * common.QuotaPerUnit
+	}
+	if originalBase < 0 {
+		return 0, false
+	}
+
+	rawOriginalQuota := priceData.ApplyOtherRatiosToFloat(originalBase)
+	originalQuota, originalClamp := common.QuotaFromFloatChecked(rawOriginalQuota)
+	if info.GroupModelDiscountSnapshot != nil && rawOriginalQuota > 0 && originalQuota == 0 {
+		originalQuota = 1
+	}
+	// Keep the legacy fixed-group rounding order for the fallback net amount:
+	// group price is converted first, then request-specific multipliers apply.
+	// Only the monthly ledger uses the independently calculated true original.
+	netBaseQuota, netBaseClamp := common.QuotaFromFloatChecked(originalBase * priceData.GroupRatioInfo.GroupRatio)
+	netQuota, netClamp := common.QuotaFromFloatChecked(
+		priceData.ApplyOtherRatiosToFloat(float64(netBaseQuota)),
+	)
+	if info.GroupModelDiscountSnapshot != nil {
+		noteTaskQuotaClamp(info, originalClamp)
+	}
+	noteTaskQuotaClamp(info, netBaseClamp)
+	noteTaskQuotaClamp(info, netClamp)
+	priceData.OriginalQuota = originalQuota
+	priceData.Quota = netQuota
+	info.PriceData = priceData
+	return netQuota, true
 }
 
 // noteTaskQuotaClamp records the first quota saturation event onto the task's

@@ -257,6 +257,9 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	if err := prepareQuotaVersionMigration(DB); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -292,6 +295,11 @@ func migrateDB() error {
 		&SubscriptionOrder{},
 		&UserSubscription{},
 		&SubscriptionPreConsumeRecord{},
+		&UserGroupModelMonthlyUsage{},
+		&GroupModelDiscountSettlement{},
+		&GroupModelDiscountAdjustment{},
+		&BillingRefundOperation{},
+		&BillingAdmissionReserveOperation{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
 		&PerfMetric{},
@@ -304,6 +312,9 @@ func migrateDB() error {
 		&AuthzRole{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := finalizeQuotaVersionMigration(DB); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
@@ -328,6 +339,9 @@ func migrateDB() error {
 }
 
 func migrateDBFast() error {
+	if err := prepareQuotaVersionMigration(DB); err != nil {
+		return err
+	}
 
 	var wg sync.WaitGroup
 
@@ -363,6 +377,11 @@ func migrateDBFast() error {
 		{&SubscriptionOrder{}, "SubscriptionOrder"},
 		{&UserSubscription{}, "UserSubscription"},
 		{&SubscriptionPreConsumeRecord{}, "SubscriptionPreConsumeRecord"},
+		{&UserGroupModelMonthlyUsage{}, "UserGroupModelMonthlyUsage"},
+		{&GroupModelDiscountSettlement{}, "GroupModelDiscountSettlement"},
+		{&GroupModelDiscountAdjustment{}, "GroupModelDiscountAdjustment"},
+		{&BillingRefundOperation{}, "BillingRefundOperation"},
+		{&BillingAdmissionReserveOperation{}, "BillingAdmissionReserveOperation"},
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&PerfMetric{}, "PerfMetric"},
@@ -394,6 +413,9 @@ func migrateDBFast() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := finalizeQuotaVersionMigration(DB); err != nil {
+		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err

@@ -128,6 +128,10 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
+	// Recover stale, durably staged billing refunds and admission top-ups. Only
+	// the master scans; per-operation CAS claims keep multi-instance actions safe.
+	service.StartBillingReconciliationWorker()
+
 	// Report this process as a system instance so the System Info page can show
 	// all currently alive nodes in multi-instance deployments.
 	service.StartSystemInstanceReporter()

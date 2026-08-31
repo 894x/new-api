@@ -222,6 +222,9 @@ func validateOptionValue(key string, value string) error {
 	if key == "ModelRequestRateLimitTPM" {
 		return setting.ValidateModelRequestRateLimitTPM(value)
 	}
+	if key == ratio_setting.ModelTieredRatiosOptionKey {
+		return ratio_setting.CheckModelTieredRatios(value)
+	}
 	if key == "error_setting.blocked_response_headers" {
 		_, err := operation_setting.ValidateBlockedResponseHeadersJSON(value)
 		return err

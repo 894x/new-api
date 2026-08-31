@@ -23,6 +23,28 @@ export type SystemOption = {
 
 export type SystemOptionKey = string
 
+export type GroupModelTieredRatioTier = {
+  min_monthly_original_quota: number
+  ratio: number
+}
+
+export type GroupModelTieredRatioPolicy = {
+  enabled: boolean
+  effective_from: number
+  effective_until: number | null
+  timezone: string
+  tiers: GroupModelTieredRatioTier[]
+}
+
+export type GroupModelTieredProgressBasis = 'original' | 'charged'
+
+export type GroupModelTieredRatioGroup = {
+  progress_basis: GroupModelTieredProgressBasis
+  models: Record<string, GroupModelTieredRatioPolicy>
+}
+
+export type GroupModelTieredRatios = Record<string, GroupModelTieredRatioGroup>
+
 export type SystemOptionsResponse = {
   success: boolean
   message: string
@@ -288,6 +310,7 @@ export type BillingSettings = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   'group_ratio_setting.group_special_usable_group': string
+  'group_ratio_setting.model_tiered_ratios': string
   PayAddress: string
   EpayId: string
   EpayKey: string

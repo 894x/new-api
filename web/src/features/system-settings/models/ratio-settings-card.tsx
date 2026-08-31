@@ -33,6 +33,12 @@ import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { positiveIntegerSchema } from '../utils/numeric-field'
 import { GroupRatioForm } from './group-ratio-form'
+import {
+  formatGroupModelTieredRatiosForTextarea,
+  normalizeGroupModelTieredRatiosJson,
+  parseGroupModelTieredRatiosJson,
+} from './lib/group-model-tiered-ratio-schema'
+import { saveChangedOptionFields } from './lib/save-changed-option-fields'
 import { ModelRatioForm } from './model-ratio-form'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
@@ -134,6 +140,15 @@ const createGroupSchema = (t: Translate) =>
     MaxTokenAutoGroups: positiveIntegerSchema(t('Enter a positive integer')),
     DefaultUseAutoGroup: z.boolean(),
     GroupSpecialUsableGroup: createJsonStringField(t),
+    ModelTieredRatios: z.string().superRefine((value, context) => {
+      const result = parseGroupModelTieredRatiosJson(value)
+      if (!result.success) {
+        context.addIssue({
+          code: 'custom',
+          message: t(result.error),
+        })
+      }
+    }),
   })
 
 type ModelFormValues = z.infer<ReturnType<typeof createModelSchema>>
@@ -161,7 +176,9 @@ export function RatioSettingsCard({
   visibleTabs = ['models', 'groups', 'tool-prices', 'upstream-sync'],
 }: RatioSettingsCardProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOption = useUpdateOption({
+    deferSystemOptionsInvalidation: true,
+  })
   const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
 
@@ -211,6 +228,9 @@ export function RatioSettingsCard({
     GroupSpecialUsableGroup: normalizeJsonString(
       groupDefaults.GroupSpecialUsableGroup
     ),
+    ModelTieredRatios: normalizeGroupModelTieredRatiosJson(
+      groupDefaults.ModelTieredRatios || '{}'
+    ),
   })
   const modelSchema = useMemo(() => createModelSchema(t), [t])
   const groupSchema = useMemo(() => createGroupSchema(t), [t])
@@ -247,6 +267,9 @@ export function RatioSettingsCard({
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
+      ),
+      ModelTieredRatios: formatGroupModelTieredRatiosForTextarea(
+        groupDefaults.ModelTieredRatios || '{}'
       ),
     },
   })
@@ -298,6 +321,9 @@ export function RatioSettingsCard({
       GroupSpecialUsableGroup: normalizeJsonString(
         groupDefaults.GroupSpecialUsableGroup
       ),
+      ModelTieredRatios: normalizeGroupModelTieredRatiosJson(
+        groupDefaults.ModelTieredRatios || '{}'
+      ),
     }
 
     groupForm.reset({
@@ -309,6 +335,9 @@ export function RatioSettingsCard({
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
+      ),
+      ModelTieredRatios: formatGroupModelTieredRatiosForTextarea(
+        groupDefaults.ModelTieredRatios || '{}'
       ),
     })
   }, [groupDefaults, groupForm])
@@ -329,7 +358,7 @@ export function RatioSettingsCard({
         BillingExpr: normalizeJsonString(values.BillingExpr),
       }
 
-      const apiKeyMap: Record<string, string> = {
+      const apiKeyMap: Partial<Record<keyof typeof normalized, string>> = {
         BillingMode: 'billing_setting.billing_mode',
         BillingExpr: 'billing_setting.billing_expr',
       }
@@ -345,15 +374,21 @@ export function RatioSettingsCard({
         return
       }
 
-      for (const key of updates) {
-        const apiKey = apiKeyMap[key as string] || (key as string)
-        await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
+      const result = await saveChangedOptionFields({
+        normalized,
+        baseline: modelNormalizedDefaults.current,
+        apiKeyMap,
+        mutateAsync: updateOption.mutateAsync,
+        onFieldSaved: (nextBaseline) => {
+          modelNormalizedDefaults.current = nextBaseline
+          setSavedModelValues(nextBaseline)
+        },
+      })
+      if (result.allSucceeded && result.hadChanges) {
+        await queryClient.invalidateQueries({ queryKey: ['system-options'] })
       }
-
-      modelNormalizedDefaults.current = normalized
-      setSavedModelValues(normalized)
     },
-    [t, updateOption]
+    [queryClient, t, updateOption]
   )
 
   const saveGroupRatios = useCallback(
@@ -369,28 +404,32 @@ export function RatioSettingsCard({
         GroupSpecialUsableGroup: normalizeJsonString(
           values.GroupSpecialUsableGroup
         ),
+        ModelTieredRatios: normalizeGroupModelTieredRatiosJson(
+          values.ModelTieredRatios
+        ),
       }
 
       // Map form field names to API keys (most are 1:1, except GroupSpecialUsableGroup)
-      const apiKeyMap: Record<string, string> = {
+      const apiKeyMap: Partial<Record<keyof typeof normalized, string>> = {
         GroupSpecialUsableGroup:
           'group_ratio_setting.group_special_usable_group',
+        ModelTieredRatios: 'group_ratio_setting.model_tiered_ratios',
       }
 
-      const updates = (
-        Object.keys(normalized) as Array<keyof typeof normalized>
-      ).filter(
-        (key) => normalized[key] !== groupNormalizedDefaults.current[key]
-      )
-
-      for (const key of updates) {
-        const apiKey = apiKeyMap[key] || key
-        await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
+      const result = await saveChangedOptionFields({
+        normalized,
+        baseline: groupNormalizedDefaults.current,
+        apiKeyMap,
+        mutateAsync: updateOption.mutateAsync,
+        onFieldSaved: (nextBaseline) => {
+          groupNormalizedDefaults.current = nextBaseline
+        },
+      })
+      if (result.allSucceeded && result.hadChanges) {
+        await queryClient.invalidateQueries({ queryKey: ['system-options'] })
       }
-
-      groupNormalizedDefaults.current = normalized
     },
-    [updateOption]
+    [queryClient, updateOption]
   )
 
   const handleResetRatios = useCallback(() => {

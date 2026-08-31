@@ -4,11 +4,13 @@ import (
 	"math"
 	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -337,6 +339,10 @@ func (s *recordingBillingSettler) Reserve(targetQuota int) error {
 	return nil
 }
 
+func (s *recordingBillingSettler) ReserveForAdmission(targetQuota int) error {
+	return s.Reserve(targetQuota)
+}
+
 func TestPrepareTieredBillingForSelectedGroupUpdatesReservation(t *testing.T) {
 	const expr = `tier("base", p)`
 	billing := &recordingBillingSettler{preConsumedQuota: 50_000}
@@ -363,6 +369,83 @@ func TestPrepareTieredBillingForSelectedGroupUpdatesReservation(t *testing.T) {
 	assert.Equal(t, 100_000, relayInfo.FinalPreConsumedQuota)
 	assert.Equal(t, 0.20, relayInfo.TieredBillingSnapshot.GroupRatio)
 	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+}
+
+func TestPrepareTieredBillingForSelectedGroupRefreshesMonthlyDiscountAndReservesOriginal(t *testing.T) {
+	originalPolicies := ratio_setting.ModelTieredRatios2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(originalPolicies))
+	})
+	require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(`{
+		"vip":{"gpt-monthly":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.8}]}}
+	}`))
+
+	billing := &recordingBillingSettler{preConsumedQuota: 150}
+	relayInfo := &relaycommon.RelayInfo{
+		UserGroup:       "default",
+		UsingGroup:      "vip",
+		OriginModelName: "gpt-monthly",
+		StartTime:       time.Unix(1_000, 0),
+		Billing:         billing,
+		PriceData: types.PriceData{
+			FreeModel:                 true,
+			QuotaToPreConsume:         150,
+			OriginalQuotaToPreConsume: 300,
+			GroupRatioInfo:            types.GroupRatioInfo{GroupRatio: 0.5},
+		},
+	}
+
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, relayInfo))
+	require.NotNil(t, relayInfo.GroupModelDiscountSnapshot)
+	assert.Equal(t, "vip", relayInfo.GroupModelDiscountSnapshot.UsingGroup)
+	assert.Equal(t, []int{300}, billing.reserveTargets)
+	assert.False(t, relayInfo.PriceData.FreeModel)
+	assert.Equal(t, 300, relayInfo.FinalPreConsumedQuota)
+}
+
+func TestPrepareTieredBillingForSelectedGroupFreezesManualResolverAcrossAutoGroupRetry(t *testing.T) {
+	originalPolicies := ratio_setting.ModelTieredRatios2JSONString()
+	originalContracts := ratio_setting.GroupGroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(originalPolicies))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(originalContracts))
+	})
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(`{
+		"vip":{"gpt-monthly-frozen":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.9}]}},
+		"svip":{"gpt-monthly-frozen":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.8}]}}
+	}`))
+
+	billing := &recordingBillingSettler{preConsumedQuota: 150}
+	relayInfo := &relaycommon.RelayInfo{
+		UserGroup:       "default",
+		UsingGroup:      "vip",
+		OriginModelName: "gpt-monthly-frozen",
+		StartTime:       time.Unix(1_000, 0),
+		Billing:         billing,
+		PriceData: types.PriceData{
+			OriginalQuotaToPreConsume: 300,
+			GroupRatioInfo:            types.GroupRatioInfo{GroupRatio: 0.5},
+		},
+	}
+
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, relayInfo))
+	require.NotNil(t, relayInfo.GroupModelDiscountResolver, "manually constructed RelayInfo captures a resolver on first use")
+	require.NotNil(t, relayInfo.GroupModelDiscountSnapshot)
+	assert.Equal(t, 0.9, relayInfo.GroupModelDiscountSnapshot.Tiers[0].Ratio)
+
+	// Both policy and contract changes happen after request admission. The
+	// auto-group retry must still resolve from the original complete snapshot.
+	require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(`{
+		"vip":{"gpt-monthly-frozen":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.4}]}},
+		"svip":{"gpt-monthly-frozen":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.3}]}}
+	}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{"default":{"svip":0.7}}`))
+	relayInfo.UsingGroup = "svip"
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, relayInfo))
+	require.NotNil(t, relayInfo.GroupModelDiscountSnapshot)
+	assert.Equal(t, "svip", relayInfo.GroupModelDiscountSnapshot.UsingGroup)
+	assert.Equal(t, 0.8, relayInfo.GroupModelDiscountSnapshot.Tiers[0].Ratio)
 }
 
 func TestPrepareTieredBillingForSelectedGroupStartsBillingAfterFreeGroup(t *testing.T) {

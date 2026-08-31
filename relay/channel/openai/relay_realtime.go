@@ -237,6 +237,9 @@ func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.R
 	totalUsage.OutputTokenDetails.TextTokens += usage.OutputTokenDetails.TextTokens
 	totalUsage.OutputTokenDetails.AudioTokens += usage.OutputTokenDetails.AudioTokens
 	// clear usage
-	err := service.PreWssConsumeQuota(ctx, info, usage)
+	// Reserve against the cumulative connection usage. Passing only the latest
+	// chunk would make the target non-monotonic and the final settlement could
+	// exceed the amount protected by the billing session.
+	err := service.PreWssConsumeQuota(ctx, info, totalUsage)
 	return err
 }

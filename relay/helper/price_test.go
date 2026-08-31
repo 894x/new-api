@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -141,6 +142,100 @@ func TestModelPriceHelperTieredPreConsumeMaxTokensFallback(t *testing.T) {
 			require.Equal(t, tc.expected, priceData.QuotaToPreConsume)
 		})
 	}
+}
+
+func TestModelPriceHelperTieredPreConsumeFallbackWhenMonthlyDiscountReplacesZeroGroupRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode":    `{"monthly-zero-group-tiered":"tiered_expr"}`,
+		"billing_setting.billing_expr":    `{"monthly-zero-group-tiered":"tier(\"base\", c * 15)"}`,
+		"group_ratio_setting.group_ratio": `{"monthly-zero":0}`,
+		"group_ratio_setting.model_tiered_ratios": `{
+			"monthly-zero":{"monthly-zero-group-tiered":{
+				"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC",
+				"tiers":[{"min_monthly_original_quota":0,"ratio":0.8}]
+			}}
+		}`,
+	}))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("group", "monthly-zero")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "monthly-zero-group-tiered",
+		UserGroup:       "monthly-zero",
+		UsingGroup:      "monthly-zero",
+		StartTime:       time.Unix(10, 0),
+		BillingRequestInput: &billingexpr.RequestInput{
+			Body: []byte(`{}`),
+		},
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 0, &types.TokenCountMeta{})
+
+	require.NoError(t, err)
+	require.NotNil(t, info.GroupModelDiscountSnapshot)
+	require.NotNil(t, info.TieredBillingSnapshot)
+	require.Equal(t, defaultTieredPreConsumeMaxTokens, info.TieredBillingSnapshot.EstimatedCompletionTokens)
+	require.Equal(t, 61_440, priceData.OriginalQuotaToPreConsume)
+	require.Equal(t, 61_440, priceData.QuotaToPreConsume)
+	require.False(t, priceData.FreeModel)
+}
+
+func TestModelPriceHelperTieredKeepsBeforeGroupFallbackForFreeGroupRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode":                `{"free-retry-tiered":"tiered_expr"}`,
+		"billing_setting.billing_expr":                `{"free-retry-tiered":"tier(\"base\", c * 15)"}`,
+		"group_ratio_setting.group_ratio":             `{"free-retry":0}`,
+		"group_ratio_setting.model_tiered_ratios":     `{}`,
+		"quota_setting.enable_free_model_pre_consume": "false",
+	}))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("group", "free-retry")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "free-retry-tiered",
+		UserGroup:       "free-retry",
+		UsingGroup:      "free-retry",
+		StartTime:       time.Unix(10, 0),
+		BillingRequestInput: &billingexpr.RequestInput{
+			Body: []byte(`{}`),
+		},
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 0, &types.TokenCountMeta{})
+
+	require.NoError(t, err)
+	require.Nil(t, info.GroupModelDiscountSnapshot)
+	require.NotNil(t, info.TieredBillingSnapshot)
+	require.Equal(t, defaultTieredPreConsumeMaxTokens, info.TieredBillingSnapshot.EstimatedCompletionTokens)
+	require.Equal(t, 61_440, priceData.OriginalQuotaToPreConsume)
+	require.Zero(t, priceData.QuotaToPreConsume)
+	require.True(t, priceData.FreeModel)
 }
 
 func TestModelPriceHelperTieredPreConsumesImageOutputTokens(t *testing.T) {
@@ -309,4 +404,228 @@ func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T)
 	require.Equal(t, "QuotaFromFloat", clamp.Op)
 	require.Equal(t, common.QuotaClampOverflow, clamp.Kind)
 	require.Nil(t, info.Billing)
+}
+
+func TestModelPriceHelperPerCallKeepsOriginalQuotaBeforeGroupDiscount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelPrices := ratio_setting.ModelPrice2JSONString()
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+	})
+
+	prices, err := common.Marshal(map[string]float64{"per-call-original-test": 0.04})
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(string(prices)))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"vip":0.5}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "vip")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "per-call-original-test",
+		UserGroup:       "vip",
+		UsingGroup:      "vip",
+	}
+
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+
+	require.NoError(t, err)
+	require.Equal(t, 20000, priceData.OriginalQuota)
+	require.Equal(t, 10000, priceData.Quota)
+
+	priceData, err = ModelPriceHelper(ctx, info, 0, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	require.Equal(t, 20000, priceData.OriginalQuotaToPreConsume)
+	require.Equal(t, 10000, priceData.QuotaToPreConsume)
+}
+
+func TestModelPriceHelperPreConsumesOriginalWhenMonthlyDiscountIsActive(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelPrices := ratio_setting.ModelPrice2JSONString()
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	savedTieredRatios := ratio_setting.ModelTieredRatios2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+		require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(savedTieredRatios))
+	})
+
+	prices, err := common.Marshal(map[string]float64{"monthly-discount-preconsume": 0.04})
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(string(prices)))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"vip":0.5}`))
+	require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(`{
+		"vip":{"monthly-discount-preconsume":{
+			"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC",
+			"tiers":[{"min_monthly_original_quota":0,"ratio":0.9}]
+		}}
+	}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "vip")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "monthly-discount-preconsume",
+		UserGroup:       "vip",
+		UsingGroup:      "vip",
+		StartTime:       time.Unix(10, 0),
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 0, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	require.NotNil(t, info.GroupModelDiscountSnapshot)
+	require.Equal(t, 20000, priceData.OriginalQuotaToPreConsume)
+	require.Equal(t, 20000, priceData.QuotaToPreConsume, "pre-consume must conservatively reserve original quota")
+
+	priceData, err = ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	require.NotNil(t, info.GroupModelDiscountSnapshot)
+	require.Equal(t, 20000, priceData.OriginalQuota)
+	require.Equal(t, 10000, priceData.Quota, "the legacy fixed-ratio fallback remains available for settlement")
+}
+
+func TestModelPriceHelperKeepsPositiveMonthlyOriginalLedgerEligible(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelPrices := ratio_setting.ModelPrice2JSONString()
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	savedTieredRatios := ratio_setting.ModelTieredRatios2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+		require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(savedTieredRatios))
+	})
+
+	tinyPrice := 0.4 / common.QuotaPerUnit
+	prices, err := common.Marshal(map[string]float64{"monthly-minimum-original": tinyPrice})
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(string(prices)))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"vip":3}`))
+	require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(`{
+		"vip":{"monthly-minimum-original":{
+			"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC",
+			"tiers":[{"min_monthly_original_quota":0,"ratio":0.9}]
+		}}
+	}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "vip")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "monthly-minimum-original",
+		UserGroup:       "vip",
+		UsingGroup:      "vip",
+		StartTime:       time.Unix(10, 0),
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 0, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	require.Equal(t, 1, priceData.OriginalQuotaToPreConsume)
+	require.Equal(t, 1, priceData.QuotaToPreConsume)
+
+	priceData, err = ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	require.Equal(t, 1, priceData.OriginalQuota)
+	require.Equal(t, 1, priceData.Quota)
+}
+
+func TestInactiveMonthlyDiscountDoesNotRejectLegalLegacyQuotaWhenOriginalOverflows(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+
+	overflowingPrice := float64(common.MaxQuota) * 2 / common.QuotaPerUnit
+	prices, err := common.Marshal(map[string]float64{
+		"legacy-fixed-overflow":    overflowingPrice,
+		"legacy-per-call-overflow": overflowingPrice,
+	})
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(string(prices)))
+	ratios, err := common.Marshal(map[string]float64{
+		"legacy-ratio-overflow": float64(common.MaxQuota) * 2,
+	})
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratios)))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"legacy-zero":0,"legacy-tiny":0.000000000001}`))
+	require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(`{
+		"legacy-zero":{"*":{
+			"enabled":false,"effective_from":0,"effective_until":null,"timezone":"UTC",
+			"tiers":[{"min_monthly_original_quota":0,"ratio":0.9}]
+		}},
+		"legacy-tiny":{"*":{
+			"enabled":false,"effective_from":0,"effective_until":null,"timezone":"UTC",
+			"tiers":[{"min_monthly_original_quota":0,"ratio":0.9}]
+		}}
+	}`))
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode": `{"legacy-tiered-overflow":"tiered_expr"}`,
+		"billing_setting.billing_expr": `{"legacy-tiered-overflow":"tier(\"overflow\", p * 1000000000000000)"}`,
+	}))
+
+	newRequest := func(model, group string) (*gin.Context, *relaycommon.RelayInfo) {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		ctx.Set("group", group)
+		return ctx, &relaycommon.RelayInfo{
+			OriginModelName: model,
+			UserGroup:       group,
+			UsingGroup:      group,
+			StartTime:       time.Unix(10, 0),
+			BillingRequestInput: &billingexpr.RequestInput{
+				Body: []byte(`{}`),
+			},
+		}
+	}
+
+	t.Run("ratio billing with a zero group ratio", func(t *testing.T) {
+		ctx, info := newRequest("legacy-ratio-overflow", "legacy-zero")
+		priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+
+		require.NoError(t, err)
+		require.Nil(t, info.GroupModelDiscountSnapshot)
+		require.Zero(t, priceData.QuotaToPreConsume)
+	})
+
+	t.Run("fixed billing with a tiny group ratio", func(t *testing.T) {
+		ctx, info := newRequest("legacy-fixed-overflow", "legacy-tiny")
+		priceData, err := ModelPriceHelper(ctx, info, 0, &types.TokenCountMeta{})
+
+		require.NoError(t, err)
+		require.Nil(t, info.GroupModelDiscountSnapshot)
+		require.Zero(t, priceData.QuotaToPreConsume)
+	})
+
+	t.Run("per-call billing with a zero group ratio", func(t *testing.T) {
+		ctx, info := newRequest("legacy-per-call-overflow", "legacy-zero")
+		priceData, err := ModelPriceHelperPerCall(ctx, info)
+
+		require.NoError(t, err)
+		require.Nil(t, info.GroupModelDiscountSnapshot)
+		require.Zero(t, priceData.Quota)
+	})
+
+	t.Run("tiered expression billing with a tiny group ratio", func(t *testing.T) {
+		ctx, info := newRequest("legacy-tiered-overflow", "legacy-tiny")
+		priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+
+		require.NoError(t, err)
+		require.Nil(t, info.GroupModelDiscountSnapshot)
+		require.Equal(t, 500000, priceData.QuotaToPreConsume)
+	})
+
+	require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(`{
+		"legacy-zero":{"legacy-fixed-overflow":{
+			"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC",
+			"tiers":[{"min_monthly_original_quota":0,"ratio":0.9}]
+		}}
+	}`))
+	ctx, info := newRequest("legacy-fixed-overflow", "legacy-zero")
+	_, err = ModelPriceHelper(ctx, info, 0, &types.TokenCountMeta{})
+	var clamp *common.QuotaClamp
+	require.ErrorAs(t, err, &clamp, "an active monthly policy still requires a representable original quota")
+	require.Equal(t, common.QuotaClampOverflow, clamp.Kind)
 }
