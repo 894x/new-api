@@ -141,6 +141,38 @@ func ListChannelAssetConfigs() ([]ChannelAssetConfig, error) {
 	return configs, err
 }
 
+func AttachChannelAssetLibraryEnabled(channels []*Channel) error {
+	channelIds := make([]int, 0, len(channels))
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		channel.AssetLibraryEnabled = false
+		channelIds = append(channelIds, channel.Id)
+	}
+	if len(channelIds) == 0 {
+		return nil
+	}
+
+	var enabledChannelIds []int
+	if err := DB.Model(&ChannelAssetConfig{}).
+		Where("channel_id IN ? AND enabled = ?", channelIds, true).
+		Pluck("channel_id", &enabledChannelIds).Error; err != nil {
+		return err
+	}
+	enabled := make(map[int]struct{}, len(enabledChannelIds))
+	for _, channelId := range enabledChannelIds {
+		enabled[channelId] = struct{}{}
+	}
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		_, channel.AssetLibraryEnabled = enabled[channel.Id]
+	}
+	return nil
+}
+
 func CountChannelAssetReplicas(channelId int) (int64, error) {
 	var groupCount int64
 	if err := DB.Model(&UserAssetGroupReplica{}).Where("channel_id = ?", channelId).Count(&groupCount).Error; err != nil {

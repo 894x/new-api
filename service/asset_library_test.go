@@ -325,6 +325,67 @@ func TestManualSyncRequiresAtLeastOneEnabledChannel(t *testing.T) {
 	require.ErrorContains(t, groupErr, "no enabled asset library channels")
 }
 
+func TestUpdateAssetReplicasSkipsDisabledAssetLibraryChannel(t *testing.T) {
+	db := setupAssetLibraryServiceTestDB(t)
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestCount.Add(1)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"code":0}`))
+	}))
+	t.Cleanup(server.Close)
+
+	require.NoError(t, db.Create(&model.Channel{Id: 45, Name: "disabled asset channel", Key: "key"}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 45, Enabled: false, Backend: AssetLibraryBackendOpenAPI,
+		BaseURL: server.URL, AuthType: AssetLibraryAuthBearer, APIKey: "disabled-key",
+	}).Error)
+	asset := &model.UserAsset{
+		Id: "asset-na-disabled-update", UserId: 7, GroupId: "group-na-disabled-update",
+		Name: "disabled asset", SourceURL: "https://example.com/disabled.png", AssetType: "Image",
+	}
+	require.NoError(t, db.Create(asset).Error)
+	require.NoError(t, db.Create(&model.UserAssetReplica{
+		AssetId: asset.Id, ChannelId: 45, UpstreamAssetId: "4501", State: model.AssetReplicaStateReady,
+	}).Error)
+
+	report, err := UpdateAssetReplicas(t.Context(), asset)
+
+	require.NoError(t, err)
+	assert.Empty(t, report.Errors)
+	assert.EqualValues(t, 0, requestCount.Load())
+}
+
+func TestUpdateAssetGroupReplicasSkipsDisabledAssetLibraryChannel(t *testing.T) {
+	db := setupAssetLibraryServiceTestDB(t)
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestCount.Add(1)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"code":0}`))
+	}))
+	t.Cleanup(server.Close)
+
+	require.NoError(t, db.Create(&model.Channel{Id: 46, Name: "disabled asset group channel", Key: "key"}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 46, Enabled: false, Backend: AssetLibraryBackendOpenAPI,
+		BaseURL: server.URL, AuthType: AssetLibraryAuthBearer, APIKey: "disabled-key",
+	}).Error)
+	group := &model.UserAssetGroup{
+		Id: "group-na-disabled-update", UserId: 7, Name: "disabled group",
+	}
+	require.NoError(t, db.Create(group).Error)
+	require.NoError(t, db.Create(&model.UserAssetGroupReplica{
+		GroupId: group.Id, ChannelId: 46, UpstreamGroupId: "4601", State: model.AssetReplicaStateReady,
+	}).Error)
+
+	report, err := UpdateAssetGroupReplicas(t.Context(), group)
+
+	require.NoError(t, err)
+	assert.Empty(t, report.Errors)
+	assert.EqualValues(t, 0, requestCount.Load())
+}
+
 func TestSyncAssetGroupReplicasSynchronizesEveryChildAsset(t *testing.T) {
 	db := setupAssetLibraryServiceTestDB(t)
 	var requestCount atomic.Int32

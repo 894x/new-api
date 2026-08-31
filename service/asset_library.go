@@ -730,14 +730,16 @@ func UpdateAssetGroupReplicas(ctx context.Context, group *model.UserAssetGroup) 
 		}
 		replica = currentReplica
 		config, configErr := model.GetChannelAssetConfig(replica.ChannelId)
+		if configErr == nil && !config.Enabled {
+			lock.Unlock()
+			continue
+		}
 		if configErr == nil {
-			upstreamConfig := *config
-			upstreamConfig.Enabled = true
 			backend, backendErr := assetLibraryBackendForChannel(replica.ChannelId)
 			if backendErr != nil {
 				configErr = backendErr
 			} else {
-				configErr = backend.UpdateGroup(ctx, &upstreamConfig, group, replica.UpstreamGroupId)
+				configErr = backend.UpdateGroup(ctx, config, group, replica.UpstreamGroupId)
 			}
 		}
 		if configErr != nil {
@@ -780,14 +782,16 @@ func UpdateAssetReplicas(ctx context.Context, asset *model.UserAsset) (*AssetLib
 		}
 		replica = currentReplica
 		config, configErr := model.GetChannelAssetConfig(replica.ChannelId)
+		if configErr == nil && !config.Enabled {
+			lock.Unlock()
+			continue
+		}
 		if configErr == nil {
-			upstreamConfig := *config
-			upstreamConfig.Enabled = true
 			backend, backendErr := assetLibraryBackendForChannel(replica.ChannelId)
 			if backendErr != nil {
 				configErr = backendErr
 			} else {
-				configErr = backend.UpdateAsset(ctx, &upstreamConfig, asset, replica.UpstreamAssetId)
+				configErr = backend.UpdateAsset(ctx, config, asset, replica.UpstreamAssetId)
 			}
 		}
 		if configErr != nil {

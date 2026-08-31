@@ -61,6 +61,43 @@ func TestAssetLibraryActionRejectsUnsupportedVersionWithOfficialEnvelope(t *test
 	assert.Equal(t, "ark", response.ResponseMetadata.Service)
 }
 
+func TestGetAllChannelsIncludesAssetLibraryEnabledState(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	require.NoError(t, db.Create(&[]model.Channel{
+		{Id: 71, Name: "asset-enabled", Key: "key-71", Status: common.ChannelStatusEnabled},
+		{Id: 72, Name: "asset-disabled", Key: "key-72", Status: common.ChannelStatusEnabled},
+	}).Error)
+	require.NoError(t, db.Create(&[]model.ChannelAssetConfig{
+		{ChannelId: 71, Enabled: true},
+		{ChannelId: 72, Enabled: false},
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/channel?p=1&page_size=20", nil)
+
+	GetAllChannels(context)
+
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items []struct {
+				Id                  int  `json:"id"`
+				AssetLibraryEnabled bool `json:"asset_library_enabled"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Len(t, response.Data.Items, 2)
+	states := make(map[int]bool, len(response.Data.Items))
+	for _, item := range response.Data.Items {
+		states[item.Id] = item.AssetLibraryEnabled
+	}
+	assert.True(t, states[71])
+	assert.False(t, states[72])
+}
+
 func TestAssetLibraryActionEnforcesAccountOwnership(t *testing.T) {
 	db := setupAssetLibraryControllerTestDB(t)
 	require.NoError(t, db.Create(&model.UserAssetGroup{

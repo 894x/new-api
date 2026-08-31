@@ -107,6 +107,25 @@ func TestAssetReplicaUpsertKeepsSingleMapping(t *testing.T) {
 	assert.Equal(t, AssetReplicaStateReady, replica.State)
 }
 
+func TestAttachChannelAssetLibraryEnabledUsesConfigurationState(t *testing.T) {
+	db := setupAssetLibraryModelTestDB(t)
+	require.NoError(t, db.Create(&[]ChannelAssetConfig{
+		{ChannelId: 1, Enabled: true},
+		{ChannelId: 2, Enabled: false},
+	}).Error)
+	channels := []*Channel{
+		{Id: 1, AssetLibraryEnabled: false},
+		{Id: 2, AssetLibraryEnabled: true},
+		{Id: 3, AssetLibraryEnabled: true},
+	}
+
+	require.NoError(t, AttachChannelAssetLibraryEnabled(channels))
+
+	assert.True(t, channels[0].AssetLibraryEnabled)
+	assert.False(t, channels[1].AssetLibraryEnabled)
+	assert.False(t, channels[2].AssetLibraryEnabled)
+}
+
 func TestDeleteUserAssetLibraryDataRemovesOnlyOwnedLogicalData(t *testing.T) {
 	db := setupAssetLibraryModelTestDB(t)
 	require.NoError(t, db.Create(&[]UserAssetGroup{
