@@ -1,6 +1,7 @@
 package doubao
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
@@ -121,6 +123,171 @@ func TestNativeRequestRewritesLogicalAssetForCurrentChannel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(encoded), `"url":"asset://asset-upstream-11"`)
 	assert.NotContains(t, string(encoded), assetId)
+}
+
+func TestVolcengineAssetReferenceIntegrationRewritesBeforeTaskSubmit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	type observedRequest struct {
+		action        string
+		authorization string
+		body          map[string]any
+	}
+
+	assetRequests := make(chan observedRequest, 3)
+	taskRequests := make(chan observedRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := common.DecodeJson(r.Body, &body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/" {
+			action := r.URL.Query().Get("Action")
+			assetRequests <- observedRequest{
+				action: action, authorization: r.Header.Get("Authorization"), body: body,
+			}
+			switch action {
+			case "CreateAssetGroup":
+				_, _ = io.WriteString(w, `{"ResponseMetadata":{"RequestId":"req-group"},"Result":{"Id":"group-official-e2e"}}`)
+			case "CreateAsset":
+				_, _ = io.WriteString(w, `{"ResponseMetadata":{"RequestId":"req-asset"},"Result":{"Id":"asset-official-e2e"}}`)
+			case "GetAsset":
+				_, _ = io.WriteString(w, `{"ResponseMetadata":{"RequestId":"req-get"},"Result":{"Id":"asset-official-e2e","Name":"Official E2E reference","URL":"https://example.com/official-e2e.png","GroupId":"group-official-e2e","AssetType":"Image","Status":"Active","ProjectName":"default"}}`)
+			default:
+				http.Error(w, "unexpected asset action", http.StatusBadRequest)
+			}
+			return
+		}
+		if r.URL.Path == "/api/v3/contents/generations/tasks" {
+			taskRequests <- observedRequest{authorization: r.Header.Get("Authorization"), body: body}
+			_, _ = io.WriteString(w, `{"id":"task-upstream-official-e2e"}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	originalDB := model.DB
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.Channel{}, &model.ChannelAssetConfig{}, &model.UserAssetGroup{}, &model.UserAsset{},
+		&model.UserAssetGroupReplica{}, &model.UserAssetReplica{},
+	))
+	model.DB = db
+	t.Cleanup(func() {
+		model.DB = originalDB
+		sqlDB, dbErr := db.DB()
+		if dbErr == nil {
+			require.NoError(t, sqlDB.Close())
+		}
+	})
+
+	const (
+		userID    = 7
+		channelID = 12
+		assetID   = "asset-na-fedcba9876543210fedcba9876543210"
+		groupID   = "group-na-fedcba9876543210fedcba9876543210"
+	)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: channelID, Type: constant.ChannelTypeDoubaoVideo, Key: "video-key-e2e", Name: "Mock Volcengine Video",
+	}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: channelID, Enabled: true, Backend: service.AssetLibraryBackendAction,
+		BaseURL: server.URL, AuthType: service.AssetLibraryAuthAKSK,
+		AccessKey: "access-key-e2e", SecretKey: "secret-key-e2e", Region: service.DefaultAssetLibraryRegion,
+		ProjectName: service.DefaultAssetLibraryProject,
+	}).Error)
+	group := &model.UserAssetGroup{
+		Id: groupID, UserId: userID, Name: "Official E2E group", GroupType: "VideoGen", ProjectName: "default",
+	}
+	require.NoError(t, db.Create(group).Error)
+	asset := &model.UserAsset{
+		Id: assetID, UserId: userID, GroupId: groupID, Name: "Official E2E reference",
+		SourceURL: "https://example.com/official-e2e.png", AssetType: "Image", ProjectName: "default",
+	}
+	require.NoError(t, db.Create(asset).Error)
+
+	replication, err := service.ReplicateAsset(context.Background(), asset)
+	require.NoError(t, err)
+	require.Empty(t, replication.Errors)
+	require.NotNil(t, replication.Summary)
+	assert.Equal(t, "processing", replication.Summary.Status)
+	details, err := service.RefreshAssetLibraryAsset(context.Background(), assetID)
+	require.NoError(t, err)
+	assert.Equal(t, "Active", details.Status)
+
+	groupRequest := <-assetRequests
+	assert.Equal(t, "CreateAssetGroup", groupRequest.action)
+	assert.True(t, strings.HasPrefix(groupRequest.authorization, "HMAC-SHA256 Credential=access-key-e2e/"))
+	assert.Equal(t, "Official E2E group", groupRequest.body["Name"])
+	assetRequest := <-assetRequests
+	assert.Equal(t, "CreateAsset", assetRequest.action)
+	assert.Equal(t, "group-official-e2e", assetRequest.body["GroupId"])
+	assert.Equal(t, "https://example.com/official-e2e.png", assetRequest.body["URL"])
+	getRequest := <-assetRequests
+	assert.Equal(t, "GetAsset", getRequest.action)
+	assert.Equal(t, "asset-official-e2e", getRequest.body["Id"])
+
+	router := gin.New()
+	router.POST(
+		"/api/v3/contents/generations/tasks",
+		middleware.DoubaoVideoRequestConvert(),
+		func(c *gin.Context) {
+			common.SetContextKey(c, constant.ContextKeyUserId, userID)
+			c.Next()
+		},
+		middleware.AssetLibraryRouting(),
+		func(c *gin.Context) {
+			info := &relaycommon.RelayInfo{
+				UserId: userID, OriginModelName: "doubao-seedance-2-0-260128",
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ChannelType: constant.ChannelTypeDoubaoVideo, ChannelId: channelID,
+					ChannelBaseUrl: server.URL, ApiKey: "video-key-e2e",
+					UpstreamModelName: "doubao-seedance-2-0-260128",
+				},
+				TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "task-public-official-e2e"},
+			}
+			adaptor := &TaskAdaptor{}
+			adaptor.Init(info)
+			require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
+			requestBody, buildErr := adaptor.BuildRequestBody(c, info)
+			require.NoError(t, buildErr)
+			response, requestErr := adaptor.DoRequest(c, info, requestBody)
+			require.NoError(t, requestErr)
+			upstreamTaskID, taskData, taskErr := adaptor.DoResponse(c, response, info)
+			require.Nil(t, taskErr)
+			assert.Equal(t, "task-upstream-official-e2e", upstreamTaskID)
+			assert.Contains(t, string(taskData), "task-upstream-official-e2e")
+		},
+	)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v3/contents/generations/tasks", strings.NewReader(fmt.Sprintf(`{
+		"model":"doubao-seedance-2-0-260128",
+		"content":[
+			{"type":"image_url","image_url":{"url":"asset://%s"}},
+			{"type":"text","text":"Animate the official asset"}
+		]
+	}`, assetID)))
+	request.Header.Set("Content-Type", "application/json")
+	responseRecorder := httptest.NewRecorder()
+	router.ServeHTTP(responseRecorder, request)
+
+	assert.Equal(t, http.StatusOK, responseRecorder.Code)
+	assert.JSONEq(t, `{"id":"task-public-official-e2e"}`, responseRecorder.Body.String())
+	taskRequest := <-taskRequests
+	assert.Equal(t, "Bearer video-key-e2e", taskRequest.authorization)
+	content, ok := taskRequest.body["content"].([]any)
+	require.True(t, ok)
+	require.Len(t, content, 2)
+	imagePart, ok := content[0].(map[string]any)
+	require.True(t, ok)
+	imageURL, ok := imagePart["image_url"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "asset://asset-official-e2e", imageURL["url"])
+	assert.NotContains(t, fmt.Sprint(taskRequest.body), assetID)
 }
 
 func TestCompatibleRequestRejectsRawAssetURI(t *testing.T) {

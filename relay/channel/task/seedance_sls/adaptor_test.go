@@ -1,6 +1,7 @@
 package seedance_sls
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -206,6 +207,131 @@ func TestBuildNativeSLSRequestRewritesAccountAsset(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(encoded), `"url":"asset://asset-upstream-sls"`)
 	assert.NotContains(t, string(encoded), assetID)
+}
+
+func TestReplicateAndSubmitAccountAssetIntegration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	type observedRequest struct {
+		authorization string
+		body          map[string]any
+	}
+
+	assetRequests := make(chan observedRequest, 1)
+	taskRequests := make(chan observedRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := common.DecodeJson(r.Body, &body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/volcengine/assets":
+			assetRequests <- observedRequest{authorization: r.Header.Get("Authorization"), body: body}
+			_, _ = io.WriteString(w, `{"success":true,"data":{"logical_id":"lass_e2e_asset","logical_group_id":"lass_e2e_group","status":"Active"}}`)
+		case "/v1/video/generations":
+			taskRequests <- observedRequest{authorization: r.Header.Get("Authorization"), body: body}
+			_, _ = io.WriteString(w, `{"task_id":"task_upstream_e2e","status":"QUEUED"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	originalDB := model.DB
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.Channel{}, &model.ChannelAssetConfig{}, &model.UserAssetGroup{}, &model.UserAsset{},
+		&model.UserAssetGroupReplica{}, &model.UserAssetReplica{},
+	))
+	model.DB = db
+	t.Cleanup(func() {
+		model.DB = originalDB
+		sqlDB, dbErr := db.DB()
+		if dbErr == nil {
+			require.NoError(t, sqlDB.Close())
+		}
+	})
+
+	const (
+		userID    = 7
+		channelID = 11
+		assetID   = "asset-na-0123456789abcdef0123456789abcdef"
+		groupID   = "group-na-0123456789abcdef0123456789abcdef"
+	)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: channelID, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-video-key", Name: "Mock Seedance SLS",
+	}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: channelID, Enabled: true, Backend: service.AssetLibraryBackendSeedanceSLS,
+		BaseURL: server.URL, AuthType: service.AssetLibraryAuthBearer, APIKey: "sls-asset-key",
+	}).Error)
+	group := &model.UserAssetGroup{
+		Id: groupID, UserId: userID, Name: "E2E group", GroupType: "VideoGen", ProjectName: "default",
+	}
+	require.NoError(t, db.Create(group).Error)
+	asset := &model.UserAsset{
+		Id: assetID, UserId: userID, GroupId: groupID, Name: "E2E reference",
+		SourceURL: "https://example.com/e2e-reference.png", AssetType: "Image", ProjectName: "default",
+	}
+	require.NoError(t, db.Create(asset).Error)
+
+	replication, err := service.ReplicateAsset(context.Background(), asset)
+	require.NoError(t, err)
+	require.Empty(t, replication.Errors)
+	require.NotNil(t, replication.Summary)
+	assert.Equal(t, 1, replication.Summary.Ready)
+	assert.Equal(t, "ready", replication.Summary.Status)
+	assetRequest := <-assetRequests
+	assert.Equal(t, "Bearer sls-asset-key", assetRequest.authorization)
+	assert.Equal(t, "https://example.com/e2e-reference.png", assetRequest.body["source_url"])
+	assert.Equal(t, "E2E group", assetRequest.body["group_name"])
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(fmt.Sprintf(`{
+		"model":"doubao-seedance-2-0",
+		"content":[
+			{"type":"image_url","image_url":{"url":"asset://%s"}},
+			{"type":"text","text":"Animate the E2E reference"}
+		]
+	}`, assetID)))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	defer common.CleanupBodyStorage(ctx)
+	info := &relaycommon.RelayInfo{
+		UserId: userID, OriginModelName: "doubao-seedance-2-0",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: channelID, ChannelBaseUrl: server.URL, ApiKey: "sls-video-key",
+			UpstreamModelName: "doubao-seedance-2-0",
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "task_public_e2e"},
+	}
+	adaptor := &TaskAdaptor{}
+	adaptor.Init(info)
+	require.Nil(t, adaptor.ValidateRequestAndSetAction(ctx, info))
+	requestBody, err := adaptor.BuildRequestBody(ctx, info)
+	require.NoError(t, err)
+	response, err := adaptor.DoRequest(ctx, info, requestBody)
+	require.NoError(t, err)
+	upstreamTaskID, taskData, taskErr := adaptor.DoResponse(ctx, response, info)
+	require.Nil(t, taskErr)
+
+	taskRequest := <-taskRequests
+	assert.Equal(t, "Bearer sls-video-key", taskRequest.authorization)
+	content, ok := taskRequest.body["content"].([]any)
+	require.True(t, ok)
+	require.Len(t, content, 2)
+	imagePart, ok := content[0].(map[string]any)
+	require.True(t, ok)
+	imageURL, ok := imagePart["image_url"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "asset://lass_e2e_asset", imageURL["url"])
+	assert.NotContains(t, string(taskData), "task_upstream_e2e")
+	assert.Contains(t, string(taskData), "task_public_e2e")
+	assert.Equal(t, "task_upstream_e2e", upstreamTaskID)
+	assert.Contains(t, recorder.Body.String(), "task_public_e2e")
 }
 
 func TestBuildCompatibleRequestConvertsPromptAndImages(t *testing.T) {
