@@ -323,6 +323,14 @@ export const groupModelTieredRatiosSchema = z
     }
   })
 
+export function getUnknownTieredRatioGroups(
+  config: GroupModelTieredRatios,
+  pricingGroups: string[]
+): string[] {
+  const configuredGroups = new Set(pricingGroups)
+  return Object.keys(config).filter((group) => !configuredGroups.has(group))
+}
+
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

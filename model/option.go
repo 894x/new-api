@@ -3,6 +3,7 @@ package model
 import (
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -19,6 +20,8 @@ type Option struct {
 	Key   string `json:"key" gorm:"primaryKey"`
 	Value string `json:"value"`
 }
+
+var groupPricingOptionMutex sync.Mutex
 
 func AllOption() ([]*Option, error) {
 	var options []*Option
@@ -192,8 +195,40 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	groupPricingOptionMutex.Lock()
+	defer groupPricingOptionMutex.Unlock()
+
 	options, _ := AllOption()
+	optionValues := make(map[string]string, len(options))
 	for _, option := range options {
+		optionValues[option.Key] = option.Value
+	}
+	groupRatios, hasGroupRatios := optionValues["GroupRatio"]
+	modelTieredRatios, hasModelTieredRatios := optionValues[ratio_setting.ModelTieredRatiosOptionKey]
+	updatesGroupPricing := hasGroupRatios || hasModelTieredRatios
+	if updatesGroupPricing {
+		if !hasGroupRatios {
+			groupRatios = ratio_setting.GroupRatio2JSONString()
+		}
+		if !hasModelTieredRatios {
+			modelTieredRatios = ratio_setting.ModelTieredRatios2JSONString()
+		}
+		if err := applyGroupPricingOptions(groupRatios, modelTieredRatios); err != nil {
+			common.SysLog("failed to update group pricing options: " + err.Error())
+			if recoveryErr := ratio_setting.RecoverGroupPricingConfiguration(groupRatios); recoveryErr != nil {
+				common.SysLog("failed to recover safe group pricing runtime: " + recoveryErr.Error())
+			}
+			common.OptionMapRWMutex.Lock()
+			common.OptionMap["GroupRatio"] = groupRatios
+			common.OptionMap[ratio_setting.ModelTieredRatiosOptionKey] = modelTieredRatios
+			common.OptionMapRWMutex.Unlock()
+		}
+	}
+	for _, option := range options {
+		if updatesGroupPricing &&
+			(option.Key == "GroupRatio" || option.Key == ratio_setting.ModelTieredRatiosOptionKey) {
+			continue
+		}
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
@@ -222,6 +257,9 @@ func validateOptionValue(key string, value string) error {
 	if key == "ModelRequestRateLimitTPM" {
 		return setting.ValidateModelRequestRateLimitTPM(value)
 	}
+	if key == "GroupRatio" {
+		return ratio_setting.CheckGroupRatio(value)
+	}
 	if key == ratio_setting.ModelTieredRatiosOptionKey {
 		return ratio_setting.CheckModelTieredRatios(value)
 	}
@@ -233,8 +271,26 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
-	if err := validateOptionValue(key, value); err != nil {
-		return err
+	updatesGroupPricing := key == "GroupRatio" || key == ratio_setting.ModelTieredRatiosOptionKey
+	var groupRatios string
+	var modelTieredRatios string
+	if updatesGroupPricing {
+		groupPricingOptionMutex.Lock()
+		defer groupPricingOptionMutex.Unlock()
+		groupRatios, modelTieredRatios = currentGroupPricingOptionValues()
+		if key == "GroupRatio" {
+			groupRatios = value
+		} else {
+			modelTieredRatios = value
+		}
+		if err := ratio_setting.CheckGroupPricingConfiguration(groupRatios, modelTieredRatios); err != nil {
+			return err
+		}
+	}
+	if !updatesGroupPricing {
+		if err := validateOptionValue(key, value); err != nil {
+			return err
+		}
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
 		option := Option{Key: key}
@@ -245,6 +301,9 @@ func UpdateOption(key string, value string) error {
 		return tx.Save(&option).Error
 	}); err != nil {
 		return err
+	}
+	if updatesGroupPricing {
+		return applyGroupPricingOptions(groupRatios, modelTieredRatios)
 	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
@@ -259,7 +318,28 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
+	groupRatios, hasGroupRatios := values["GroupRatio"]
+	modelTieredRatios, hasModelTieredRatios := values[ratio_setting.ModelTieredRatiosOptionKey]
+	updatesGroupPricing := hasGroupRatios || hasModelTieredRatios
+	if updatesGroupPricing {
+		groupPricingOptionMutex.Lock()
+		defer groupPricingOptionMutex.Unlock()
+		currentGroupRatios, currentModelTieredRatios := currentGroupPricingOptionValues()
+		if !hasGroupRatios {
+			groupRatios = currentGroupRatios
+		}
+		if !hasModelTieredRatios {
+			modelTieredRatios = currentModelTieredRatios
+		}
+		if err := ratio_setting.CheckGroupPricingConfiguration(groupRatios, modelTieredRatios); err != nil {
+			return err
+		}
+	}
 	for key, value := range values {
+		if updatesGroupPricing &&
+			(key == "GroupRatio" || key == ratio_setting.ModelTieredRatiosOptionKey) {
+			continue
+		}
 		if err := validateOptionValue(key, value); err != nil {
 			return err
 		}
@@ -280,11 +360,45 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
+	if updatesGroupPricing {
+		if err := applyGroupPricingOptions(groupRatios, modelTieredRatios); err != nil {
+			return err
+		}
+	}
 	for k, v := range values {
+		if updatesGroupPricing &&
+			(k == "GroupRatio" || k == ratio_setting.ModelTieredRatiosOptionKey) {
+			continue
+		}
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+func currentGroupPricingOptionValues() (string, string) {
+	common.OptionMapRWMutex.RLock()
+	groupRatios, hasGroupRatios := common.OptionMap["GroupRatio"]
+	modelTieredRatios, hasModelTieredRatios := common.OptionMap[ratio_setting.ModelTieredRatiosOptionKey]
+	common.OptionMapRWMutex.RUnlock()
+	if !hasGroupRatios {
+		groupRatios = ratio_setting.GroupRatio2JSONString()
+	}
+	if !hasModelTieredRatios {
+		modelTieredRatios = ratio_setting.ModelTieredRatios2JSONString()
+	}
+	return groupRatios, modelTieredRatios
+}
+
+func applyGroupPricingOptions(groupRatios, modelTieredRatios string) error {
+	if err := ratio_setting.UpdateGroupPricingConfiguration(groupRatios, modelTieredRatios); err != nil {
+		return err
+	}
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap["GroupRatio"] = groupRatios
+	common.OptionMap[ratio_setting.ModelTieredRatiosOptionKey] = modelTieredRatios
+	common.OptionMapRWMutex.Unlock()
 	return nil
 }
 

@@ -1,7 +1,6 @@
 package ratio_setting
 
 import (
-	"encoding/json"
 	"errors"
 
 	"github.com/QuantumNous/new-api/common"
@@ -116,15 +115,18 @@ func UpdateGroupGroupRatioByJSONString(jsonStr string) error {
 }
 
 func CheckGroupRatio(jsonStr string) error {
-	checkGroupRatio := make(map[string]float64)
-	err := json.Unmarshal([]byte(jsonStr), &checkGroupRatio)
-	if err != nil {
-		return err
+	return checkGroupPricingConfiguration(jsonStr, ModelTieredRatios2JSONString())
+}
+
+func parseGroupRatiosJSON(jsonStr string) (map[string]float64, error) {
+	groupRatios := make(map[string]float64)
+	if err := common.UnmarshalJsonStr(jsonStr, &groupRatios); err != nil {
+		return nil, err
 	}
-	for name, ratio := range checkGroupRatio {
+	for name, ratio := range groupRatios {
 		if ratio < 0 {
-			return errors.New("group ratio must be not less than 0: " + name)
+			return nil, errors.New("group ratio must be not less than 0: " + name)
 		}
 	}
-	return nil
+	return groupRatios, nil
 }

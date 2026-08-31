@@ -26,6 +26,37 @@ func TestUpdateModelTieredRatiosRejectsInvalidConfigurationWithoutReplacingLiveP
 	assert.Equal(t, 0.9, snapshot.Tiers[0].Ratio)
 }
 
+func TestCheckModelTieredRatiosRejectsGroupMissingFromPricingGroups(t *testing.T) {
+	originalGroups := GroupRatio2JSONString()
+	originalTiered := ModelTieredRatios2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, UpdateGroupRatioByJSONString(originalGroups))
+		require.NoError(t, UpdateModelTieredRatiosByJSONString(originalTiered))
+	})
+
+	require.NoError(t, UpdateModelTieredRatiosByJSONString(`{}`))
+	require.NoError(t, UpdateGroupRatioByJSONString(`{"premium":1}`))
+
+	err := CheckModelTieredRatios(`{"orphan":{"gpt-5":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.9}]}}}`)
+	assert.EqualError(t, err, `model tiered ratio group "orphan" is not configured in GroupRatio`)
+}
+
+func TestCheckGroupRatioRejectsRemovingGroupReferencedByTieredPolicy(t *testing.T) {
+	originalGroups := GroupRatio2JSONString()
+	originalTiered := ModelTieredRatios2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, UpdateGroupRatioByJSONString(originalGroups))
+		require.NoError(t, UpdateModelTieredRatiosByJSONString(originalTiered))
+	})
+
+	require.NoError(t, UpdateModelTieredRatiosByJSONString(`{}`))
+	require.NoError(t, UpdateGroupRatioByJSONString(`{"premium":1}`))
+	require.NoError(t, UpdateModelTieredRatiosByJSONString(`{"premium":{"gpt-5":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.9}]}}}`))
+
+	err := CheckGroupRatio(`{"default":1}`)
+	assert.EqualError(t, err, `model tiered ratio group "premium" is not configured in GroupRatio`)
+}
+
 func TestResolveModelTieredDiscountUsesWildcardButDefersToGroupGroupContract(t *testing.T) {
 	originalTiered := ModelTieredRatios2JSONString()
 	originalContracts := GroupGroupRatio2JSONString()

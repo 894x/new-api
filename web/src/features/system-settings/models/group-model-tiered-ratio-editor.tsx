@@ -51,6 +51,14 @@ import {
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { getEnabledModels } from '@/features/channels/api'
 import { COMMON_TIMEZONES } from '@/features/pricing/lib/billing-expr'
@@ -62,10 +70,10 @@ import type {
   GroupModelTieredRatios,
 } from '../types'
 import {
-  getUtf8ByteLength,
   getGroupModelTieredValidationMessage,
   getGroupModelTieredPolicyStatus,
-  GROUP_NAME_MAX_UTF8_BYTES,
+  getUnknownTieredRatioGroups,
+  getUtf8ByteLength,
   groupModelTieredRatiosSchema,
   hasDuplicateJsonObjectKey,
   MODEL_NAME_MAX_UTF8_BYTES,
@@ -411,9 +419,7 @@ function PolicyCard(props: PolicyCardProps) {
   const [tierIds, setTierIds] = useState(() =>
     props.policy.tiers.map((_, index) => `${inputId}-tier-${index}`)
   )
-  const [groupDraft, setGroupDraft] = useState(props.groupName)
   const [modelDraft, setModelDraft] = useState(props.modelName)
-  const [groupDraftError, setGroupDraftError] = useState('')
   const [modelDraftError, setModelDraftError] = useState('')
   const [startDraft, setStartDraft] = useState(() =>
     formatTimestampInTimezone(
@@ -436,15 +442,12 @@ function PolicyCard(props: PolicyCardProps) {
   const modelDraftErrorId = `${inputId}-model-error`
 
   const reportKeyErrors = (errors: { group: string; model: string }) => {
-    setGroupDraftError(errors.group)
     setModelDraftError(errors.model)
     onDraftErrorChange(keyDraftErrorKey, errors.group || errors.model || null)
   }
 
   useEffect(() => {
-    setGroupDraft(props.groupName)
     setModelDraft(props.modelName)
-    setGroupDraftError('')
     setModelDraftError('')
     onDraftErrorChange(keyDraftErrorKey, null)
   }, [keyDraftErrorKey, onDraftErrorChange, props.groupName, props.modelName])
@@ -566,12 +569,11 @@ function PolicyCard(props: PolicyCardProps) {
     let group = ''
     let model = ''
 
-    if (!normalizedGroup) {
-      group = t('Group name is required')
-    } else if (normalizedGroup === '__proto__') {
-      group = t('Group and model names cannot use __proto__')
-    } else if (getUtf8ByteLength(normalizedGroup) > GROUP_NAME_MAX_UTF8_BYTES) {
-      group = t('Group name must be at most 128 UTF-8 bytes')
+    if (!props.groupOptions.includes(normalizedGroup)) {
+      group = t(
+        'Tiered discount group "{{group}}" must exist in pricing groups',
+        { group: normalizedGroup }
+      )
     }
 
     if (!normalizedModel) {
@@ -601,9 +603,11 @@ function PolicyCard(props: PolicyCardProps) {
   }
 
   const commitKeyDrafts = () => {
-    const errors = validateKeyDrafts(groupDraft, modelDraft)
+    const errors = validateKeyDrafts(props.groupName, modelDraft)
     reportKeyErrors(errors)
-    if (!errors.group && !errors.model) renamePolicy(groupDraft, modelDraft)
+    if (!errors.group && !errors.model) {
+      renamePolicy(props.groupName, modelDraft)
+    }
   }
 
   const removePolicy = () => {
@@ -692,6 +696,15 @@ function PolicyCard(props: PolicyCardProps) {
     : t(
         'Thresholds use monthly original quota. A request crossing a threshold is split between tiers.'
       )
+  const groupReferenceError = props.groupOptions.includes(props.groupName)
+    ? ''
+    : t('Tiered discount group "{{group}}" must exist in pricing groups', {
+        group: props.groupName,
+      })
+  const groupItems = [
+    ...(groupReferenceError ? [props.groupName] : []),
+    ...props.groupOptions,
+  ].map((group) => ({ value: group, label: group }))
 
   return (
     <Card size='sm'>
@@ -737,45 +750,59 @@ function PolicyCard(props: PolicyCardProps) {
         )}
 
         <div className='grid gap-4 md:grid-cols-2'>
-          <div className='space-y-2'>
-            <Label htmlFor={`${inputId}-group`}>{t('Billing group')}</Label>
-            <Input
-              id={`${inputId}-group`}
-              list={`${inputId}-groups`}
-              value={groupDraft}
-              aria-invalid={groupDraftError !== ''}
-              aria-describedby={groupDraftError ? groupDraftErrorId : undefined}
-              onChange={(event) => {
-                const nextValue = event.target.value
-                setGroupDraft(nextValue)
-                reportKeyErrors(validateKeyDrafts(nextValue, modelDraft))
-              }}
-              onBlur={commitKeyDrafts}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') event.currentTarget.blur()
-                if (event.key === 'Escape') {
-                  setGroupDraft(props.groupName)
-                  reportKeyErrors(
-                    validateKeyDrafts(props.groupName, modelDraft)
-                  )
+          <Field data-invalid={groupReferenceError !== ''}>
+            <FieldLabel id={`${inputId}-group-label`}>
+              {t('Billing group')}
+            </FieldLabel>
+            <Select
+              items={groupItems}
+              value={props.groupName}
+              onValueChange={(nextGroup) => {
+                if (nextGroup === null || nextGroup === props.groupName) return
+                const errors = validateKeyDrafts(nextGroup, modelDraft)
+                reportKeyErrors(errors)
+                if (!errors.group && !errors.model) {
+                  renamePolicy(nextGroup, modelDraft)
                 }
               }}
-            />
-            <datalist id={`${inputId}-groups`}>
-              {props.groupOptions.map((group) => (
-                <option key={group} value={group} />
-              ))}
-            </datalist>
-            {groupDraftError && (
+            >
+              <SelectTrigger
+                className='w-full'
+                aria-labelledby={`${inputId}-group-label`}
+                aria-invalid={groupReferenceError !== ''}
+                aria-describedby={
+                  groupReferenceError ? groupDraftErrorId : undefined
+                }
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  {groupItems.map((group) => (
+                    <SelectItem
+                      key={group.value}
+                      value={group.value}
+                      disabled={
+                        groupReferenceError !== '' &&
+                        group.value === props.groupName
+                      }
+                    >
+                      {group.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            {groupReferenceError && (
               <p
                 id={groupDraftErrorId}
                 role='alert'
                 className='text-destructive text-sm'
               >
-                {groupDraftError}
+                {groupReferenceError}
               </p>
             )}
-          </div>
+          </Field>
 
           <div className='space-y-2'>
             <Label htmlFor={`${inputId}-model`}>{t('Origin model')}</Label>
@@ -788,7 +815,7 @@ function PolicyCard(props: PolicyCardProps) {
               onChange={(event) => {
                 const nextValue = event.target.value
                 setModelDraft(nextValue)
-                reportKeyErrors(validateKeyDrafts(groupDraft, nextValue))
+                reportKeyErrors(validateKeyDrafts(props.groupName, nextValue))
               }}
               onBlur={commitKeyDrafts}
               onKeyDown={(event) => {
@@ -796,7 +823,7 @@ function PolicyCard(props: PolicyCardProps) {
                 if (event.key === 'Escape') {
                   setModelDraft(props.modelName)
                   reportKeyErrors(
-                    validateKeyDrafts(groupDraft, props.modelName)
+                    validateKeyDrafts(props.groupName, props.modelName)
                   )
                 }
               }}
@@ -1203,6 +1230,11 @@ export const GroupModelTieredRatioEditor = memo(
       () => (config ? groupModelTieredRatiosSchema.safeParse(config) : null),
       [config]
     )
+    const unknownGroups = useMemo(
+      () =>
+        config ? getUnknownTieredRatioGroups(config, props.groupOptions) : [],
+      [config, props.groupOptions]
+    )
     const issues = useMemo(() => {
       const issueMap = new Map<string, string>()
       if (validation && !validation.success) {
@@ -1228,6 +1260,11 @@ export const GroupModelTieredRatioEditor = memo(
         getGroupModelTieredValidationMessage(
           validation.error.issues[0]?.message
         )
+      )
+    } else if (unknownGroups[0]) {
+      currentSchemaError = t(
+        'Tiered discount group "{{group}}" must exist in pricing groups',
+        { group: unknownGroups[0] }
       )
     }
     schemaError.current = currentSchemaError
@@ -1259,7 +1296,8 @@ export const GroupModelTieredRatioEditor = memo(
     }
 
     const addPolicy = () => {
-      const groupName = props.groupOptions[0] ?? 'default'
+      const groupName = props.groupOptions[0]
+      if (!groupName) return
       const groupConfig = Object.hasOwn(config, groupName)
         ? config[groupName]
         : {
@@ -1316,7 +1354,13 @@ export const GroupModelTieredRatioEditor = memo(
               )}
             </p>
           </div>
-          <Button type='button' variant='outline' size='sm' onClick={addPolicy}>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={addPolicy}
+            disabled={props.groupOptions.length === 0}
+          >
             <Plus className='mr-2 h-4 w-4' />
             {t('Add policy')}
           </Button>

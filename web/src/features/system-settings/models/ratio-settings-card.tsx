@@ -27,14 +27,16 @@ import * as z from 'zod'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-import { resetModelRatios } from '../api'
+import { resetModelRatios, updateGroupPricingOptions } from '../api'
 import { SettingsPageTitleStatusPortal } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { safeJsonParse } from '../utils/json-parser'
 import { positiveIntegerSchema } from '../utils/numeric-field'
 import { GroupRatioForm } from './group-ratio-form'
 import {
   formatGroupModelTieredRatiosForTextarea,
+  getUnknownTieredRatioGroups,
   normalizeGroupModelTieredRatiosJson,
   parseGroupModelTieredRatiosJson,
 } from './lib/group-model-tiered-ratio-schema'
@@ -126,30 +128,58 @@ const createModelSchema = (t: Translate) =>
   })
 
 const createGroupSchema = (t: Translate) =>
-  z.object({
-    GroupRatio: createJsonStringField(t),
-    TopupGroupRatio: createJsonStringField(t),
-    UserUsableGroups: createJsonStringField(t),
-    GroupGroupRatio: createJsonStringField(t),
-    AutoGroups: createJsonStringField(t, {
-      predicate: (parsed) =>
-        Array.isArray(parsed) &&
-        parsed.every((item) => typeof item === 'string'),
-      predicateMessage: 'Expected a JSON array of group identifiers',
-    }),
-    MaxTokenAutoGroups: positiveIntegerSchema(t('Enter a positive integer')),
-    DefaultUseAutoGroup: z.boolean(),
-    GroupSpecialUsableGroup: createJsonStringField(t),
-    ModelTieredRatios: z.string().superRefine((value, context) => {
-      const result = parseGroupModelTieredRatiosJson(value)
-      if (!result.success) {
-        context.addIssue({
-          code: 'custom',
-          message: t(result.error),
+  z
+    .object({
+      GroupRatio: createJsonStringField(t),
+      TopupGroupRatio: createJsonStringField(t),
+      UserUsableGroups: createJsonStringField(t),
+      GroupGroupRatio: createJsonStringField(t),
+      AutoGroups: createJsonStringField(t, {
+        predicate: (parsed) =>
+          Array.isArray(parsed) &&
+          parsed.every((item) => typeof item === 'string'),
+        predicateMessage: 'Expected a JSON array of group identifiers',
+      }),
+      MaxTokenAutoGroups: positiveIntegerSchema(t('Enter a positive integer')),
+      DefaultUseAutoGroup: z.boolean(),
+      GroupSpecialUsableGroup: createJsonStringField(t),
+      ModelTieredRatios: z.string().superRefine((value, context) => {
+        const result = parseGroupModelTieredRatiosJson(value)
+        if (!result.success) {
+          context.addIssue({
+            code: 'custom',
+            message: t(result.error),
+          })
+        }
+      }),
+    })
+    .superRefine((values, context) => {
+      const tieredRatios = parseGroupModelTieredRatiosJson(
+        values.ModelTieredRatios
+      )
+      if (!tieredRatios.success) return
+
+      const pricingGroups = Object.keys(
+        safeJsonParse<Record<string, number>>(values.GroupRatio, {
+          fallback: {},
+          silent: true,
         })
-      }
-    }),
-  })
+      )
+      const unknownGroup = getUnknownTieredRatioGroups(
+        tieredRatios.data,
+        pricingGroups
+      )[0]
+      if (!unknownGroup) return
+
+      context.addIssue({
+        code: 'custom',
+        path: ['ModelTieredRatios'],
+        message: t(
+          'Tiered discount group "{{group}}" must exist in pricing groups',
+          { group: unknownGroup }
+        ),
+      })
+    })
 
 type ModelFormValues = z.infer<ReturnType<typeof createModelSchema>>
 type GroupFormValues = z.infer<ReturnType<typeof createGroupSchema>>
@@ -178,6 +208,19 @@ export function RatioSettingsCard({
   const { t } = useTranslation()
   const updateOption = useUpdateOption({
     deferSystemOptionsInvalidation: true,
+  })
+  const updateGroupPricing = useMutation({
+    mutationFn: updateGroupPricingOptions,
+    onSuccess: (data) => {
+      if (data.success) {
+        toast.success(t('Setting updated successfully'))
+      } else {
+        toast.error(data.message || t('Failed to update setting'))
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t('Failed to update setting'))
+    },
   })
   const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -416,6 +459,30 @@ export function RatioSettingsCard({
         ModelTieredRatios: 'group_ratio_setting.model_tiered_ratios',
       }
 
+      const pricingPairChanged =
+        normalized.GroupRatio !== groupNormalizedDefaults.current.GroupRatio ||
+        normalized.ModelTieredRatios !==
+          groupNormalizedDefaults.current.ModelTieredRatios
+
+      if (pricingPairChanged) {
+        let response
+        try {
+          response = await updateGroupPricing.mutateAsync({
+            group_ratio: normalized.GroupRatio,
+            model_tiered_ratios: normalized.ModelTieredRatios,
+          })
+        } catch {
+          return
+        }
+        if (!response.success) return
+
+        groupNormalizedDefaults.current = {
+          ...groupNormalizedDefaults.current,
+          GroupRatio: normalized.GroupRatio,
+          ModelTieredRatios: normalized.ModelTieredRatios,
+        }
+      }
+
       const result = await saveChangedOptionFields({
         normalized,
         baseline: groupNormalizedDefaults.current,
@@ -425,11 +492,11 @@ export function RatioSettingsCard({
           groupNormalizedDefaults.current = nextBaseline
         },
       })
-      if (result.allSucceeded && result.hadChanges) {
+      if (result.allSucceeded && (pricingPairChanged || result.hadChanges)) {
         await queryClient.invalidateQueries({ queryKey: ['system-options'] })
       }
     },
-    [queryClient, updateOption]
+    [queryClient, updateGroupPricing, updateOption]
   )
 
   const handleResetRatios = useCallback(() => {
@@ -477,7 +544,7 @@ export function RatioSettingsCard({
         <GroupRatioForm
           form={groupForm}
           onSave={saveGroupRatios}
-          isSaving={updateOption.isPending}
+          isSaving={updateOption.isPending || updateGroupPricing.isPending}
         />
       )
     }

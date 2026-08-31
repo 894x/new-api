@@ -151,11 +151,14 @@ export const GroupRatioForm = memo(function GroupRatioForm({
   const watchedGroupRatio = form.watch('GroupRatio')
   const watchedUserUsableGroups = form.watch('UserUsableGroups')
   const watchedTopupGroupRatio = form.watch('TopupGroupRatio')
-  const groupNames = useMemo(() => {
+  const pricingGroupNames = useMemo(() => {
     const ratioMap = safeJsonParse<Record<string, number>>(watchedGroupRatio, {
       fallback: {},
       silent: true,
     })
+    return Object.keys(ratioMap)
+  }, [watchedGroupRatio])
+  const groupNames = useMemo(() => {
     const usableMap = safeJsonParse<Record<string, string>>(
       watchedUserUsableGroups,
       { fallback: {}, silent: true }
@@ -166,12 +169,12 @@ export const GroupRatioForm = memo(function GroupRatioForm({
     )
     return [
       ...new Set([
-        ...Object.keys(ratioMap),
+        ...pricingGroupNames,
         ...Object.keys(usableMap),
         ...Object.keys(topupMap),
       ]),
     ]
-  }, [watchedGroupRatio, watchedUserUsableGroups, watchedTopupGroupRatio])
+  }, [pricingGroupNames, watchedUserUsableGroups, watchedTopupGroupRatio])
 
   return (
     <div className='space-y-6'>
@@ -274,7 +277,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                 <FormItem data-invalid={fieldState.invalid}>
                   <GroupModelTieredRatioEditor
                     value={field.value}
-                    groupOptions={groupNames}
+                    groupOptions={pricingGroupNames}
                     onChange={field.onChange}
                     onValidationChange={handleTieredValidationChange}
                   />

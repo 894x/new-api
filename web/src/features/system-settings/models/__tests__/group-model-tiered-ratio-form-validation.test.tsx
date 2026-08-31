@@ -89,14 +89,17 @@ type FormHarnessProps = {
   actionsContainer: HTMLDivElement
   onSave: (values: GroupFormValues) => Promise<void>
   tieredRatios: string
+  groupRatio?: string
+  topupGroupRatio?: string
+  userUsableGroups?: string
 }
 
 function FormHarness(props: FormHarnessProps) {
   const form = useForm<GroupFormValues>({
     defaultValues: {
-      GroupRatio: '{"premium":1}',
-      TopupGroupRatio: '{}',
-      UserUsableGroups: '{}',
+      GroupRatio: props.groupRatio ?? '{"premium":1}',
+      TopupGroupRatio: props.topupGroupRatio ?? '{}',
+      UserUsableGroups: props.userUsableGroups ?? '{}',
       GroupGroupRatio: '{}',
       AutoGroups: '[]',
       MaxTokenAutoGroups: 5,
@@ -115,7 +118,11 @@ function FormHarness(props: FormHarnessProps) {
 
 function renderGroupRatioForm(
   onSave = vi.fn().mockResolvedValue(undefined),
-  tieredRatios = modelTieredRatios
+  tieredRatios = modelTieredRatios,
+  groups: Pick<
+    FormHarnessProps,
+    'groupRatio' | 'topupGroupRatio' | 'userUsableGroups'
+  > = {}
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -130,6 +137,7 @@ function renderGroupRatioForm(
         actionsContainer={actionsContainer}
         onSave={onSave}
         tieredRatios={tieredRatios}
+        {...groups}
       />
     </QueryClientProvider>
   )
@@ -154,6 +162,50 @@ describe('group ratio form tiered-policy draft validation', () => {
     expect(
       screen.getAllByText('Model name is required').length
     ).toBeGreaterThan(0)
+  })
+
+  test('does not save a tiered policy whose group is absent from GroupRatio', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    renderGroupRatioForm(
+      onSave,
+      modelTieredRatios.replaceAll('premium', 'orphan')
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+
+    expect(onSave).not.toHaveBeenCalled()
+    expect(
+      screen.getAllByText(
+        'Tiered discount group "orphan" must exist in pricing groups'
+      ).length
+    ).toBeGreaterThan(0)
+  })
+
+  test('offers only GroupRatio keys in the tiered-policy group select', async () => {
+    const user = userEvent.setup()
+    renderGroupRatioForm(
+      vi.fn().mockResolvedValue(undefined),
+      modelTieredRatios,
+      {
+        topupGroupRatio: '{"topup-only":1}',
+        userUsableGroups: '{"usable-only":"legacy"}',
+      }
+    )
+
+    await user.click(
+      screen.getByRole('combobox', {
+        name: 'Billing group',
+      })
+    )
+
+    expect(screen.getByRole('option', { name: 'premium' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('option', { name: 'topup-only' })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('option', { name: 'usable-only' })
+    ).not.toBeInTheDocument()
   })
 
   test('does not save while Effective start is an empty visual draft', async () => {

@@ -644,22 +644,65 @@ describe('group-model tiered ratio editor', () => {
     expect(result.default.models['*']).toBeUndefined()
   })
 
-  test('marks only an overlong group draft invalid and links its error message', () => {
-    renderEditor()
-    const groupInput = screen.getByLabelText('Billing group')
-    const modelInput = screen.getByLabelText('Origin model')
-    const groupAtLimit = `${'组'.repeat(42)}ab`
+  test('moves a policy only through the configured pricing-group select', async () => {
+    const user = userEvent.setup()
+    const onChange = renderEditor()
+    const groupSelect = screen.getByRole('combobox', {
+      name: 'Billing group',
+    })
 
-    fireEvent.change(groupInput, { target: { value: groupAtLimit } })
-    expect(groupInput).toHaveAttribute('aria-invalid', 'false')
+    await user.click(groupSelect)
+    await user.click(screen.getByRole('option', { name: 'default' }))
 
-    fireEvent.change(groupInput, { target: { value: `${groupAtLimit}c` } })
-    expect(groupInput).toHaveAttribute('aria-invalid', 'true')
-    expect(modelInput).toHaveAttribute('aria-invalid', 'false')
-    const errorId = groupInput.getAttribute('aria-describedby')
-    expect(errorId).toBeTruthy()
-    expect(document.querySelector(`#${errorId}`)).toHaveTextContent(
-      'Group name must be at most 128 UTF-8 bytes'
+    const result = JSON.parse(
+      onChange.mock.calls.at(-1)?.[0] as string
+    ) as CanonicalConfig<unknown>
+    expect(result.default.models['custom-model']).toBeDefined()
+    expect(result.premium).toBeUndefined()
+  })
+
+  test('moves a policy through the pricing-group select with the keyboard', async () => {
+    const user = userEvent.setup()
+    const onChange = renderEditor()
+    const groupSelect = screen.getByRole('combobox', {
+      name: 'Billing group',
+    })
+
+    groupSelect.focus()
+    await user.keyboard('{Enter}{Home}{Enter}')
+
+    const result = JSON.parse(
+      onChange.mock.calls.at(-1)?.[0] as string
+    ) as CanonicalConfig<unknown>
+    expect(result.default.models['custom-model']).toBeDefined()
+    expect(result.premium).toBeUndefined()
+  })
+
+  test('marks an existing policy invalid when its group is not a pricing group', async () => {
+    const user = userEvent.setup()
+    const onValidationChange = vi.fn()
+    renderEditor(vi.fn(), onValidationChange, {
+      groupOptions: ['default'],
+    })
+
+    const groupSelect = screen.getByRole('combobox', {
+      name: 'Billing group',
+    })
+    expect(groupSelect).toHaveAttribute('aria-invalid', 'true')
+    await user.click(groupSelect)
+    expect(screen.getByRole('option', { name: 'premium' })).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    )
+    expect(
+      screen.getByText(
+        'Tiered discount group "premium" must exist in pricing groups'
+      )
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(onValidationChange).toHaveBeenLastCalledWith(
+        'Tiered discount group "premium" must exist in pricing groups'
+      )
     )
   })
 
@@ -682,27 +725,24 @@ describe('group-model tiered ratio editor', () => {
     )
   })
 
-  test.each(['Billing group', 'Origin model'])(
-    'rejects an exact __proto__ %s draft before it can be serialized',
-    async (label) => {
-      const user = userEvent.setup()
-      const onChange = vi.fn()
-      renderEditor(onChange)
-      const input = screen.getByLabelText(label)
+  test('rejects an exact __proto__ model draft before it can be serialized', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    renderEditor(onChange)
+    const input = screen.getByLabelText('Origin model')
 
-      await user.clear(input)
-      await user.type(input, '__proto__')
-      await user.tab()
+    await user.clear(input)
+    await user.type(input, '__proto__')
+    await user.tab()
 
-      expect(input).toHaveAttribute('aria-invalid', 'true')
-      const errorId = input.getAttribute('aria-describedby')
-      expect(errorId).toBeTruthy()
-      expect(document.querySelector(`#${errorId}`)).toHaveTextContent(
-        'Group and model names cannot use __proto__'
-      )
-      expect(onChange).not.toHaveBeenCalled()
-    }
-  )
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    const errorId = input.getAttribute('aria-describedby')
+    expect(errorId).toBeTruthy()
+    expect(document.querySelector(`#${errorId}`)).toHaveTextContent(
+      'Group and model names cannot use __proto__'
+    )
+    expect(onChange).not.toHaveBeenCalled()
+  })
 
   test('marks an invalid threshold and exposes the validation message', async () => {
     const user = userEvent.setup()

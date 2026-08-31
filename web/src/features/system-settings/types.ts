@@ -56,6 +56,11 @@ export type UpdateOptionRequest = {
   value: string | boolean | number
 }
 
+export type UpdateGroupPricingOptionsRequest = {
+  group_ratio: string
+  model_tiered_ratios: string
+}
+
 export type UpdateOptionResponse = {
   success: boolean
   message: string
