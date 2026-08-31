@@ -94,21 +94,14 @@ func GetAllEnableAbilities() []Ability {
 }
 
 func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
-	return GetChannelWithFilters(group, model, retry, requestPath, "", nil)
+	return GetChannelWithSelectionFilters(group, model, retry, ChannelSelectionFilters{RequestPath: requestPath})
 }
 
 // GetChannelWithFilter selects a DB-backed channel from the supplied allowed
 // set. A nil set preserves the ordinary unconstrained selection behavior.
 func GetChannelWithFilter(group string, model string, retry int, requestPath string, allowedChannelIds map[int]struct{}) (*Channel, error) {
-	return GetChannelWithFilters(group, model, retry, requestPath, "", allowedChannelIds)
-}
-
-// GetChannelWithFilters selects a DB-backed channel after applying request
-// path, video resolution, and optional asset-replica constraints.
-func GetChannelWithFilters(group string, model string, retry int, requestPath string, videoResolution string, allowedChannelIds map[int]struct{}) (*Channel, error) {
 	return GetChannelWithSelectionFilters(group, model, retry, ChannelSelectionFilters{
 		RequestPath:       requestPath,
-		VideoResolution:   videoResolution,
 		AllowedChannelIds: allowedChannelIds,
 	})
 }
@@ -163,9 +156,6 @@ func GetChannelWithSelectionFilters(group string, model string, retry int, filte
 	if len(abilities) == 0 && selectionErr != nil {
 		return nil, selectionErr
 	}
-	if filters.VideoResolution != "" && pathEligibleCount > 0 && parameterCandidateCount == 0 {
-		return nil, newVideoResolutionUnsupportedError(model, filters.VideoResolution)
-	}
 	if firstParameterViolation != nil && parameterCandidateCount > 0 && len(abilities) == 0 {
 		return nil, newParameterCapabilityUnsupportedError(model, firstParameterViolation)
 	}
@@ -203,10 +193,10 @@ func GetChannelWithSelectionFilters(group string, model string, retry int, filte
 }
 
 // filterAbilitiesBySelectionFilters loads each candidate channel once, then
-// applies request path, video resolution, and parameter constraints before
+// applies request path and parameter constraints before
 // priority and weight selection.
 func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelectionFilters, model string) ([]Ability, int, int, error, error) {
-	if (filters.RequestPath == "" && filters.VideoResolution == "" && len(filters.RequestBody) == 0) || len(abilities) == 0 {
+	if (filters.RequestPath == "" && len(filters.RequestBody) == 0) || len(abilities) == 0 {
 		return abilities, len(abilities), len(abilities), nil, nil
 	}
 
@@ -225,16 +215,12 @@ func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelec
 	}
 	channelsByID := make(map[int]*Channel, len(channels))
 	advancedConfigs := make(map[int]*dto.AdvancedCustomConfig)
-	videoConfigs := make(map[int]*dto.VideoCapabilityConfig)
 	parameterConfigs := make(map[int]*dto.ParameterCapabilityConfig)
 	for _, channel := range channels {
 		channelsByID[channel.Id] = channel
 		settings := channel.GetOtherSettings()
 		if channel.Type == constant.ChannelTypeAdvancedCustom {
 			advancedConfigs[channel.Id] = settings.AdvancedCustom
-		}
-		if settings.VideoCapabilities != nil {
-			videoConfigs[channel.Id] = settings.VideoCapabilities
 		}
 		if settings.ParameterCapabilities != nil {
 			parameterConfigs[channel.Id] = settings.ParameterCapabilities
@@ -252,9 +238,6 @@ func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelec
 			continue
 		}
 		pathEligibleCount++
-		if !videoConfigs[ability.ChannelId].SupportsResolution(model, filters.VideoResolution) {
-			continue
-		}
 		parameterCandidateCount++
 		channel := channelsByID[ability.ChannelId]
 		if channel == nil {

@@ -10,7 +10,6 @@ const (
 
 	ContextKeyOriginalModel        ContextKey = "original_model"
 	ContextKeyRequestStartTime     ContextKey = "request_start_time"
-	ContextKeyVideoResolution      ContextKey = "video_resolution"
 	ContextKeySelectionRequestBody ContextKey = "selection_request_body"
 	ContextKeyResponseId           ContextKey = "response_id"
 

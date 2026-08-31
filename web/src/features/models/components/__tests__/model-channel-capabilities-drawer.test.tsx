@@ -99,8 +99,6 @@ function installCapabilityFixture(): void {
                 },
                 top_p: { supported: false, on_violation: 'drop' },
               },
-              video_capabilities_configured: true,
-              video_resolutions: ['720p', '1080p'],
               parameter_override_configured: true,
               parameter_override_mode: 'mixed',
               parameter_override_legacy: {
@@ -147,8 +145,6 @@ function installCapabilityFixture(): void {
               model_mapped: false,
               endpoint_types: ['openai'],
               parameter_capabilities_configured: false,
-              video_capabilities_configured: false,
-              video_resolutions: [],
               parameter_override_configured: false,
               parameter_override_mode: 'none',
               parameter_override_operations: [],
@@ -235,9 +231,7 @@ describe('model channel capabilities drawer', () => {
     expect(screen.getByText('openai-response')).toBeInTheDocument()
     expect(screen.getAllByText('temperature')).toHaveLength(2)
     expect(screen.getByText('top_p')).toBeInTheDocument()
-    expect(screen.getByText('720p')).toBeInTheDocument()
-    expect(screen.getByText('1080p')).toBeInTheDocument()
-    expect(screen.getAllByText('Not configured')).toHaveLength(3)
+    expect(screen.getAllByText('Not configured')).toHaveLength(2)
     expect(screen.getAllByText('Parameter override rules')).toHaveLength(2)
     expect(screen.getByText('Mixed')).toBeInTheDocument()
     expect(screen.getByText('Evaluated at request time')).toBeInTheDocument()

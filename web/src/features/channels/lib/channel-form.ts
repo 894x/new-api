@@ -246,10 +246,6 @@ export const channelFormSchema = z
       .string()
       .optional()
       .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
-    video_capabilities: z
-      .string()
-      .optional()
-      .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
     header_override: z
       .string()
       .optional()
@@ -459,7 +455,6 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   setting: '',
   param_override: '',
   parameter_capabilities: '',
-  video_capabilities: '',
   header_override: '',
   settings: '{}',
   other: '',
@@ -565,7 +560,6 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
   let parameterCapabilities = ''
-  let videoCapabilities = ''
 
   if (channel.settings) {
     try {
@@ -610,9 +604,6 @@ export function transformChannelToFormDefaults(
           2
         )
       }
-      if (parsed.video_capabilities) {
-        videoCapabilities = JSON.stringify(parsed.video_capabilities, null, 2)
-      }
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse channel settings:', error)
@@ -639,7 +630,6 @@ export function transformChannelToFormDefaults(
     setting: channel.setting || '',
     param_override: channel.param_override || '',
     parameter_capabilities: parameterCapabilities,
-    video_capabilities: videoCapabilities,
     header_override: channel.header_override || '',
     settings: channel.settings || '{}',
     other: channel.other || '',
@@ -859,12 +849,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   } else if ('parameter_capabilities' in settingsObj) {
     delete settingsObj.parameter_capabilities
   }
-
-  if (formData.video_capabilities?.trim()) {
-    settingsObj.video_capabilities = JSON.parse(formData.video_capabilities)
-  } else if ('video_capabilities' in settingsObj) {
-    delete settingsObj.video_capabilities
-  }
+  delete settingsObj.video_capabilities
 
   return JSON.stringify(settingsObj)
 }

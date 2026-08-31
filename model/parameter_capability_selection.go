@@ -12,7 +12,6 @@ var ErrParameterCapabilityUnsupported = errors.New("request parameters are not s
 
 type ChannelSelectionFilters struct {
 	RequestPath       string
-	VideoResolution   string
 	RequestBody       []byte
 	AllowedChannelIds map[int]struct{}
 }

@@ -42,7 +42,6 @@ import {
   Route,
   Settings,
   SlidersHorizontal,
-  Video,
   Wand2,
 } from 'lucide-react'
 import {
@@ -179,7 +178,6 @@ import {
   collectInvalidStatusCodeEntries,
   collectNewDisallowedStatusCodeRedirects,
 } from '../../lib/status-code-risk-guard'
-import { parseVideoCapabilityConfig } from '../../lib/video-capabilities'
 import type { Channel } from '../../types'
 import { useChannels } from '../channels-provider'
 import { AdvancedCustomEditorDialog } from '../dialogs/advanced-custom-editor-dialog'
@@ -191,7 +189,6 @@ import {
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { ParameterCapabilityEditorDialog } from '../dialogs/parameter-capability-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
-import { VideoCapabilityEditorDialog } from '../dialogs/video-capability-editor-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
 import { ModelRoutingOverridesEditor } from '../model-routing-overrides-editor'
 import {
@@ -289,7 +286,6 @@ const SENSITIVE_FORM_FIELDS = [
   'key_mode',
   'param_override',
   'parameter_capabilities',
-  'video_capabilities',
   'header_override',
   'settings',
   'setting',
@@ -670,8 +666,6 @@ export function ChannelMutateDrawer({
   const [paramOverrideEditorOpen, setParamOverrideEditorOpen] = useState(false)
   const [parameterCapabilityEditorOpen, setParameterCapabilityEditorOpen] =
     useState(false)
-  const [videoCapabilityEditorOpen, setVideoCapabilityEditorOpen] =
-    useState(false)
   const [advancedCustomEditorOpen, setAdvancedCustomEditorOpen] =
     useState(false)
   const [clipboardConnectionInfo, setClipboardConnectionInfo] =
@@ -774,7 +768,6 @@ export function ChannelMutateDrawer({
   const currentStatusCodeMapping = form.watch('status_code_mapping')
   const currentParamOverride = form.watch('param_override')
   const currentParameterCapabilities = form.watch('parameter_capabilities')
-  const currentVideoCapabilities = form.watch('video_capabilities')
   const currentHeaderOverride = form.watch('header_override')
   const currentForceFormat = form.watch('force_format')
   const currentThinkingToContent = form.watch('thinking_to_content')
@@ -970,19 +963,6 @@ export function ChannelMutateDrawer({
       overrideCount,
     }
   }, [currentParameterCapabilities])
-
-  const videoCapabilityStats = useMemo(() => {
-    const models =
-      parseVideoCapabilityConfig(currentVideoCapabilities || '').models || {}
-    return {
-      configured: Object.keys(models).length > 0,
-      modelCount: Object.keys(models).length,
-      resolutionCount: Object.values(models).reduce(
-        (count, capability) => count + (capability.resolutions || []).length,
-        0
-      ),
-    }
-  }, [currentVideoCapabilities])
 
   const currentTypeLabel = useMemo(
     () =>
@@ -1222,11 +1202,6 @@ export function ChannelMutateDrawer({
   const capabilityModelOptions = useMemo(
     () => [...new Set([...currentModelsArray, ...redirectModelList])],
     [currentModelsArray, redirectModelList]
-  )
-
-  const videoCapabilityModelOptions = useMemo(
-    () => [...new Set([...currentModelsArray, ...redirectModelKeyList])],
-    [currentModelsArray, redirectModelKeyList]
   )
 
   // Transform models to multi-select options
@@ -3648,75 +3623,6 @@ export function ChannelMutateDrawer({
                           <div className='border-border/60 rounded-lg border p-4'>
                             <FormField
                               control={form.control}
-                              name='video_capabilities'
-                              render={() => (
-                                <FormItem className='space-y-3'>
-                                  <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
-                                    <div className='space-y-1'>
-                                      <FormLabel>
-                                        {t('Video Resolution Capabilities')}
-                                      </FormLabel>
-                                      <FormDescription>
-                                        {t(
-                                          'Define the supported resolutions for each public video model on this channel.'
-                                        )}
-                                      </FormDescription>
-                                    </div>
-                                    <Button
-                                      type='button'
-                                      variant='outline'
-                                      size='sm'
-                                      onClick={() =>
-                                        setVideoCapabilityEditorOpen(true)
-                                      }
-                                      disabled={sensitiveLocked || isSubmitting}
-                                    >
-                                      <Video className='mr-2 h-4 w-4' />
-                                      {videoCapabilityStats.configured
-                                        ? t('Edit video capabilities')
-                                        : t('Configure video capabilities')}
-                                    </Button>
-                                  </div>
-                                  <div className='flex flex-wrap gap-2'>
-                                    {videoCapabilityStats.configured ? (
-                                      <>
-                                        <Badge variant='secondary'>
-                                          {t('{{count}} video model rule(s)', {
-                                            count:
-                                              videoCapabilityStats.modelCount,
-                                          })}
-                                        </Badge>
-                                        <Badge variant='outline'>
-                                          {t('{{count}} resolution(s)', {
-                                            count:
-                                              videoCapabilityStats.resolutionCount,
-                                          })}
-                                        </Badge>
-                                      </>
-                                    ) : (
-                                      <span className='text-muted-foreground text-sm'>
-                                        {t(
-                                          'No video resolution limits configured. Video routing keeps the legacy wildcard behavior.'
-                                        )}
-                                      </span>
-                                    )}
-                                  </div>
-                                  {sensitiveLocked && (
-                                    <FormDescription>
-                                      {t(
-                                        'No permission to perform this action'
-                                      )}
-                                    </FormDescription>
-                                  )}
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-                          </div>
-
-                          <div className='border-border/60 rounded-lg border p-4'>
-                            <FormField
-                              control={form.control}
                               name='parameter_capabilities'
                               render={() => (
                                 <FormItem className='space-y-3'>
@@ -5154,21 +5060,6 @@ export function ChannelMutateDrawer({
           </SheetFooter>
         </SheetContent>
       </Sheet>
-
-      {videoCapabilityEditorOpen && !sensitiveLocked && (
-        <VideoCapabilityEditorDialog
-          open={videoCapabilityEditorOpen}
-          value={form.watch('video_capabilities') || ''}
-          models={videoCapabilityModelOptions}
-          onOpenChange={setVideoCapabilityEditorOpen}
-          onSave={(nextValue) => {
-            form.setValue('video_capabilities', nextValue, {
-              shouldDirty: true,
-              shouldValidate: true,
-            })
-          }}
-        />
-      )}
 
       {parameterCapabilityEditorOpen && !sensitiveLocked && (
         <ParameterCapabilityEditorDialog

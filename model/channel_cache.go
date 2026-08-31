@@ -26,7 +26,6 @@ var channelsIDM map[int]*Channel                                      // all cha
 // channel2advancedCustomConfig caches parsed Advanced Custom (type 58) configs so
 // path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
-var channel2videoCapabilityConfig map[int]*dto.VideoCapabilityConfig
 var channel2parameterCapabilityConfig map[int]*dto.ParameterCapabilityConfig
 var channelSyncLock sync.RWMutex
 
@@ -37,7 +36,6 @@ func InitChannelCache() {
 	}
 	newChannelId2channel := make(map[int]*Channel)
 	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
-	newChannel2videoCapabilityConfig := make(map[int]*dto.VideoCapabilityConfig)
 	newChannel2parameterCapabilityConfig := make(map[int]*dto.ParameterCapabilityConfig)
 	var channels []*Channel
 	if err := DB.Find(&channels).Error; err != nil {
@@ -50,9 +48,6 @@ func InitChannelCache() {
 			if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
 				newChannel2advancedCustomConfig[channel.Id] = config
 			}
-		}
-		if config := channel.GetOtherSettings().VideoCapabilities; config != nil {
-			newChannel2videoCapabilityConfig[channel.Id] = config
 		}
 		if config := channel.GetOtherSettings().ParameterCapabilities; config != nil {
 			newChannel2parameterCapabilityConfig[channel.Id] = config
@@ -116,7 +111,6 @@ func InitChannelCache() {
 	}
 	channelsIDM = newChannelId2channel
 	channel2advancedCustomConfig = newChannel2advancedCustomConfig
-	channel2videoCapabilityConfig = newChannel2videoCapabilityConfig
 	channel2parameterCapabilityConfig = newChannel2parameterCapabilityConfig
 	channelSyncLock.Unlock()
 	// Lock ordering: InvalidatePricingCache acquires updatePricingLock, and
@@ -136,21 +130,14 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
-	return GetRandomSatisfiedChannelWithFilters(group, model, retry, requestPath, "", nil)
+	return GetRandomSatisfiedChannelWithSelectionFilters(group, model, retry, ChannelSelectionFilters{RequestPath: requestPath})
 }
 
 // GetRandomSatisfiedChannelWithFilter selects a channel from the supplied
 // allowed set. A nil set preserves the ordinary unconstrained selection path.
 func GetRandomSatisfiedChannelWithFilter(group string, model string, retry int, requestPath string, allowedChannelIds map[int]struct{}) (*Channel, error) {
-	return GetRandomSatisfiedChannelWithFilters(group, model, retry, requestPath, "", allowedChannelIds)
-}
-
-// GetRandomSatisfiedChannelWithFilters selects a channel after applying request
-// path, video resolution, and optional asset-replica constraints.
-func GetRandomSatisfiedChannelWithFilters(group string, model string, retry int, requestPath string, videoResolution string, allowedChannelIds map[int]struct{}) (*Channel, error) {
 	return GetRandomSatisfiedChannelWithSelectionFilters(group, model, retry, ChannelSelectionFilters{
 		RequestPath:       requestPath,
-		VideoResolution:   videoResolution,
 		AllowedChannelIds: allowedChannelIds,
 	})
 }
@@ -166,23 +153,21 @@ func GetRandomSatisfiedChannelWithSelectionFilters(group string, model string, r
 
 	// First, try the exact model abilities. If all exact candidates fail request
 	// constraints, normalized-model abilities remain eligible as a fallback.
-	routings, resolutionCandidateCount, parameterCandidateCount, firstParameterViolation, selectionErr := filterCachedChannelSelectionCandidates(
+	routings, parameterCandidateCount, firstParameterViolation, selectionErr := filterCachedChannelSelectionCandidates(
 		group2model2channels[group][model], filters, model,
 	)
 	if len(routings) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		if normalizedModel != "" && normalizedModel != model {
-			var normalizedResolutionCandidateCount int
 			var normalizedParameterCandidateCount int
 			var normalizedViolation error
 			var normalizedErr error
-			routings, normalizedResolutionCandidateCount, normalizedParameterCandidateCount, normalizedViolation, normalizedErr = filterCachedChannelSelectionCandidates(
+			routings, normalizedParameterCandidateCount, normalizedViolation, normalizedErr = filterCachedChannelSelectionCandidates(
 				group2model2channels[group][normalizedModel], filters, model,
 			)
 			if selectionErr == nil {
 				selectionErr = normalizedErr
 			}
-			resolutionCandidateCount += normalizedResolutionCandidateCount
 			parameterCandidateCount += normalizedParameterCandidateCount
 			if firstParameterViolation == nil {
 				firstParameterViolation = normalizedViolation
@@ -191,9 +176,6 @@ func GetRandomSatisfiedChannelWithSelectionFilters(group string, model string, r
 	}
 	if len(routings) == 0 && selectionErr != nil {
 		return nil, selectionErr
-	}
-	if len(routings) == 0 && filters.VideoResolution != "" && resolutionCandidateCount > 0 && parameterCandidateCount == 0 {
-		return nil, newVideoResolutionUnsupportedError(model, filters.VideoResolution)
 	}
 	if len(routings) == 0 && firstParameterViolation != nil && parameterCandidateCount > 0 {
 		return nil, newParameterCapabilityUnsupportedError(model, firstParameterViolation)
@@ -254,14 +236,12 @@ func GetRandomSatisfiedChannelWithSelectionFilters(group string, model string, r
 	return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
 }
 
-func filterCachedChannelSelectionCandidates(routings []cachedChannelRouting, filters ChannelSelectionFilters, requestModel string) ([]cachedChannelRouting, int, int, error, error) {
+func filterCachedChannelSelectionCandidates(routings []cachedChannelRouting, filters ChannelSelectionFilters, requestModel string) ([]cachedChannelRouting, int, error, error) {
 	routings = filterChannelsByRequestPathAndModel(routings, filters.RequestPath, requestModel)
 	routings = filterChannelRoutingsByAllowedIds(routings, filters.AllowedChannelIds)
-	resolutionCandidateCount := len(routings)
-	routings = filterChannelRoutingsByVideoResolution(routings, channel2videoCapabilityConfig, requestModel, filters.VideoResolution)
 	parameterCandidateCount := len(routings)
 	filtered, firstViolation, err := filterChannelRoutingsBySelectionParameters(routings, channel2parameterCapabilityConfig, channelsIDM, requestModel, filters.RequestBody)
-	return filtered, resolutionCandidateCount, parameterCandidateCount, firstViolation, err
+	return filtered, parameterCandidateCount, firstViolation, err
 }
 
 func filterChannelRoutingsBySelectionParameters(routings []cachedChannelRouting, configs map[int]*dto.ParameterCapabilityConfig, channels map[int]*Channel, requestModel string, requestBody []byte) ([]cachedChannelRouting, error, error) {
@@ -305,19 +285,6 @@ func filterChannelRoutingsByAllowedIds(routings []cachedChannelRouting, allowedC
 	filtered := make([]cachedChannelRouting, 0, len(routings))
 	for _, routing := range routings {
 		if _, ok := allowedChannelIds[routing.ChannelId]; ok {
-			filtered = append(filtered, routing)
-		}
-	}
-	return filtered
-}
-
-func filterChannelRoutingsByVideoResolution(routings []cachedChannelRouting, configs map[int]*dto.VideoCapabilityConfig, model string, resolution string) []cachedChannelRouting {
-	if resolution == "" || len(routings) == 0 {
-		return routings
-	}
-	filtered := make([]cachedChannelRouting, 0, len(routings))
-	for _, routing := range routings {
-		if configs[routing.ChannelId].SupportsResolution(model, resolution) {
 			filtered = append(filtered, routing)
 		}
 	}
@@ -429,9 +396,6 @@ func CacheUpdateChannel(channel *Channel) {
 	if channel2advancedCustomConfig == nil {
 		channel2advancedCustomConfig = make(map[int]*dto.AdvancedCustomConfig)
 	}
-	if channel2videoCapabilityConfig == nil {
-		channel2videoCapabilityConfig = make(map[int]*dto.VideoCapabilityConfig)
-	}
 	if channel2parameterCapabilityConfig == nil {
 		channel2parameterCapabilityConfig = make(map[int]*dto.ParameterCapabilityConfig)
 	}
@@ -440,10 +404,6 @@ func CacheUpdateChannel(channel *Channel) {
 		if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
 			channel2advancedCustomConfig[channel.Id] = config
 		}
-	}
-	delete(channel2videoCapabilityConfig, channel.Id)
-	if config := channel.GetOtherSettings().VideoCapabilities; config != nil {
-		channel2videoCapabilityConfig[channel.Id] = config
 	}
 	delete(channel2parameterCapabilityConfig, channel.Id)
 	if config := channel.GetOtherSettings().ParameterCapabilities; config != nil {

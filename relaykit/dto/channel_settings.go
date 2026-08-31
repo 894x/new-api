@@ -97,7 +97,6 @@ type ChannelOtherSettings struct {
 	UpstreamModelUpdateIgnoredModels      []string                   `json:"upstream_model_update_ignored_models,omitempty"`       // 手动忽略的模型
 	AdvancedCustom                        *AdvancedCustomConfig      `json:"advanced_custom,omitempty"`
 	ParameterCapabilities                 *ParameterCapabilityConfig `json:"parameter_capabilities,omitempty"`
-	VideoCapabilities                     *VideoCapabilityConfig     `json:"video_capabilities,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {

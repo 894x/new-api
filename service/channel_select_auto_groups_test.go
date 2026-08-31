@@ -66,12 +66,15 @@ func setupChannelSelectAutoGroupsTest(t *testing.T) *gorm.DB {
 	return db
 }
 
-func setChannelSelectVideoResolutions(t *testing.T, db *gorm.DB, channelID int, modelName string, resolutions ...string) {
+func setChannelSelectResolutionParameters(t *testing.T, db *gorm.DB, channelID int, resolutions ...string) {
 	t.Helper()
 	var channel model.Channel
 	require.NoError(t, db.First(&channel, "id = ?", channelID).Error)
-	channel.SetOtherSettings(dto.ChannelOtherSettings{VideoCapabilities: &dto.VideoCapabilityConfig{
-		Models: map[string]dto.VideoModelCapability{modelName: {Resolutions: resolutions}},
+	participates := true
+	channel.SetOtherSettings(dto.ChannelOtherSettings{ParameterCapabilities: &dto.ParameterCapabilityConfig{
+		Defaults: map[string]dto.ParameterCapability{
+			"metadata.resolution": {AllowedValues: resolutions, ParticipateInSelection: &participates},
+		},
 	}})
 	require.NoError(t, db.Model(&channel).Update("settings", channel.OtherSettings).Error)
 }
@@ -166,13 +169,13 @@ func TestCacheGetRandomSatisfiedChannelKeepsAssetConstraintAcrossAutoGroups(t *t
 	assert.Equal(t, "default", selectedGroup)
 }
 
-func TestCacheGetRandomSatisfiedChannelSkipsAutoGroupWithUnsupportedVideoResolution(t *testing.T) {
+func TestCacheGetRandomSatisfiedChannelSkipsAutoGroupWithUnsupportedResolutionParameter(t *testing.T) {
 	db := setupChannelSelectAutoGroupsTest(t)
 	const modelName = "auto-groups-video-model"
 	createChannelSelectAutoGroupsChannel(t, db, 2201, "vip", modelName)
 	createChannelSelectAutoGroupsChannel(t, db, 2202, "default", modelName)
-	setChannelSelectVideoResolutions(t, db, 2201, modelName, "720p")
-	setChannelSelectVideoResolutions(t, db, 2202, modelName, "1080p")
+	setChannelSelectResolutionParameters(t, db, 2201, "720p")
+	setChannelSelectResolutionParameters(t, db, 2202, "1080p")
 	model.InitChannelCache()
 
 	gin.SetMode(gin.TestMode)
@@ -182,12 +185,12 @@ func TestCacheGetRandomSatisfiedChannelSkipsAutoGroupWithUnsupportedVideoResolut
 
 	retry := 0
 	selected, selectedGroup, err := CacheGetRandomSatisfiedChannel(&RetryParam{
-		Ctx:             ctx,
-		TokenGroup:      "auto",
-		ModelName:       modelName,
-		RequestPath:     "/v1/video/generations",
-		VideoResolution: "1080p",
-		Retry:           &retry,
+		Ctx:         ctx,
+		TokenGroup:  "auto",
+		ModelName:   modelName,
+		RequestPath: "/v1/video/generations",
+		RequestBody: []byte(`{"metadata":{"resolution":"1080p"}}`),
+		Retry:       &retry,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, selected)
@@ -195,13 +198,13 @@ func TestCacheGetRandomSatisfiedChannelSkipsAutoGroupWithUnsupportedVideoResolut
 	assert.Equal(t, "default", selectedGroup)
 }
 
-func TestCacheGetRandomSatisfiedChannelReportsUnsupportedResolutionAcrossAutoGroups(t *testing.T) {
+func TestCacheGetRandomSatisfiedChannelReportsUnsupportedResolutionParameterAcrossAutoGroups(t *testing.T) {
 	db := setupChannelSelectAutoGroupsTest(t)
 	const modelName = "auto-groups-video-model"
 	createChannelSelectAutoGroupsChannel(t, db, 2301, "vip", modelName)
 	createChannelSelectAutoGroupsChannel(t, db, 2302, "default", modelName)
-	setChannelSelectVideoResolutions(t, db, 2301, modelName, "720p")
-	setChannelSelectVideoResolutions(t, db, 2302, modelName, "720p")
+	setChannelSelectResolutionParameters(t, db, 2301, "720p")
+	setChannelSelectResolutionParameters(t, db, 2302, "720p")
 	model.InitChannelCache()
 
 	gin.SetMode(gin.TestMode)
@@ -211,13 +214,13 @@ func TestCacheGetRandomSatisfiedChannelReportsUnsupportedResolutionAcrossAutoGro
 
 	retry := 0
 	selected, _, err := CacheGetRandomSatisfiedChannel(&RetryParam{
-		Ctx:             ctx,
-		TokenGroup:      "auto",
-		ModelName:       modelName,
-		RequestPath:     "/v1/video/generations",
-		VideoResolution: "1080p",
-		Retry:           &retry,
+		Ctx:         ctx,
+		TokenGroup:  "auto",
+		ModelName:   modelName,
+		RequestPath: "/v1/video/generations",
+		RequestBody: []byte(`{"metadata":{"resolution":"1080p"}}`),
+		Retry:       &retry,
 	})
 	assert.Nil(t, selected)
-	assert.True(t, errors.Is(err, model.ErrVideoResolutionUnsupported))
+	assert.True(t, errors.Is(err, model.ErrParameterCapabilityUnsupported))
 }

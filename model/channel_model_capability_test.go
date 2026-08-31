@@ -47,11 +47,6 @@ func TestListModelChannelCapabilitiesAggregatesEffectiveChannelConfiguration(t *
 				},
 			},
 		},
-		VideoCapabilities: &dto.VideoCapabilityConfig{
-			Models: map[string]dto.VideoModelCapability{
-				"public-model": {Resolutions: []string{"720p", "1080p"}},
-			},
-		},
 	})
 	require.NoError(t, DB.Create(channel).Error)
 	require.NoError(t, channel.AddAbilities(nil))
@@ -84,8 +79,6 @@ func TestListModelChannelCapabilitiesAggregatesEffectiveChannelConfiguration(t *
 	assert.Equal(t, 1.0, *capability.ParameterCapabilities["temperature"].Max)
 	require.Contains(t, capability.ParameterCapabilities, "top_p")
 	assert.False(t, *capability.ParameterCapabilities["top_p"].Supported)
-	assert.True(t, capability.VideoCapabilitiesConfigured)
-	assert.Equal(t, []string{"720p", "1080p"}, capability.VideoResolutions)
 	assert.True(t, capability.ParameterOverrideConfigured)
 	assert.Equal(t, "mixed", capability.ParameterOverrideMode)
 	assert.Equal(t, float64(0.2), capability.ParameterOverrideLegacy["temperature"])
@@ -131,7 +124,6 @@ func TestListModelChannelCapabilitiesReportsInvalidReadOnlyConfigurationWithoutP
 	assert.NotEmpty(t, result.Channels[0].ConfigurationError)
 	assert.Equal(t, []string{"openai"}, result.Channels[0].EndpointTypes)
 	assert.False(t, result.Channels[0].ParameterCapabilitiesConfigured)
-	assert.False(t, result.Channels[0].VideoCapabilitiesConfigured)
 	var persisted Channel
 	require.NoError(t, DB.First(&persisted, channel.Id).Error)
 	assert.Equal(t, invalidSettings, persisted.OtherSettings)

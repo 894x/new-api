@@ -365,7 +365,7 @@ function ChannelCapabilityCard(props: { channel: ModelChannelCapability }) {
 
       <Separator />
 
-      <div className='grid gap-4 lg:grid-cols-2'>
+      <div className='grid gap-4'>
         <div className='flex flex-col gap-2'>
           <p className='text-sm font-medium'>{t('Parameter capabilities')}</p>
           {props.channel.parameter_capabilities_configured ? (
@@ -377,23 +377,6 @@ function ChannelCapabilityCard(props: { channel: ModelChannelCapability }) {
                     <CapabilityValue capability={capability} />
                   </p>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <p className='text-muted-foreground text-sm'>
-              {t('Not configured')}
-            </p>
-          )}
-        </div>
-
-        <div className='flex flex-col gap-2'>
-          <p className='text-sm font-medium'>{t('Video capabilities')}</p>
-          {props.channel.video_capabilities_configured ? (
-            <div className='flex flex-wrap gap-2'>
-              {props.channel.video_resolutions.map((resolution) => (
-                <Badge key={resolution} variant='outline'>
-                  {resolution}
-                </Badge>
               ))}
             </div>
           ) : (

@@ -31,7 +31,6 @@ func TestGetRandomSatisfiedChannelFiltersParameterCapabilitiesBeforePriority(t *
 	originalGroups := group2model2channels
 	originalChannels := channelsIDM
 	originalAdvanced := channel2advancedCustomConfig
-	originalVideo := channel2videoCapabilityConfig
 	originalParameter := channel2parameterCapabilityConfig
 	group2model2channels = map[string]map[string][]cachedChannelRouting{
 		"default": {"vision-model": {
@@ -41,7 +40,6 @@ func TestGetRandomSatisfiedChannelFiltersParameterCapabilitiesBeforePriority(t *
 	}
 	channelsIDM = map[int]*Channel{731: highPriority, 732: lowPriority}
 	channel2advancedCustomConfig = map[int]*dto.AdvancedCustomConfig{}
-	channel2videoCapabilityConfig = map[int]*dto.VideoCapabilityConfig{}
 	channel2parameterCapabilityConfig = map[int]*dto.ParameterCapabilityConfig{
 		731: highPriority.GetOtherSettings().ParameterCapabilities,
 	}
@@ -51,7 +49,6 @@ func TestGetRandomSatisfiedChannelFiltersParameterCapabilitiesBeforePriority(t *
 		group2model2channels = originalGroups
 		channelsIDM = originalChannels
 		channel2advancedCustomConfig = originalAdvanced
-		channel2videoCapabilityConfig = originalVideo
 		channel2parameterCapabilityConfig = originalParameter
 		channelSyncLock.Unlock()
 		common.MemoryCacheEnabled = originalMemoryCacheEnabled
@@ -84,14 +81,12 @@ func TestGetRandomSatisfiedChannelReportsUnsupportedParameterCapability(t *testi
 	originalGroups := group2model2channels
 	originalChannels := channelsIDM
 	originalAdvanced := channel2advancedCustomConfig
-	originalVideo := channel2videoCapabilityConfig
 	originalParameter := channel2parameterCapabilityConfig
 	group2model2channels = map[string]map[string][]cachedChannelRouting{
 		"default": {"vision-model": {{ChannelId: 733}}},
 	}
 	channelsIDM = map[int]*Channel{733: channel}
 	channel2advancedCustomConfig = map[int]*dto.AdvancedCustomConfig{}
-	channel2videoCapabilityConfig = map[int]*dto.VideoCapabilityConfig{}
 	channel2parameterCapabilityConfig = map[int]*dto.ParameterCapabilityConfig{733: channel.GetOtherSettings().ParameterCapabilities}
 	channelSyncLock.Unlock()
 	t.Cleanup(func() {
@@ -99,7 +94,6 @@ func TestGetRandomSatisfiedChannelReportsUnsupportedParameterCapability(t *testi
 		group2model2channels = originalGroups
 		channelsIDM = originalChannels
 		channel2advancedCustomConfig = originalAdvanced
-		channel2videoCapabilityConfig = originalVideo
 		channel2parameterCapabilityConfig = originalParameter
 		channelSyncLock.Unlock()
 		common.MemoryCacheEnabled = originalMemoryCacheEnabled

@@ -76,8 +76,6 @@ export interface ModelChannelCapability {
   endpoint_types: string[]
   parameter_capabilities_configured: boolean
   parameter_capabilities?: Record<string, ModelParameterCapability>
-  video_capabilities_configured: boolean
-  video_resolutions: string[]
   parameter_override_configured: boolean
   parameter_override_mode: 'none' | 'legacy' | 'operations' | 'mixed'
   parameter_override_legacy?: Record<string, unknown>

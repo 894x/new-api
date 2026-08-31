@@ -47,8 +47,6 @@ type ModelChannelCapability struct {
 	EndpointTypes                   []string                                 `json:"endpoint_types"`
 	ParameterCapabilitiesConfigured bool                                     `json:"parameter_capabilities_configured"`
 	ParameterCapabilities           map[string]dto.ParameterCapability       `json:"parameter_capabilities,omitempty"`
-	VideoCapabilitiesConfigured     bool                                     `json:"video_capabilities_configured"`
-	VideoResolutions                []string                                 `json:"video_resolutions"`
 	ParameterOverrideConfigured     bool                                     `json:"parameter_override_configured"`
 	ParameterOverrideMode           string                                   `json:"parameter_override_mode"`
 	ParameterOverrideLegacy         map[string]any                           `json:"parameter_override_legacy,omitempty"`
@@ -246,7 +244,6 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 			Groups:                      groupsByChannel[channel.Id],
 			UpstreamModel:               modelName,
 			EndpointTypes:               make([]string, 0),
-			VideoResolutions:            make([]string, 0),
 			ParameterOverrideMode:       "none",
 			ParameterOverrideOperations: make([]ModelChannelParameterOverrideOperation, 0),
 		}
@@ -411,12 +408,6 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 		if settings.ParameterCapabilities != nil && mappingErr == nil {
 			capability.ParameterCapabilities = settings.ParameterCapabilities.Resolve(upstreamModel)
 			capability.ParameterCapabilitiesConfigured = len(capability.ParameterCapabilities) > 0
-		}
-		if settings.VideoCapabilities != nil {
-			if videoCapability, exists := settings.VideoCapabilities.Models[modelName]; exists {
-				capability.VideoCapabilitiesConfigured = true
-				capability.VideoResolutions = append(capability.VideoResolutions, videoCapability.Resolutions...)
-			}
 		}
 		capability.ConfigurationError = strings.Join(configurationErrors, "; ")
 		result.Channels = append(result.Channels, capability)

@@ -48,6 +48,26 @@ describe('channel form parameter capability persistence', () => {
     expect(settings.parameter_capabilities).toEqual(parameterCapabilities)
   })
 
+  it('removes obsolete video capability settings when saving a channel', () => {
+    const payload = transformFormDataToCreatePayload({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'Migrated capability channel',
+      key: 'test-key',
+      models: 'video-model',
+      disable_store: true,
+      settings: JSON.stringify({
+        disable_store: true,
+        video_capabilities: {
+          models: { 'video-model': { resolutions: ['1080p'] } },
+        },
+      }),
+    })
+
+    const settings = JSON.parse(payload.channel.settings || '{}')
+    expect(settings.disable_store).toBe(true)
+    expect(settings).not.toHaveProperty('video_capabilities')
+  })
+
   it('loads persisted capability configuration into the visual editor field', () => {
     const channel: Channel = {
       id: 1,

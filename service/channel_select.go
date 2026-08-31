@@ -11,12 +11,11 @@ import (
 )
 
 type RetryParam struct {
-	Ctx             *gin.Context
-	TokenGroup      string
-	ModelName       string
-	RequestPath     string
-	VideoResolution string
-	RequestBody     []byte
+	Ctx         *gin.Context
+	TokenGroup  string
+	ModelName   string
+	RequestPath string
+	RequestBody []byte
 
 	// AllowedChannelIds is nil for ordinary requests. A non-nil map restricts
 	// selection to channels that can resolve every local asset reference.
@@ -124,14 +123,13 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 
 			channel, err = model.GetRandomSatisfiedChannelWithSelectionFilters(autoGroup, param.ModelName, priorityRetry, model.ChannelSelectionFilters{
 				RequestPath:       param.RequestPath,
-				VideoResolution:   param.VideoResolution,
 				RequestBody:       param.RequestBody,
 				AllowedChannelIds: param.AllowedChannelIds,
 			})
-			if err != nil && !errors.Is(err, model.ErrVideoResolutionUnsupported) && !errors.Is(err, model.ErrParameterCapabilityUnsupported) {
+			if err != nil && !errors.Is(err, model.ErrParameterCapabilityUnsupported) {
 				return nil, autoGroup, err
 			}
-			if errors.Is(err, model.ErrVideoResolutionUnsupported) || errors.Is(err, model.ErrParameterCapabilityUnsupported) {
+			if errors.Is(err, model.ErrParameterCapabilityUnsupported) {
 				lastSelectionErr = err
 			}
 			if channel == nil {
@@ -176,7 +174,6 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	} else {
 		channel, err = model.GetRandomSatisfiedChannelWithSelectionFilters(param.TokenGroup, param.ModelName, param.GetRetry(), model.ChannelSelectionFilters{
 			RequestPath:       param.RequestPath,
-			VideoResolution:   param.VideoResolution,
 			RequestBody:       param.RequestBody,
 			AllowedChannelIds: param.AllowedChannelIds,
 		})
