@@ -101,6 +101,7 @@ export function GroupsTable() {
       enableCardView
       viewModeStorageKey='asset-library:groups:view-mode'
       renderCard={(row) => <GroupCard row={row} />}
+      cardGridClassName='grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,15rem),1fr))] sm:gap-3'
       toolbarProps={{
         searchPlaceholder: t('Filter asset groups by name...'),
         searchDebounceMs: 400,

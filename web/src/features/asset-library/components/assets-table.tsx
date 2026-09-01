@@ -137,6 +137,7 @@ export function AssetsTable() {
       renderCard={(row) => (
         <AssetCard row={row} group={groupsById.get(row.original.GroupId)} />
       )}
+      cardGridClassName='grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,15rem),1fr))] sm:gap-3'
       toolbarProps={{
         searchPlaceholder: t('Filter assets by name...'),
         searchDebounceMs: 400,

@@ -21,6 +21,7 @@ import { ExternalLink, Loader2, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { CopyButton } from '@/components/copy-button'
 import { Dialog } from '@/components/dialog'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
@@ -161,6 +162,7 @@ export function AssetPreviewDialog(props: {
       ),
   })
   const asset = replicaQuery.data?.asset || assetQuery.data || props.asset
+  const assetUri = asset ? `asset://${asset.Id}` : ''
   let previewContent = null
   if (assetQuery.isLoading && !asset) {
     previewContent = <Skeleton className='h-72 w-full rounded-lg' />
@@ -319,7 +321,21 @@ export function AssetPreviewDialog(props: {
       open={props.open}
       onOpenChange={props.onOpenChange}
       title={asset?.Name || t('Asset preview')}
-      description={asset ? `asset://${asset.Id}` : undefined}
+      description={
+        asset ? (
+          <CopyButton
+            value={assetUri}
+            size='sm'
+            className='-ml-2 max-w-full cursor-copy justify-start px-2 font-mono font-normal whitespace-normal'
+            iconClassName='size-3.5'
+            tooltip={t('Copy to clipboard')}
+            successTooltip={t('Copied!')}
+            aria-label={`${t('Copy to clipboard')}: ${assetUri}`}
+          >
+            <span className='text-left break-all'>{assetUri}</span>
+          </CopyButton>
+        ) : undefined
+      }
       contentClassName={canViewReplicas ? 'sm:max-w-6xl' : 'sm:max-w-3xl'}
       contentHeight='auto'
       footer={

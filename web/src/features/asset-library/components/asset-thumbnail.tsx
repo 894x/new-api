@@ -19,24 +19,40 @@ For commercial licensing, please contact support@quantumnous.com
 import { FileAudio, FileImage, FileVideo } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 import type { Asset } from '../types'
+import { useAssetLibrary } from './asset-library-provider'
 
-export function AssetThumbnail(props: { asset: Asset; className?: string }) {
+export function AssetThumbnail(props: {
+  asset: Asset
+  className?: string
+  buttonClassName?: string
+}) {
   const { t } = useTranslation()
+  const { openAssetDialog } = useAssetLibrary()
   const iconClassName = 'size-6 text-muted-foreground'
   if (props.asset.AssetType === 'Image' && props.asset.URL) {
     return (
-      <img
-        src={props.asset.URL}
-        alt={props.asset.Name || t('Asset preview')}
-        loading='lazy'
-        className={cn(
-          'size-12 rounded-md border object-cover',
-          props.className
-        )}
-      />
+      <Button
+        type='button'
+        variant='ghost'
+        className={cn('h-auto cursor-zoom-in p-0', props.buttonClassName)}
+        aria-label={`${t('Preview')}: ${props.asset.Name || t('Untitled asset')}`}
+        title={t('Preview')}
+        onClick={() => openAssetDialog('preview-asset', props.asset)}
+      >
+        <img
+          src={props.asset.URL}
+          alt={props.asset.Name || t('Asset preview')}
+          loading='lazy'
+          className={cn(
+            'size-12 rounded-md border object-cover transition-opacity group-hover/button:opacity-90',
+            props.className
+          )}
+        />
+      </Button>
     )
   }
 

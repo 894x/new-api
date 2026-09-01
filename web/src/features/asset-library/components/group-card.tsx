@@ -33,9 +33,9 @@ function GroupCardComponent(props: { row: Row<AssetGroup> }) {
   const group = props.row.original
 
   return (
-    <div className='flex min-w-0 flex-col gap-3'>
-      <div className='flex items-start gap-3'>
-        <span className='bg-muted/50 flex size-11 shrink-0 items-center justify-center rounded-lg border'>
+    <div className='flex min-w-0 flex-col gap-2.5'>
+      <div className='flex items-start gap-2.5'>
+        <span className='bg-muted/50 flex size-10 shrink-0 items-center justify-center rounded-lg border'>
           <FolderOpen
             className='text-muted-foreground size-5'
             aria-hidden='true'
@@ -51,7 +51,7 @@ function GroupCardComponent(props: { row: Row<AssetGroup> }) {
         <GroupRowActions row={props.row} />
       </div>
 
-      <p className='text-muted-foreground line-clamp-2 min-h-10 text-sm'>
+      <p className='text-muted-foreground line-clamp-1 text-sm'>
         {group.Description || t('No description')}
       </p>
 

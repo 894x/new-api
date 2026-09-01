@@ -35,10 +35,11 @@ function AssetCardComponent(props: { row: Row<Asset>; group?: AssetGroup }) {
 
   if (!asset.Replication) {
     return (
-      <div className='flex min-w-0 flex-col gap-3'>
+      <div className='flex min-w-0 flex-col gap-2.5'>
         <AssetThumbnail
           asset={asset}
           className='aspect-video h-auto w-full rounded-lg [&_svg]:size-12'
+          buttonClassName='w-full'
         />
 
         <div className='flex min-w-0 items-start gap-2'>
@@ -76,8 +77,8 @@ function AssetCardComponent(props: { row: Row<Asset>; group?: AssetGroup }) {
   }
 
   return (
-    <div className='flex min-w-0 flex-col gap-3'>
-      <div className='flex items-start gap-3'>
+    <div className='flex min-w-0 flex-col gap-2.5'>
+      <div className='flex items-start gap-2.5'>
         <AssetThumbnail asset={asset} className='size-16' />
         <div className='min-w-0 flex-1'>
           <p className='truncate font-medium'>
@@ -103,7 +104,7 @@ function AssetCardComponent(props: { row: Row<Asset>; group?: AssetGroup }) {
         <AssetRowActions row={props.row} />
       </div>
 
-      <div className='grid grid-cols-2 gap-3 text-sm'>
+      <div className='grid grid-cols-2 gap-2.5 text-sm'>
         <div className='min-w-0'>
           <p className='text-muted-foreground text-xs'>{t('Asset Group')}</p>
           <p className='truncate'>{props.group?.Name || asset.GroupId}</p>
