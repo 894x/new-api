@@ -460,6 +460,26 @@ const AUDIT_TEMPLATES: Record<string, string> = {
     'Applied upstream model changes to channel (ID: {{id}})',
   'channel.upstream_apply_all':
     'Applied upstream model changes to {{count}} channels',
+  'channel.asset_library.update':
+    'Updated asset library config for channel (ID: {{id}})',
+  'channel.asset_library.delete':
+    'Deleted asset library config for channel (ID: {{id}})',
+  'channel.asset_library.sync':
+    'Synchronized asset library replicas for channel (ID: {{id}})',
+  // Asset library
+  'asset_library.group.create': 'Created asset group {{name}} (ID: {{id}})',
+  'asset_library.group.update': 'Updated asset group {{name}} (ID: {{id}})',
+  'asset_library.group.delete': 'Deleted asset group {{name}} (ID: {{id}})',
+  'asset_library.asset.create':
+    'Created asset (ID: {{id}}, type: {{asset_type}}, group: {{group_id}})',
+  'asset_library.asset.update':
+    'Updated asset (ID: {{id}}, type: {{asset_type}}, group: {{group_id}})',
+  'asset_library.asset.delete':
+    'Deleted asset (ID: {{id}}, type: {{asset_type}}, group: {{group_id}})',
+  'asset_library.asset.sync':
+    'Synchronized asset {{id}} (errors: {{error_count}})',
+  'asset_library.group.sync':
+    'Synchronized asset group {{id}} (errors: {{error_count}})',
   // Redemption codes
   'redemption.create':
     'Created {{count}} redemption codes named {{name}} ({{quota}} each)',
@@ -508,4 +528,20 @@ export function renderAuditContent(
   const template = AUDIT_TEMPLATES[op.action]
   if (!template) return null
   return t(template, (op.params ?? {}) as Record<string, unknown>)
+}
+
+export function parseAuditChangedFields(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((field): field is string => typeof field === 'string')
+      .map((field) => field.trim())
+      .filter(Boolean)
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((field) => field.trim())
+      .filter(Boolean)
+  }
+  return []
 }

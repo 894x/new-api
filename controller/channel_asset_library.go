@@ -126,7 +126,7 @@ func UpdateChannelAssetLibraryConfig(c *gin.Context) {
 	}
 	recordManageAudit(c, "channel.asset_library.update", map[string]interface{}{
 		"id":             channelId,
-		"changed_fields": strings.Join(changedFields, ","),
+		"changed_fields": changedFields,
 	})
 	if config.Enabled {
 		common.RelayCtxGo(context.Background(), func() {

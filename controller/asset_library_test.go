@@ -26,22 +26,215 @@ func setupAssetLibraryControllerTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, db.AutoMigrate(
 		&model.User{},
 		&model.Channel{},
+		&model.Log{},
 		&model.ChannelAssetConfig{},
 		&model.UserAssetGroup{},
 		&model.UserAsset{},
 		&model.UserAssetGroupReplica{},
 		&model.UserAssetReplica{},
 	))
-	previousDB := model.DB
-	model.DB = db
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	previousRedisEnabled := common.RedisEnabled
+	model.DB, model.LOG_DB = db, db
+	common.MemoryCacheEnabled = false
+	common.RedisEnabled = false
 	t.Cleanup(func() {
-		model.DB = previousDB
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		common.RedisEnabled = previousRedisEnabled
 		sqlDB, err := db.DB()
 		if err == nil {
 			require.NoError(t, sqlDB.Close())
 		}
 	})
 	return db
+}
+
+func TestAssetLibraryMutationsRecordStructuredAudit(t *testing.T) {
+	const (
+		userId  = 1
+		groupId = "group-na-0123456789abcdef0123456789abcdef"
+		assetId = "asset-na-0123456789abcdef0123456789abcdef"
+	)
+
+	testCases := []struct {
+		name           string
+		action         string
+		body           string
+		expectedAction string
+		expectedParams map[string]interface{}
+		arrange        func(t *testing.T, db *gorm.DB)
+	}{
+		{
+			name:           "create asset group",
+			action:         "CreateAssetGroup",
+			body:           `{"Name":"characters"}`,
+			expectedAction: "asset_library.group.create",
+			expectedParams: map[string]interface{}{"name": "characters", "group_type": "AIGC"},
+		},
+		{
+			name:           "create asset",
+			action:         "CreateAsset",
+			body:           `{"GroupId":"` + groupId + `","URL":"https://signed.example.com/portrait.png?token=secret","AssetType":"Image","Name":"portrait"}`,
+			expectedAction: "asset_library.asset.create",
+			expectedParams: map[string]interface{}{"name": "portrait", "group_id": groupId, "asset_type": "Image"},
+			arrange: func(t *testing.T, db *gorm.DB) {
+				require.NoError(t, db.Create(&model.UserAssetGroup{
+					Id: groupId, UserId: userId, Name: "characters", GroupType: "AIGC", ProjectName: "default",
+				}).Error)
+			},
+		},
+		{
+			name:           "update asset group",
+			action:         "UpdateAssetGroup",
+			body:           `{"Id":"` + groupId + `","Name":"updated characters"}`,
+			expectedAction: "asset_library.group.update",
+			expectedParams: map[string]interface{}{"id": groupId, "name": "updated characters", "group_type": "AIGC"},
+			arrange: func(t *testing.T, db *gorm.DB) {
+				require.NoError(t, db.Create(&model.UserAssetGroup{
+					Id: groupId, UserId: userId, Name: "characters", GroupType: "AIGC", ProjectName: "default",
+				}).Error)
+			},
+		},
+		{
+			name:           "update asset",
+			action:         "UpdateAsset",
+			body:           `{"Id":"` + assetId + `","Name":"updated portrait"}`,
+			expectedAction: "asset_library.asset.update",
+			expectedParams: map[string]interface{}{"id": assetId, "name": "updated portrait", "group_id": groupId, "asset_type": "Image"},
+			arrange: func(t *testing.T, db *gorm.DB) {
+				require.NoError(t, db.Create(&model.UserAssetGroup{
+					Id: groupId, UserId: userId, Name: "characters", GroupType: "AIGC", ProjectName: "default",
+				}).Error)
+				require.NoError(t, db.Create(&model.UserAsset{
+					Id: assetId, UserId: userId, GroupId: groupId, Name: "portrait",
+					SourceURL: "https://signed.example.com/portrait.png?token=secret", AssetType: "Image", ProjectName: "default",
+				}).Error)
+			},
+		},
+		{
+			name:           "delete asset",
+			action:         "DeleteAsset",
+			body:           `{"Id":"` + assetId + `"}`,
+			expectedAction: "asset_library.asset.delete",
+			expectedParams: map[string]interface{}{"id": assetId, "name": "portrait", "group_id": groupId, "asset_type": "Image"},
+			arrange: func(t *testing.T, db *gorm.DB) {
+				require.NoError(t, db.Create(&model.UserAssetGroup{
+					Id: groupId, UserId: userId, Name: "characters", GroupType: "AIGC", ProjectName: "default",
+				}).Error)
+				require.NoError(t, db.Create(&model.UserAsset{
+					Id: assetId, UserId: userId, GroupId: groupId, Name: "portrait",
+					SourceURL: "https://signed.example.com/portrait.png?token=secret", AssetType: "Image", ProjectName: "default",
+				}).Error)
+			},
+		},
+		{
+			name:           "delete asset group",
+			action:         "DeleteAssetGroup",
+			body:           `{"Id":"` + groupId + `"}`,
+			expectedAction: "asset_library.group.delete",
+			expectedParams: map[string]interface{}{"id": groupId, "name": "characters", "group_type": "AIGC"},
+			arrange: func(t *testing.T, db *gorm.DB) {
+				require.NoError(t, db.Create(&model.UserAssetGroup{
+					Id: groupId, UserId: userId, Name: "characters", GroupType: "AIGC", ProjectName: "default",
+				}).Error)
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := setupAssetLibraryControllerTestDB(t)
+			require.NoError(t, db.Create(&model.User{
+				Id: userId, Username: "asset-owner", Password: "password", Role: common.RoleCommonUser, AffCode: "asset-owner-aff",
+			}).Error)
+			if testCase.arrange != nil {
+				testCase.arrange(t, db)
+			}
+
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(http.MethodPost,
+				"/api/asset-library?Action="+testCase.action+"&Version=2024-01-01",
+				bytes.NewBufferString(testCase.body),
+			)
+			context.Set("id", userId)
+
+			AssetLibraryAction(context)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var logs []model.Log
+			require.NoError(t, db.Where("user_id = ? AND type = ?", userId, model.LogTypeManage).Find(&logs).Error)
+			require.Len(t, logs, 1)
+			assert.Equal(t, "asset-owner", logs[0].Username)
+			assert.NotEmpty(t, logs[0].RequestId)
+			assert.Empty(t, logs[0].ModelName)
+			assert.Empty(t, logs[0].TokenName)
+			assert.Zero(t, logs[0].ChannelId)
+			assert.Zero(t, logs[0].Quota)
+			assert.Zero(t, logs[0].PromptTokens)
+			assert.Zero(t, logs[0].CompletionTokens)
+			assert.False(t, logs[0].IsStream)
+			assert.NotContains(t, logs[0].Content, "signed.example.com")
+			assert.NotContains(t, logs[0].Other, "signed.example.com")
+			assert.NotContains(t, logs[0].Other, "secret")
+
+			var other map[string]interface{}
+			require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
+			assert.NotContains(t, other, "admin_info")
+			op, ok := other["op"].(map[string]interface{})
+			require.True(t, ok)
+			assert.Equal(t, testCase.expectedAction, op["action"])
+			params, ok := op["params"].(map[string]interface{})
+			require.True(t, ok)
+			expectedParamCount := len(testCase.expectedParams)
+			if _, hasFixedId := testCase.expectedParams["id"]; !hasFixedId {
+				expectedParamCount++
+			}
+			assert.Len(t, params, expectedParamCount)
+			for key, value := range testCase.expectedParams {
+				assert.Equal(t, value, params[key])
+			}
+			if _, hasFixedId := testCase.expectedParams["id"]; !hasFixedId {
+				var response struct {
+					Result assetLibraryMutationResult `json:"Result"`
+				}
+				require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+				assert.Equal(t, response.Result.Id, params["id"])
+			}
+		})
+	}
+}
+
+func TestAssetLibraryCreateAuditSurvivesReplicationFailure(t *testing.T) {
+	const userId = 1
+	db := setupAssetLibraryControllerTestDB(t)
+	require.NoError(t, db.Create(&model.User{
+		Id: userId, Username: "asset-owner", Password: "password", Role: common.RoleCommonUser, AffCode: "asset-owner-aff",
+	}).Error)
+	require.NoError(t, db.Migrator().DropTable(&model.ChannelAssetConfig{}))
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost,
+		"/api/asset-library?Action=CreateAssetGroup&Version=2024-01-01",
+		bytes.NewBufferString(`{"Name":"characters"}`),
+	)
+	context.Set("id", userId)
+
+	AssetLibraryAction(context)
+
+	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
+	var groups []model.UserAssetGroup
+	require.NoError(t, db.Where("user_id = ?", userId).Find(&groups).Error)
+	require.Len(t, groups, 1)
+	assert.Equal(t, "characters", groups[0].Name)
+
+	var logs []model.Log
+	require.NoError(t, db.Where("user_id = ? AND type = ?", userId, model.LogTypeManage).Find(&logs).Error)
+	require.Len(t, logs, 1)
+	assert.Contains(t, logs[0].Content, groups[0].Id)
 }
 
 func TestAssetLibraryActionRejectsUnsupportedVersionWithOfficialEnvelope(t *testing.T) {

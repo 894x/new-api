@@ -117,6 +117,11 @@ func createAssetLibraryGroup(c *gin.Context, userId int, includeReplication bool
 		writeAssetLibraryInternalError(c, "CreateAssetGroup", err)
 		return
 	}
+	recordAssetLibraryAudit(c, userId, "asset_library.group.create", map[string]interface{}{
+		"id":         group.Id,
+		"name":       group.Name,
+		"group_type": group.GroupType,
+	})
 	report, err := service.ReplicateAssetGroup(c.Request.Context(), group)
 	if err != nil {
 		writeAssetLibraryInternalError(c, "CreateAssetGroup", err)
@@ -175,6 +180,12 @@ func createAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool
 		writeAssetLibraryInternalError(c, "CreateAsset", err)
 		return
 	}
+	recordAssetLibraryAudit(c, userId, "asset_library.asset.create", map[string]interface{}{
+		"id":         asset.Id,
+		"name":       asset.Name,
+		"group_id":   asset.GroupId,
+		"asset_type": asset.AssetType,
+	})
 	report, err := service.ReplicateAsset(c.Request.Context(), asset)
 	if err != nil {
 		writeAssetLibraryInternalError(c, "CreateAsset", err)
@@ -358,6 +369,11 @@ func updateAssetLibraryGroup(c *gin.Context, userId int, includeReplication bool
 		writeAssetLibraryInternalError(c, "UpdateAssetGroup", err)
 		return
 	}
+	recordAssetLibraryAudit(c, userId, "asset_library.group.update", map[string]interface{}{
+		"id":         group.Id,
+		"name":       group.Name,
+		"group_type": group.GroupType,
+	})
 	report, err := service.UpdateAssetGroupReplicas(c.Request.Context(), group)
 	if err != nil {
 		writeAssetLibraryInternalError(c, "UpdateAssetGroup", err)
@@ -394,6 +410,12 @@ func updateAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool
 		writeAssetLibraryInternalError(c, "UpdateAsset", err)
 		return
 	}
+	recordAssetLibraryAudit(c, userId, "asset_library.asset.update", map[string]interface{}{
+		"id":         asset.Id,
+		"name":       asset.Name,
+		"group_id":   asset.GroupId,
+		"asset_type": asset.AssetType,
+	})
 	report, err := service.UpdateAssetReplicas(c.Request.Context(), asset)
 	if err != nil {
 		writeAssetLibraryInternalError(c, "UpdateAsset", err)
@@ -429,6 +451,12 @@ func deleteAssetLibraryAsset(c *gin.Context, userId int) {
 		writeAssetLibraryInternalError(c, "DeleteAsset", err)
 		return
 	}
+	recordAssetLibraryAudit(c, userId, "asset_library.asset.delete", map[string]interface{}{
+		"id":         asset.Id,
+		"name":       asset.Name,
+		"group_id":   asset.GroupId,
+		"asset_type": asset.AssetType,
+	})
 	writeAssetLibrarySuccess(c, "DeleteAsset", gin.H{})
 }
 
@@ -464,7 +492,16 @@ func deleteAssetLibraryGroup(c *gin.Context, userId int) {
 		writeAssetLibraryInternalError(c, "DeleteAssetGroup", err)
 		return
 	}
+	recordAssetLibraryAudit(c, userId, "asset_library.group.delete", map[string]interface{}{
+		"id":         group.Id,
+		"name":       group.Name,
+		"group_type": group.GroupType,
+	})
 	writeAssetLibrarySuccess(c, "DeleteAssetGroup", gin.H{})
+}
+
+func recordAssetLibraryAudit(c *gin.Context, userId int, action string, params map[string]interface{}) {
+	model.RecordOperationAuditLog(userId, auditContentEN(action, params), c.ClientIP(), action, params, nil, nil)
 }
 
 func buildAssetLibraryGroupResult(group *model.UserAssetGroup, includeReplication bool) (dto.AssetGroupResult, error) {
