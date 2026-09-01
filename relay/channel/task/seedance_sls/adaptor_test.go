@@ -58,6 +58,162 @@ func TestValidateNativeSLSRequestStoresLosslessPayload(t *testing.T) {
 	assert.Equal(t, constant.TaskActionGenerate, info.Action)
 }
 
+func TestEstimateBillingUsesNativeSLSResolutionAndVideoInputPricing(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantRatio float64
+	}{
+		{
+			name: "1080p text to video",
+			body: `{
+				"model":"doubao-seedance-2-0-260128",
+				"content":[{"type":"text","text":"A cat runs through neon rain"}],
+				"resolution":"1080p"
+			}`,
+			wantRatio: 51.0 / 46.0,
+		},
+		{
+			name: "1080p video input",
+			body: `{
+				"model":"doubao-seedance-2-0-260128",
+				"content":[
+					{"type":"video_url","video_url":{"url":"https://example.com/reference.mp4"}},
+					{"type":"text","text":"Extend this video"}
+				],
+				"resolution":"1080p"
+			}`,
+			wantRatio: 31.0 / 46.0,
+		},
+		{
+			name: "4k text to video",
+			body: `{
+				"model":"doubao-seedance-2-0-260128",
+				"content":[{"type":"text","text":"A cat runs through neon rain"}],
+				"resolution":"4K"
+			}`,
+			wantRatio: 26.0 / 46.0,
+		},
+		{
+			name: "720p text to video uses base price",
+			body: `{
+				"model":"doubao-seedance-2-0-260128",
+				"content":[{"type":"text","text":"A cat runs through neon rain"}],
+				"resolution":"720p"
+			}`,
+			wantRatio: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(tt.body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			defer common.CleanupBodyStorage(ctx)
+			info := &relaycommon.RelayInfo{OriginModelName: "doubao-seedance-2-0-260128"}
+			adaptor := &TaskAdaptor{}
+			require.Nil(t, adaptor.ValidateRequestAndSetAction(ctx, info))
+
+			ratios := adaptor.EstimateBilling(ctx, info)
+			if tt.wantRatio == 1 {
+				assert.Empty(t, ratios)
+				return
+			}
+			require.Contains(t, ratios, "video_input")
+			assert.InDelta(t, tt.wantRatio, ratios["video_input"], 1e-12)
+		})
+	}
+}
+
+func TestEstimateBillingUsesCompatibleSLSMetadataPricing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("task_request", relaycommon.TaskSubmitReq{
+		Metadata: map[string]any{
+			"resolution": "1080p",
+			"content": []any{
+				map[string]any{"type": "text", "text": "A cat runs through neon rain"},
+			},
+		},
+	})
+	info := &relaycommon.RelayInfo{OriginModelName: "doubao-seedance-2-0-260128"}
+
+	ratios := (&TaskAdaptor{}).EstimateBilling(ctx, info)
+
+	require.Contains(t, ratios, "video_input")
+	assert.InDelta(t, 51.0/46.0, ratios["video_input"], 1e-12)
+}
+
+func TestEstimateBillingUsesSeedance25Pricing(t *testing.T) {
+	tests := []struct {
+		name       string
+		resolution string
+		content    []any
+		wantRatio  float64
+	}{
+		{
+			name:       "1080p text to video",
+			resolution: "1080p",
+			content:    []any{map[string]any{"type": "text", "text": "A cinematic tracking shot"}},
+			wantRatio:  77.0 / 70.0,
+		},
+		{
+			name:       "1080p video input",
+			resolution: "1080p",
+			content: []any{
+				map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://example.com/reference.mp4"}},
+				map[string]any{"type": "text", "text": "Extend this video"},
+			},
+			wantRatio: 46.0 / 70.0,
+		},
+		{
+			name:       "720p video input",
+			resolution: "720p",
+			content: []any{
+				map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://example.com/reference.mp4"}},
+				map[string]any{"type": "text", "text": "Extend this video"},
+			},
+			wantRatio: 42.0 / 70.0,
+		},
+		{
+			name:       "720p text to video uses base price",
+			resolution: "720p",
+			content:    []any{map[string]any{"type": "text", "text": "A cinematic tracking shot"}},
+			wantRatio:  1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			payload := map[string]any{
+				"model":      "doubao-seedance-2-5-260628",
+				"content":    tt.content,
+				"resolution": tt.resolution,
+			}
+			body, err := common.Marshal(payload)
+			require.NoError(t, err)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(string(body)))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			defer common.CleanupBodyStorage(ctx)
+			info := &relaycommon.RelayInfo{OriginModelName: "doubao-seedance-2-5-260628"}
+			adaptor := &TaskAdaptor{}
+			require.Nil(t, adaptor.ValidateRequestAndSetAction(ctx, info))
+
+			ratios := adaptor.EstimateBilling(ctx, info)
+			if tt.wantRatio == 1 {
+				assert.Empty(t, ratios)
+				return
+			}
+			require.Contains(t, ratios, "video_input")
+			assert.InDelta(t, tt.wantRatio, ratios["video_input"], 1e-12)
+		})
+	}
+}
+
 func TestSeedanceSLSRejectsMultipartOpenAIVideoRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -588,9 +744,14 @@ func TestFetchTaskUsesSLSPathAndBearerToken(t *testing.T) {
 
 func TestSeedanceSLSModelList(t *testing.T) {
 	assert.Equal(t, []string{
-		"doubao-seedance-2-0",
-		"doubao-seedance-2-0-fast",
-		"doubao-seedance-2-0-mini",
+		"doubao-seedance-1-0-pro-250528",
+		"doubao-seedance-1-0-lite-t2v",
+		"doubao-seedance-1-0-lite-i2v",
+		"doubao-seedance-1-5-pro-251215",
+		"doubao-seedance-2-0-260128",
+		"doubao-seedance-2-0-fast-260128",
+		"doubao-seedance-2-0-mini-260615",
+		"doubao-seedance-2-5-260628",
 	}, (&TaskAdaptor{}).GetModelList())
 }
 
@@ -605,4 +766,5 @@ func TestSeedanceSLSModelsHaveDefaultBillingRatios(t *testing.T) {
 		assert.Equal(t, defaults[versioned], defaults[alias], alias)
 		assert.Positive(t, defaults[alias], alias)
 	}
+	assert.InDelta(t, 4.794520547945205, defaults["doubao-seedance-2-5-260628"], 1e-12)
 }

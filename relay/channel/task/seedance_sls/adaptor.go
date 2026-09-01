@@ -26,12 +26,6 @@ import (
 
 const nativeRequestContextKey = "seedance_sls_native_request"
 
-var modelList = []string{
-	"doubao-seedance-2-0",
-	"doubao-seedance-2-0-fast",
-	"doubao-seedance-2-0-mini",
-}
-
 type TaskAdaptor struct {
 	taskcommon.BaseBilling
 	apiKey  string
@@ -220,6 +214,49 @@ func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, _ *r
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
 	return nil
+}
+
+func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
+	var metadata map[string]any
+	if nativeValue, ok := c.Get(nativeRequestContextKey); ok {
+		metadata, _ = nativeValue.(map[string]any)
+	} else {
+		request, err := relaycommon.GetTaskRequest(c)
+		if err != nil {
+			return nil
+		}
+		metadata = request.Metadata
+	}
+	if metadata == nil {
+		return nil
+	}
+
+	resolution, _ := metadata["resolution"].(string)
+	ratio, ok := getVideoInputRatio(info.OriginModelName, resolution, hasVideoInMetadata(metadata))
+	if !ok || ratio == 1.0 {
+		return nil
+	}
+	return map[string]float64{"video_input": ratio}
+}
+
+func hasVideoInMetadata(metadata map[string]any) bool {
+	content, ok := metadata["content"].([]any)
+	if !ok {
+		return false
+	}
+	for _, itemValue := range content {
+		item, ok := itemValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		if item["type"] == "video_url" {
+			return true
+		}
+		if _, ok := item["video_url"]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {

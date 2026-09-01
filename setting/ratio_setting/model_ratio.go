@@ -249,6 +249,7 @@ var defaultModelRatio = map[string]float64{
 	"doubao-seedance-2-0-fast":        0.037 * RMB, // Seedance SLS alias
 	"doubao-seedance-2-0-mini-260615": 0.023 * RMB, // ¥23 / 1M tokens
 	"doubao-seedance-2-0-mini":        0.023 * RMB, // Seedance SLS alias
+	"doubao-seedance-2-5-260628":      0.070 * RMB, // ¥70 / 1M tokens
 
 	// Perplexity online 模型对搜索额外收费，有需要应自行调整，此处不计入搜索费用
 	"llama-3-sonar-small-32k-chat":   0.2 / 1000 * USD,

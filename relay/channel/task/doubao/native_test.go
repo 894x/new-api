@@ -68,6 +68,69 @@ func TestNativeRequestUsesExistingDoubaoBillingAndPreservesPayload(t *testing.T)
 	assert.Len(t, content, 2)
 }
 
+func TestSeedance25BillingRatios(t *testing.T) {
+	tests := []struct {
+		name       string
+		resolution string
+		content    []any
+		wantRatio  float64
+	}{
+		{
+			name:       "1080p text to video",
+			resolution: "1080p",
+			content:    []any{map[string]any{"type": "text", "text": "A cinematic tracking shot"}},
+			wantRatio:  77.0 / 70.0,
+		},
+		{
+			name:       "1080p video input",
+			resolution: "1080p",
+			content: []any{
+				map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://example.com/reference.mp4"}},
+				map[string]any{"type": "text", "text": "Extend this video"},
+			},
+			wantRatio: 46.0 / 70.0,
+		},
+		{
+			name:       "720p video input",
+			resolution: "720p",
+			content: []any{
+				map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://example.com/reference.mp4"}},
+				map[string]any{"type": "text", "text": "Extend this video"},
+			},
+			wantRatio: 42.0 / 70.0,
+		},
+		{
+			name:       "720p text to video uses base price",
+			resolution: "720p",
+			content:    []any{map[string]any{"type": "text", "text": "A cinematic tracking shot"}},
+			wantRatio:  1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Set("task_request", relaycommon.TaskSubmitReq{Metadata: map[string]any{
+				"resolution": tt.resolution,
+				"content":    tt.content,
+			}})
+			info := &relaycommon.RelayInfo{OriginModelName: "doubao-seedance-2-5-260628"}
+
+			ratios := (&TaskAdaptor{}).EstimateBilling(ctx, info)
+			if tt.wantRatio == 1 {
+				assert.Empty(t, ratios)
+				return
+			}
+			require.Contains(t, ratios, "video_input")
+			assert.InDelta(t, tt.wantRatio, ratios["video_input"], 1e-12)
+		})
+	}
+}
+
+func TestDoubaoModelListIncludesSeedance25(t *testing.T) {
+	assert.Contains(t, (&TaskAdaptor{}).GetModelList(), "doubao-seedance-2-5-260628")
+}
+
 func TestNativeRequestRewritesLogicalAssetForCurrentChannel(t *testing.T) {
 	originalDB := model.DB
 	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
