@@ -75,6 +75,7 @@ import {
   getFirstResponseTimeColor,
   getResponseTimeColor,
   getReasoningEffortVariant,
+  parseAuditChangedFields,
   renderAuditContent,
 } from '../../lib/format'
 import {
@@ -566,10 +567,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
   // Channel update records which fields changed (stable field tokens); render
   // them with their localized labels for admins.
   const changedFieldTokens =
-    isManage &&
-    props.isAdmin &&
-    Array.isArray(other?.op?.params?.changed_fields)
-      ? (other.op.params.changed_fields as string[])
+    isManage && props.isAdmin
+      ? parseAuditChangedFields(other?.op?.params?.changed_fields)
       : []
   const changedFieldsText = changedFieldTokens
     .map((field) => t(CHANNEL_FIELD_LABELS[field] ?? field))

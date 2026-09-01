@@ -50,6 +50,15 @@ var auditContentTemplates = map[string]string{
 	"channel.model_routing_override": "Updated ${count} model routing overrides on channel (ID: ${id})",
 	"model.channel_routing_override": "Updated ${count} channel routing overrides for model ${model}",
 
+	"asset_library.group.create": "Created asset group ${name} (ID: ${id})",
+	"asset_library.group.update": "Updated asset group ${name} (ID: ${id})",
+	"asset_library.group.delete": "Deleted asset group ${name} (ID: ${id})",
+	"asset_library.asset.create": "Created asset (ID: ${id}, type: ${asset_type}, group: ${group_id})",
+	"asset_library.asset.update": "Updated asset (ID: ${id}, type: ${asset_type}, group: ${group_id})",
+	"asset_library.asset.delete": "Deleted asset (ID: ${id}, type: ${asset_type}, group: ${group_id})",
+	"asset_library.asset.sync":   "Synchronized asset ${id} (errors: ${error_count})",
+	"asset_library.group.sync":   "Synchronized asset group ${id} (errors: ${error_count})",
+
 	"redemption.create": "Created ${count} redemption codes named ${name} (${quota} each)",
 
 	"subscription.plan_reset":      "Reset active subscriptions for plan ${plan_id}",
