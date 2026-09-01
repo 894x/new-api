@@ -16,9 +16,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import {
+  useIsMutating,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query'
 import type { Row } from '@tanstack/react-table'
-import { Eye, MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
+import {
+  Eye,
+  Loader2,
+  MoreHorizontal,
+  Pencil,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -29,13 +42,36 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
+import {
+  assetLibraryQueryKeys,
+  getAssetLibraryErrorMessage,
+  refreshAssetStatus,
+} from '../lib'
 import type { Asset } from '../types'
 import { useAssetLibrary } from './asset-library-provider'
 
 export function AssetRowActions(props: { row: Row<Asset> }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const { openAssetDialog } = useAssetLibrary()
   const asset = props.row.original
+  const isLibraryRefreshing =
+    useIsMutating({
+      mutationKey: assetLibraryQueryKeys.statusRefreshLibrary(),
+    }) > 0
+  const isAssetRefreshing =
+    useIsMutating({
+      mutationKey: assetLibraryQueryKeys.statusRefreshAsset(asset.Id),
+    }) > 0
+  const refreshMutation = useMutation({
+    mutationKey: assetLibraryQueryKeys.statusRefreshAsset(asset.Id),
+    mutationFn: () => refreshAssetStatus(queryClient, asset.Id),
+    onSuccess: () => toast.success(t('Asset status refreshed.')),
+    onError: (error) =>
+      toast.error(
+        getAssetLibraryErrorMessage(error, t('Failed to refresh asset'))
+      ),
+  })
 
   return (
     <DropdownMenu>
@@ -51,6 +87,19 @@ export function AssetRowActions(props: { row: Row<Asset> }) {
         <MoreHorizontal className='size-4' />
       </DropdownMenuTrigger>
       <DropdownMenuContent align='end' className='w-40'>
+        <DropdownMenuItem
+          disabled={isAssetRefreshing || isLibraryRefreshing}
+          onClick={() => refreshMutation.mutate()}
+        >
+          {t('Refresh asset')}
+          <DropdownMenuShortcut>
+            {isAssetRefreshing ? (
+              <Loader2 className='size-4 animate-spin' />
+            ) : (
+              <RefreshCw className='size-4' />
+            )}
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => openAssetDialog('preview-asset', asset)}
         >

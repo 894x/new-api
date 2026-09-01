@@ -16,25 +16,54 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
+import {
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type Query,
+} from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { DataTablePage, useDataTable } from '@/components/data-table'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 
-import { listAllAssetGroups, listAssets } from '../api'
-import { assetLibraryQueryKeys } from '../lib'
-import type { AssetGroup, AssetType, ListAssetLibraryRequest } from '../types'
+import { getAsset, listAllAssetGroups, listAssets } from '../api'
+import {
+  assetLibraryQueryKeys,
+  isAssetProcessing,
+  updateAssetStatusCaches,
+} from '../lib'
+import type {
+  Asset,
+  AssetGroup,
+  AssetType,
+  ListAssetLibraryRequest,
+} from '../types'
 import { AssetCard } from './asset-card'
 import { useAssetColumns } from './asset-columns'
 
 const route = getRouteApi('/_authenticated/asset-library/')
+const ASSET_STATUS_REFRESH_INTERVAL_MS = 4_000
+const ASSET_STATUS_ERROR_RETRY_INTERVAL_MS = 15_000
+const ASSET_STATUS_FAST_REFRESH_LIMIT = 15
+const ASSET_STATUS_MAX_REFRESH_COUNT = 30
+const ASSET_STATUS_MAX_ERROR_COUNT = 5
+
+type AssetStatusRefreshBudget = {
+  successfulRefreshes: number
+  consecutiveFailures: number
+  exhausted: boolean
+}
 
 export function AssetsTable() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const statusRefreshBudgets = useRef(
+    new Map<string, AssetStatusRefreshBudget>()
+  )
   const isMobile = useMediaQuery('(max-width: 640px)')
   const search = route.useSearch()
   const navigate = route.useNavigate()
@@ -96,6 +125,70 @@ export function AssetsTable() {
     queryKey: assetLibraryQueryKeys.assetList(request),
     queryFn: () => listAssets(request),
     placeholderData: (previousData) => previousData,
+  })
+  useEffect(() => {
+    const visibleProcessingAssetIds = new Set(
+      data?.Items.filter(isAssetProcessing).map((asset) => asset.Id) ?? []
+    )
+    for (const assetId of statusRefreshBudgets.current.keys()) {
+      if (!visibleProcessingAssetIds.has(assetId)) {
+        statusRefreshBudgets.current.delete(assetId)
+      }
+    }
+  }, [data?.Items])
+  useQueries({
+    queries: (data?.Items ?? []).filter(isAssetProcessing).map((asset) => {
+      const budget = statusRefreshBudgets.current.get(asset.Id)
+      return {
+        queryKey: assetLibraryQueryKeys.asset(asset.Id),
+        queryFn: async () => {
+          const currentBudget = statusRefreshBudgets.current.get(asset.Id) ?? {
+            successfulRefreshes: 0,
+            consecutiveFailures: 0,
+            exhausted: false,
+          }
+          try {
+            const refreshedAsset = await getAsset(asset.Id)
+            if (isAssetProcessing(refreshedAsset)) {
+              currentBudget.successfulRefreshes += 1
+              currentBudget.consecutiveFailures = 0
+              currentBudget.exhausted =
+                currentBudget.successfulRefreshes >=
+                ASSET_STATUS_MAX_REFRESH_COUNT
+              statusRefreshBudgets.current.set(asset.Id, currentBudget)
+            } else {
+              statusRefreshBudgets.current.delete(asset.Id)
+            }
+            updateAssetStatusCaches(queryClient, refreshedAsset)
+            return refreshedAsset
+          } catch (error) {
+            currentBudget.consecutiveFailures += 1
+            currentBudget.exhausted =
+              currentBudget.consecutiveFailures >= ASSET_STATUS_MAX_ERROR_COUNT
+            statusRefreshBudgets.current.set(asset.Id, currentBudget)
+            throw error
+          }
+        },
+        enabled: !budget?.exhausted,
+        placeholderData: asset,
+        refetchInterval: (query: Query<Asset>) => {
+          const currentBudget = statusRefreshBudgets.current.get(asset.Id)
+          if (currentBudget?.exhausted) return false
+          const currentAsset = query.state.data
+          if (currentAsset && !isAssetProcessing(currentAsset)) return false
+          return (currentBudget?.consecutiveFailures ?? 0) > 0 ||
+            (currentBudget?.successfulRefreshes ?? 0) >=
+              ASSET_STATUS_FAST_REFRESH_LIMIT
+            ? ASSET_STATUS_ERROR_RETRY_INTERVAL_MS
+            : ASSET_STATUS_REFRESH_INTERVAL_MS
+        },
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: () =>
+          !statusRefreshBudgets.current.get(asset.Id)?.exhausted,
+        retry: false,
+        staleTime: 0,
+      }
+    }),
   })
   const includeReplication = Boolean(
     data?.Items.some((asset) => asset.Replication)

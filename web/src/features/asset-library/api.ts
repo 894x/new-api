@@ -118,6 +118,32 @@ export function listAssets(
   return callAssetLibrary('ListAssets', request)
 }
 
+export async function listAllAssets(): Promise<Asset[]> {
+  const pageSize = 100
+  const firstPage = await listAssets({
+    PageNumber: 1,
+    PageSize: pageSize,
+    SortBy: 'CreateTime',
+    SortOrder: 'Asc',
+  })
+  const pageCount = Math.ceil(firstPage.TotalCount / pageSize)
+  if (pageCount <= 1) return firstPage.Items
+
+  const remainingPages: AssetsPage[] = []
+  for (let pageNumber = 2; pageNumber <= pageCount; pageNumber += 1) {
+    remainingPages.push(
+      await listAssets({
+        PageNumber: pageNumber,
+        PageSize: pageSize,
+        SortBy: 'CreateTime',
+        SortOrder: 'Asc',
+      })
+    )
+  }
+
+  return [firstPage, ...remainingPages].flatMap((page) => page.Items)
+}
+
 export function getAssetGroup(id: string): Promise<AssetGroup> {
   return callAssetLibrary('GetAssetGroup', { Id: id })
 }

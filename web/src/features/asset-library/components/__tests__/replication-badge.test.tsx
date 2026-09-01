@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Row } from '@tanstack/react-table'
 import { createInstance } from 'i18next'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -46,6 +47,19 @@ await i18n.use(initReactI18next).init({
     },
   },
 })
+
+function renderAssetCard(asset: Asset): string {
+  const queryClient = new QueryClient()
+  return renderToStaticMarkup(
+    <QueryClientProvider client={queryClient}>
+      <I18nextProvider i18n={i18n}>
+        <AssetLibraryProvider>
+          <AssetCard row={{ original: asset } as Row<Asset>} />
+        </AssetLibraryProvider>
+      </I18nextProvider>
+    </QueryClientProvider>
+  )
+}
 
 describe('ReplicationBadge', () => {
   test('renders nothing when replication metadata is not available', () => {
@@ -114,13 +128,7 @@ describe('ReplicationBadge', () => {
       CreateTime: '2026-08-20T00:00:00Z',
       UpdateTime: '2026-08-20T00:00:00Z',
     }
-    const markup = renderToStaticMarkup(
-      <I18nextProvider i18n={i18n}>
-        <AssetLibraryProvider>
-          <AssetCard row={{ original: asset } as Row<Asset>} />
-        </AssetLibraryProvider>
-      </I18nextProvider>
-    )
+    const markup = renderAssetCard(asset)
 
     assert.doesNotMatch(markup, /Channel availability/)
   })
@@ -137,13 +145,7 @@ describe('ReplicationBadge', () => {
       CreateTime: '2026-08-20T00:00:00Z',
       UpdateTime: '2026-08-20T00:00:00Z',
     }
-    const markup = renderToStaticMarkup(
-      <I18nextProvider i18n={i18n}>
-        <AssetLibraryProvider>
-          <AssetCard row={{ original: asset } as Row<Asset>} />
-        </AssetLibraryProvider>
-      </I18nextProvider>
-    )
+    const markup = renderAssetCard(asset)
 
     assert.match(markup, /<img[^>]*class="[^"]*aspect-video/)
     assert.doesNotMatch(markup, /asset-na-media-first/)
@@ -168,13 +170,7 @@ describe('ReplicationBadge', () => {
         Total: 1,
       },
     }
-    const markup = renderToStaticMarkup(
-      <I18nextProvider i18n={i18n}>
-        <AssetLibraryProvider>
-          <AssetCard row={{ original: asset } as Row<Asset>} />
-        </AssetLibraryProvider>
-      </I18nextProvider>
-    )
+    const markup = renderAssetCard(asset)
 
     assert.match(markup, /<img[^>]*class="[^"]*size-16/)
     assert.match(markup, /asset-na-admin/)

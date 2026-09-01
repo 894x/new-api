@@ -16,19 +16,68 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { FolderPlus, Plus } from 'lucide-react'
+import {
+  useIsMutating,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query'
+import { FolderPlus, Loader2, Plus, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 
+import {
+  assetLibraryQueryKeys,
+  getAssetLibraryErrorMessage,
+  refreshAssetLibraryStatuses,
+} from '../lib'
 import { useAssetLibrary } from './asset-library-provider'
 
 export function AssetLibraryPrimaryButtons() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const { openAssetDialog, openGroupDialog } = useAssetLibrary()
+  const isAnyStatusRefreshing =
+    useIsMutating({
+      mutationKey: assetLibraryQueryKeys.statusRefreshes(),
+    }) > 0
+  const refreshMutation = useMutation({
+    mutationKey: assetLibraryQueryKeys.statusRefreshLibrary(),
+    mutationFn: () => refreshAssetLibraryStatuses(queryClient),
+    onSuccess: (result) => {
+      if (result.failed === 0) {
+        toast.success(t('Asset library refreshed.'))
+        return
+      }
+      toast.warning(
+        t(
+          'Asset library refresh completed: {{succeeded}} succeeded, {{failed}} failed.',
+          result
+        )
+      )
+    },
+    onError: (error) =>
+      toast.error(
+        getAssetLibraryErrorMessage(error, t('Failed to refresh asset library'))
+      ),
+  })
 
   return (
     <div className='flex flex-wrap gap-2'>
+      <Button
+        size='sm'
+        variant='outline'
+        disabled={refreshMutation.isPending || isAnyStatusRefreshing}
+        onClick={() => refreshMutation.mutate()}
+      >
+        {refreshMutation.isPending ? (
+          <Loader2 className='animate-spin' />
+        ) : (
+          <RefreshCw />
+        )}
+        {t('Refresh asset library')}
+      </Button>
       <Button
         size='sm'
         variant='outline'

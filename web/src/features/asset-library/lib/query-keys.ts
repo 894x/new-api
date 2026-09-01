@@ -19,11 +19,18 @@ For commercial licensing, please contact support@quantumnous.com
 export const assetLibraryQueryKeys = {
   all: ['asset-library'] as const,
   assets: () => [...assetLibraryQueryKeys.all, 'assets'] as const,
+  assetLists: () => [...assetLibraryQueryKeys.assets(), 'list'] as const,
   assetList: (params: object) =>
-    [...assetLibraryQueryKeys.assets(), 'list', params] as const,
+    [...assetLibraryQueryKeys.assetLists(), params] as const,
   asset: (id: string) => [...assetLibraryQueryKeys.assets(), id] as const,
   assetReplicas: (id: string) =>
     [...assetLibraryQueryKeys.asset(id), 'replicas'] as const,
+  statusRefreshes: () =>
+    [...assetLibraryQueryKeys.all, 'status-refresh'] as const,
+  statusRefreshLibrary: () =>
+    [...assetLibraryQueryKeys.statusRefreshes(), 'library'] as const,
+  statusRefreshAsset: (id: string) =>
+    [...assetLibraryQueryKeys.statusRefreshes(), 'asset', id] as const,
   groups: () => [...assetLibraryQueryKeys.all, 'groups'] as const,
   groupList: (params: object) =>
     [...assetLibraryQueryKeys.groups(), 'list', params] as const,
