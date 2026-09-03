@@ -2,6 +2,9 @@ package controller
 
 import (
 	"bytes"
+	"encoding/binary"
+	"image"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -12,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -57,6 +61,7 @@ func TestAssetLibraryMutationsRecordStructuredAudit(t *testing.T) {
 		groupId = "group-na-0123456789abcdef0123456789abcdef"
 		assetId = "asset-na-0123456789abcdef0123456789abcdef"
 	)
+	imageURL := newAssetLibraryTestImageURL(t, 1200, 800)
 
 	testCases := []struct {
 		name           string
@@ -76,7 +81,7 @@ func TestAssetLibraryMutationsRecordStructuredAudit(t *testing.T) {
 		{
 			name:           "create asset",
 			action:         "CreateAsset",
-			body:           `{"GroupId":"` + groupId + `","URL":"https://signed.example.com/portrait.png?token=secret","AssetType":"Image","Name":"portrait"}`,
+			body:           `{"GroupId":"` + groupId + `","URL":"` + imageURL + `","AssetType":"Image","Name":"portrait"}`,
 			expectedAction: "asset_library.asset.create",
 			expectedParams: map[string]interface{}{"name": "portrait", "group_id": groupId, "asset_type": "Image"},
 			arrange: func(t *testing.T, db *gorm.DB) {
@@ -429,6 +434,7 @@ func TestCreateAssetGroupWithoutEnabledAssetChannel(t *testing.T) {
 
 func TestCreateAssetWithoutEnabledAssetChannel(t *testing.T) {
 	db := setupAssetLibraryControllerTestDB(t)
+	imageURL := newAssetLibraryTestImageURL(t, 1200, 800)
 	group := &model.UserAssetGroup{
 		Id: "group-na-0123456789abcdef0123456789abcdef", UserId: 1, Name: "character",
 		GroupType: "AIGC", ProjectName: "default",
@@ -439,7 +445,7 @@ func TestCreateAssetWithoutEnabledAssetChannel(t *testing.T) {
 	context, _ := gin.CreateTestContext(recorder)
 	context.Request = httptest.NewRequest(http.MethodPost,
 		"/api/asset-library?Action=CreateAsset&Version=2024-01-01",
-		bytes.NewBufferString(`{"GroupId":"`+group.Id+`","URL":"https://example.com/portrait.png","AssetType":"Image","Name":"portrait"}`),
+		bytes.NewBufferString(`{"GroupId":"`+group.Id+`","URL":"`+imageURL+`","AssetType":"Image","Name":"portrait"}`),
 	)
 	context.Set("id", 1)
 
@@ -453,10 +459,114 @@ func TestCreateAssetWithoutEnabledAssetChannel(t *testing.T) {
 	assert.Regexp(t, `^asset-na-[0-9a-f]{32}$`, response.Result.Id)
 	asset, err := model.GetUserAsset(1, response.Result.Id)
 	require.NoError(t, err)
-	assert.Equal(t, "https://example.com/portrait.png", asset.SourceURL)
+	assert.Equal(t, imageURL, asset.SourceURL)
 	var replicaCount int64
 	require.NoError(t, db.Model(&model.UserAssetReplica{}).Where("asset_id = ?", asset.Id).Count(&replicaCount).Error)
 	assert.Zero(t, replicaCount)
+}
+
+func TestCreateAssetRejectsInvalidRemoteMediaBeforePersistence(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	group := &model.UserAssetGroup{
+		Id: "group-na-0123456789abcdef0123456789abcdef", UserId: 1, Name: "character",
+		GroupType: "AIGC", ProjectName: "default",
+	}
+	require.NoError(t, db.Create(group).Error)
+	imageURL := newAssetLibraryTestImageURL(t, 300, 800)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost,
+		"/api/asset-library?Action=CreateAsset&Version=2024-01-01",
+		bytes.NewBufferString(`{"GroupId":"`+group.Id+`","URL":"`+imageURL+`","AssetType":"Image","Name":"invalid portrait"}`),
+	)
+	context.Set("id", 1)
+
+	AssetLibraryAction(context)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	var response assetLibraryResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "InvalidParameter.Media", response.ResponseMetadata.Error.Code)
+	assert.Contains(t, response.ResponseMetadata.Error.Message, "image width and height")
+	var assetCount int64
+	require.NoError(t, db.Model(&model.UserAsset{}).Count(&assetCount).Error)
+	assert.Zero(t, assetCount)
+}
+
+func TestCreateAudioAssetStoresVerifiedMediaMetadata(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	group := &model.UserAssetGroup{
+		Id: "group-na-0123456789abcdef0123456789abcdef", UserId: 1, Name: "voices",
+		GroupType: "AIGC", ProjectName: "default",
+	}
+	require.NoError(t, db.Create(group).Error)
+	audioBody := buildAssetLibraryControllerTestWAV(8000, 2)
+	audioURL := newAssetLibraryTestMediaURL(t, "audio/wav", audioBody)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost,
+		"/api/asset-library?Action=CreateAsset&Version=2024-01-01",
+		bytes.NewBufferString(`{"GroupId":"`+group.Id+`","URL":"`+audioURL+`","AssetType":"Audio","Name":"voice"}`),
+	)
+	context.Set("id", 1)
+
+	AssetLibraryAction(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Result assetLibraryMutationResult `json:"Result"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	asset, err := model.GetUserAsset(1, response.Result.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "wav", asset.MediaFormat)
+	assert.Equal(t, int64(len(audioBody)), asset.FileSize)
+	assert.InDelta(t, 2.0, asset.Duration, 0.001)
+}
+
+func newAssetLibraryTestImageURL(t *testing.T, width int, height int) string {
+	t.Helper()
+	var body bytes.Buffer
+	require.NoError(t, png.Encode(&body, image.NewRGBA(image.Rect(0, 0, width, height))))
+	return newAssetLibraryTestMediaURL(t, "image/png", body.Bytes())
+}
+
+func newAssetLibraryTestMediaURL(t *testing.T, contentType string, body []byte) string {
+	t.Helper()
+	fetchSetting := system_setting.GetFetchSetting()
+	previousSetting := *fetchSetting
+	fetchSetting.EnableSSRFProtection = false
+	service.InitHttpClient()
+	t.Cleanup(func() {
+		*fetchSetting = previousSetting
+		service.InitHttpClient()
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", contentType)
+		_, err := writer.Write(body)
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	return server.URL + "/asset"
+}
+
+func buildAssetLibraryControllerTestWAV(sampleRate uint32, seconds uint32) []byte {
+	dataSize := sampleRate * seconds * 2
+	body := make([]byte, 44+dataSize)
+	copy(body[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(body[4:8], uint32(len(body)-8))
+	copy(body[8:12], "WAVE")
+	copy(body[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(body[16:20], 16)
+	binary.LittleEndian.PutUint16(body[20:22], 1)
+	binary.LittleEndian.PutUint16(body[22:24], 1)
+	binary.LittleEndian.PutUint32(body[24:28], sampleRate)
+	binary.LittleEndian.PutUint32(body[28:32], sampleRate*2)
+	binary.LittleEndian.PutUint16(body[32:34], 2)
+	binary.LittleEndian.PutUint16(body[34:36], 16)
+	copy(body[36:40], "data")
+	binary.LittleEndian.PutUint32(body[40:44], dataSize)
+	return body
 }
 
 func TestCreateAssetGroupRejectsValuesThatExceedDatabaseColumns(t *testing.T) {
@@ -674,6 +784,10 @@ func TestAssetLibraryResultAlwaysUsesLogicalSourceURL(t *testing.T) {
 		Name:        "portrait",
 		SourceURL:   "https://example.com/portrait.png",
 		AssetType:   "Image",
+		MediaFormat: "png",
+		FileSize:    12345,
+		Width:       1200,
+		Height:      800,
 		ProjectName: "default",
 	}
 
@@ -684,6 +798,10 @@ func TestAssetLibraryResultAlwaysUsesLogicalSourceURL(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "https://example.com/portrait.png", result.URL)
+	assert.Equal(t, "png", result.Format)
+	assert.Equal(t, int64(12345), result.FileSize)
+	assert.Equal(t, 1200, result.Width)
+	assert.Equal(t, 800, result.Height)
 }
 
 func TestGetAssetKeepsSourcePreviewWhenUpstreamRefreshFails(t *testing.T) {

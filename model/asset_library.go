@@ -49,15 +49,21 @@ func (UserAssetGroup) TableName() string {
 }
 
 type UserAsset struct {
-	Id          string `json:"id" gorm:"type:varchar(64);primaryKey"`
-	UserId      int    `json:"user_id" gorm:"not null;index:idx_user_assets_user_created,priority:1"`
-	GroupId     string `json:"group_id" gorm:"type:varchar(64);not null;index"`
-	Name        string `json:"name" gorm:"type:varchar(64)"`
-	SourceURL   string `json:"-" gorm:"type:text;not null"`
-	AssetType   string `json:"asset_type" gorm:"type:varchar(32);not null;index"`
-	ProjectName string `json:"project_name" gorm:"type:varchar(128);not null;index"`
-	CreatedTime int64  `json:"created_time" gorm:"autoCreateTime;index:idx_user_assets_user_created,priority:2"`
-	UpdatedTime int64  `json:"updated_time" gorm:"autoUpdateTime"`
+	Id          string  `json:"id" gorm:"type:varchar(64);primaryKey"`
+	UserId      int     `json:"user_id" gorm:"not null;index:idx_user_assets_user_created,priority:1"`
+	GroupId     string  `json:"group_id" gorm:"type:varchar(64);not null;index"`
+	Name        string  `json:"name" gorm:"type:varchar(64)"`
+	SourceURL   string  `json:"-" gorm:"type:text;not null"`
+	AssetType   string  `json:"asset_type" gorm:"type:varchar(32);not null;index"`
+	MediaFormat string  `json:"media_format" gorm:"type:varchar(16)"`
+	FileSize    int64   `json:"file_size"`
+	Width       int     `json:"width"`
+	Height      int     `json:"height"`
+	Duration    float64 `json:"duration"`
+	FPS         float64 `json:"fps"`
+	ProjectName string  `json:"project_name" gorm:"type:varchar(128);not null;index"`
+	CreatedTime int64   `json:"created_time" gorm:"autoCreateTime;index:idx_user_assets_user_created,priority:2"`
+	UpdatedTime int64   `json:"updated_time" gorm:"autoUpdateTime"`
 }
 
 func (UserAsset) TableName() string {

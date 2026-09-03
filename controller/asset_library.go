@@ -167,6 +167,11 @@ func createAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool
 			return
 		}
 	}
+	mediaMetadata, err := service.ValidateAssetLibraryMedia(c.Request.Context(), sourceURL, assetType)
+	if err != nil {
+		writeAssetLibraryError(c, "CreateAsset", http.StatusBadRequest, "InvalidParameter.Media", err.Error(), nil)
+		return
+	}
 	asset := &model.UserAsset{
 		Id:          "asset-na-" + common.GetUUID(),
 		UserId:      userId,
@@ -174,6 +179,12 @@ func createAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool
 		Name:        name,
 		SourceURL:   sourceURL,
 		AssetType:   assetType,
+		MediaFormat: mediaMetadata.Format,
+		FileSize:    mediaMetadata.FileSize,
+		Width:       mediaMetadata.Width,
+		Height:      mediaMetadata.Height,
+		Duration:    mediaMetadata.Duration,
+		FPS:         mediaMetadata.FPS,
 		ProjectName: group.ProjectName,
 	}
 	if err := model.CreateUserAsset(asset); err != nil {
@@ -544,6 +555,12 @@ func buildAssetLibraryResult(asset *model.UserAsset, details *service.AssetLibra
 		URL:               asset.SourceURL,
 		GroupId:           asset.GroupId,
 		AssetType:         asset.AssetType,
+		Format:            asset.MediaFormat,
+		FileSize:          asset.FileSize,
+		Width:             asset.Width,
+		Height:            asset.Height,
+		Duration:          asset.Duration,
+		FPS:               asset.FPS,
 		Status:            status,
 		Error:             assetError,
 		ProjectName:       asset.ProjectName,

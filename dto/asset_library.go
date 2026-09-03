@@ -104,6 +104,12 @@ type AssetResult struct {
 	URL               string               `json:"URL,omitempty"`
 	GroupId           string               `json:"GroupId"`
 	AssetType         string               `json:"AssetType"`
+	Format            string               `json:"Format,omitempty"`
+	FileSize          int64                `json:"FileSize,omitempty"`
+	Width             int                  `json:"Width,omitempty"`
+	Height            int                  `json:"Height,omitempty"`
+	Duration          float64              `json:"Duration,omitempty"`
+	FPS               float64              `json:"FPS,omitempty"`
 	Status            string               `json:"Status,omitempty"`
 	Error             *AssetLibraryError   `json:"Error,omitempty"`
 	ProjectName       string               `json:"ProjectName"`

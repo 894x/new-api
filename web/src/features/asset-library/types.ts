@@ -43,6 +43,12 @@ export type Asset = {
   URL?: string
   GroupId: string
   AssetType: AssetType | string
+  Format?: string
+  FileSize?: number
+  Width?: number
+  Height?: number
+  Duration?: number
+  FPS?: number
   Status?: string
   Error?: {
     Code?: string
