@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -14,6 +15,25 @@ import (
 )
 
 const publicErrorMessage = "请求处理失败，请稍后重试。如果多次尝试仍然失败，请联系管理员。"
+
+var upstreamRequestIDPattern = regexp.MustCompile(`(?i)\brequest\s+id\s*:\s*[A-Za-z0-9][A-Za-z0-9._:/-]*`)
+
+func replaceUpstreamRequestID(message, requestID string) string {
+	if requestID == "" {
+		return message
+	}
+	return upstreamRequestIDPattern.ReplaceAllStringFunc(message, func(string) string {
+		return "request id: " + requestID
+	})
+}
+
+func messageWithLocalRequestID(message, requestID string) string {
+	replaced := replaceUpstreamRequestID(message, requestID)
+	if replaced != message {
+		return replaced
+	}
+	return common.MessageWithRequestId(message, requestID)
+}
 
 func ShouldHideErrorDetails(c *gin.Context) bool {
 	if !operation_setting.ShouldHideErrorDetails() {
@@ -71,15 +91,98 @@ func TaskErrorForClient(c *gin.Context, taskErr *dto.TaskError) *dto.TaskError {
 		result.Data = nil
 		return &result
 	}
-	result.Message = common.MessageWithRequestId(result.Message, c.GetString(common.RequestIdKey))
+	result.Message = messageWithLocalRequestID(result.Message, c.GetString(common.RequestIdKey))
 	return &result
 }
 
 func TaskFailReasonForClient(c *gin.Context, failReason string) string {
-	if failReason == "" || !ShouldHideErrorDetails(c) {
+	if failReason == "" {
 		return failReason
 	}
-	return PublicErrorMessage(c.GetString(common.RequestIdKey))
+	requestID := c.GetString(common.RequestIdKey)
+	if ShouldHideErrorDetails(c) {
+		return PublicErrorMessage(requestID)
+	}
+	return replaceUpstreamRequestID(failReason, requestID)
+}
+
+func TaskResponseDataForClient(c *gin.Context, data []byte) []byte {
+	if len(data) == 0 || c == nil {
+		return data
+	}
+	requestID := c.GetString(common.RequestIdKey)
+	if requestID == "" {
+		return data
+	}
+
+	sanitized, replaced := replaceUpstreamRequestIDs(json.RawMessage(data), requestID)
+	if !replaced {
+		return data
+	}
+	return sanitized
+}
+
+func replaceUpstreamRequestIDs(data json.RawMessage, requestID string) (json.RawMessage, bool) {
+	switch common.GetJsonType(data) {
+	case "object":
+		var object map[string]json.RawMessage
+		if err := common.Unmarshal(data, &object); err != nil {
+			return data, false
+		}
+		replacedAny := false
+		for key, child := range object {
+			replaced, changed := replaceUpstreamRequestIDs(child, requestID)
+			if changed {
+				object[key] = replaced
+				replacedAny = true
+			}
+		}
+		if !replacedAny {
+			return data, false
+		}
+		sanitized, err := common.Marshal(object)
+		if err != nil {
+			return data, false
+		}
+		return sanitized, true
+	case "array":
+		var array []json.RawMessage
+		if err := common.Unmarshal(data, &array); err != nil {
+			return data, false
+		}
+		replacedAny := false
+		for index, child := range array {
+			replaced, changed := replaceUpstreamRequestIDs(child, requestID)
+			if changed {
+				array[index] = replaced
+				replacedAny = true
+			}
+		}
+		if !replacedAny {
+			return data, false
+		}
+		sanitized, err := common.Marshal(array)
+		if err != nil {
+			return data, false
+		}
+		return sanitized, true
+	case "string":
+		var text string
+		if err := common.Unmarshal(data, &text); err != nil {
+			return data, false
+		}
+		replaced := replaceUpstreamRequestID(text, requestID)
+		if replaced == text {
+			return data, false
+		}
+		sanitized, err := common.Marshal(replaced)
+		if err != nil {
+			return data, false
+		}
+		return sanitized, true
+	default:
+		return data, false
+	}
 }
 
 func StreamErrorDataForClient(c *gin.Context, data string) (string, bool) {

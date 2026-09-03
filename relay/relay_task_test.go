@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/groupdiscount"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -98,6 +99,49 @@ func TestTaskSubmitBufferedSuccessCanBeDiscardedForPersistenceError(t *testing.T
 	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
 	assert.NotContains(t, recorder.Body.String(), "task_public")
 	assert.Contains(t, recorder.Body.String(), "insert_task_failed")
+}
+
+func TestTaskModel2DtoReplacesUpstreamRequestIDs(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("role", common.RoleAdminUser)
+	c.Set(common.RequestIdKey, "request-local")
+	task := &model.Task{
+		TaskID:     "task_public",
+		FailReason: "ratio is invalid. Request id: upstream-failure-id (code=InvalidParameter.TaskTypeConstraint)",
+		Data:       []byte(`{"data":{"result_url":"ratio is invalid. Request id: upstream-data-id (code=InvalidParameter.TaskTypeConstraint)"}}`),
+	}
+
+	result := TaskModel2Dto(c, task)
+
+	assert.Equal(t, "ratio is invalid. request id: request-local (code=InvalidParameter.TaskTypeConstraint)", result.FailReason)
+	assert.JSONEq(t, `{"data":{"result_url":"ratio is invalid. request id: request-local (code=InvalidParameter.TaskTypeConstraint)"}}`, string(result.Data))
+	assert.NotContains(t, string(result.Data), "upstream-data-id")
+}
+
+func TestRelayTaskFetchReplacesUpstreamRequestIDInResponse(t *testing.T) {
+	const testRelayMode = 987654
+	originalBuilder, existed := fetchRespBuilders[testRelayMode]
+	fetchRespBuilders[testRelayMode] = func(*gin.Context) ([]byte, *dto.TaskError) {
+		return []byte(`{"status":"failed","error":{"message":"ratio is invalid. Request id: upstream-request-id (code=InvalidParameter.TaskTypeConstraint)"}}`), nil
+	}
+	t.Cleanup(func() {
+		if existed {
+			fetchRespBuilders[testRelayMode] = originalBuilder
+			return
+		}
+		delete(fetchRespBuilders, testRelayMode)
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/video/generations/task_public", nil)
+	c.Set(common.RequestIdKey, "request-local")
+
+	taskErr := RelayTaskFetch(c, testRelayMode)
+
+	require.Nil(t, taskErr)
+	assert.JSONEq(t, `{"status":"failed","error":{"message":"ratio is invalid. request id: request-local (code=InvalidParameter.TaskTypeConstraint)"}}`, recorder.Body.String())
+	assert.NotContains(t, recorder.Body.String(), "upstream-request-id")
 }
 
 func TestRecalculateTaskSubmitRatiosRebuildsOriginalAndNetFromFrozenPriceInputs(t *testing.T) {

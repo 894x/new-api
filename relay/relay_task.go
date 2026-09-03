@@ -476,6 +476,7 @@ func RelayTaskFetch(c *gin.Context, relayMode int) (taskResp *dto.TaskError) {
 	if len(respBody) == 0 {
 		respBody = []byte("{\"code\":\"success\",\"data\":null}")
 	}
+	respBody = service.TaskResponseDataForClient(c, respBody)
 
 	c.Writer.Header().Set("Content-Type", "application/json")
 	_, err := io.Copy(c.Writer, bytes.NewBuffer(respBody))
@@ -754,6 +755,6 @@ func TaskModel2Dto(c *gin.Context, task *model.Task) *dto.TaskDto {
 		Progress:   task.Progress,
 		Properties: task.Properties,
 		Username:   task.Username,
-		Data:       task.Data,
+		Data:       service.TaskResponseDataForClient(c, task.Data),
 	}
 }

@@ -86,6 +86,63 @@ func TestTaskErrorForClientDoesNotMutateInternalError(t *testing.T) {
 	assert.NotNil(t, taskErr.Data)
 }
 
+func TestTaskErrorForClientReplacesUpstreamRequestID(t *testing.T) {
+	setHideErrorDetails(t, false)
+	c := newErrorClientContext(common.RoleCommonUser, "request-local")
+	taskErr := &dto.TaskError{
+		Code:       "provider_error",
+		Message:    "provider failed. Request id: upstream-request-id",
+		StatusCode: http.StatusBadGateway,
+	}
+
+	result := TaskErrorForClient(c, taskErr)
+
+	assert.Equal(t, "provider failed. request id: request-local", result.Message)
+	assert.NotContains(t, result.Message, "upstream-request-id")
+	assert.Equal(t, "provider failed. Request id: upstream-request-id", taskErr.Message)
+}
+
+func TestTaskFailReasonForClientReplacesUpstreamRequestID(t *testing.T) {
+	setHideErrorDetails(t, false)
+	c := newErrorClientContext(common.RoleCommonUser, "request-local")
+	failReason := "The parameter ratio specified in the request is not valid. Request id: 0217882828433820e23c04e8b740c94d8512f0597aa5fa6ac2318 (code=InvalidParameter.TaskTypeConstraint)"
+
+	result := TaskFailReasonForClient(c, failReason)
+
+	assert.Equal(t, "The parameter ratio specified in the request is not valid. request id: request-local (code=InvalidParameter.TaskTypeConstraint)", result)
+	assert.NotContains(t, result, "0217882828433820e23c04e8b740c94d8512f0597aa5fa6ac2318")
+}
+
+func TestTaskResponseDataForClientReplacesNestedUpstreamRequestID(t *testing.T) {
+	c := newErrorClientContext(common.RoleCommonUser, "request-local")
+	responseBody := []byte(`{"code":"success","data":{"status":"FAILURE","result_url":"ratio is invalid. Request id: upstream-request-123 (code=InvalidParameter.TaskTypeConstraint)"}}`)
+
+	result := TaskResponseDataForClient(c, responseBody)
+
+	assert.JSONEq(t, `{"code":"success","data":{"status":"FAILURE","result_url":"ratio is invalid. request id: request-local (code=InvalidParameter.TaskTypeConstraint)"}}`, string(result))
+	assert.NotContains(t, string(result), "upstream-request-123")
+}
+
+func TestTaskResponseDataForClientKeepsRequestIDURLQuery(t *testing.T) {
+	c := newErrorClientContext(common.RoleCommonUser, "request-local")
+	responseBody := []byte(`{"status":"succeeded","content":{"video_url":"https://example.com/video.mp4?request_id=upstream-signed-value&token=abc"}}`)
+
+	result := TaskResponseDataForClient(c, responseBody)
+
+	assert.Equal(t, string(responseBody), string(result))
+}
+
+func TestTaskResponseDataForClientPreservesLargeJSONIntegers(t *testing.T) {
+	c := newErrorClientContext(common.RoleCommonUser, "request-local")
+	responseBody := []byte(`{"id":9007199254740993,"error":{"message":"failed. Request id: upstream-request-id"}}`)
+
+	result := TaskResponseDataForClient(c, responseBody)
+
+	assert.Contains(t, string(result), `"id":9007199254740993`)
+	assert.NotContains(t, string(result), `"id":9007199254740992`)
+	assert.Contains(t, string(result), "request id: request-local")
+}
+
 func TestStreamErrorDataForClientHidesErrorEventsOnly(t *testing.T) {
 	setHideErrorDetails(t, true)
 	c := newErrorClientContext(common.RoleCommonUser, "request-stream")

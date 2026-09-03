@@ -602,6 +602,11 @@ func TestParseSLSWrappedTaskResult(t *testing.T) {
 			body: `{"code":"success","message":"","data":{"task_id":"task_upstream","status":"FAILURE","progress":"100%","fail_reason":"content rejected"}}`,
 			want: &relaycommon.TaskInfo{TaskID: "task_upstream", Status: string(model.TaskStatusFailure), Progress: "100%", Reason: "content rejected"},
 		},
+		{
+			name: "failed reason in result url",
+			body: `{"code":"success","message":"","data":{"task_id":"task_upstream","status":"FAILURE","progress":"100%","result_url":"The parameter ratio specified in the request is not valid. Request id: 0217882828433820e23c04e8b740c94d8512f0597aa5fa6ac2318 (code=InvalidParameter.TaskTypeConstraint)"}}`,
+			want: &relaycommon.TaskInfo{TaskID: "task_upstream", Status: string(model.TaskStatusFailure), Progress: "100%", Reason: "The parameter ratio specified in the request is not valid. Request id: 0217882828433820e23c04e8b740c94d8512f0597aa5fa6ac2318 (code=InvalidParameter.TaskTypeConstraint)"},
+		},
 	}
 
 	for _, tt := range tests {

@@ -452,6 +452,10 @@ func (a *TaskAdaptor) parseTaskResult(respBody []byte, depth int) (*relaycommon.
 		}
 	case "FAILURE", "FAILED":
 		taskInfo.Status = string(model.TaskStatusFailure)
+		if taskInfo.Reason == "" {
+			taskInfo.Reason = taskInfo.Url
+			taskInfo.Url = ""
+		}
 		if taskInfo.Progress == "" {
 			taskInfo.Progress = taskcommon.ProgressComplete
 		}
