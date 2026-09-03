@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import type { Asset } from '../../types'
@@ -68,6 +68,7 @@ const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { focusManager, QueryClient, QueryClientProvider } =
   await import('@tanstack/react-query')
 const { api } = await import('@/lib/api')
+const { assetLibraryQueryKeys } = await import('../../lib')
 const { AssetLibraryProvider } = await import('../asset-library-provider')
 const { AssetsTable } = await import('../assets-table')
 
@@ -89,6 +90,7 @@ let queryClient: InstanceType<typeof QueryClient> | null = null
 let assetRefreshCount = 0
 let assetStaysProcessing = false
 let assetRefreshFails = false
+let requestedUrls: string[] = []
 
 const processingAsset: Asset = {
   Id: 'asset-na-processing',
@@ -109,9 +111,11 @@ beforeEach(() => {
   assetRefreshCount = 0
   assetStaysProcessing = false
   assetRefreshFails = false
+  requestedUrls = []
   listedAsset = processingAsset
   refreshedAssetOverride = undefined
-  apiClient.post = async (_url, _data, config) => {
+  apiClient.post = async (url, _data, config) => {
+    requestedUrls.push(url)
     switch (config?.params?.Action) {
       case 'ListAssetGroups':
         return {
@@ -166,6 +170,73 @@ afterEach(() => {
 })
 
 describe('asset status refresh', () => {
+  test('does not carry the previous users rows into a newly selected scope', async () => {
+    listedAsset = { ...processingAsset, Status: 'Owner scope' }
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0 } },
+    })
+    const defaultPost = apiClient.post
+    apiClient.post = async (url, data, config) => {
+      if (
+        url === '/api/asset-library/admin/users/42' &&
+        config?.params?.Action === 'ListAssets'
+      ) {
+        return new Promise(() => undefined)
+      }
+      return defaultPost(url, data, config)
+    }
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <AssetLibraryProvider>
+            <AssetsTable />
+          </AssetLibraryProvider>
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await screen.findByText('Owner scope')
+
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <AssetLibraryProvider targetUserId={42}>
+            <AssetsTable />
+          </AssetLibraryProvider>
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    await waitFor(() =>
+      expect(requestedUrls).toContain('/api/asset-library/admin/users/42')
+    )
+    expect(screen.queryByText('Owner scope')).not.toBeInTheDocument()
+  })
+
+  test('reads another users library through the admin scope without polling it', async () => {
+    vi.useFakeTimers()
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0 } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <AssetLibraryProvider targetUserId={42}>
+            <AssetsTable />
+          </AssetLibraryProvider>
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000)
+    })
+
+    expect(requestedUrls).toContain('/api/asset-library/admin/users/42')
+    expect(assetRefreshCount).toBe(0)
+  })
+
   test('updates a processing asset to its terminal status without reloading the page', async () => {
     vi.useFakeTimers()
     queryClient = new QueryClient({
@@ -288,7 +359,7 @@ describe('asset status refresh', () => {
 
     await act(async () => {
       queryClient?.setQueriesData(
-        { queryKey: ['asset-library', 'assets', 'list'] },
+        { queryKey: assetLibraryQueryKeys.assetLists() },
         (page: unknown) => ({
           ...(page as object),
           Items: [{ ...processingAsset, Status: 'Active' }],
@@ -300,7 +371,7 @@ describe('asset status refresh', () => {
 
     await act(async () => {
       queryClient?.setQueriesData(
-        { queryKey: ['asset-library', 'assets', 'list'] },
+        { queryKey: assetLibraryQueryKeys.assetLists() },
         (page: unknown) => ({
           ...(page as object),
           Items: [processingAsset],

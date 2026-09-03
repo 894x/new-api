@@ -70,7 +70,7 @@ export function AssetMutateDialog(props: AssetMutateDialogProps) {
   const isUpdate = !!props.asset
   const { data: groups = [], isLoading: groupsLoading } = useQuery({
     queryKey: assetLibraryQueryKeys.groupOptions(),
-    queryFn: listAllAssetGroups,
+    queryFn: () => listAllAssetGroups(),
     enabled: props.open && !isUpdate,
   })
   const createForm = useForm<AssetFormValues>({

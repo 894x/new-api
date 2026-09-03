@@ -44,6 +44,7 @@ import type {
 } from '../types'
 import { AssetCard } from './asset-card'
 import { useAssetColumns } from './asset-columns'
+import { useAssetLibrary } from './asset-library-provider'
 
 const route = getRouteApi('/_authenticated/asset-library/')
 const ASSET_STATUS_REFRESH_INTERVAL_MS = 4_000
@@ -67,6 +68,7 @@ export function AssetsTable() {
   const isMobile = useMediaQuery('(max-width: 640px)')
   const search = route.useSearch()
   const navigate = route.useNavigate()
+  const { targetUserId, isReadOnly } = useAssetLibrary()
   const {
     globalFilter,
     onGlobalFilterChange,
@@ -92,8 +94,8 @@ export function AssetsTable() {
     ?.value as string[] | undefined) ?? [])[0]
 
   const { data: groups = [] } = useQuery({
-    queryKey: assetLibraryQueryKeys.groupOptions(),
-    queryFn: listAllAssetGroups,
+    queryKey: assetLibraryQueryKeys.groupOptions(targetUserId),
+    queryFn: () => listAllAssetGroups(targetUserId),
   })
   const groupsById = useMemo(
     () => new Map(groups.map((group) => [group.Id, group] as const)),
@@ -122,9 +124,12 @@ export function AssetsTable() {
   )
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: assetLibraryQueryKeys.assetList(request),
-    queryFn: () => listAssets(request),
-    placeholderData: (previousData) => previousData,
+    queryKey: assetLibraryQueryKeys.assetList(request, targetUserId),
+    queryFn: () => listAssets(request, targetUserId),
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[2] === (targetUserId ?? 'self')
+        ? previousData
+        : undefined,
   })
   useEffect(() => {
     const visibleProcessingAssetIds = new Set(
@@ -137,7 +142,10 @@ export function AssetsTable() {
     }
   }, [data?.Items])
   useQueries({
-    queries: (data?.Items ?? []).filter(isAssetProcessing).map((asset) => {
+    queries: (isReadOnly
+      ? []
+      : (data?.Items ?? []).filter(isAssetProcessing)
+    ).map((asset) => {
       const budget = statusRefreshBudgets.current.get(asset.Id)
       return {
         queryKey: assetLibraryQueryKeys.asset(asset.Id),

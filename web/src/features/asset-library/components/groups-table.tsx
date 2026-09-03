@@ -28,6 +28,7 @@ import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { listAssetGroups } from '../api'
 import { assetLibraryQueryKeys } from '../lib'
 import type { ListAssetLibraryRequest } from '../types'
+import { useAssetLibrary } from './asset-library-provider'
 import { GroupCard } from './group-card'
 import { useAssetGroupColumns } from './group-columns'
 
@@ -38,6 +39,7 @@ export function GroupsTable() {
   const isMobile = useMediaQuery('(max-width: 640px)')
   const search = route.useSearch()
   const navigate = route.useNavigate()
+  const { targetUserId } = useAssetLibrary()
   const {
     globalFilter,
     onGlobalFilterChange,
@@ -64,9 +66,12 @@ export function GroupsTable() {
     [globalFilter, pagination.pageIndex, pagination.pageSize]
   )
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: assetLibraryQueryKeys.groupList(request),
-    queryFn: () => listAssetGroups(request),
-    placeholderData: (previousData) => previousData,
+    queryKey: assetLibraryQueryKeys.groupList(request, targetUserId),
+    queryFn: () => listAssetGroups(request, targetUserId),
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[2] === (targetUserId ?? 'self')
+        ? previousData
+        : undefined,
   })
   const includeReplication = Boolean(
     data?.Items.some((group) => group.Replication)

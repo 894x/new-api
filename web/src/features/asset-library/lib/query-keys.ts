@@ -18,11 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export const assetLibraryQueryKeys = {
   all: ['asset-library'] as const,
-  assets: () => [...assetLibraryQueryKeys.all, 'assets'] as const,
-  assetLists: () => [...assetLibraryQueryKeys.assets(), 'list'] as const,
-  assetList: (params: object) =>
-    [...assetLibraryQueryKeys.assetLists(), params] as const,
-  asset: (id: string) => [...assetLibraryQueryKeys.assets(), id] as const,
+  assets: (targetUserId?: number) =>
+    [...assetLibraryQueryKeys.all, 'assets', targetUserId ?? 'self'] as const,
+  assetLists: (targetUserId?: number) =>
+    [...assetLibraryQueryKeys.assets(targetUserId), 'list'] as const,
+  assetList: (params: object, targetUserId?: number) =>
+    [...assetLibraryQueryKeys.assetLists(targetUserId), params] as const,
+  asset: (id: string, targetUserId?: number) =>
+    [...assetLibraryQueryKeys.assets(targetUserId), id] as const,
   assetReplicas: (id: string) =>
     [...assetLibraryQueryKeys.asset(id), 'replicas'] as const,
   statusRefreshes: () =>
@@ -31,11 +34,14 @@ export const assetLibraryQueryKeys = {
     [...assetLibraryQueryKeys.statusRefreshes(), 'library'] as const,
   statusRefreshAsset: (id: string) =>
     [...assetLibraryQueryKeys.statusRefreshes(), 'asset', id] as const,
-  groups: () => [...assetLibraryQueryKeys.all, 'groups'] as const,
-  groupList: (params: object) =>
-    [...assetLibraryQueryKeys.groups(), 'list', params] as const,
-  groupOptions: () => [...assetLibraryQueryKeys.groups(), 'options'] as const,
-  group: (id: string) => [...assetLibraryQueryKeys.groups(), id] as const,
+  groups: (targetUserId?: number) =>
+    [...assetLibraryQueryKeys.all, 'groups', targetUserId ?? 'self'] as const,
+  groupList: (params: object, targetUserId?: number) =>
+    [...assetLibraryQueryKeys.groups(targetUserId), 'list', params] as const,
+  groupOptions: (targetUserId?: number) =>
+    [...assetLibraryQueryKeys.groups(targetUserId), 'options'] as const,
+  group: (id: string, targetUserId?: number) =>
+    [...assetLibraryQueryKeys.groups(targetUserId), id] as const,
   groupReplicas: (id: string) =>
     [...assetLibraryQueryKeys.group(id), 'replicas'] as const,
   channelConfig: (channelId: number) =>

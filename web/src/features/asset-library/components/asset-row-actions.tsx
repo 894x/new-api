@@ -53,7 +53,7 @@ import { useAssetLibrary } from './asset-library-provider'
 export function AssetRowActions(props: { row: Row<Asset> }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const { openAssetDialog } = useAssetLibrary()
+  const { openAssetDialog, isReadOnly } = useAssetLibrary()
   const asset = props.row.original
   const isLibraryRefreshing =
     useIsMutating({
@@ -87,19 +87,21 @@ export function AssetRowActions(props: { row: Row<Asset> }) {
         <MoreHorizontal className='size-4' />
       </DropdownMenuTrigger>
       <DropdownMenuContent align='end' className='w-40'>
-        <DropdownMenuItem
-          disabled={isAssetRefreshing || isLibraryRefreshing}
-          onClick={() => refreshMutation.mutate()}
-        >
-          {t('Refresh asset')}
-          <DropdownMenuShortcut>
-            {isAssetRefreshing ? (
-              <Loader2 className='size-4 animate-spin' />
-            ) : (
-              <RefreshCw className='size-4' />
-            )}
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
+        {!isReadOnly ? (
+          <DropdownMenuItem
+            disabled={isAssetRefreshing || isLibraryRefreshing}
+            onClick={() => refreshMutation.mutate()}
+          >
+            {t('Refresh asset')}
+            <DropdownMenuShortcut>
+              {isAssetRefreshing ? (
+                <Loader2 className='size-4 animate-spin' />
+              ) : (
+                <RefreshCw className='size-4' />
+              )}
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem
           onClick={() => openAssetDialog('preview-asset', asset)}
         >
@@ -108,23 +110,27 @@ export function AssetRowActions(props: { row: Row<Asset> }) {
             <Eye className='size-4' />
           </DropdownMenuShortcut>
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() => openAssetDialog('update-asset', asset)}
-        >
-          {t('Edit')}
-          <DropdownMenuShortcut>
-            <Pencil className='size-4' />
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          className='text-destructive focus:text-destructive'
-          onClick={() => openAssetDialog('delete-asset', asset)}
-        >
-          {t('Delete')}
-          <DropdownMenuShortcut>
-            <Trash2 className='size-4' />
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
+        {!isReadOnly ? (
+          <>
+            <DropdownMenuItem
+              onClick={() => openAssetDialog('update-asset', asset)}
+            >
+              {t('Edit')}
+              <DropdownMenuShortcut>
+                <Pencil className='size-4' />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className='text-destructive focus:text-destructive'
+              onClick={() => openAssetDialog('delete-asset', asset)}
+            >
+              {t('Delete')}
+              <DropdownMenuShortcut>
+                <Trash2 className='size-4' />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   )

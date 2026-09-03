@@ -40,7 +40,7 @@ import { useAssetLibrary } from './asset-library-provider'
 
 export function GroupRowActions(props: { row: Row<AssetGroup> }) {
   const { t } = useTranslation()
-  const { openGroupDialog } = useAssetLibrary()
+  const { openGroupDialog, isReadOnly } = useAssetLibrary()
   const user = useAuthStore((state) => state.auth.user)
   const canViewUpstreamDetails = hasPermission(
     user,
@@ -53,6 +53,8 @@ export function GroupRowActions(props: { row: Row<AssetGroup> }) {
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
   )
   const group = props.row.original
+
+  if (isReadOnly) return null
 
   return (
     <DropdownMenu>

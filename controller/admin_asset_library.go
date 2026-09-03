@@ -3,9 +3,11 @@ package controller
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -14,6 +16,66 @@ import (
 
 type adminAssetLibrarySyncRequest struct {
 	ChannelIds []int `json:"channel_ids,omitempty"`
+}
+
+// AdminAssetLibraryAction exposes read-only asset library queries for a
+// specific user. Mutations remain scoped to the owner's regular endpoint.
+func AdminAssetLibraryAction(c *gin.Context) {
+	action := strings.TrimSpace(c.Query("Action"))
+	version := strings.TrimSpace(c.Query("Version"))
+	if version != service.AssetLibraryVersion {
+		writeAssetLibraryError(c, action, http.StatusBadRequest, "InvalidParameter.Version", "Version must be "+service.AssetLibraryVersion, nil)
+		return
+	}
+	adminId := c.GetInt("id")
+	if adminId <= 0 {
+		writeAssetLibraryError(c, action, http.StatusUnauthorized, "Unauthorized", "user identity is missing", nil)
+		return
+	}
+	if !model.IsAdmin(adminId) {
+		writeAssetLibraryError(c, action, http.StatusForbidden, "AccessDenied", "administrator access is required", nil)
+		return
+	}
+	targetUserId, err := strconv.Atoi(strings.TrimSpace(c.Param("user_id")))
+	if err != nil || targetUserId <= 0 {
+		writeAssetLibraryError(c, action, http.StatusBadRequest, "InvalidParameter.UserId", "UserId must be a positive integer", nil)
+		return
+	}
+	if _, err = model.GetUserById(targetUserId, false); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeAssetLibraryError(c, action, http.StatusNotFound, "NotFound.UserId", "user not found", nil)
+			return
+		}
+		writeAssetLibraryInternalError(c, action, err)
+		return
+	}
+
+	switch action {
+	case "ListAssetGroups":
+		listAssetLibraryGroups(c, targetUserId, true)
+	case "ListAssets":
+		listAssetLibraryAssets(c, targetUserId, true)
+	case "GetAssetGroup":
+		getAssetLibraryGroup(c, targetUserId, true)
+	case "GetAsset":
+		var request dto.GetAssetRequest
+		if !decodeAssetLibraryRequest(c, "GetAsset", &request) {
+			return
+		}
+		asset, err := model.GetUserAsset(targetUserId, strings.TrimSpace(request.Id))
+		if err != nil {
+			writeAssetLibraryLookupError(c, "GetAsset", "NotFound.AssetId", "asset not found", err)
+			return
+		}
+		result, err := buildAssetLibraryResult(asset, nil, true)
+		if err != nil {
+			writeAssetLibraryInternalError(c, "GetAsset", err)
+			return
+		}
+		writeAssetLibrarySuccess(c, "GetAsset", result)
+	default:
+		writeAssetLibraryError(c, action, http.StatusBadRequest, "InvalidParameter.Action", "admin asset library access is read-only", nil)
+	}
 }
 
 func GetAdminAssetReplicaDetails(c *gin.Context) {

@@ -21,7 +21,10 @@ import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
+import { AdminAssetLibraryUserScope } from './components/admin-user-scope'
 import { AssetLibraryDialogs } from './components/asset-library-dialogs'
 import { AssetLibraryPrimaryButtons } from './components/asset-library-primary-buttons'
 import { AssetLibraryProvider } from './components/asset-library-provider'
@@ -34,17 +37,50 @@ export function AssetLibrary() {
   const { t } = useTranslation()
   const search = route.useSearch()
   const navigate = route.useNavigate()
+  const user = useAuthStore((state) => state.auth.user)
   const activeTab = search.tab || 'assets'
+  const isAdmin = (user?.role ?? 0) >= ROLE.ADMIN
+  const targetUserId =
+    isAdmin && search.userId && search.userId !== user?.id
+      ? search.userId
+      : undefined
+
+  const changeTargetUser = (userId?: number) => {
+    navigate({
+      search: (previous) => ({
+        ...previous,
+        userId,
+        page: undefined,
+        filter: undefined,
+        assetType: undefined,
+        groupId: undefined,
+      }),
+    })
+  }
 
   return (
-    <AssetLibraryProvider>
+    <AssetLibraryProvider targetUserId={targetUserId}>
       <SectionPageLayout fixedContent>
         <SectionPageLayout.Title>{t('Asset Library')}</SectionPageLayout.Title>
         <SectionPageLayout.Actions>
-          <AssetLibraryPrimaryButtons />
+          {!targetUserId ? <AssetLibraryPrimaryButtons /> : null}
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
           <div className='flex h-full min-h-0 flex-col gap-3'>
+            {isAdmin && user ? (
+              <AdminAssetLibraryUserScope
+                currentUser={user}
+                targetUserId={targetUserId}
+                onTargetUserIdChange={changeTargetUser}
+              />
+            ) : null}
+            {targetUserId ? (
+              <p className='text-muted-foreground text-sm'>
+                {t('Viewing user #{{id}} in read-only mode.', {
+                  id: targetUserId,
+                })}
+              </p>
+            ) : null}
             <Tabs
               value={activeTab}
               onValueChange={(value) =>

@@ -42,6 +42,7 @@ import {
 import { assetLibraryQueryKeys, getAssetLibraryErrorMessage } from '../lib'
 import type { Asset } from '../types'
 import { AdminReplicaDetails } from './admin-replica-details'
+import { useAssetLibrary } from './asset-library-provider'
 import { ReplicationBadge } from './replication-badge'
 
 function AssetMediaPreview(props: { asset: Asset }) {
@@ -103,21 +104,24 @@ export function AssetPreviewDialog(props: {
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const { targetUserId, isReadOnly } = useAssetLibrary()
   const user = useAuthStore((state) => state.auth.user)
-  const canViewReplicas = hasPermission(
-    user,
-    ADMIN_PERMISSION_RESOURCES.CHANNEL,
-    ADMIN_PERMISSION_ACTIONS.READ
-  )
-  const canSyncReplicas = hasPermission(
-    user,
-    ADMIN_PERMISSION_RESOURCES.CHANNEL,
-    ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
-  )
+  const canViewReplicas =
+    hasPermission(
+      user,
+      ADMIN_PERMISSION_RESOURCES.CHANNEL,
+      ADMIN_PERMISSION_ACTIONS.READ
+    ) && !isReadOnly
+  const canSyncReplicas =
+    hasPermission(
+      user,
+      ADMIN_PERMISSION_RESOURCES.CHANNEL,
+      ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
+    ) && !isReadOnly
   const assetId = props.asset?.Id || ''
   const assetQuery = useQuery({
-    queryKey: assetLibraryQueryKeys.asset(assetId),
-    queryFn: () => getAsset(assetId),
+    queryKey: assetLibraryQueryKeys.asset(assetId, targetUserId),
+    queryFn: () => getAsset(assetId, targetUserId),
     enabled: props.open && !!assetId && !canViewReplicas,
     staleTime: 0,
     gcTime: 0,

@@ -31,6 +31,7 @@ const assetLibrarySearchSchema = z.object({
     .optional()
     .catch([]),
   groupId: z.array(z.string()).optional().catch([]),
+  userId: z.number().int().positive().optional().catch(undefined),
 })
 
 export const Route = createFileRoute('/_authenticated/asset-library/')({

@@ -319,6 +319,120 @@ func TestAssetLibraryActionEnforcesAccountOwnership(t *testing.T) {
 	assert.Equal(t, "NotFound.GroupId", response.ResponseMetadata.Error.Code)
 }
 
+func TestAdminAssetLibraryActionCanReadAnotherUsersAssets(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	const (
+		adminId = 1
+		ownerId = 2
+		groupId = "group-na-22222222222222222222222222222222"
+		assetId = "asset-na-22222222222222222222222222222222"
+	)
+	require.NoError(t, db.Create(&[]model.User{
+		{Id: adminId, Username: "admin", Password: "password", Role: common.RoleAdminUser, AffCode: "admin-aff"},
+		{Id: ownerId, Username: "asset-owner", Password: "password", Role: common.RoleCommonUser, AffCode: "owner-aff"},
+	}).Error)
+	require.NoError(t, db.Create(&model.UserAssetGroup{
+		Id: groupId, UserId: ownerId, Name: "other user's group", GroupType: "AIGC", ProjectName: "default",
+	}).Error)
+	require.NoError(t, db.Create(&model.UserAsset{
+		Id: assetId, UserId: ownerId, GroupId: groupId, Name: "other user's asset",
+		AssetType: "Image", SourceURL: "https://example.com/other-user.png", ProjectName: "default",
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost,
+		"/api/asset-library/admin/users/2?Action=ListAssets&Version=2024-01-01",
+		bytes.NewBufferString(`{"PageNumber":1,"PageSize":20}`),
+	)
+	context.Params = gin.Params{{Key: "user_id", Value: "2"}}
+	context.Set("id", adminId)
+
+	AdminAssetLibraryAction(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Result dto.ListAssetsResult `json:"Result"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Len(t, response.Result.Items, 1)
+	assert.Equal(t, assetId, response.Result.Items[0].Id)
+	assert.Equal(t, "other user's asset", response.Result.Items[0].Name)
+}
+
+func TestAdminAssetLibraryActionRejectsMutationsAgainstAnotherUser(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	require.NoError(t, db.Create(&[]model.User{
+		{Id: 1, Username: "admin", Password: "password", Role: common.RoleAdminUser, AffCode: "admin-aff"},
+		{Id: 2, Username: "asset-owner", Password: "password", Role: common.RoleCommonUser, AffCode: "owner-aff"},
+	}).Error)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost,
+		"/api/asset-library/admin/users/2?Action=DeleteAsset&Version=2024-01-01",
+		bytes.NewBufferString(`{"Id":"asset-na-22222222222222222222222222222222"}`),
+	)
+	context.Params = gin.Params{{Key: "user_id", Value: "2"}}
+	context.Set("id", 1)
+
+	AdminAssetLibraryAction(context)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	var response assetLibraryResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "InvalidParameter.Action", response.ResponseMetadata.Error.Code)
+}
+
+func TestAdminAssetLibraryActionGetAssetDoesNotRefreshUpstreams(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls.Add(1)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"success":true,"data":{"logical_id":"stored-upstream-id","status":"Active"}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	require.NoError(t, db.Create(&[]model.User{
+		{Id: 1, Username: "admin", Password: "password", Role: common.RoleAdminUser, AffCode: "admin-aff"},
+		{Id: 2, Username: "asset-owner", Password: "password", Role: common.RoleCommonUser, AffCode: "owner-aff"},
+	}).Error)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 42, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-key", Name: "Seedance SLS", Status: common.ChannelStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: 42, Enabled: true, Backend: service.AssetLibraryBackendSeedanceSLS,
+		BaseURL: server.URL, AuthType: service.AssetLibraryAuthBearer, APIKey: "sls-key",
+	}).Error)
+	group := &model.UserAssetGroup{
+		Id: "group-na-33333333333333333333333333333333", UserId: 2, Name: "owner group", GroupType: "AIGC", ProjectName: "default",
+	}
+	asset := &model.UserAsset{
+		Id: "asset-na-33333333333333333333333333333333", UserId: 2, GroupId: group.Id,
+		Name: "stored asset", AssetType: "Image", SourceURL: "https://example.com/stored.png", ProjectName: "default",
+	}
+	require.NoError(t, db.Create(group).Error)
+	require.NoError(t, db.Create(asset).Error)
+	require.NoError(t, db.Create(&model.UserAssetReplica{
+		AssetId: asset.Id, ChannelId: 42, UpstreamAssetId: "stored-upstream-id",
+		State: model.AssetReplicaStateProcessing, UpstreamStatus: "Processing",
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost,
+		"/api/asset-library/admin/users/2?Action=GetAsset&Version=2024-01-01",
+		bytes.NewBufferString(`{"Id":"`+asset.Id+`"}`),
+	)
+	context.Params = gin.Params{{Key: "user_id", Value: "2"}}
+	context.Set("id", 1)
+
+	AdminAssetLibraryAction(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Zero(t, calls.Load())
+}
+
 func TestGetAdminAssetReplicaDetailsRefreshesEveryUpstreamBeforeReturning(t *testing.T) {
 	db := setupAssetLibraryControllerTestDB(t)
 	var calls atomic.Int32

@@ -24,6 +24,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { useAuthStore } from '@/stores/auth-store'
 
 import type { Asset } from '../../types'
+import { AssetLibraryProvider } from '../asset-library-provider'
 import { AssetPreviewDialog } from '../asset-preview-dialog'
 
 const { copyToClipboard } = vi.hoisted(() => ({
@@ -64,7 +65,9 @@ describe('AssetPreviewDialog asset URI', () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <AssetPreviewDialog open onOpenChange={vi.fn()} asset={imageAsset} />
+        <AssetLibraryProvider>
+          <AssetPreviewDialog open onOpenChange={vi.fn()} asset={imageAsset} />
+        </AssetLibraryProvider>
       </QueryClientProvider>
     )
 

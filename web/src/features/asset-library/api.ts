@@ -50,10 +50,13 @@ function getAssetLibraryError<TResult>(
 
 async function callAssetLibrary<TResult>(
   action: string,
-  payload: object
+  payload: object,
+  targetUserId?: number
 ): Promise<TResult> {
   const response = await api.post<AssetLibraryResponse<TResult>>(
-    '/api/asset-library',
+    targetUserId
+      ? `/api/asset-library/admin/users/${encodeURIComponent(targetUserId)}`
+      : '/api/asset-library',
     payload,
     {
       ...assetLibraryRequestConfig,
@@ -82,30 +85,39 @@ async function callAssetLibraryVoid(
 }
 
 export function listAssetGroups(
-  request: ListAssetLibraryRequest
+  request: ListAssetLibraryRequest,
+  targetUserId?: number
 ): Promise<AssetGroupsPage> {
-  return callAssetLibrary('ListAssetGroups', request)
+  return callAssetLibrary('ListAssetGroups', request, targetUserId)
 }
 
-export async function listAllAssetGroups(): Promise<AssetGroup[]> {
+export async function listAllAssetGroups(
+  targetUserId?: number
+): Promise<AssetGroup[]> {
   const pageSize = 100
-  const firstPage = await listAssetGroups({
-    PageNumber: 1,
-    PageSize: pageSize,
-    SortBy: 'CreateTime',
-    SortOrder: 'Asc',
-  })
+  const firstPage = await listAssetGroups(
+    {
+      PageNumber: 1,
+      PageSize: pageSize,
+      SortBy: 'CreateTime',
+      SortOrder: 'Asc',
+    },
+    targetUserId
+  )
   const pageCount = Math.ceil(firstPage.TotalCount / pageSize)
   if (pageCount <= 1) return firstPage.Items
 
   const remainingPages = await Promise.all(
     Array.from({ length: pageCount - 1 }, (_, index) =>
-      listAssetGroups({
-        PageNumber: index + 2,
-        PageSize: pageSize,
-        SortBy: 'CreateTime',
-        SortOrder: 'Asc',
-      })
+      listAssetGroups(
+        {
+          PageNumber: index + 2,
+          PageSize: pageSize,
+          SortBy: 'CreateTime',
+          SortOrder: 'Asc',
+        },
+        targetUserId
+      )
     )
   )
 
@@ -113,43 +125,53 @@ export async function listAllAssetGroups(): Promise<AssetGroup[]> {
 }
 
 export function listAssets(
-  request: ListAssetLibraryRequest
+  request: ListAssetLibraryRequest,
+  targetUserId?: number
 ): Promise<AssetsPage> {
-  return callAssetLibrary('ListAssets', request)
+  return callAssetLibrary('ListAssets', request, targetUserId)
 }
 
-export async function listAllAssets(): Promise<Asset[]> {
+export async function listAllAssets(targetUserId?: number): Promise<Asset[]> {
   const pageSize = 100
-  const firstPage = await listAssets({
-    PageNumber: 1,
-    PageSize: pageSize,
-    SortBy: 'CreateTime',
-    SortOrder: 'Asc',
-  })
+  const firstPage = await listAssets(
+    {
+      PageNumber: 1,
+      PageSize: pageSize,
+      SortBy: 'CreateTime',
+      SortOrder: 'Asc',
+    },
+    targetUserId
+  )
   const pageCount = Math.ceil(firstPage.TotalCount / pageSize)
   if (pageCount <= 1) return firstPage.Items
 
   const remainingPages: AssetsPage[] = []
   for (let pageNumber = 2; pageNumber <= pageCount; pageNumber += 1) {
     remainingPages.push(
-      await listAssets({
-        PageNumber: pageNumber,
-        PageSize: pageSize,
-        SortBy: 'CreateTime',
-        SortOrder: 'Asc',
-      })
+      await listAssets(
+        {
+          PageNumber: pageNumber,
+          PageSize: pageSize,
+          SortBy: 'CreateTime',
+          SortOrder: 'Asc',
+        },
+        targetUserId
+      )
     )
   }
 
   return [firstPage, ...remainingPages].flatMap((page) => page.Items)
 }
 
-export function getAssetGroup(id: string): Promise<AssetGroup> {
-  return callAssetLibrary('GetAssetGroup', { Id: id })
+export function getAssetGroup(
+  id: string,
+  targetUserId?: number
+): Promise<AssetGroup> {
+  return callAssetLibrary('GetAssetGroup', { Id: id }, targetUserId)
 }
 
-export function getAsset(id: string): Promise<Asset> {
-  return callAssetLibrary('GetAsset', { Id: id })
+export function getAsset(id: string, targetUserId?: number): Promise<Asset> {
+  return callAssetLibrary('GetAsset', { Id: id }, targetUserId)
 }
 
 export function createAssetGroup(input: {

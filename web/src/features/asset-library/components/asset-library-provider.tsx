@@ -32,6 +32,8 @@ type AssetLibraryContextValue = {
   open: AssetLibraryDialogType
   currentAsset: Asset | null
   currentGroup: AssetGroup | null
+  targetUserId?: number
+  isReadOnly: boolean
   openAssetDialog: (dialog: AssetLibraryDialogType, asset?: Asset) => void
   openGroupDialog: (dialog: AssetLibraryDialogType, group?: AssetGroup) => void
   closeDialog: () => void
@@ -39,7 +41,10 @@ type AssetLibraryContextValue = {
 
 const AssetLibraryContext = createContext<AssetLibraryContextValue | null>(null)
 
-export function AssetLibraryProvider(props: { children: ReactNode }) {
+export function AssetLibraryProvider(props: {
+  children: ReactNode
+  targetUserId?: number
+}) {
   const [open, setOpen] = useState<AssetLibraryDialogType>(null)
   const [currentAsset, setCurrentAsset] = useState<Asset | null>(null)
   const [currentGroup, setCurrentGroup] = useState<AssetGroup | null>(null)
@@ -73,6 +78,8 @@ export function AssetLibraryProvider(props: { children: ReactNode }) {
       open,
       currentAsset,
       currentGroup,
+      targetUserId: props.targetUserId,
+      isReadOnly: props.targetUserId !== undefined,
       openAssetDialog,
       openGroupDialog,
       closeDialog,
@@ -81,6 +88,7 @@ export function AssetLibraryProvider(props: { children: ReactNode }) {
       open,
       currentAsset,
       currentGroup,
+      props.targetUserId,
       openAssetDialog,
       openGroupDialog,
       closeDialog,

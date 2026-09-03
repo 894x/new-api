@@ -37,7 +37,7 @@ import { useAssetLibrary } from './asset-library-provider'
 export function AssetLibraryPrimaryButtons() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const { openAssetDialog, openGroupDialog } = useAssetLibrary()
+  const { openAssetDialog, openGroupDialog, isReadOnly } = useAssetLibrary()
   const isAnyStatusRefreshing =
     useIsMutating({
       mutationKey: assetLibraryQueryKeys.statusRefreshes(),
@@ -62,6 +62,8 @@ export function AssetLibraryPrimaryButtons() {
         getAssetLibraryErrorMessage(error, t('Failed to refresh asset library'))
       ),
   })
+
+  if (isReadOnly) return null
 
   return (
     <div className='flex flex-wrap gap-2'>
