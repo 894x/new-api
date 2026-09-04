@@ -8,6 +8,14 @@ import (
 )
 
 func SetVideoRouter(router *gin.Engine) {
+	miniMaxVideoV2Router := router.Group("/v2")
+	miniMaxVideoV2Router.Use(middleware.RouteTag("relay"))
+	miniMaxVideoV2Router.Use(middleware.MiniMaxVideoV2RequestConvert(), middleware.TokenAuth(), middleware.AssetLibraryRouting(), middleware.Distribute())
+	{
+		miniMaxVideoV2Router.POST("/video_generation", controller.RelayTask)
+		miniMaxVideoV2Router.GET("/query/video_generation/:task_id", controller.RelayTaskFetch)
+	}
+
 	doubaoVideoRouter := router.Group("/api/v3/contents/generations")
 	doubaoVideoRouter.Use(middleware.RouteTag("relay"))
 	doubaoVideoRouter.Use(middleware.DoubaoVideoRequestConvert(), middleware.TokenAuth(), middleware.AssetLibraryRouting(), middleware.Distribute())
