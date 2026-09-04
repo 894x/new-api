@@ -242,9 +242,14 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if adaptor == nil {
 		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
 	}
-	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+	taskResponseFormat := common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat)
+	if taskResponseFormat == constant.TaskResponseFormatDoubaoVideo {
 		if _, ok := adaptor.(channel.NativeVideoConverter); !ok {
 			return nil, service.TaskErrorWrapperLocal(errors.New("selected channel does not support the Doubao video protocol"), "invalid_api_platform", http.StatusBadRequest)
+		}
+	} else if taskResponseFormat == constant.TaskResponseFormatAliVideo {
+		if _, ok := adaptor.(channel.AliNativeVideoConverter); !ok {
+			return nil, service.TaskErrorWrapperLocal(errors.New("selected channel does not support the Ali video protocol"), "invalid_api_platform", http.StatusBadRequest)
 		}
 	}
 	adaptor.Init(info)
@@ -556,7 +561,8 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		return
 	}
 
-	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+	taskResponseFormat := common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat)
+	if taskResponseFormat == constant.TaskResponseFormatDoubaoVideo {
 		adaptor := GetTaskAdaptor(originTask.Platform)
 		if adaptor == nil {
 			return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid channel id: %d", originTask.ChannelId), "invalid_channel_id", http.StatusBadRequest)
@@ -568,6 +574,20 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		respBody, err = converter.ConvertToNativeVideo(originTask)
 		if err != nil {
 			return nil, service.TaskErrorWrapper(err, "convert_to_native_video_failed", http.StatusInternalServerError)
+		}
+		return respBody, nil
+	} else if taskResponseFormat == constant.TaskResponseFormatAliVideo {
+		adaptor := GetTaskAdaptor(originTask.Platform)
+		if adaptor == nil {
+			return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid channel id: %d", originTask.ChannelId), "invalid_channel_id", http.StatusBadRequest)
+		}
+		converter, ok := adaptor.(channel.AliNativeVideoConverter)
+		if !ok {
+			return nil, service.TaskErrorWrapperLocal(errors.New("task does not support the Ali video protocol"), "not_implemented", http.StatusNotImplemented)
+		}
+		respBody, err = converter.ConvertToAliNativeVideo(originTask)
+		if err != nil {
+			return nil, service.TaskErrorWrapper(err, "convert_to_ali_native_video_failed", http.StatusInternalServerError)
 		}
 		return respBody, nil
 	}

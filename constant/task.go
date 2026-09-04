@@ -18,7 +18,10 @@ const (
 	TaskActionRemix             = "remixGenerate"
 )
 
-const TaskResponseFormatDoubaoVideo = "doubao_video"
+const (
+	TaskResponseFormatDoubaoVideo = "doubao_video"
+	TaskResponseFormatAliVideo    = "ali_video"
+)
 
 var SunoModel2Action = map[string]string{
 	"suno_music":  SunoActionMusic,

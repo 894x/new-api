@@ -24,6 +24,11 @@ const (
 // 1 === ￥0.014 / 1k tokens
 
 var defaultModelRatio = map[string]float64{
+	// Wan3 is billed per generated second. The base ratio represents the
+	// Beijing 480P public price; the Ali task adaptor applies duration and
+	// resolution multipliers.
+	"wan3.0-video":       2 * 0.3 / USD2RMB,
+	"wan3.0-video-prime": 2 * 0.45 / USD2RMB,
 	//"midjourney":                50,
 	"gpt-4-gizmo-*":                             15,
 	"gpt-4o-gizmo-*":                            2.5,

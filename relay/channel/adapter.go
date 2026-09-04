@@ -115,3 +115,9 @@ type OpenAIVideoConverter interface {
 type NativeVideoConverter interface {
 	ConvertToNativeVideo(originTask *model.Task) ([]byte, error)
 }
+
+// AliNativeVideoConverter renders a stored task using the DashScope async
+// task response contract used by Wan video generation APIs.
+type AliNativeVideoConverter interface {
+	ConvertToAliNativeVideo(originTask *model.Task) ([]byte, error)
+}

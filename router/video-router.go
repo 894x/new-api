@@ -8,6 +8,14 @@ import (
 )
 
 func SetVideoRouter(router *gin.Engine) {
+	aliVideoRouter := router.Group("/api/v1")
+	aliVideoRouter.Use(middleware.RouteTag("relay"))
+	aliVideoRouter.Use(middleware.AliVideoRequestConvert(), middleware.TokenAuth(), middleware.AssetLibraryRouting(), middleware.Distribute())
+	{
+		aliVideoRouter.POST("/services/aigc/video-generation/video-synthesis", controller.RelayTask)
+		aliVideoRouter.GET("/tasks/:task_id", controller.RelayTaskFetch)
+	}
+
 	doubaoVideoRouter := router.Group("/api/v3/contents/generations")
 	doubaoVideoRouter.Use(middleware.RouteTag("relay"))
 	doubaoVideoRouter.Use(middleware.DoubaoVideoRequestConvert(), middleware.TokenAuth(), middleware.AssetLibraryRouting(), middleware.Distribute())

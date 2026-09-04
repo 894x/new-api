@@ -1,6 +1,8 @@
 package ali
 
 var ModelList = []string{
+	"wan3.0-video-prime",
+	"wan3.0-video",
 	"qwen-turbo",
 	"qwen-plus",
 	"qwen-max",
