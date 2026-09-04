@@ -16,15 +16,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-// ============================================================================
-// Wallet Hooks Exports
-// ============================================================================
+import { describe, expect, test } from 'vitest'
 
-export * from './use-topup-info'
-export * from './use-payment'
-export * from './use-affiliate'
-export * from './use-redemption'
-export * from './use-creem-payment'
-export * from './use-waffo-payment'
-export * from './use-waffo-pancake-payment'
-export * from './use-wechat-payment'
+import { calculatePresetPricing } from './format'
+
+describe('calculatePresetPricing', () => {
+  test('treats CNY presets as direct CNY amounts', () => {
+    expect(calculatePresetPricing(100, 7.3, 1, 7.3)).toEqual({
+      displayValue: 100,
+      originalPrice: 100,
+      actualPrice: 100,
+      savedAmount: 0,
+      hasDiscount: false,
+    })
+  })
+
+  test('keeps USD presets priced through the payment rate', () => {
+    expect(calculatePresetPricing(10, 7.3, 1, 1)).toEqual({
+      displayValue: 10,
+      originalPrice: 73,
+      actualPrice: 73,
+      savedAmount: 0,
+      hasDiscount: false,
+    })
+  })
+})

@@ -20,10 +20,13 @@ import (
 func TestTopUpQuotaValidation(t *testing.T) {
 	oldQuotaPerUnit := common.QuotaPerUnit
 	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	oldUSDExchangeRate := operation_setting.USDExchangeRate
 	common.QuotaPerUnit = 500000
+	operation_setting.USDExchangeRate = 7.3
 	t.Cleanup(func() {
 		common.QuotaPerUnit = oldQuotaPerUnit
 		operation_setting.GetGeneralSetting().QuotaDisplayType = oldDisplayType
+		operation_setting.USDExchangeRate = oldUSDExchangeRate
 	})
 
 	testCases := []struct {
@@ -44,6 +47,12 @@ func TestTopUpQuotaValidation(t *testing.T) {
 			displayType: operation_setting.QuotaDisplayTypeUSD,
 			amount:      4295,
 			wantErr:     true,
+		},
+		{
+			name:        "CNY amount is converted to equivalent USD quota",
+			displayType: operation_setting.QuotaDisplayTypeCNY,
+			amount:      100,
+			wantQuota:   6_849_315,
 		},
 		{
 			name:        "token amount preserves settlement truncation",
@@ -71,6 +80,41 @@ func TestTopUpQuotaValidation(t *testing.T) {
 			assert.Equal(t, tc.wantQuota, quota)
 		})
 	}
+}
+
+func TestGetPayMoneyTreatsCNYAmountAsTheConfiguredPaymentUnit(t *testing.T) {
+	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	oldUSDExchangeRate := operation_setting.USDExchangeRate
+	oldPrice := operation_setting.Price
+	oldTopupGroupRatio := common.TopupGroupRatio2JSONString()
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeCNY
+	operation_setting.USDExchangeRate = 7.3
+	operation_setting.Price = 7.3
+	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(`{}`))
+	t.Cleanup(func() {
+		operation_setting.GetGeneralSetting().QuotaDisplayType = oldDisplayType
+		operation_setting.USDExchangeRate = oldUSDExchangeRate
+		operation_setting.Price = oldPrice
+		require.NoError(t, common.UpdateTopupGroupRatioByJSONString(oldTopupGroupRatio))
+	})
+
+	assert.InDelta(t, 100, getPayMoney(100, "default"), 0.000001)
+	assert.Equal(t, int64(31_353), getMaxTopUpAmount())
+}
+
+func TestCNYTopUpRejectsAnInvalidExchangeRate(t *testing.T) {
+	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	oldUSDExchangeRate := operation_setting.USDExchangeRate
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeCNY
+	operation_setting.USDExchangeRate = 0
+	t.Cleanup(func() {
+		operation_setting.GetGeneralSetting().QuotaDisplayType = oldDisplayType
+		operation_setting.USDExchangeRate = oldUSDExchangeRate
+	})
+
+	_, err := getTopUpQuota(100)
+	require.EqualError(t, err, "充值额度必须大于 0")
+	assert.Zero(t, getPayMoney(100, "default"))
 }
 
 func TestValidateTopUpQuotaReturnsMaximumAmount(t *testing.T) {

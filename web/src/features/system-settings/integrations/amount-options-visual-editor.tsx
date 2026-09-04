@@ -31,11 +31,13 @@ import { isArray } from '../utils/json-validators'
 type AmountOptionsVisualEditorProps = {
   value: string
   onChange: (value: string) => void
+  currencySymbol?: string
 }
 
 export function AmountOptionsVisualEditor({
   value,
   onChange,
+  currencySymbol = '$',
 }: AmountOptionsVisualEditorProps) {
   const { t } = useTranslation()
   const [newAmount, setNewAmount] = useState('')
@@ -49,14 +51,14 @@ export function AmountOptionsVisualEditor({
     })
 
     return parsed
-      .filter((item) => typeof item === 'number' || !isNaN(Number(item)))
+      .filter((item) => typeof item === 'number' || !Number.isNaN(Number(item)))
       .map(Number)
       .sort((a, b) => a - b)
   }, [value, t])
 
   const handleAdd = () => {
-    const amount = parseFloat(newAmount)
-    if (isNaN(amount) || amount <= 0) {
+    const amount = Number.parseFloat(newAmount)
+    if (Number.isNaN(amount) || amount <= 0) {
       return
     }
 
@@ -112,7 +114,10 @@ export function AmountOptionsVisualEditor({
                 className='text-base'
                 copyable={false}
               >
-                <span className='font-mono'>${amount}</span>
+                <span className='font-mono'>
+                  {currencySymbol}
+                  {amount}
+                </span>
                 <Button
                   type='button'
                   variant='ghost'
@@ -123,7 +128,9 @@ export function AmountOptionsVisualEditor({
                     handleRemove(amount)
                   }}
                   className='hover:bg-muted-foreground/20 size-auto p-0.5'
-                  aria-label={t('Remove ${{amount}}', { amount })}
+                  aria-label={t('Remove {{amount}}', {
+                    amount: `${currencySymbol}${amount}`,
+                  })}
                 >
                   <X className='h-3.5 w-3.5' />
                 </Button>
@@ -156,7 +163,7 @@ export function AmountOptionsVisualEditor({
             e.stopPropagation()
             handleAdd()
           }}
-          disabled={!newAmount || parseFloat(newAmount) <= 0}
+          disabled={!newAmount || Number.parseFloat(newAmount) <= 0}
           className='w-full sm:w-auto'
         >
           <Plus className='h-4 w-4 sm:mr-2' />

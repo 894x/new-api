@@ -216,6 +216,40 @@ func TestRechargeEpayCreditsQuotaExactlyOnce(t *testing.T) {
 	assert.Equal(t, 2*500000, getUserQuotaForPaymentGuardTest(t, user.Id))
 }
 
+func TestRechargeEpayUsesTheQuotaCapturedWhenTheOrderWasCreated(t *testing.T) {
+	truncateTables(t)
+
+	oldQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() { common.QuotaPerUnit = oldQuotaPerUnit })
+
+	user := insertUserForPaymentGuardTest(t, 507, 0)
+	order := createEpayTestOrder(t, user.Id, "EPAYCAPTUREDQUOTA", PaymentProviderEpay, common.TopUpStatusPending)
+	order.CreditedQuota = 6_849_315
+	require.NoError(t, DB.Model(&order).Update("credited_quota", order.CreditedQuota).Error)
+
+	alreadyDone, err := RechargeEpay(order.TradeNo, "alipay", "127.0.0.1")
+	require.NoError(t, err)
+	assert.False(t, alreadyDone)
+	assert.Equal(t, 6_849_315, getUserQuotaForPaymentGuardTest(t, user.Id))
+}
+
+func TestManualCompleteTopUpUsesTheQuotaCapturedWhenTheOrderWasCreated(t *testing.T) {
+	truncateTables(t)
+
+	oldQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() { common.QuotaPerUnit = oldQuotaPerUnit })
+
+	user := insertUserForPaymentGuardTest(t, 508, 0)
+	order := createEpayTestOrder(t, user.Id, "EPAYMANUALCAPTUREDQUOTA", PaymentProviderEpay, common.TopUpStatusPending)
+	order.CreditedQuota = 6_849_315
+	require.NoError(t, DB.Model(&order).Update("credited_quota", order.CreditedQuota).Error)
+
+	require.NoError(t, ManualCompleteTopUp(order.TradeNo, "127.0.0.1"))
+	assert.Equal(t, 6_849_315, getUserQuotaForPaymentGuardTest(t, user.Id))
+}
+
 func TestRechargeEpayKeepsRedisAndDatabaseCreditInSync(t *testing.T) {
 	truncateTables(t)
 	server := useUserCacheMiniRedis(t)

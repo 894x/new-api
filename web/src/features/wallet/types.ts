@@ -59,6 +59,18 @@ export type WaffoPancakePaymentResponse = ApiResponse<
     }
   | string
 >
+export interface WechatPayOrder {
+  code_url: string
+  trade_no: string
+  money_cents: number
+  expires_at: number
+}
+export type WechatPayPaymentResponse = ApiResponse<WechatPayOrder>
+export type WechatPayStatusResponse = ApiResponse<{
+  status: TopupStatus
+  trade_no: string
+  trade_state?: string
+}>
 
 /**
  * Creem product configuration
@@ -124,6 +136,8 @@ export interface TopupInfo {
   enable_online_topup: boolean
   /** Whether Stripe topup is enabled */
   enable_stripe_topup: boolean
+  /** Whether native WeChat Pay topup is enabled */
+  enable_wechatpay_topup?: boolean
   /** Available payment methods */
   pay_methods: PaymentMethod[]
   /** Minimum topup amount for online topup */

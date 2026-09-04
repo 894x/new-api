@@ -21,6 +21,7 @@ import { describe, expect, test } from 'vitest'
 import { PAYMENT_TYPES } from '../constants'
 import {
   dispatchSelectedPayment,
+  getMinTopupAmount,
   isStripePayment,
   isWaffoPayment,
   isWaffoPancakePayment,
@@ -81,5 +82,22 @@ describe('payment dispatch', () => {
 
     expect(success).toBe(false)
     expect(called).toBe(false)
+  })
+})
+
+describe('payment minimum', () => {
+  test('uses the configured minimum when WeChat Pay is the only gateway', () => {
+    expect(
+      getMinTopupAmount({
+        enable_online_topup: false,
+        enable_stripe_topup: false,
+        enable_wechatpay_topup: true,
+        pay_methods: [],
+        min_topup: 20,
+        stripe_min_topup: 1,
+        amount_options: [],
+        discount: {},
+      })
+    ).toBe(20)
   })
 })

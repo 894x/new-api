@@ -46,7 +46,9 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { confirmPaymentCompliance } from '../api'
 import {
@@ -102,6 +104,18 @@ const paymentSchema = z.object({
   }, 'Provide a valid callback URL starting with http:// or https://'),
   EpayId: z.string(),
   EpayKey: z.string(),
+  WechatPayAppID: z.string(),
+  WechatPayMchID: z.string(),
+  WechatPayMerchantSerialNumber: z.string(),
+  WechatPayAPIv3Key: z
+    .string()
+    .refine(
+      (value) => value.trim() === '' || value.trim().length === 32,
+      'API v3 key must be exactly 32 characters'
+    ),
+  WechatPayMerchantPrivateKey: z.string(),
+  WechatPayPublicKeyID: z.string(),
+  WechatPayPublicKey: z.string(),
   Price: z.coerce.number().min(0),
   MinTopUp: z.coerce.number().min(0),
   CustomCallbackAddress: z
@@ -224,6 +238,22 @@ export function PaymentSettingsSection({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const updateOption = useUpdateOption()
+  const currency = useSystemConfigStore((state) => state.config.currency)
+  const paymentAmountCurrency = React.useMemo(() => {
+    switch (currency.quotaDisplayType) {
+      case 'CNY':
+        return { label: 'CNY', symbol: '¥' }
+      case 'CUSTOM':
+        return {
+          label: t('Custom Currency'),
+          symbol: currency.customCurrencySymbol || '¤',
+        }
+      case 'TOKENS':
+        return { label: t('Tokens'), symbol: '' }
+      default:
+        return { label: 'USD', symbol: '$' }
+    }
+  }, [currency.customCurrencySymbol, currency.quotaDisplayType, t])
   const initialFormValues = React.useMemo<PaymentFormValues>(
     () => ({
       ...defaultValues,
@@ -421,6 +451,14 @@ export function PaymentSettingsSection({
       PayAddress: removeTrailingSlash(values.PayAddress),
       EpayId: values.EpayId.trim(),
       EpayKey: values.EpayKey.trim(),
+      WechatPayAppID: values.WechatPayAppID.trim(),
+      WechatPayMchID: values.WechatPayMchID.trim(),
+      WechatPayMerchantSerialNumber:
+        values.WechatPayMerchantSerialNumber.trim(),
+      WechatPayAPIv3Key: values.WechatPayAPIv3Key.trim(),
+      WechatPayMerchantPrivateKey: values.WechatPayMerchantPrivateKey.trim(),
+      WechatPayPublicKeyID: values.WechatPayPublicKeyID.trim(),
+      WechatPayPublicKey: values.WechatPayPublicKey.trim(),
       Price: values.Price,
       MinTopUp: values.MinTopUp,
       CustomCallbackAddress: removeTrailingSlash(values.CustomCallbackAddress),
@@ -463,6 +501,15 @@ export function PaymentSettingsSection({
       PayAddress: removeTrailingSlash(initialRef.current.PayAddress),
       EpayId: initialRef.current.EpayId.trim(),
       EpayKey: initialRef.current.EpayKey.trim(),
+      WechatPayAppID: initialRef.current.WechatPayAppID.trim(),
+      WechatPayMchID: initialRef.current.WechatPayMchID.trim(),
+      WechatPayMerchantSerialNumber:
+        initialRef.current.WechatPayMerchantSerialNumber.trim(),
+      WechatPayAPIv3Key: initialRef.current.WechatPayAPIv3Key.trim(),
+      WechatPayMerchantPrivateKey:
+        initialRef.current.WechatPayMerchantPrivateKey.trim(),
+      WechatPayPublicKeyID: initialRef.current.WechatPayPublicKeyID.trim(),
+      WechatPayPublicKey: initialRef.current.WechatPayPublicKey.trim(),
       Price: initialRef.current.Price,
       MinTopUp: initialRef.current.MinTopUp,
       CustomCallbackAddress: removeTrailingSlash(
@@ -518,6 +565,52 @@ export function PaymentSettingsSection({
 
     if (sanitized.EpayKey && sanitized.EpayKey !== initial.EpayKey) {
       updates.push({ key: 'EpayKey', value: sanitized.EpayKey })
+    }
+
+    if (sanitized.WechatPayAppID !== initial.WechatPayAppID) {
+      updates.push({ key: 'WechatPayAppID', value: sanitized.WechatPayAppID })
+    }
+
+    if (sanitized.WechatPayMchID !== initial.WechatPayMchID) {
+      updates.push({ key: 'WechatPayMchID', value: sanitized.WechatPayMchID })
+    }
+
+    if (
+      sanitized.WechatPayMerchantSerialNumber !==
+      initial.WechatPayMerchantSerialNumber
+    ) {
+      updates.push({
+        key: 'WechatPayMerchantSerialNumber',
+        value: sanitized.WechatPayMerchantSerialNumber,
+      })
+    }
+
+    if (sanitized.WechatPayPublicKeyID !== initial.WechatPayPublicKeyID) {
+      updates.push({
+        key: 'WechatPayPublicKeyID',
+        value: sanitized.WechatPayPublicKeyID,
+      })
+    }
+
+    if (sanitized.WechatPayAPIv3Key) {
+      updates.push({
+        key: 'WechatPayAPIv3Key',
+        value: sanitized.WechatPayAPIv3Key,
+      })
+    }
+
+    if (sanitized.WechatPayMerchantPrivateKey) {
+      updates.push({
+        key: 'WechatPayMerchantPrivateKey',
+        value: sanitized.WechatPayMerchantPrivateKey,
+      })
+    }
+
+    if (sanitized.WechatPayPublicKey) {
+      updates.push({
+        key: 'WechatPayPublicKey',
+        value: sanitized.WechatPayPublicKey,
+      })
     }
 
     if (sanitized.Price !== initial.Price) {
@@ -877,9 +970,10 @@ export function PaymentSettingsSection({
           />
           <Tabs defaultValue='general' className='min-w-0'>
             <div className='overflow-x-auto pb-1'>
-              <TabsList className='grid min-w-[44rem] grid-cols-6'>
+              <TabsList className='grid min-w-[50rem] grid-cols-7'>
                 <TabsTrigger value='general'>{t('General')}</TabsTrigger>
                 <TabsTrigger value='epay'>Epay</TabsTrigger>
+                <TabsTrigger value='wechatpay'>{t('WeChat Pay')}</TabsTrigger>
                 <TabsTrigger value='stripe'>{t('Stripe')}</TabsTrigger>
                 <TabsTrigger value='creem'>Creem</TabsTrigger>
                 <TabsTrigger value='waffo-pancake'>Waffo Pancake</TabsTrigger>
@@ -898,6 +992,15 @@ export function PaymentSettingsSection({
                   </p>
                 </div>
 
+                <Alert>
+                  <AlertDescription>
+                    {t(
+                      'Top-up limits, presets, and discount thresholds are entered directly in {{currency}}.',
+                      { currency: paymentAmountCurrency.label }
+                    )}
+                  </AlertDescription>
+                </Alert>
+
                 <div className='grid gap-6 md:grid-cols-2'>
                   <FormField
                     control={form.control}
@@ -905,7 +1008,9 @@ export function PaymentSettingsSection({
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>
-                          {t('Price (local currency / USD)')}
+                          {currency.quotaDisplayType === 'CNY'
+                            ? t('Payment price (CNY per USD credit)')
+                            : t('Price (local currency / USD)')}
                         </FormLabel>
                         <FormControl>
                           <Input
@@ -917,7 +1022,7 @@ export function PaymentSettingsSection({
                         </FormControl>
                         <FormDescription>
                           {t(
-                            'How much to charge for each US dollar of balance (Epay)'
+                            'How much to charge for each US dollar of balance (Epay and WeChat Pay)'
                           )}
                         </FormDescription>
                         <FormMessage />
@@ -930,7 +1035,11 @@ export function PaymentSettingsSection({
                     name='MinTopUp'
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>{t('Minimum top-up (USD)')}</FormLabel>
+                        <FormLabel>
+                          {t('Minimum top-up ({{currency}})', {
+                            currency: paymentAmountCurrency.label,
+                          })}
+                        </FormLabel>
                         <FormControl>
                           <Input
                             type='number'
@@ -940,7 +1049,9 @@ export function PaymentSettingsSection({
                           />
                         </FormControl>
                         <FormDescription>
-                          {t('Smallest USD amount users can recharge (Epay)')}
+                          {t(
+                            'Smallest amount users can recharge in the configured top-up currency.'
+                          )}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
@@ -1047,6 +1158,7 @@ export function PaymentSettingsSection({
                             <AmountOptionsVisualEditor
                               value={field.value}
                               onChange={field.onChange}
+                              currencySymbol={paymentAmountCurrency.symbol}
                             />
                           ) : (
                             <JsonCodeEditor
@@ -1107,6 +1219,8 @@ export function PaymentSettingsSection({
                             <AmountDiscountVisualEditor
                               value={field.value}
                               onChange={field.onChange}
+                              currencyLabel={paymentAmountCurrency.label}
+                              currencySymbol={paymentAmountCurrency.symbol}
                             />
                           ) : (
                             <JsonCodeEditor
@@ -1250,6 +1364,207 @@ export function PaymentSettingsSection({
                     )}
                   />
                 </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent
+              value='wechatpay'
+              className={paymentTabContentClassName}
+            >
+              <div className='space-y-5'>
+                <div>
+                  <h3 className='text-lg font-medium'>
+                    {t('WeChat Pay Native')}
+                  </h3>
+                  <p className='text-muted-foreground text-sm'>
+                    {t(
+                      'Direct merchant integration using WeChat Pay API v3 public key mode.'
+                    )}
+                  </p>
+                </div>
+
+                <Alert>
+                  <ShieldAlert className='h-4 w-4' />
+                  <AlertTitle>{t('Callback configuration')}</AlertTitle>
+                  <AlertDescription className='space-y-1'>
+                    <p>
+                      {t(
+                        'Configure this payment notification URL in WeChat Pay:'
+                      )}{' '}
+                      <code className='break-all'>
+                        {'<Callback address>/api/user/wechatpay/notify'}
+                      </code>
+                    </p>
+                    <p>
+                      {t(
+                        'The callback address must be a publicly reachable HTTPS origin.'
+                      )}
+                    </p>
+                  </AlertDescription>
+                </Alert>
+
+                <FormField
+                  control={form.control}
+                  name='CustomCallbackAddress'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Callback address')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder={t('https://gateway.example.com')}
+                          {...field}
+                          onChange={(event) =>
+                            field.onChange(event.target.value)
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Enter only the HTTPS site origin without a path. Leave blank to use the server address.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <div className='grid gap-6 md:grid-cols-2'>
+                  <FormField
+                    control={form.control}
+                    name='WechatPayAppID'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('WeChat AppID')}</FormLabel>
+                        <FormControl>
+                          <Input autoComplete='off' {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='WechatPayMchID'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('WeChat Pay merchant ID')}</FormLabel>
+                        <FormControl>
+                          <Input autoComplete='off' {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='WechatPayMerchantSerialNumber'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          {t('Merchant certificate serial number')}
+                        </FormLabel>
+                        <FormControl>
+                          <Input autoComplete='off' {...field} />
+                        </FormControl>
+                        <FormDescription>
+                          {t('Serial number matching the merchant private key')}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='WechatPayPublicKeyID'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('WeChat Pay public key ID')}</FormLabel>
+                        <FormControl>
+                          <Input autoComplete='off' {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <FormField
+                  control={form.control}
+                  name='WechatPayAPIv3Key'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('API v3 key')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='password'
+                          autoComplete='new-password'
+                          placeholder={t('Enter new key to update')}
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Exactly 32 characters; leave blank unless rotating the secret'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <div className='grid gap-6 lg:grid-cols-2'>
+                  <FormField
+                    control={form.control}
+                    name='WechatPayMerchantPrivateKey'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Merchant private key PEM')}</FormLabel>
+                        <FormControl>
+                          <Textarea
+                            className='min-h-40 font-mono text-xs'
+                            autoComplete='new-password'
+                            placeholder='-----BEGIN PRIVATE KEY-----'
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t('Leave blank unless rotating the secret')}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='WechatPayPublicKey'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('WeChat Pay public key PEM')}</FormLabel>
+                        <FormControl>
+                          <Textarea
+                            className='min-h-40 font-mono text-xs'
+                            autoComplete='new-password'
+                            placeholder='-----BEGIN PUBLIC KEY-----'
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t('Leave blank unless rotating the key')}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <a
+                  href='https://pay.weixin.qq.com/doc/v3/merchant/4013053249'
+                  target='_blank'
+                  rel='noreferrer'
+                  className='text-primary inline-flex text-sm underline underline-offset-4'
+                >
+                  {t('Open WeChat Pay API v3 documentation')}
+                </a>
               </div>
             </TabsContent>
 

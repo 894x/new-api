@@ -108,3 +108,27 @@ func isEpayWebhookConfigured() bool {
 func isEpayWebhookEnabled() bool {
 	return isEpayTopUpEnabled()
 }
+
+func isWechatPayTopUpEnabled() bool {
+	if !isPaymentComplianceConfirmed() {
+		return false
+	}
+	return isWechatPayWebhookConfigured()
+}
+
+func isWechatPayWebhookConfigured() bool {
+	return strings.TrimSpace(setting.WechatPayAppID) != "" &&
+		strings.TrimSpace(setting.WechatPayMchID) != "" &&
+		strings.TrimSpace(setting.WechatPayMerchantSerialNumber) != "" &&
+		len(strings.TrimSpace(setting.WechatPayAPIv3Key)) == 32 &&
+		strings.TrimSpace(setting.WechatPayMerchantPrivateKey) != "" &&
+		strings.TrimSpace(setting.WechatPayPublicKeyID) != "" &&
+		strings.TrimSpace(setting.WechatPayPublicKey) != ""
+}
+
+func isWechatPayWebhookEnabled() bool {
+	// Keep verified callbacks and order-query compensation available for
+	// already-created orders even if compliance is later disabled. New order
+	// creation remains gated by isWechatPayTopUpEnabled.
+	return isWechatPayWebhookConfigured()
+}

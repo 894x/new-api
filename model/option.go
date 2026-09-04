@@ -86,6 +86,13 @@ func InitOptionMap() {
 	common.OptionMap["CustomCallbackAddress"] = ""
 	common.OptionMap["EpayId"] = ""
 	common.OptionMap["EpayKey"] = ""
+	common.OptionMap["WechatPayAppID"] = setting.WechatPayAppID
+	common.OptionMap["WechatPayMchID"] = setting.WechatPayMchID
+	common.OptionMap["WechatPayMerchantSerialNumber"] = setting.WechatPayMerchantSerialNumber
+	common.OptionMap["WechatPayAPIv3Key"] = setting.WechatPayAPIv3Key
+	common.OptionMap["WechatPayMerchantPrivateKey"] = setting.WechatPayMerchantPrivateKey
+	common.OptionMap["WechatPayPublicKeyID"] = setting.WechatPayPublicKeyID
+	common.OptionMap["WechatPayPublicKey"] = setting.WechatPayPublicKey
 	common.OptionMap["Price"] = strconv.FormatFloat(operation_setting.Price, 'f', -1, 64)
 	common.OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.USDExchangeRate, 'f', -1, 64)
 	common.OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.MinTopUp)
@@ -570,6 +577,20 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.EpayId = value
 	case "EpayKey":
 		operation_setting.EpayKey = value
+	case "WechatPayAppID":
+		setting.WechatPayAppID = value
+	case "WechatPayMchID":
+		setting.WechatPayMchID = value
+	case "WechatPayMerchantSerialNumber":
+		setting.WechatPayMerchantSerialNumber = value
+	case "WechatPayAPIv3Key":
+		setting.WechatPayAPIv3Key = value
+	case "WechatPayMerchantPrivateKey":
+		setting.WechatPayMerchantPrivateKey = value
+	case "WechatPayPublicKeyID":
+		setting.WechatPayPublicKeyID = value
+	case "WechatPayPublicKey":
+		setting.WechatPayPublicKey = value
 	case "Price":
 		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
 	case "USDExchangeRate":

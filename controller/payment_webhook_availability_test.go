@@ -167,3 +167,48 @@ func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	operation_setting.PayMethods = nil
 	require.False(t, isEpayWebhookEnabled())
 }
+
+func TestWechatPayAvailabilitySeparatesNewOrdersFromInFlightSettlement(t *testing.T) {
+	paymentSetting := operation_setting.GetPaymentSetting()
+	originalConfirmed := paymentSetting.ComplianceConfirmed
+	originalTermsVersion := paymentSetting.ComplianceTermsVersion
+	originalAppID := setting.WechatPayAppID
+	originalMchID := setting.WechatPayMchID
+	originalSerial := setting.WechatPayMerchantSerialNumber
+	originalAPIv3Key := setting.WechatPayAPIv3Key
+	originalPrivateKey := setting.WechatPayMerchantPrivateKey
+	originalPublicKeyID := setting.WechatPayPublicKeyID
+	originalPublicKey := setting.WechatPayPublicKey
+	t.Cleanup(func() {
+		paymentSetting.ComplianceConfirmed = originalConfirmed
+		paymentSetting.ComplianceTermsVersion = originalTermsVersion
+		setting.WechatPayAppID = originalAppID
+		setting.WechatPayMchID = originalMchID
+		setting.WechatPayMerchantSerialNumber = originalSerial
+		setting.WechatPayAPIv3Key = originalAPIv3Key
+		setting.WechatPayMerchantPrivateKey = originalPrivateKey
+		setting.WechatPayPublicKeyID = originalPublicKeyID
+		setting.WechatPayPublicKey = originalPublicKey
+	})
+
+	setting.WechatPayAppID = "wx-app"
+	setting.WechatPayMchID = "1900000001"
+	setting.WechatPayMerchantSerialNumber = "merchant-serial"
+	setting.WechatPayAPIv3Key = "01234567890123456789012345678901"
+	setting.WechatPayMerchantPrivateKey = "private-key"
+	setting.WechatPayPublicKeyID = "PUB_KEY_ID_1"
+	setting.WechatPayPublicKey = "public-key"
+
+	paymentSetting.ComplianceConfirmed = false
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	require.False(t, isWechatPayTopUpEnabled())
+	require.True(t, isWechatPayWebhookEnabled())
+
+	paymentSetting.ComplianceConfirmed = true
+	require.True(t, isWechatPayTopUpEnabled())
+	require.True(t, isWechatPayWebhookEnabled())
+
+	setting.WechatPayPublicKey = ""
+	require.False(t, isWechatPayTopUpEnabled())
+	require.False(t, isWechatPayWebhookEnabled())
+}

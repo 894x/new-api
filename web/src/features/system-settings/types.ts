@@ -319,6 +319,13 @@ export type BillingSettings = {
   PayAddress: string
   EpayId: string
   EpayKey: string
+  WechatPayAppID: string
+  WechatPayMchID: string
+  WechatPayMerchantSerialNumber: string
+  WechatPayAPIv3Key: string
+  WechatPayMerchantPrivateKey: string
+  WechatPayPublicKeyID: string
+  WechatPayPublicKey: string
   Price: number
   MinTopUp: number
   CustomCallbackAddress: string
