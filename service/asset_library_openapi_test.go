@@ -12,6 +12,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOpenAPIAssetBackendUsesOpaqueUserPrefixForAutoImportGroup(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		paths = append(paths, request.URL.Path)
+		var body map[string]any
+		require.NoError(t, common.DecodeJson(request.Body, &body))
+		assert.Equal(t, "uid-7-Seedance Auto Imports", body["group_name"])
+		writer.Header().Set("Content-Type", "application/json")
+		if request.URL.Path == "/openapi/v1/asset/group/create" {
+			_, _ = writer.Write([]byte(`{"code":0,"message":"","data":{"id":101},"trace_id":"trace-group"}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"code":0,"message":"","data":{},"trace_id":"trace-update"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	backend := openAPIAssetLibraryBackend{}
+	config := &model.ChannelAssetConfig{
+		Enabled: true, BaseURL: server.URL, AuthType: AssetLibraryAuthBearer, APIKey: "upstream-key",
+	}
+	group := &model.UserAssetGroup{
+		UserId: 7, Name: autoImportAssetGroupName, ProjectName: autoImportAssetProjectName,
+	}
+	result, err := backend.CreateGroup(t.Context(), config, group)
+	require.NoError(t, err)
+	require.NoError(t, backend.UpdateGroup(t.Context(), config, group, result.GroupID))
+	assert.Equal(t, []string{
+		"/openapi/v1/asset/group/create",
+		"/openapi/v1/asset/group/update",
+	}, paths)
+}
+
 func TestOpenAPIAssetBackendCreatesGroupAndAsset(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

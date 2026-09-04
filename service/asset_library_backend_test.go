@@ -12,6 +12,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestActionAssetBackendUsesOpaqueUserPrefixForAutoImportGroup(t *testing.T) {
+	var actions []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		actions = append(actions, request.URL.Query().Get("Action"))
+		var body map[string]any
+		require.NoError(t, common.DecodeJson(request.Body, &body))
+		assert.Equal(t, "uid-7-Seedance Auto Imports", body["Name"])
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"ResponseMetadata":{},"Result":{"Id":"group-upstream"}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	backend := actionAssetLibraryBackend{}
+	config := &model.ChannelAssetConfig{
+		Enabled: true, BaseURL: server.URL, AuthType: AssetLibraryAuthBearer, APIKey: "asset-key",
+	}
+	group := &model.UserAssetGroup{
+		UserId: 7, Name: autoImportAssetGroupName, ProjectName: autoImportAssetProjectName,
+	}
+	result, err := backend.CreateGroup(t.Context(), config, group)
+	require.NoError(t, err)
+	assert.Equal(t, "group-upstream", result.GroupID)
+	require.NoError(t, backend.UpdateGroup(t.Context(), config, group, result.GroupID))
+	assert.Equal(t, []string{"CreateAssetGroup", "UpdateAssetGroup"}, actions)
+}
+
 func TestSeedanceSLSAssetBackendCreatesFirstAssetWithGroupName(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, http.MethodPost, request.Method)

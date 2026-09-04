@@ -2,6 +2,7 @@ package seedance_sls
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,13 +33,34 @@ type TaskAdaptor struct {
 	baseURL string
 }
 
+type taskProgress string
+
+func (p *taskProgress) UnmarshalJSON(data []byte) error {
+	jsonType := common.GetJsonType(data)
+	switch jsonType {
+	case "string":
+		var value string
+		if err := common.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		*p = taskProgress(value)
+	case "number":
+		*p = taskProgress(string(bytes.TrimSpace(data)) + "%")
+	case "null":
+		*p = ""
+	default:
+		return fmt.Errorf("unsupported Seedance SLS task progress type %s", jsonType)
+	}
+	return nil
+}
+
 type taskResponse struct {
 	TaskID          string          `json:"task_id"`
 	Status          string          `json:"status"`
 	FailReason      string          `json:"fail_reason"`
 	ResultURL       string          `json:"result_url"`
 	LastFrameURL    string          `json:"last_frame_url"`
-	Progress        string          `json:"progress"`
+	Progress        taskProgress    `json:"progress"`
 	TotalTokens     int             `json:"total_tokens"`
 	Duration        *int            `json:"duration"`
 	Resolution      string          `json:"resolution"`
@@ -307,9 +329,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		info.UpstreamModelName = modelName
 	}
 	payload["model"] = modelName
-	payload, err = service.RewriteAssetReferences(info.UserId, info.ChannelId, payload)
+	requestContext := context.Background()
+	if c.Request != nil {
+		requestContext = c.Request.Context()
+	}
+	payload, err = service.PrepareAssetReferences(requestContext, info.UserId, info.ChannelId, payload)
 	if err != nil {
-		return nil, errors.Wrap(err, "rewrite asset references failed")
+		return nil, errors.Wrap(err, "prepare asset references failed")
 	}
 
 	data, err := common.Marshal(payload)
@@ -426,7 +452,7 @@ func (a *TaskAdaptor) parseTaskResult(respBody []byte, depth int) (*relaycommon.
 		Status:      result.Status,
 		Reason:      result.FailReason,
 		Url:         result.ResultURL,
-		Progress:    result.Progress,
+		Progress:    string(result.Progress),
 		TotalTokens: result.TotalTokens,
 	}
 	switch strings.ToUpper(result.Status) {

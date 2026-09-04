@@ -1,9 +1,13 @@
 package seedance_sls
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +20,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -365,6 +370,131 @@ func TestBuildNativeSLSRequestRewritesAccountAsset(t *testing.T) {
 	assert.NotContains(t, string(encoded), assetID)
 }
 
+func TestBuildNativeSLSRequestAutoImportsDirectImageURLBeforeUpstreamCall(t *testing.T) {
+	var imageBody bytes.Buffer
+	imageData := image.NewRGBA(image.Rect(0, 0, 400, 400))
+	imageData.Set(0, 0, color.RGBA{R: 255, A: 255})
+	require.NoError(t, png.Encode(&imageBody, imageData))
+
+	var createCalls int
+	var refreshCalls int
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/reference.png":
+			writer.Header().Set("Content-Type", "image/png")
+			_, err := writer.Write(imageBody.Bytes())
+			require.NoError(t, err)
+		case "/v1/volcengine/assets":
+			createCalls++
+			var body map[string]any
+			require.NoError(t, common.DecodeJson(request.Body, &body))
+			assert.Equal(t, server.URL+"/reference.png", body["source_url"])
+			assert.Equal(t, "uid-7-Seedance Auto Imports", body["group_name"])
+			_, err := io.WriteString(writer, `{"success":true,"data":{"logical_id":"lass_auto_asset","logical_group_id":"lasg_auto_group","status":"Processing"}}`)
+			require.NoError(t, err)
+		case "/v1/volcengine/assets/lass_auto_asset":
+			refreshCalls++
+			_, err := io.WriteString(writer, `{"success":true,"data":{"logical_id":"lass_auto_asset","logical_group_id":"lasg_auto_group","status":"Active","asset_type":"Image"}}`)
+			require.NoError(t, err)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	fetchSetting := system_setting.GetFetchSetting()
+	previousFetchSetting := *fetchSetting
+	fetchSetting.EnableSSRFProtection = false
+	service.InitHttpClient()
+	t.Cleanup(func() {
+		*fetchSetting = previousFetchSetting
+		service.InitHttpClient()
+	})
+
+	originalDB := model.DB
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.Channel{}, &model.ChannelAssetConfig{}, &model.UserAssetGroup{}, &model.UserAsset{},
+		&model.UserAssetGroupReplica{}, &model.UserAssetReplica{},
+	))
+	model.DB = db
+	t.Cleanup(func() {
+		model.DB = originalDB
+		sqlDB, dbErr := db.DB()
+		if dbErr == nil {
+			require.NoError(t, sqlDB.Close())
+		}
+	})
+
+	const (
+		userID    = 7
+		channelID = 11
+	)
+	require.NoError(t, db.Create(&model.Channel{
+		Id: channelID, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-video-key", Name: "Seedance SLS",
+	}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{
+		ChannelId: channelID, Enabled: true, Backend: service.AssetLibraryBackendSeedanceSLS,
+		BaseURL: server.URL, AuthType: service.AssetLibraryAuthBearer, APIKey: "sls-asset-key",
+	}).Error)
+
+	sourceURL := server.URL + "/reference.png"
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(fmt.Sprintf(`{
+		"model":"doubao-seedance-2-0",
+		"content":[
+			{"type":"image_url","image_url":{"url":%q}},
+			{"type":"image_url","image_url":{"url":%q}},
+			{"type":"text","text":"Animate this image"}
+		],
+		"webhook_url":%q
+	}`, sourceURL, sourceURL, sourceURL)))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	defer common.CleanupBodyStorage(ctx)
+	info := &relaycommon.RelayInfo{
+		UserId: userID,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: channelID, UpstreamModelName: "doubao-seedance-2-0",
+		},
+	}
+	adaptor := &TaskAdaptor{}
+	require.Nil(t, adaptor.ValidateRequestAndSetAction(ctx, info))
+
+	body, err := adaptor.BuildRequestBody(ctx, info)
+	require.NoError(t, err)
+	encoded, err := io.ReadAll(body)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal(encoded, &payload))
+	content, ok := payload["content"].([]any)
+	require.True(t, ok)
+	require.Len(t, content, 3)
+	for _, index := range []int{0, 1} {
+		part, ok := content[index].(map[string]any)
+		require.True(t, ok)
+		imageURL, ok := part["image_url"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "asset://lass_auto_asset", imageURL["url"])
+	}
+	assert.Equal(t, sourceURL, payload["webhook_url"])
+	assert.Equal(t, 1, createCalls)
+	assert.Equal(t, 1, refreshCalls)
+
+	var groups []model.UserAssetGroup
+	require.NoError(t, db.Find(&groups).Error)
+	require.Len(t, groups, 1)
+	assert.Equal(t, "Seedance Auto Imports", groups[0].Name)
+	assert.Equal(t, "seedance-auto-import", groups[0].ProjectName)
+	var assets []model.UserAsset
+	require.NoError(t, db.Find(&assets).Error)
+	require.Len(t, assets, 1)
+	assert.Equal(t, sourceURL, assets[0].SourceURL)
+	assert.Equal(t, "Image", assets[0].AssetType)
+}
+
 func TestReplicateAndSubmitAccountAssetIntegration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -596,6 +726,11 @@ func TestParseSLSWrappedTaskResult(t *testing.T) {
 			name: "completed",
 			body: `{"code":"success","message":"","data":{"task_id":"task_upstream","status":"SUCCESS","progress":"100%","result_url":"https://example.com/video.mp4","total_tokens":108900}}`,
 			want: &relaycommon.TaskInfo{TaskID: "task_upstream", Status: string(model.TaskStatusSuccess), Progress: "100%", Url: "https://example.com/video.mp4", TotalTokens: 108900},
+		},
+		{
+			name: "running with numeric progress",
+			body: `{"code":"success","message":"","data":{"task_id":"task_upstream","status":"IN_PROGRESS","progress":50}}`,
+			want: &relaycommon.TaskInfo{TaskID: "task_upstream", Status: string(model.TaskStatusInProgress), Progress: "50%"},
 		},
 		{
 			name: "failed",

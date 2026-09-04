@@ -122,11 +122,18 @@ func AssetLibraryBackendRequiresBearer(backend string) bool {
 	return backend == AssetLibraryBackendSeedanceSLS || backend == AssetLibraryBackendOpenAPI
 }
 
+func assetLibraryUpstreamGroupName(group *model.UserAssetGroup) string {
+	if group.ProjectName == autoImportAssetProjectName {
+		return fmt.Sprintf("uid-%d-%s", group.UserId, autoImportAssetGroupName)
+	}
+	return group.Name
+}
+
 func (actionAssetLibraryBackend) CreateGroup(ctx context.Context, config *model.ChannelAssetConfig, group *model.UserAssetGroup) (*assetLibraryCreateGroupResult, error) {
 	projectName := assetLibraryProject(config)
 	groupType := group.GroupType
 	request := dto.CreateAssetGroupRequest{
-		Name:        group.Name,
+		Name:        assetLibraryUpstreamGroupName(group),
 		Description: &group.Description,
 		GroupType:   &groupType,
 		ProjectName: &projectName,
@@ -167,9 +174,10 @@ func (actionAssetLibraryBackend) CreateAsset(ctx context.Context, config *model.
 
 func (actionAssetLibraryBackend) UpdateGroup(ctx context.Context, config *model.ChannelAssetConfig, group *model.UserAssetGroup, upstreamGroupId string) error {
 	projectName := assetLibraryProject(config)
+	groupName := assetLibraryUpstreamGroupName(group)
 	request := dto.UpdateAssetGroupRequest{
 		Id:          upstreamGroupId,
-		Name:        &group.Name,
+		Name:        &groupName,
 		Description: &group.Description,
 		ProjectName: &projectName,
 	}
@@ -242,7 +250,8 @@ func (seedanceSLSAssetLibraryBackend) CreateAsset(ctx context.Context, config *m
 	if groupReplica != nil && strings.TrimSpace(groupReplica.UpstreamGroupId) != "" {
 		request.GroupID = &groupReplica.UpstreamGroupId
 	} else {
-		request.GroupName = &group.Name
+		groupName := assetLibraryUpstreamGroupName(group)
+		request.GroupName = &groupName
 	}
 	var result seedanceSLSAssetData
 	if err := callSeedanceSLSAssetLibrary(ctx, config, http.MethodPost, "", request, &result); err != nil {

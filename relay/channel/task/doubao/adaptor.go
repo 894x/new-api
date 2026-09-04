@@ -2,6 +2,7 @@ package doubao
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -221,9 +222,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 			payload[key] = value
 		}
 		payload["model"] = info.UpstreamModelName
-		payload, err = service.RewriteAssetReferences(info.UserId, info.ChannelId, payload)
+		requestContext := context.Background()
+		if c.Request != nil {
+			requestContext = c.Request.Context()
+		}
+		payload, err = service.PrepareAssetReferences(requestContext, info.UserId, info.ChannelId, payload)
 		if err != nil {
-			return nil, errors.Wrap(err, "rewrite asset references failed")
+			return nil, errors.Wrap(err, "prepare asset references failed")
 		}
 		data, err := common.Marshal(payload)
 		if err != nil {

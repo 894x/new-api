@@ -62,7 +62,7 @@ type openAPIAssetData struct {
 
 func (openAPIAssetLibraryBackend) CreateGroup(ctx context.Context, config *model.ChannelAssetConfig, group *model.UserAssetGroup) (*assetLibraryCreateGroupResult, error) {
 	groupType := 1
-	request := openAPIAssetGroupCreateRequest{GroupName: group.Name, GroupType: &groupType}
+	request := openAPIAssetGroupCreateRequest{GroupName: assetLibraryUpstreamGroupName(group), GroupType: &groupType}
 	if strings.TrimSpace(group.Description) != "" {
 		request.Description = &group.Description
 	}
@@ -119,9 +119,10 @@ func (openAPIAssetLibraryBackend) UpdateGroup(ctx context.Context, config *model
 	if err != nil {
 		return err
 	}
+	groupName := assetLibraryUpstreamGroupName(group)
 	request := openAPIAssetGroupUpdateRequest{
 		ID:          groupID,
-		GroupName:   &group.Name,
+		GroupName:   &groupName,
 		Description: &group.Description,
 	}
 	return callOpenAPIAssetLibrary(ctx, config, "/openapi/v1/asset/group/update", request, nil)

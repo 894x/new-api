@@ -119,6 +119,7 @@ type AssetListParams struct {
 	GroupType   string
 	Statuses    []string
 	Name        string
+	SourceURL   string
 	AssetType   string
 	ProjectName string
 	PageNumber  int64
@@ -263,6 +264,9 @@ func ListUserAssets(userId int, params AssetListParams) ([]UserAsset, int64, err
 	}
 	if params.Name != "" {
 		query = query.Where("name LIKE ?", "%"+params.Name+"%")
+	}
+	if params.SourceURL != "" {
+		query = query.Where("source_url = ?", params.SourceURL)
 	}
 	if params.AssetType != "" {
 		query = query.Where("asset_type = ?", params.AssetType)

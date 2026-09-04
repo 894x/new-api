@@ -3,7 +3,6 @@ package controller
 import (
 	"errors"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -149,7 +148,7 @@ func createAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool
 		writeAssetLibraryLookupError(c, "CreateAsset", "NotFound.GroupId", "asset group not found", err)
 		return
 	}
-	sourceURL, err := validateAssetLibrarySourceURL(request.URL)
+	sourceURL, err := service.NormalizeAssetLibrarySourceURL(request.URL)
 	if err != nil {
 		writeAssetLibraryError(c, "CreateAsset", http.StatusBadRequest, "InvalidParameter.URL", err.Error(), nil)
 		return
@@ -636,18 +635,6 @@ func assetLibraryLogicalProject(value *string) string {
 		return service.DefaultAssetLibraryProject
 	}
 	return projectName
-}
-
-func validateAssetLibrarySourceURL(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if len(value) > 8192 {
-		return "", errors.New("URL must not exceed 8192 bytes")
-	}
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
-		return "", errors.New("URL must be a publicly accessible http or https URL without embedded credentials")
-	}
-	return value, nil
 }
 
 func isLogicalAssetLibraryId(value string, prefix string) bool {
