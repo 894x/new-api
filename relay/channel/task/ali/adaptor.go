@@ -88,15 +88,36 @@ type AliVideoOutput struct {
 	Message       string `json:"message,omitempty"`
 }
 
+type AliFloatValue float64
+
+func (v *AliFloatValue) UnmarshalJSON(data []byte) error {
+	var number float64
+	if err := common.Unmarshal(data, &number); err == nil {
+		*v = AliFloatValue(number)
+		return nil
+	}
+
+	var text string
+	if err := common.Unmarshal(data, &text); err != nil {
+		return err
+	}
+	number, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return err
+	}
+	*v = AliFloatValue(number)
+	return nil
+}
+
 // AliUsage 使用统计
 type AliUsage struct {
-	Duration            dto.IntValue `json:"duration,omitempty"`
-	InputVideoDuration  float64      `json:"input_video_duration,omitempty"`
-	OutputVideoDuration float64      `json:"output_video_duration,omitempty"`
-	VideoCount          dto.IntValue `json:"video_count,omitempty"`
-	FPS                 dto.IntValue `json:"fps,omitempty"`
-	SR                  dto.IntValue `json:"SR,omitempty"`
-	Ratio               string       `json:"ratio,omitempty"`
+	Duration            AliFloatValue `json:"duration,omitempty"`
+	InputVideoDuration  AliFloatValue `json:"input_video_duration,omitempty"`
+	OutputVideoDuration AliFloatValue `json:"output_video_duration,omitempty"`
+	VideoCount          dto.IntValue  `json:"video_count,omitempty"`
+	FPS                 dto.IntValue  `json:"fps,omitempty"`
+	SR                  dto.IntValue  `json:"SR,omitempty"`
+	Ratio               string        `json:"ratio,omitempty"`
 }
 
 type AliMetadata struct {
@@ -164,6 +185,8 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 func isWan3Model(model string) bool {
 	return model == "wan3.0-video" || model == "wan3.0-video-prime"
 }
+
+const maxWan3BillingDurationSeconds = 30
 
 func validateAliNativeRequest(taskReq relaycommon.TaskSubmitReq, upstreamModel string, allowUnresolvedSmartDuration bool) (*AliVideoRequest, error) {
 	if taskReq.Metadata == nil {
@@ -634,10 +657,20 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	if aliReq.Parameters != nil && aliReq.Parameters.Duration != nil {
 		duration = *aliReq.Parameters.Duration
 	}
-	if duration == -1 && isWan3Model(aliReq.Model) {
-		// Smart duration can produce up to 30 seconds. Reserve the maximum and
-		// settle to usage.output_video_duration after the task completes.
-		duration = 30
+	if isWan3Model(aliReq.Model) {
+		reserveMaximumDuration := duration == -1
+		for _, media := range aliReq.Input.Media {
+			if media.Type == "reference_video" {
+				reserveMaximumDuration = true
+				break
+			}
+		}
+		if reserveMaximumDuration {
+			// Wan3 bills input plus output video duration, and the provider caps
+			// their combined duration at 30 seconds. Reserve that maximum when
+			// the input duration is unknown, then settle from response usage.
+			duration = maxWan3BillingDurationSeconds
+		}
 	}
 	if duration <= 0 {
 		duration = 5
@@ -663,14 +696,17 @@ func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, taskResult *rela
 	if err := common.Unmarshal(task.Data, &response); err != nil || response.Usage == nil {
 		return 0
 	}
-	actualSeconds := response.Usage.OutputVideoDuration
-	if actualSeconds <= 0 {
-		actualSeconds = float64(response.Usage.Duration)
+	inputSeconds := max(float64(response.Usage.InputVideoDuration), 0)
+	outputSeconds := float64(response.Usage.OutputVideoDuration)
+	if outputSeconds <= 0 {
+		outputSeconds = float64(response.Usage.Duration)
 	}
+	outputSeconds = max(outputSeconds, 0)
+	actualSeconds := inputSeconds + outputSeconds
 	if actualSeconds <= 0 {
 		return 0
 	}
-	actualSeconds = min(actualSeconds, 30)
+	actualSeconds = min(actualSeconds, maxWan3BillingDurationSeconds)
 
 	billingContext := task.PrivateData.BillingContext
 	if billingContext == nil || billingContext.ModelRatio <= 0 || taskResult == nil {

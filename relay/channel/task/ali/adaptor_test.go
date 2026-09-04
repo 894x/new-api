@@ -294,6 +294,29 @@ func TestEstimateBillingWan3SmartDurationReservesMaximum(t *testing.T) {
 	assert.Equal(t, 4.0, ratios["resolution-1080P"])
 }
 
+func TestEstimateBillingWan3ReferenceVideoReservesMaximumTotalDuration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(ctx, constant.ContextKeyTaskResponseFormat, constant.TaskResponseFormatAliVideo)
+	ctx.Set("task_request", relaycommon.TaskSubmitReq{Metadata: map[string]any{
+		"model": "wan3.0-video",
+		"input": map[string]any{
+			"media": []any{map[string]any{
+				"type": "reference_video",
+				"url":  "https://example.com/reference.mp4",
+			}},
+		},
+		"parameters": map[string]any{"resolution": "720P", "duration": 5},
+	}})
+	info := testRelayInfo()
+	info.UpstreamModelName = "wan3.0-video"
+
+	ratios := (&TaskAdaptor{}).EstimateBilling(ctx, info)
+
+	assert.Equal(t, 30.0, ratios["seconds"])
+	assert.Equal(t, 2.0, ratios["resolution-720P"])
+}
+
 func TestEstimateBillingWan3OfficialDefaultsUse1080P(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -381,12 +404,12 @@ func TestConvertToAliNativeVideoFillsEmptyTaskStatus(t *testing.T) {
 	assert.JSONEq(t, `{"output":{"task_id":"task_public","task_status":"RUNNING"}}`, string(encoded))
 }
 
-func TestAdjustBillingOnCompleteWan3UsesActualOutputDuration(t *testing.T) {
+func TestAdjustBillingOnCompleteWan3UsesActualInputAndOutputDuration(t *testing.T) {
 	modelRatio := 2 * 0.3 / ratio_setting.USD2RMB
 	task := &model.Task{
 		Status:     model.TaskStatusSuccess,
 		Properties: model.Properties{OriginModelName: "wan3.0-video"},
-		Data:       []byte(`{"usage":{"duration":5,"output_video_duration":5.0}}`),
+		Data:       []byte(`{"usage":{"duration":5.0,"input_video_duration":7.5,"output_video_duration":5.0}}`),
 		PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{
 			ModelPrice:  -1,
 			ModelRatio:  modelRatio,
@@ -399,9 +422,69 @@ func TestAdjustBillingOnCompleteWan3UsesActualOutputDuration(t *testing.T) {
 	actual := (&TaskAdaptor{}).AdjustBillingOnComplete(task, taskResult)
 
 	assert.Zero(t, actual)
-	assert.Equal(t, common.QuotaRound(5*common.QuotaPerUnit/2), taskResult.TotalTokens)
+	assert.Equal(t, common.QuotaRound(12.5*common.QuotaPerUnit/2), taskResult.TotalTokens)
 	assert.Equal(t, 1.0, task.PrivateData.BillingContext.OtherRatios["seconds"])
 	assert.Equal(t, 4.0, task.PrivateData.BillingContext.OtherRatios["resolution-1080P"])
+}
+
+func TestAdjustBillingOnCompleteWan3RejectsNegativeInputDuration(t *testing.T) {
+	task := &model.Task{
+		Status:     model.TaskStatusSuccess,
+		Properties: model.Properties{OriginModelName: "wan3.0-video"},
+		Data:       []byte(`{"usage":{"duration":5,"input_video_duration":-7.5,"output_video_duration":5.0}}`),
+		PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{
+			ModelPrice:  -1,
+			ModelRatio:  2 * 0.3 / ratio_setting.USD2RMB,
+			GroupRatio:  1,
+			OtherRatios: map[string]float64{"seconds": 30, "resolution-1080P": 4},
+		}},
+	}
+	taskResult := &relaycommon.TaskInfo{}
+
+	actual := (&TaskAdaptor{}).AdjustBillingOnComplete(task, taskResult)
+
+	assert.Zero(t, actual)
+	assert.Equal(t, common.QuotaRound(5*common.QuotaPerUnit/2), taskResult.TotalTokens)
+}
+
+func TestAdjustBillingOnCompleteWan3CapsCombinedDuration(t *testing.T) {
+	task := &model.Task{
+		Status:     model.TaskStatusSuccess,
+		Properties: model.Properties{OriginModelName: "wan3.0-video"},
+		Data:       []byte(`{"usage":{"input_video_duration":25.0,"output_video_duration":15.0}}`),
+		PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{
+			ModelPrice:  -1,
+			ModelRatio:  2 * 0.3 / ratio_setting.USD2RMB,
+			GroupRatio:  1,
+			OtherRatios: map[string]float64{"seconds": 30},
+		}},
+	}
+	taskResult := &relaycommon.TaskInfo{}
+
+	actual := (&TaskAdaptor{}).AdjustBillingOnComplete(task, taskResult)
+
+	assert.Zero(t, actual)
+	assert.Equal(t, common.QuotaRound(30*common.QuotaPerUnit/2), taskResult.TotalTokens)
+}
+
+func TestAdjustBillingOnCompleteWan3AcceptsStringDurationFallback(t *testing.T) {
+	task := &model.Task{
+		Status:     model.TaskStatusSuccess,
+		Properties: model.Properties{OriginModelName: "wan3.0-video"},
+		Data:       []byte(`{"usage":{"duration":"5"}}`),
+		PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{
+			ModelPrice:  -1,
+			ModelRatio:  2 * 0.3 / ratio_setting.USD2RMB,
+			GroupRatio:  1,
+			OtherRatios: map[string]float64{"seconds": 30},
+		}},
+	}
+	taskResult := &relaycommon.TaskInfo{}
+
+	actual := (&TaskAdaptor{}).AdjustBillingOnComplete(task, taskResult)
+
+	assert.Zero(t, actual)
+	assert.Equal(t, common.QuotaRound(5*common.QuotaPerUnit/2), taskResult.TotalTokens)
 }
 
 func TestConvertToAliRequestWan3BuildsOfficialMediaProtocol(t *testing.T) {
