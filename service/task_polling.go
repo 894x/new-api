@@ -515,6 +515,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		storedResponseBody = sanitizer.SanitizeTaskData(responseBody, task.TaskID)
 	}
 	task.Data = redactVideoResponseBody(storedResponseBody)
+	if taskResult.Usage != nil {
+		task.PrivateData.Usage = taskResult.Usage
+		task.Usage = taskResult.Usage
+	}
 
 	logger.LogDebug(ctx, "updateVideoSingleTask taskResult: %+v", taskResult)
 

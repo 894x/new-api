@@ -16,6 +16,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -148,6 +149,13 @@ func (a *wrappedTaskPollingAdaptor) ParseWrappedTaskResult([]byte) (*relaycommon
 		Progress:    "100%",
 		Url:         "https://example.com/sls-output.mp4",
 		TotalTokens: 108900,
+		Usage: &hosttypes.TaskUsage{
+			Kind:   hosttypes.TaskUsageKindVideoDuration,
+			Unit:   hosttypes.TaskUsageUnitSecond,
+			Input:  2.5,
+			Output: 5,
+			Total:  7.5,
+		},
 	}, nil
 }
 
@@ -398,6 +406,12 @@ func TestUpdateVideoSingleTaskUsesWrappedResultURLAndTotalTokens(t *testing.T) {
 	assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), task.Status)
 	assert.NotContains(t, string(task.Data), "task_upstream_sls")
 	assert.Contains(t, string(task.Data), "task_public_sls")
+	stored, exists, err := model.GetByTaskId(1, task.TaskID)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.NotNil(t, stored.Usage)
+	assert.Equal(t, 2.5, stored.Usage.Input)
+	assert.Equal(t, 5.0, stored.Usage.Output)
 }
 
 func TestUpdateVideoTasksPassesChannelOtherSettingsToAdaptor(t *testing.T) {

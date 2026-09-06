@@ -18,6 +18,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
@@ -118,6 +119,29 @@ type AliUsage struct {
 	FPS                 dto.IntValue  `json:"fps,omitempty"`
 	SR                  dto.IntValue  `json:"SR,omitempty"`
 	Ratio               string        `json:"ratio,omitempty"`
+}
+
+func normalizeWan3Usage(usage *AliUsage) *hosttypes.TaskUsage {
+	if usage == nil {
+		return nil
+	}
+	inputSeconds := max(float64(usage.InputVideoDuration), 0)
+	outputSeconds := float64(usage.OutputVideoDuration)
+	if outputSeconds <= 0 {
+		outputSeconds = float64(usage.Duration)
+	}
+	outputSeconds = max(outputSeconds, 0)
+	totalSeconds := inputSeconds + outputSeconds
+	if totalSeconds <= 0 {
+		return nil
+	}
+	return &hosttypes.TaskUsage{
+		Kind:   hosttypes.TaskUsageKindVideoDuration,
+		Unit:   hosttypes.TaskUsageUnitSecond,
+		Input:  inputSeconds,
+		Output: outputSeconds,
+		Total:  totalSeconds,
+	}
 }
 
 type AliMetadata struct {
@@ -696,17 +720,11 @@ func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, taskResult *rela
 	if err := common.Unmarshal(task.Data, &response); err != nil || response.Usage == nil {
 		return 0
 	}
-	inputSeconds := max(float64(response.Usage.InputVideoDuration), 0)
-	outputSeconds := float64(response.Usage.OutputVideoDuration)
-	if outputSeconds <= 0 {
-		outputSeconds = float64(response.Usage.Duration)
-	}
-	outputSeconds = max(outputSeconds, 0)
-	actualSeconds := inputSeconds + outputSeconds
-	if actualSeconds <= 0 {
+	usage := normalizeWan3Usage(response.Usage)
+	if usage == nil {
 		return 0
 	}
-	actualSeconds = min(actualSeconds, maxWan3BillingDurationSeconds)
+	actualSeconds := min(usage.Total, maxWan3BillingDurationSeconds)
 
 	billingContext := task.PrivateData.BillingContext
 	if billingContext == nil || billingContext.ModelRatio <= 0 || taskResult == nil {
@@ -831,7 +849,8 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 
 	taskResult := relaycommon.TaskInfo{
-		Code: 0,
+		Code:  0,
+		Usage: normalizeWan3Usage(aliResp.Usage),
 	}
 
 	// 状态映射

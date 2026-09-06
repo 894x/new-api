@@ -247,6 +247,7 @@ export interface LogOtherData {
   // Task-related fields (for refund logs, type=6)
   is_task?: boolean
   task_id?: string
+  task_usage?: TaskUsage
   reason?: string
   // Subscription billing fields
   subscription_plan_id?: string
@@ -257,6 +258,14 @@ export interface LogOtherData {
   subscription_consumed?: number
   subscription_remain?: number
   subscription_total?: number
+}
+
+export interface TaskUsage {
+  kind: string
+  unit: string
+  input: number
+  output: number
+  total: number
 }
 
 /**
@@ -316,6 +325,7 @@ export interface TaskLog {
   fail_reason?: string
   result_url?: string
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
+  usage?: TaskUsage
   other?: string
   created_at?: number
   updated_at?: number

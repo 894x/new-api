@@ -30,13 +30,14 @@ import { cn } from '@/lib/utils'
 
 import { TASK_ACTIONS, TASK_STATUS } from '../../constants'
 import { taskActionMapper, taskStatusMapper } from '../../lib/mappers'
-import type { TaskLog } from '../../types'
+import type { TaskLog, TaskUsage } from '../../types'
 import {
   AudioPreviewDialog,
   type AudioClip,
 } from '../dialogs/audio-preview-dialog'
 import { FailReasonDialog } from '../dialogs/fail-reason-dialog'
 import { VideoPreviewDialog } from '../dialogs/video-preview-dialog'
+import { UsageCell } from '../usage-cell'
 import { useUsageLogsContext } from '../usage-logs-provider'
 import {
   createDurationColumn,
@@ -46,6 +47,13 @@ import {
 
 const VIDEO_RESULT_URL_PATTERN = /^(https?:\/\/|data:video\/)/i
 const AUTHENTICATED_VIDEO_URL_PATTERN = /\/v1\/videos\/.+\/content(?:[?#]|$)/i
+
+function toNonNegativeUsageNumber(value: unknown): number {
+  const parsed = typeof value === 'string' ? Number(value) : value
+  return typeof parsed === 'number' && Number.isFinite(parsed)
+    ? Math.max(parsed, 0)
+    : 0
+}
 
 function parseTaskData(data: unknown): unknown[] {
   if (Array.isArray(data)) return data
@@ -58,6 +66,41 @@ function parseTaskData(data: unknown): unknown[] {
     }
   }
   return []
+}
+
+function resolveTaskUsage(log: TaskLog): TaskUsage | undefined {
+  if (log.usage) return log.usage
+
+  let data = log.data
+  if (typeof data === 'string') {
+    try {
+      data = JSON.parse(data) as unknown
+    } catch {
+      return undefined
+    }
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return undefined
+  }
+
+  const rawUsage = (data as Record<string, unknown>).usage
+  if (!rawUsage || typeof rawUsage !== 'object' || Array.isArray(rawUsage)) {
+    return undefined
+  }
+  const usage = rawUsage as Record<string, unknown>
+  const input = toNonNegativeUsageNumber(usage.input_video_duration)
+  let output = toNonNegativeUsageNumber(usage.output_video_duration)
+  if (output <= 0) output = toNonNegativeUsageNumber(usage.duration)
+  const total = input + output
+  if (total <= 0) return undefined
+
+  return {
+    kind: 'video_duration',
+    unit: 'second',
+    input,
+    output,
+    total,
+  }
 }
 
 function AudioPreviewCell({ log }: { log: TaskLog }) {
@@ -220,6 +263,11 @@ export function useTaskLogsColumns(
       },
     },
     createProgressColumn<TaskLog>({ headerLabel: t('Progress') }),
+    {
+      accessorKey: 'usage',
+      header: t('Usage'),
+      cell: ({ row }) => <UsageCell usage={resolveTaskUsage(row.original)} />,
+    },
     {
       accessorKey: 'fail_reason',
       header: t('Details'),

@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/groupdiscount"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"gorm.io/gorm"
 )
 
@@ -61,17 +62,18 @@ type Task struct {
 	// nil preserves polling compatibility for rows created before the billing
 	// readiness gate. New prepared/pending rows stay false until their billing
 	// state is durably confirmed.
-	BillingReady           *bool      `json:"-" gorm:"index"`
-	BillingRecoveryPending bool       `json:"-" gorm:"index"`
-	Action                 string     `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
-	Status                 TaskStatus `json:"status" gorm:"type:varchar(20);index"` // 任务状态
-	FailReason             string     `json:"fail_reason"`
-	SubmitTime             int64      `json:"submit_time" gorm:"index"`
-	StartTime              int64      `json:"start_time" gorm:"index"`
-	FinishTime             int64      `json:"finish_time" gorm:"index"`
-	Progress               string     `json:"progress" gorm:"type:varchar(20);index"`
-	Properties             Properties `json:"properties" gorm:"type:json"`
-	Username               string     `json:"username,omitempty" gorm:"-"`
+	BillingReady           *bool                `json:"-" gorm:"index"`
+	BillingRecoveryPending bool                 `json:"-" gorm:"index"`
+	Action                 string               `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
+	Status                 TaskStatus           `json:"status" gorm:"type:varchar(20);index"` // 任务状态
+	FailReason             string               `json:"fail_reason"`
+	SubmitTime             int64                `json:"submit_time" gorm:"index"`
+	StartTime              int64                `json:"start_time" gorm:"index"`
+	FinishTime             int64                `json:"finish_time" gorm:"index"`
+	Progress               string               `json:"progress" gorm:"type:varchar(20);index"`
+	Properties             Properties           `json:"properties" gorm:"type:json"`
+	Username               string               `json:"username,omitempty" gorm:"-"`
+	Usage                  *hosttypes.TaskUsage `json:"usage,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
@@ -113,11 +115,17 @@ type TaskPrivateData struct {
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
-	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
-	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
-	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
-	NodeName       string              `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
-	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	BillingSource  string               `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
+	SubscriptionId int                  `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
+	TokenId        int                  `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
+	NodeName       string               `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
+	BillingContext *TaskBillingContext  `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	Usage          *hosttypes.TaskUsage `json:"usage,omitempty"`           // 上游最终用量（安全公开字段的持久化来源）
+}
+
+func (t *Task) AfterFind(_ *gorm.DB) error {
+	t.Usage = t.PrivateData.Usage
+	return nil
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
@@ -405,6 +413,15 @@ func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 		return nil, err
 	}
 	return task, nil
+}
+
+func GetTasksByTaskIDsAndUsers(taskIDs []string, userIDs []int) ([]*Task, error) {
+	if len(taskIDs) == 0 || len(userIDs) == 0 {
+		return nil, nil
+	}
+	var tasks []*Task
+	err := DB.Where("task_id IN ? AND user_id IN ?", taskIDs, userIDs).Find(&tasks).Error
+	return tasks, err
 }
 
 func (Task *Task) Insert() error {

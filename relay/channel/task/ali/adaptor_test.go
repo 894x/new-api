@@ -427,6 +427,21 @@ func TestAdjustBillingOnCompleteWan3UsesActualInputAndOutputDuration(t *testing.
 	assert.Equal(t, 4.0, task.PrivateData.BillingContext.OtherRatios["resolution-1080P"])
 }
 
+func TestParseTaskResultPreservesWan3InputAndOutputUsage(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"output":{"task_status":"SUCCEEDED","video_url":"https://example.com/video.mp4"},
+		"usage":{"duration":5.0,"input_video_duration":2.5,"output_video_duration":5.0}
+	}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, result.Usage)
+	assert.Equal(t, "video_duration", result.Usage.Kind)
+	assert.Equal(t, "second", result.Usage.Unit)
+	assert.Equal(t, 2.5, result.Usage.Input)
+	assert.Equal(t, 5.0, result.Usage.Output)
+	assert.Equal(t, 7.5, result.Usage.Total)
+}
+
 func TestAdjustBillingOnCompleteWan3RejectsNegativeInputDuration(t *testing.T) {
 	task := &model.Task{
 		Status:     model.TaskStatusSuccess,

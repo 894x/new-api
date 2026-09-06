@@ -28,6 +28,7 @@ func GetAllLogs(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	enrichTaskUsageLogs(logs)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
@@ -50,6 +51,7 @@ func GetUserLogs(c *gin.Context) {
 		return
 	}
 	sanitizeUserErrorLogs(c, logs)
+	enrichTaskUsageLogs(logs)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
@@ -90,11 +92,18 @@ func GetLogByKey(c *gin.Context) {
 		return
 	}
 	sanitizeUserErrorLogs(c, logs)
+	enrichTaskUsageLogs(logs)
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "",
 		"data":    logs,
 	})
+}
+
+func enrichTaskUsageLogs(logs []*model.Log) {
+	if err := service.EnrichTaskUsageLogs(logs); err != nil {
+		common.SysError("failed to enrich task usage logs: " + err.Error())
+	}
 }
 
 func sanitizeUserErrorLogs(c *gin.Context, logs []*model.Log) {
