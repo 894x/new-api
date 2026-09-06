@@ -24,6 +24,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/types"
 )
 
 // https://platform.minimaxi.com/docs/api-reference/video-generation-intro
@@ -96,6 +97,89 @@ func (a *TaskAdaptor) ValidateMappedRequest(c *gin.Context, info *relaycommon.Re
 		info.Action = constant.TaskActionTextGenerate
 	}
 	return nil
+}
+
+func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
+	if info == nil || !usesH3Protocol(info.OriginModelName, info.UpstreamModelName) {
+		return nil
+	}
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return nil
+	}
+	request, err := buildH3VideoRequest(
+		&req,
+		info.UpstreamModelName,
+		common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatMiniMaxVideoV2,
+	)
+	if err != nil {
+		return nil
+	}
+
+	resolutionMultiplier := h3ResolutionBillingMultiplier(request.Resolution)
+	videoUnits := float64(request.Duration) * resolutionMultiplier
+	imageUnits := float64(h3BillableImageCount(h3InputImageCount(request.Content))) *
+		(h3PriceRMBPerExtraImage / h3BasePriceRMBPerSecond)
+	imageSurcharge := 1.0
+	if videoUnits > 0 {
+		imageSurcharge += imageUnits / videoUnits
+	}
+	return map[string]float64{
+		"seconds":         float64(request.Duration),
+		"resolution":      resolutionMultiplier,
+		"image_surcharge": imageSurcharge,
+	}
+}
+
+func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, taskResult *relaycommon.TaskInfo) int {
+	if task == nil || taskResult == nil ||
+		!usesH3Protocol(task.Properties.OriginModelName, task.Properties.UpstreamModelName) {
+		return 0
+	}
+	var response H3QueryResponse
+	if err := common.Unmarshal(task.Data, &response); err != nil || response.Task == nil {
+		return 0
+	}
+	usage := normalizeH3Usage(response.Task.Usage)
+	if usage == nil {
+		return 0
+	}
+	taskResult.Usage = usage
+
+	billingContext := task.PrivateData.BillingContext
+	if billingContext == nil || billingContext.ModelRatio <= 0 {
+		return 0
+	}
+	resolutionMultiplier := h3ResolutionBillingMultiplier(response.Task.Resolution)
+	if response.Task.Resolution == "" && billingContext.OtherRatios != nil {
+		if frozen := billingContext.OtherRatios["resolution"]; frozen > 0 {
+			resolutionMultiplier = frozen
+		}
+	}
+	imageUnits := 0.0
+	if usage.InputImages != nil {
+		imageUnits = float64(h3BillableImageCount(*usage.InputImages)) *
+			(h3PriceRMBPerExtraImage / h3BasePriceRMBPerSecond)
+	} else if billingContext.OtherRatios != nil {
+		reservedSeconds := billingContext.OtherRatios["seconds"]
+		reservedResolution := billingContext.OtherRatios["resolution"]
+		reservedImageSurcharge := billingContext.OtherRatios["image_surcharge"]
+		if reservedSeconds > 0 && reservedResolution > 0 && reservedImageSurcharge > 1 {
+			imageUnits = (reservedImageSurcharge - 1) * reservedSeconds * reservedResolution
+		}
+	}
+	billableUnits := usage.Total*resolutionMultiplier + imageUnits
+	if billableUnits <= 0 {
+		return 0
+	}
+	if billingContext.OtherRatios == nil {
+		billingContext.OtherRatios = map[string]float64{}
+	}
+	billingContext.OtherRatios["seconds"] = 1
+	billingContext.OtherRatios["resolution"] = 1
+	billingContext.OtherRatios["image_surcharge"] = 1
+	taskResult.TotalTokens = common.QuotaRound(billableUnits * common.QuotaPerUnit / 2)
+	return 0
 }
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -321,6 +405,7 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 	if h3Response.Task != nil {
 		taskResult := &relaycommon.TaskInfo{TaskID: h3Response.Task.ID, Code: 0}
+		taskResult.Usage = normalizeH3Usage(h3Response.Task.Usage)
 		switch h3Response.Task.Status {
 		case H3TaskStatusQueued:
 			taskResult.Status = string(model.TaskStatusQueued)
@@ -389,6 +474,61 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 
 	return &taskResult, nil
+}
+
+func normalizeH3Usage(usage *H3Usage) *types.TaskUsage {
+	if usage == nil {
+		return nil
+	}
+	inputSeconds := min(max(usage.InputSeconds, 0), float64(relaycommon.MaxTaskDurationSeconds))
+	outputSeconds := min(max(usage.OutputSeconds, 0), float64(H3MaxDuration))
+	totalSeconds := inputSeconds + outputSeconds
+	if totalSeconds <= 0 {
+		totalSeconds = min(
+			max(usage.TotalSeconds, 0),
+			float64(relaycommon.MaxTaskDurationSeconds+H3MaxDuration),
+		)
+		outputSeconds = min(totalSeconds, float64(H3MaxDuration))
+		inputSeconds = totalSeconds - outputSeconds
+	}
+	var inputImages *int
+	if usage.InputImageCount != nil {
+		normalizedInputImages := min(max(*usage.InputImageCount, 0), H3MaxReferenceImages)
+		inputImages = common.GetPointer(normalizedInputImages)
+	}
+	if totalSeconds <= 0 && (inputImages == nil || *inputImages == 0) {
+		return nil
+	}
+	return &types.TaskUsage{
+		Kind:        types.TaskUsageKindVideoDuration,
+		Unit:        types.TaskUsageUnitSecond,
+		Input:       inputSeconds,
+		Output:      outputSeconds,
+		Total:       totalSeconds,
+		InputImages: inputImages,
+	}
+}
+
+func h3ResolutionBillingMultiplier(resolution string) float64 {
+	if strings.EqualFold(strings.TrimSpace(resolution), Resolution2K) {
+		return h3PriceRMBPer2KSecond / h3BasePriceRMBPerSecond
+	}
+	return 1
+}
+
+func h3InputImageCount(content []any) int {
+	count := 0
+	for _, item := range content {
+		contentItem, ok := item.(map[string]any)
+		if ok && contentItem["type"] == "image_url" {
+			count++
+		}
+	}
+	return min(count, H3MaxReferenceImages)
+}
+
+func h3BillableImageCount(inputImages int) int {
+	return max(inputImages-H3FreeInputImages, 0)
 }
 
 func (a *TaskAdaptor) SanitizeTaskData(body []byte, publicTaskID string) []byte {

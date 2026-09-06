@@ -61,10 +61,19 @@ type H3QueryResponse struct {
 }
 
 type H3Task struct {
-	ID      string      `json:"id"`
-	Status  string      `json:"status"`
-	Content *H3Content  `json:"content,omitempty"`
-	Error   *H3APIError `json:"error,omitempty"`
+	ID         string      `json:"id"`
+	Status     string      `json:"status"`
+	Resolution string      `json:"resolution,omitempty"`
+	Content    *H3Content  `json:"content,omitempty"`
+	Usage      *H3Usage    `json:"usage,omitempty"`
+	Error      *H3APIError `json:"error,omitempty"`
+}
+
+type H3Usage struct {
+	TotalSeconds    float64 `json:"total_seconds,omitempty"`
+	InputSeconds    float64 `json:"input_seconds,omitempty"`
+	OutputSeconds   float64 `json:"output_seconds,omitempty"`
+	InputImageCount *int    `json:"input_image_count,omitempty"`
 }
 
 type H3Content struct {

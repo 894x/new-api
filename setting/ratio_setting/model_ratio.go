@@ -24,6 +24,9 @@ const (
 // 1 === ￥0.014 / 1k tokens
 
 var defaultModelRatio = map[string]float64{
+	// MiniMax H3 uses the Beijing 768P public price as its base. The H3
+	// adaptor applies output/input duration, 2K, and billable-image factors.
+	"MiniMax-H3": 2 * 0.5 / USD2RMB,
 	// Wan3 is billed per generated second. The base ratio represents the
 	// Beijing 480P public price; the Ali task adaptor applies duration and
 	// resolution multipliers.

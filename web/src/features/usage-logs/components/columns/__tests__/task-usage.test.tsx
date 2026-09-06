@@ -65,6 +65,7 @@ await i18n.use(initReactI18next).init({
         Input: 'Input',
         Output: 'Output',
         Total: 'Total',
+        Image: 'Image',
       },
     },
   },
@@ -175,5 +176,45 @@ describe('task usage column', () => {
     assert.match(container.textContent || '', /Total\s*5s/)
 
     await act(async () => root.unmount())
+  })
+
+  test('falls back to nested MiniMax H3 usage including input images', async () => {
+	const container = document.createElement('div')
+	document.body.append(container)
+	const root = createRoot(container)
+	const log = {
+	  id: 3,
+	  user_id: 1,
+	  platform: 'hailuo-video',
+	  task_id: 'task_h3_existing_usage',
+	  action: 'textGenerate',
+	  channel_id: 2,
+	  submit_time: 1,
+	  status: 'SUCCESS',
+	  data: {
+		task: {
+		  usage: {
+			input_seconds: 2,
+			output_seconds: 4,
+			total_seconds: 6,
+			input_image_count: 7,
+		  },
+		},
+	  },
+	} as TaskLog
+
+	await act(async () => {
+	  root.render(
+		<I18nextProvider i18n={i18n}>
+		  <TaskUsageCell log={log} />
+		</I18nextProvider>
+	  )
+	})
+
+	assert.match(container.textContent || '', /Input\s*2s/)
+	assert.match(container.textContent || '', /Output\s*4s/)
+	assert.match(container.textContent || '', /Image\s*7/)
+
+	await act(async () => root.unmount())
   })
 })

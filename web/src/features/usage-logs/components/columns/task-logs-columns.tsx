@@ -83,16 +83,32 @@ function resolveTaskUsage(log: TaskLog): TaskUsage | undefined {
     return undefined
   }
 
-  const rawUsage = (data as Record<string, unknown>).usage
+  const dataRecord = data as Record<string, unknown>
+  const nestedTask =
+    dataRecord.task &&
+    typeof dataRecord.task === 'object' &&
+    !Array.isArray(dataRecord.task)
+      ? (dataRecord.task as Record<string, unknown>)
+      : undefined
+  const rawUsage = dataRecord.usage ?? nestedTask?.usage
   if (!rawUsage || typeof rawUsage !== 'object' || Array.isArray(rawUsage)) {
     return undefined
   }
   const usage = rawUsage as Record<string, unknown>
-  const input = toNonNegativeUsageNumber(usage.input_video_duration)
-  let output = toNonNegativeUsageNumber(usage.output_video_duration)
+  const input = toNonNegativeUsageNumber(
+    usage.input_video_duration ?? usage.input_seconds
+  )
+  let output = toNonNegativeUsageNumber(
+    usage.output_video_duration ?? usage.output_seconds
+  )
   if (output <= 0) output = toNonNegativeUsageNumber(usage.duration)
-  const total = input + output
-  if (total <= 0) return undefined
+  let total = input + output
+  if (total <= 0) total = toNonNegativeUsageNumber(usage.total_seconds)
+  const hasInputImages = usage.input_image_count !== undefined
+  const inputImages = Math.floor(
+    toNonNegativeUsageNumber(usage.input_image_count)
+  )
+  if (total <= 0 && !hasInputImages) return undefined
 
   return {
     kind: 'video_duration',
@@ -100,6 +116,7 @@ function resolveTaskUsage(log: TaskLog): TaskUsage | undefined {
     input,
     output,
     total,
+    ...(hasInputImages ? { input_images: inputImages } : {}),
   }
 }
 

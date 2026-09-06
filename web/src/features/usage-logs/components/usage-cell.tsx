@@ -54,6 +54,11 @@ export function UsageCell(props: UsageCellProps) {
           {t('Total')} {formatUsageValue(props.usage.total)}
           {unit}
         </span>
+        {typeof props.usage.input_images === 'number' && (
+          <span className='text-muted-foreground/60 text-[11px] leading-none'>
+            {t('Image')} {formatUsageValue(props.usage.input_images)}
+          </span>
+        )}
       </div>
     )
   }

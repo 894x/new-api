@@ -266,6 +266,7 @@ export interface TaskUsage {
   input: number
   output: number
   total: number
+  input_images?: number
 }
 
 /**

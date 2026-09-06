@@ -21,6 +21,7 @@ import i18next from 'i18next'
 import { beforeAll, describe, expect, test } from 'vitest'
 
 import { UsageCell } from '../usage-cell'
+import type { TaskUsage } from '../../types'
 
 describe('usage cell', () => {
   beforeAll(() => {
@@ -43,5 +44,23 @@ describe('usage cell', () => {
     expect(text).toContain('1,200/300')
     expect(text).toContain('Cache↓400')
     expect(text).toContain('↑20')
+  })
+
+  test('shows input image count alongside video duration usage', () => {
+    const rendered = render(
+      <UsageCell
+        usage={{
+          kind: 'video_duration',
+          unit: 'second',
+          input: 2,
+          output: 4,
+          total: 6,
+          input_images: 7,
+        } as TaskUsage}
+      />
+    )
+
+    const text = (rendered.container.textContent ?? '').replaceAll(/\s/g, '')
+    expect(text).toContain('Image7')
   })
 })

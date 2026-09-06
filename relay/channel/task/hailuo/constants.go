@@ -71,6 +71,13 @@ const (
 	H3MaxReferenceVideos  = 3
 	H3MaxReferenceAudios  = 3
 	H3MaxPromptCharacters = 7000
+	H3FreeInputImages     = 5
+)
+
+const (
+	h3BasePriceRMBPerSecond = 0.5
+	h3PriceRMBPer2KSecond   = 0.8
+	h3PriceRMBPerExtraImage = 0.2
 )
 
 var H3Ratios = []string{"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}

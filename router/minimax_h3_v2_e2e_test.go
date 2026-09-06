@@ -3,6 +3,7 @@ package router
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,10 +37,13 @@ func TestMiniMaxH3OfficialV2LifecycleEndToEnd(t *testing.T) {
 	previousHideErrorDetails := operation_setting.ShouldHideErrorDetails()
 	operation_setting.UpdateHideErrorDetails(false)
 	t.Cleanup(func() { operation_setting.UpdateHideErrorDetails(previousHideErrorDetails) })
-	previousModelPrices := ratio_setting.ModelPrice2JSONString()
-	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"MiniMax-H3":0.01,"customer-h3":0.01}`))
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	h3ModelRatio := 2 * 0.5 / ratio_setting.USD2RMB
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(
+		fmt.Sprintf(`{"MiniMax-H3":%g,"customer-h3":%g}`, h3ModelRatio, h3ModelRatio),
+	))
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(previousModelPrices))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
 	})
 
 	type observedRequest struct {
@@ -277,8 +281,15 @@ func TestMiniMaxH3OfficialV2LifecycleEndToEnd(t *testing.T) {
 	assert.Equal(t, "400", legacyQueryPayload.Error.HTTPCode)
 	var userAfterValidRequest model.User
 	require.NoError(t, model.DB.First(&userAfterValidRequest, user.Id).Error)
-	assert.Equal(t, 995_000, userAfterValidRequest.Quota)
-	assert.Equal(t, 5_000, persistedTask.Quota)
+	expectedQuota := common.QuotaFromFloat(float64(common.QuotaRound(7*1.6*common.QuotaPerUnit/2)) * h3ModelRatio)
+	assert.Equal(t, 1_000_000-expectedQuota, userAfterValidRequest.Quota)
+	assert.Equal(t, expectedQuota, persistedTask.Quota)
+	require.NotNil(t, persistedTask.Usage)
+	assert.Equal(t, 0.0, persistedTask.Usage.Input)
+	assert.Equal(t, 7.0, persistedTask.Usage.Output)
+	assert.Equal(t, 7.0, persistedTask.Usage.Total)
+	require.NotNil(t, persistedTask.Usage.InputImages)
+	assert.Equal(t, 1, *persistedTask.Usage.InputImages)
 	var tasksAfterValidRequest int64
 	require.NoError(t, model.DB.Model(&model.Task{}).Count(&tasksAfterValidRequest).Error)
 	var logsAfterValidRequest int64

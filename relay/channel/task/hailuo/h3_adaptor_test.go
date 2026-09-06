@@ -2,14 +2,17 @@ package hailuo
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -222,7 +225,7 @@ func TestH3FetchAndParseTaskResultUseV2Contract(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		observed <- observation{path: request.URL.EscapedPath(), authorization: request.Header.Get("Authorization")}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"task":{"id":"task/1","status":"succeeded","content":{"url":"https://cdn.example/h3.mp4"}}}`)
+		_, _ = io.WriteString(writer, `{"task":{"id":"task/1","status":"succeeded","resolution":"768P","content":{"url":"https://cdn.example/h3.mp4"},"usage":{"total_seconds":10,"input_seconds":4,"output_seconds":6,"input_image_count":7,"total_tokens":130196,"prompt_tokens":0,"completion_tokens":130196}}}`)
 	}))
 	t.Cleanup(server.Close)
 
@@ -245,6 +248,101 @@ func TestH3FetchAndParseTaskResultUseV2Contract(t *testing.T) {
 	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
 	assert.Equal(t, "100%", result.Progress)
 	assert.Equal(t, "https://cdn.example/h3.mp4", result.Url)
+	require.NotNil(t, result.Usage)
+	assert.Equal(t, "video_duration", result.Usage.Kind)
+	assert.Equal(t, "second", result.Usage.Unit)
+	assert.Equal(t, 4.0, result.Usage.Input)
+	assert.Equal(t, 6.0, result.Usage.Output)
+	assert.Equal(t, 10.0, result.Usage.Total)
+	encodedUsage, err := common.Marshal(result.Usage)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"kind":"video_duration","unit":"second","input":4,"output":6,"total":10,"input_images":7}`, string(encodedUsage))
+}
+
+func TestH3EstimateBillingUsesResolutionDurationAndBillableImages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(ctx, constant.ContextKeyTaskResponseFormat, constant.TaskResponseFormatMiniMaxVideoV2)
+	content := []any{map[string]any{"type": "text", "text": "animate"}}
+	for index := range 7 {
+		content = append(content, map[string]any{
+			"type": "image_url", "role": "reference_image",
+			"image_url": map[string]any{"url": fmt.Sprintf("https://cdn.example/%d.png", index)},
+		})
+	}
+	ctx.Set("task_request", relaycommon.TaskSubmitReq{Metadata: map[string]any{
+		"content": content, "resolution": "2K", "duration": 5, "ratio": "adaptive",
+	}})
+	info := &relaycommon.RelayInfo{
+		OriginModelName: H3Model,
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+	}
+	info.UpstreamModelName = H3Model
+
+	ratios := (&TaskAdaptor{}).EstimateBilling(ctx, info)
+
+	require.NotNil(t, ratios)
+	assert.Equal(t, 5.0, ratios["seconds"])
+	assert.Equal(t, 1.6, ratios["resolution"])
+	// 2K output: 5 * 1.6 base units; two images above the free five add
+	// another 2 * (0.20 / 0.50) base units, so the additive surcharge is 10%.
+	assert.InDelta(t, 1.1, ratios["image_surcharge"], 1e-12)
+}
+
+func TestH3AdjustBillingOnCompleteUsesInputOutputSecondsAndImages(t *testing.T) {
+	modelRatio := 2 * 0.5 / ratio_setting.USD2RMB
+	task := &model.Task{
+		Status:     model.TaskStatusSuccess,
+		Properties: model.Properties{OriginModelName: H3Model},
+		Data: []byte(`{"task":{"status":"succeeded","resolution":"2K","usage":{
+			"total_seconds":6,"input_seconds":2,"output_seconds":4,"input_image_count":7,
+			"total_tokens":130196,"prompt_tokens":0,"completion_tokens":130196
+		}}}`),
+		PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{
+			ModelPrice: -1, ModelRatio: modelRatio, GroupRatio: 1,
+			OtherRatios: map[string]float64{"seconds": 4, "resolution": 1.6, "image_surcharge": 1.125},
+		}},
+	}
+	taskResult := &relaycommon.TaskInfo{}
+
+	actual := (&TaskAdaptor{}).AdjustBillingOnComplete(task, taskResult)
+
+	assert.Zero(t, actual)
+	// 6 seconds at 2K = 9.6 base units; two billable images add 0.8,
+	// yielding 10.4 synthetic base seconds for the generic token settlement.
+	assert.Equal(t, common.QuotaRound(10.4*common.QuotaPerUnit/2), taskResult.TotalTokens)
+	assert.Equal(t, 1.0, task.PrivateData.BillingContext.OtherRatios["seconds"])
+	assert.Equal(t, 1.0, task.PrivateData.BillingContext.OtherRatios["resolution"])
+	assert.Equal(t, 1.0, task.PrivateData.BillingContext.OtherRatios["image_surcharge"])
+}
+
+func TestH3AdjustBillingOnCompleteKeepsReservedImagesWhenUsageOmitsCount(t *testing.T) {
+	modelRatio := 2 * 0.5 / ratio_setting.USD2RMB
+	task := &model.Task{
+		Status:     model.TaskStatusSuccess,
+		Properties: model.Properties{OriginModelName: H3Model},
+		Data:       []byte(`{"task":{"status":"succeeded","resolution":"2K","usage":{"input_seconds":2,"output_seconds":4}}}`),
+		PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{
+			ModelPrice: -1, ModelRatio: modelRatio, GroupRatio: 1,
+			OtherRatios: map[string]float64{"seconds": 4, "resolution": 1.6, "image_surcharge": 1.125},
+		}},
+	}
+	taskResult := &relaycommon.TaskInfo{}
+
+	actual := (&TaskAdaptor{}).AdjustBillingOnComplete(task, taskResult)
+
+	assert.Zero(t, actual)
+	// The response omitted input_image_count, so retain the two billable images
+	// represented by the immutable submit-time image surcharge.
+	assert.Equal(t, common.QuotaRound(10.4*common.QuotaPerUnit/2), taskResult.TotalTokens)
+	require.NotNil(t, taskResult.Usage)
+	assert.Nil(t, taskResult.Usage.InputImages)
+}
+
+func TestH3DefaultRatioUsesChinese768PPerSecondPrice(t *testing.T) {
+	defaults := ratio_setting.GetDefaultModelRatioMap()
+	assert.InDelta(t, 2*0.5/ratio_setting.USD2RMB, defaults[H3Model], 1e-12)
 }
 
 func TestH3TaskResultMapsFailureAndRetryableErrors(t *testing.T) {
