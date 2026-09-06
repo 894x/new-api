@@ -102,6 +102,22 @@ func TestTaskErrorForClientReplacesUpstreamRequestID(t *testing.T) {
 	assert.Equal(t, "provider failed. Request id: upstream-request-id", taskErr.Message)
 }
 
+func TestTaskErrorForClientWithSeparateRequestIDKeepsMessageStructured(t *testing.T) {
+	setHideErrorDetails(t, false)
+	c := newErrorClientContext(common.RoleCommonUser, "request-local")
+	taskErr := &dto.TaskError{
+		Code:       "unprocessable_entity_error",
+		Message:    "video description contains sensitive content (1026)",
+		StatusCode: http.StatusUnprocessableEntity,
+	}
+
+	result := TaskErrorForClientWithSeparateRequestID(c, taskErr)
+
+	assert.Equal(t, taskErr.Message, result.Message)
+	assert.NotContains(t, result.Message, "request-local")
+	assert.Equal(t, taskErr.Code, result.Code)
+}
+
 func TestTaskFailReasonForClientReplacesUpstreamRequestID(t *testing.T) {
 	setHideErrorDetails(t, false)
 	c := newErrorClientContext(common.RoleCommonUser, "request-local")

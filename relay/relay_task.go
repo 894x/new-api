@@ -242,9 +242,19 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if adaptor == nil {
 		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
 	}
-	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+	taskResponseFormat := common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat)
+	if taskResponseFormat == constant.TaskResponseFormatDoubaoVideo {
 		if _, ok := adaptor.(channel.NativeVideoConverter); !ok {
 			return nil, service.TaskErrorWrapperLocal(errors.New("selected channel does not support the Doubao video protocol"), "invalid_api_platform", http.StatusBadRequest)
+		}
+	} else if taskResponseFormat == constant.TaskResponseFormatAliVideo {
+		if _, ok := adaptor.(channel.AliNativeVideoConverter); !ok {
+			return nil, service.TaskErrorWrapperLocal(errors.New("selected channel does not support the Ali video protocol"), "invalid_api_platform", http.StatusBadRequest)
+		}
+	}
+	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatMiniMaxVideoV2 {
+		if _, ok := adaptor.(channel.MiniMaxVideoV2Converter); !ok {
+			return nil, service.TaskErrorWrapperLocal(errors.New("selected channel does not support the MiniMax video V2 protocol"), "invalid_api_platform", http.StatusBadRequest)
 		}
 	}
 	adaptor.Init(info)
@@ -263,6 +273,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	info.UpstreamModelName = modelName
 	if err := helper.ModelMappedHelper(c, info, nil); err != nil {
 		return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
+	}
+	if validator, ok := adaptor.(channel.MappedTaskRequestValidator); ok {
+		if taskErr := validator.ValidateMappedRequest(c, info); taskErr != nil {
+			return nil, taskErr
+		}
 	}
 
 	// 3. 预生成公开 task ID（仅首次）
@@ -314,7 +329,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
-	if resp != nil && resp.StatusCode != http.StatusOK {
+	if resp != nil && resp.StatusCode != http.StatusOK && common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) != constant.TaskResponseFormatMiniMaxVideoV2 {
 		responseBody, _ := io.ReadAll(resp.Body)
 		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
 	}
@@ -556,7 +571,27 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		return
 	}
 
-	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+	taskResponseFormat := common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat)
+	if taskResponseFormat == constant.TaskResponseFormatMiniMaxVideoV2 {
+		adaptor := GetTaskAdaptor(originTask.Platform)
+		if adaptor == nil {
+			return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid channel id: %d", originTask.ChannelId), "invalid_channel_id", http.StatusBadRequest)
+		}
+		converter, ok := adaptor.(channel.MiniMaxVideoV2Converter)
+		if !ok {
+			return nil, service.TaskErrorWrapperLocal(errors.New("task does not support the MiniMax video V2 protocol"), "not_implemented", http.StatusNotImplemented)
+		}
+		if !converter.IsMiniMaxVideoV2Task(originTask) {
+			return nil, service.TaskErrorWrapperLocal(errors.New("task was not created with the MiniMax video V2 protocol"), "invalid_model", http.StatusBadRequest)
+		}
+		respBody, err = converter.ConvertToMiniMaxVideoV2(originTask)
+		if err != nil {
+			return nil, service.TaskErrorWrapper(err, "convert_to_minimax_video_v2_failed", http.StatusInternalServerError)
+		}
+		return respBody, nil
+	}
+
+	if taskResponseFormat == constant.TaskResponseFormatDoubaoVideo {
 		adaptor := GetTaskAdaptor(originTask.Platform)
 		if adaptor == nil {
 			return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid channel id: %d", originTask.ChannelId), "invalid_channel_id", http.StatusBadRequest)
@@ -568,6 +603,20 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		respBody, err = converter.ConvertToNativeVideo(originTask)
 		if err != nil {
 			return nil, service.TaskErrorWrapper(err, "convert_to_native_video_failed", http.StatusInternalServerError)
+		}
+		return respBody, nil
+	} else if taskResponseFormat == constant.TaskResponseFormatAliVideo {
+		adaptor := GetTaskAdaptor(originTask.Platform)
+		if adaptor == nil {
+			return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid channel id: %d", originTask.ChannelId), "invalid_channel_id", http.StatusBadRequest)
+		}
+		converter, ok := adaptor.(channel.AliNativeVideoConverter)
+		if !ok {
+			return nil, service.TaskErrorWrapperLocal(errors.New("task does not support the Ali video protocol"), "not_implemented", http.StatusNotImplemented)
+		}
+		respBody, err = converter.ConvertToAliNativeVideo(originTask)
+		if err != nil {
+			return nil, service.TaskErrorWrapper(err, "convert_to_ali_native_video_failed", http.StatusInternalServerError)
 		}
 		return respBody, nil
 	}

@@ -12,16 +12,19 @@ import (
 )
 
 type TopUp struct {
-	Id              int     `json:"id"`
-	UserId          int     `json:"user_id" gorm:"index"`
-	Amount          int64   `json:"amount"`
-	Money           float64 `json:"money"`
-	TradeNo         string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
-	PaymentMethod   string  `json:"payment_method" gorm:"type:varchar(50)"`
-	PaymentProvider string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
-	CreateTime      int64   `json:"create_time"`
-	CompleteTime    int64   `json:"complete_time"`
-	Status          string  `json:"status"`
+	Id                    int     `json:"id"`
+	UserId                int     `json:"user_id" gorm:"index"`
+	Amount                int64   `json:"amount"`
+	CreditedQuota         int     `json:"credited_quota"`
+	Money                 float64 `json:"money"`
+	MoneyCents            int64   `json:"money_cents"`
+	TradeNo               string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
+	PaymentMethod         string  `json:"payment_method" gorm:"type:varchar(50)"`
+	PaymentProvider       string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
+	ProviderTransactionId string  `json:"provider_transaction_id" gorm:"type:varchar(255)"`
+	CreateTime            int64   `json:"create_time"`
+	CompleteTime          int64   `json:"complete_time"`
+	Status                string  `json:"status"`
 }
 
 const (
@@ -30,6 +33,7 @@ const (
 	PaymentMethodWaffo        = "waffo"
 	PaymentMethodWaffoPancake = "waffo_pancake"
 	PaymentMethodBalance      = "balance"
+	PaymentMethodWechatNative = "wechat_native"
 )
 
 const (
@@ -39,14 +43,17 @@ const (
 	PaymentProviderWaffo        = "waffo"
 	PaymentProviderWaffoPancake = "waffo_pancake"
 	PaymentProviderBalance      = "balance"
+	PaymentProviderWechatPay    = "wechatpay"
 )
 
 var (
-	ErrPaymentMethodMismatch   = errors.New("payment method mismatch")
-	ErrTopUpNotFound           = errors.New("topup not found")
-	ErrTopUpStatusInvalid      = errors.New("topup status invalid")
-	ErrInvalidTopUpQuota       = errors.New("invalid top-up quota")
-	ErrTopUpQuotaLimitExceeded = errors.New("top-up quota limit exceeded")
+	ErrPaymentMethodMismatch      = errors.New("payment method mismatch")
+	ErrTopUpNotFound              = errors.New("topup not found")
+	ErrTopUpStatusInvalid         = errors.New("topup status invalid")
+	ErrInvalidTopUpQuota          = errors.New("invalid top-up quota")
+	ErrTopUpQuotaLimitExceeded    = errors.New("top-up quota limit exceeded")
+	ErrPaymentAmountMismatch      = errors.New("payment amount mismatch")
+	ErrPaymentTransactionMismatch = errors.New("payment transaction mismatch")
 )
 
 func (topUp *TopUp) Insert() error {
@@ -205,9 +212,13 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 			topUp.PaymentMethod = actualPaymentMethod
 		}
 		var quotaErr error
-		quotaToAdd, quotaErr = common.QuotaFromDecimalStrict(
-			decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
-		)
+		if topUp.CreditedQuota > 0 {
+			quotaToAdd = topUp.CreditedQuota
+		} else {
+			quotaToAdd, quotaErr = common.QuotaFromDecimalStrict(
+				decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+			)
+		}
 		if quotaErr != nil || quotaToAdd <= 0 {
 			return ErrInvalidTopUpQuota
 		}
@@ -232,6 +243,83 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 	}
 	common.SysLog(fmt.Sprintf("易支付充值成功 trade_no=%s user_id=%d quota_to_add=%d money=%.2f", topUp.TradeNo, topUp.UserId, quotaToAdd, topUp.Money))
 	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%f", logger.LogQuota(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, PaymentProviderEpay)
+	return false, nil
+}
+
+// RechargeWechatPay atomically settles a verified WeChat Pay transaction.
+// The amount is compared in fen against the exact amount stored at order
+// creation, and the row lock makes callback/query replays idempotent.
+func RechargeWechatPay(tradeNo string, paidAmountCents int64, providerTransactionId string, callerIp string) (alreadyDone bool, err error) {
+	if tradeNo == "" {
+		return false, errors.New("未提供支付单号")
+	}
+	if paidAmountCents <= 0 {
+		return false, ErrPaymentAmountMismatch
+	}
+	if providerTransactionId == "" {
+		return false, errors.New("未提供微信支付订单号")
+	}
+
+	refCol := "`trade_no`"
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
+		refCol = `"trade_no"`
+	}
+
+	var quotaToAdd int
+	topUp := &TopUp{}
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
+			return ErrTopUpNotFound
+		}
+		if topUp.PaymentProvider != PaymentProviderWechatPay {
+			return ErrPaymentMethodMismatch
+		}
+		if topUp.MoneyCents <= 0 || topUp.MoneyCents != paidAmountCents {
+			return ErrPaymentAmountMismatch
+		}
+		if topUp.Status == common.TopUpStatusSuccess {
+			if topUp.ProviderTransactionId != providerTransactionId {
+				return ErrPaymentTransactionMismatch
+			}
+			alreadyDone = true
+			return nil
+		}
+		if topUp.Status != common.TopUpStatusPending {
+			return ErrTopUpStatusInvalid
+		}
+
+		quotaToAdd = topUp.CreditedQuota
+		if quotaToAdd <= 0 || quotaToAdd >= common.MaxQuota {
+			return ErrInvalidTopUpQuota
+		}
+
+		topUp.ProviderTransactionId = providerTransactionId
+		topUp.CompleteTime = common.GetTimestamp()
+		topUp.Status = common.TopUpStatusSuccess
+		if err := tx.Save(topUp).Error; err != nil {
+			return err
+		}
+		return creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil)
+	})
+	if err != nil {
+		if !errors.Is(err, ErrTopUpNotFound) &&
+			!errors.Is(err, ErrPaymentMethodMismatch) &&
+			!errors.Is(err, ErrPaymentAmountMismatch) &&
+			!errors.Is(err, ErrPaymentTransactionMismatch) &&
+			!errors.Is(err, ErrTopUpStatusInvalid) {
+			common.SysError("wechat pay topup failed: " + err.Error())
+		}
+		return false, err
+	}
+	if alreadyDone {
+		return true, nil
+	}
+
+	if quotaToAdd > 0 {
+		finalizeUserQuotaCacheMutation(topUp.UserId, "wechat pay topup")
+	}
+	common.SysLog(fmt.Sprintf("微信支付充值成功 trade_no=%s transaction_id=%s user_id=%d quota_to_add=%d money_cents=%d", topUp.TradeNo, topUp.ProviderTransactionId, topUp.UserId, quotaToAdd, topUp.MoneyCents))
+	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用微信支付充值成功，充值金额: %v，支付金额：%.2f", logger.LogQuota(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, PaymentProviderWechatPay)
 	return false, nil
 }
 
@@ -485,7 +573,9 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		// - Stripe 订单：Money 代表经分组倍率换算后的美元数量，直接 * QuotaPerUnit
 		// - 其他订单（如易支付）：Amount 为美元数量，* QuotaPerUnit
 		var quotaErr error
-		if topUp.PaymentProvider == PaymentProviderStripe {
+		if topUp.CreditedQuota > 0 {
+			quotaToAdd = topUp.CreditedQuota
+		} else if topUp.PaymentProvider == PaymentProviderStripe {
 			quotaToAdd, quotaErr = common.QuotaFromDecimalStrict(
 				decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
 			)

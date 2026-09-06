@@ -26,7 +26,7 @@ func GetTopUpInfo(c *gin.Context) {
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
 
 	// 获取支付方式
-	payMethods := operation_setting.PayMethods
+	payMethods := append([]map[string]string(nil), operation_setting.PayMethods...)
 	if !complianceConfirmed {
 		payMethods = []map[string]string{}
 	}
@@ -50,6 +50,25 @@ func GetTopUpInfo(c *gin.Context) {
 				"min_topup": strconv.Itoa(setting.StripeMinTopUp),
 			}
 			payMethods = append(payMethods, stripeMethod)
+		}
+	}
+
+	enableWechatPay := isWechatPayTopUpEnabled()
+	if enableWechatPay {
+		hasWechatPay := false
+		for _, method := range payMethods {
+			if method["type"] == model.PaymentMethodWechatNative {
+				hasWechatPay = true
+				break
+			}
+		}
+		if !hasWechatPay {
+			payMethods = append(payMethods, map[string]string{
+				"name":      "微信支付",
+				"icon":      "SiWechat",
+				"type":      model.PaymentMethodWechatNative,
+				"min_topup": strconv.Itoa(operation_setting.MinTopUp),
+			})
 		}
 	}
 
@@ -99,6 +118,7 @@ func GetTopUpInfo(c *gin.Context) {
 	data := gin.H{
 		"enable_online_topup":              isEpayTopUpEnabled(),
 		"enable_stripe_topup":              isStripeTopUpEnabled(),
+		"enable_wechatpay_topup":           enableWechatPay,
 		"enable_creem_topup":               isCreemTopUpEnabled(),
 		"enable_waffo_topup":               enableWaffo,
 		"enable_waffo_pancake_topup":       enableWaffoPancake,
@@ -148,13 +168,7 @@ func GetEpayClient() *epay.Client {
 }
 
 func getPayMoney(amount int64, group string) float64 {
-	dAmount := decimal.NewFromInt(amount)
-	// 充值金额以“展示类型”为准：
-	// - USD/CNY: 前端传 amount 为金额单位；TOKENS: 前端传 tokens，需要换成 USD 金额
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-		dAmount = dAmount.Div(dQuotaPerUnit)
-	}
+	dAmount := getTopUpAmountInUSD(amount)
 
 	topupGroupRatio := common.GetTopupGroupRatio(group)
 	if topupGroupRatio == 0 {
@@ -177,6 +191,22 @@ func getPayMoney(amount int64, group string) float64 {
 	return payMoney.InexactFloat64()
 }
 
+func getTopUpAmountInUSD(amount int64) decimal.Decimal {
+	dAmount := decimal.NewFromInt(amount)
+	switch operation_setting.GetQuotaDisplayType() {
+	case operation_setting.QuotaDisplayTypeTokens:
+		return dAmount.Div(decimal.NewFromFloat(common.QuotaPerUnit))
+	case operation_setting.QuotaDisplayTypeCNY, operation_setting.QuotaDisplayTypeCustom:
+		exchangeRate := operation_setting.GetUsdToCurrencyRate(operation_setting.USDExchangeRate)
+		if exchangeRate <= 0 {
+			return decimal.Zero
+		}
+		return dAmount.Div(decimal.NewFromFloat(exchangeRate))
+	default:
+		return dAmount
+	}
+}
+
 func getMinTopup() int64 {
 	minTopup := operation_setting.MinTopUp
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
@@ -188,12 +218,13 @@ func getMinTopup() int64 {
 }
 
 func getTopUpQuota(amount int64) (int, error) {
-	quota := decimal.NewFromInt(amount)
+	quota := getTopUpAmountInUSD(amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 		quota = decimal.NewFromInt(quota.Div(quotaPerUnit).IntPart()).Mul(quotaPerUnit)
-	} else {
-		quota = quota.Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+	}
+	if !quota.IsPositive() {
+		return 0, errors.New("充值额度必须大于 0")
 	}
 	return common.QuotaFromDecimalStrict(quota)
 }
@@ -203,15 +234,21 @@ func getMaxTopUpAmount() int64 {
 		return 0
 	}
 	quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-	maxStoredAmount := decimal.NewFromInt(common.MaxQuota - 1).
-		Div(quotaPerUnit).
-		Floor()
+	maxStoredAmount := decimal.NewFromInt(common.MaxQuota - 1).Div(quotaPerUnit)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		return maxStoredAmount.Add(decimal.NewFromInt(1)).
+		return maxStoredAmount.Floor().Add(decimal.NewFromInt(1)).
 			Mul(quotaPerUnit).
 			Ceil().
 			Sub(decimal.NewFromInt(1)).
 			IntPart()
+	}
+	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeCNY ||
+		operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeCustom {
+		exchangeRate := operation_setting.GetUsdToCurrencyRate(operation_setting.USDExchangeRate)
+		if exchangeRate <= 0 {
+			return 0
+		}
+		return maxStoredAmount.Mul(decimal.NewFromFloat(exchangeRate)).Floor().IntPart()
 	}
 	return maxStoredAmount.IntPart()
 }
@@ -275,7 +312,12 @@ func RequestEpay(c *gin.Context) {
 		return
 	}
 	id := c.GetInt("id")
-	if rejectInvalidTopUpQuota(c, id, req.Amount) {
+	creditedQuota, err := validateTopUpQuota(req.Amount)
+	if err == nil {
+		err = model.ValidateTopUpQuotaCapacity(id, creditedQuota)
+	}
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return
 	}
 
@@ -328,6 +370,7 @@ func RequestEpay(c *gin.Context) {
 	topUp := &model.TopUp{
 		UserId:          id,
 		Amount:          amount,
+		CreditedQuota:   creditedQuota,
 		Money:           payMoney,
 		TradeNo:         tradeNo,
 		PaymentMethod:   req.PaymentMethod,

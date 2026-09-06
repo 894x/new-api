@@ -32,3 +32,23 @@ func TestDistributeAllowsDoubaoVideoTaskFetchWithoutSelectingChannel(t *testing.
 
 	assert.Equal(t, http.StatusNoContent, recorder.Code)
 }
+
+func TestDistributeAllowsAliVideoTaskFetchWithoutSelectingChannel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET(
+		"/api/v1/tasks/:task_id",
+		AliVideoRequestConvert(),
+		Distribute(),
+		func(c *gin.Context) {
+			c.Status(http.StatusNoContent)
+		},
+	)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/task_public_id", nil)
+
+	router.ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusNoContent, recorder.Code)
+}

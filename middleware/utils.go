@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -14,6 +15,11 @@ func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code
 	codeStr := ""
 	if len(code) > 0 {
 		codeStr = string(code[0])
+	}
+	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatMiniMaxVideoV2 {
+		abortWithMiniMaxVideoV2Error(c, statusCode, codeStr, message)
+		logger.LogError(c.Request.Context(), fmt.Sprintf("user %d | %s", c.GetInt("id"), message))
+		return
 	}
 	publicMessage := common.MessageWithRequestId(message, c.GetString(common.RequestIdKey))
 	if service.ShouldHideErrorDetails(c) {

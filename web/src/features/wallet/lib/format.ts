@@ -81,11 +81,11 @@ export function calculatePresetPricing(
   discount: number,
   usdExchangeRate: number = 1
 ) {
-  const originalPrice = presetValue * priceRatio
+  const originalPrice = (presetValue * priceRatio) / usdExchangeRate
   const actualPrice = originalPrice * discount
   const savedAmount = originalPrice - actualPrice
   const hasDiscount = discount < 1.0
-  const displayValue = presetValue * usdExchangeRate
+  const displayValue = presetValue
 
   return {
     displayValue,

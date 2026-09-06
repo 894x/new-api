@@ -35,11 +35,15 @@ import {
 type AmountDiscountVisualEditorProps = {
   value: string
   onChange: (value: string) => void
+  currencyLabel?: string
+  currencySymbol?: string
 }
 
 export function AmountDiscountVisualEditor({
   value,
   onChange,
+  currencyLabel = 'USD',
+  currencySymbol = '$',
 }: AmountDiscountVisualEditorProps) {
   const { t } = useTranslation()
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -59,7 +63,9 @@ export function AmountDiscountVisualEditor({
         discountRate:
           typeof rate === 'number' ? rate : Number.parseFloat(String(rate)),
       }))
-      .filter((item) => !isNaN(item.amount) && !isNaN(item.discountRate))
+      .filter(
+        (item) => !Number.isNaN(item.amount) && !Number.isNaN(item.discountRate)
+      )
       .sort((a, b) => a.amount - b.amount)
   }, [value])
 
@@ -152,7 +158,10 @@ export function AmountDiscountVisualEditor({
                 id: 'amount',
                 header: t('Recharge Amount'),
                 cell: (discount) => (
-                  <span className='font-mono text-sm'>${discount.amount}</span>
+                  <span className='font-mono text-sm'>
+                    {currencySymbol}
+                    {discount.amount}
+                  </span>
                 ),
               },
               {
@@ -202,7 +211,8 @@ export function AmountDiscountVisualEditor({
                 <div className='mb-3 flex items-start justify-between'>
                   <div className='flex-1'>
                     <div className='mb-2 font-mono text-base font-medium'>
-                      ${discount.amount}
+                      {currencySymbol}
+                      {discount.amount}
                     </div>
                     <StatusBadge
                       variant={discount.discountRate < 1 ? 'info' : 'neutral'}
@@ -258,6 +268,7 @@ export function AmountDiscountVisualEditor({
         onOpenChange={setDialogOpen}
         onSave={handleSave}
         editData={editData}
+        currencyLabel={currencyLabel}
       />
     </div>
   )

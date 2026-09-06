@@ -19,14 +19,56 @@ type VideoRequest struct {
 	SubjectReference []SubjectReference `json:"subject_reference,omitempty"` // For subject-reference-to-video
 }
 
+type H3VideoRequest struct {
+	Model         string  `json:"model"`
+	Content       []any   `json:"content"`
+	Resolution    string  `json:"resolution"`
+	Duration      int     `json:"duration"`
+	Ratio         string  `json:"ratio"`
+	CallbackURL   *string `json:"callback_url,omitempty"`
+	AIGCWatermark *bool   `json:"aigc_watermark,omitempty"`
+}
+
 type VideoResponse struct {
 	TaskID   string   `json:"task_id"`
 	BaseResp BaseResp `json:"base_resp"`
 }
 
+type H3VideoResponse struct {
+	TaskID   string      `json:"task_id"`
+	BaseResp *BaseResp   `json:"base_resp,omitempty"`
+	Type     string      `json:"type,omitempty"`
+	Error    *H3APIError `json:"error,omitempty"`
+}
+
 type BaseResp struct {
 	StatusCode int    `json:"status_code"`
 	StatusMsg  string `json:"status_msg"`
+}
+
+type H3APIError struct {
+	Type     string `json:"type,omitempty"`
+	Code     any    `json:"code,omitempty"`
+	Message  string `json:"message,omitempty"`
+	HTTPCode any    `json:"http_code,omitempty"`
+}
+
+type H3QueryResponse struct {
+	Type      string      `json:"type,omitempty"`
+	Error     *H3APIError `json:"error,omitempty"`
+	RequestID string      `json:"request_id,omitempty"`
+	Task      *H3Task     `json:"task,omitempty"`
+}
+
+type H3Task struct {
+	ID      string      `json:"id"`
+	Status  string      `json:"status"`
+	Content *H3Content  `json:"content,omitempty"`
+	Error   *H3APIError `json:"error,omitempty"`
+}
+
+type H3Content struct {
+	URL string `json:"url,omitempty"`
 }
 
 type QueryTaskRequest struct {

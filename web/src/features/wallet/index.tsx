@@ -29,6 +29,7 @@ import { BillingHistoryDialog } from './components/dialogs/billing-history-dialo
 import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
 import { PaymentConfirmDialog } from './components/dialogs/payment-confirm-dialog'
 import { TransferDialog } from './components/dialogs/transfer-dialog'
+import { WechatPayDialog } from './components/dialogs/wechat-pay-dialog'
 import { RechargeFormCard } from './components/recharge-form-card'
 import { SubscriptionPlansCard } from './components/subscription-plans-card'
 import { WalletStatsCard } from './components/wallet-stats-card'
@@ -41,11 +42,13 @@ import {
   useCreemPayment,
   useWaffoPayment,
   useWaffoPancakePayment,
+  useWechatPayment,
 } from './hooks'
 import {
   getDefaultPaymentType,
   getMinTopupAmount,
   dispatchSelectedPayment,
+  isWechatPayPayment,
 } from './lib'
 import type {
   UserWalletData,
@@ -108,6 +111,13 @@ export function Wallet(props: WalletProps) {
   const { processing: waffoProcessing, processWaffoPayment } = useWaffoPayment()
   const { processing: pancakeProcessing, processWaffoPancakePayment } =
     useWaffoPancakePayment()
+  const {
+    order: wechatPayOrder,
+    processing: wechatPayProcessing,
+    createPayment: createWechatPayment,
+    checkStatus: checkWechatPaymentStatus,
+    clearPayment: clearWechatPayment,
+  } = useWechatPayment()
 
   // Fetch and refresh user data
   const fetchUser = useCallback(async () => {
@@ -194,6 +204,12 @@ export function Wallet(props: WalletProps) {
   const handlePaymentConfirm = async () => {
     if (!selectedPaymentMethod) return
 
+    if (isWechatPayPayment(selectedPaymentMethod.type)) {
+      const created = await createWechatPayment(topupAmount)
+      if (created) setConfirmDialogOpen(false)
+      return
+    }
+
     const success = await dispatchSelectedPayment(
       selectedPaymentMethod,
       topupAmount,
@@ -210,6 +226,11 @@ export function Wallet(props: WalletProps) {
       await fetchUser()
     }
   }
+
+  const handleWechatPayPaid = useCallback(async () => {
+    clearWechatPayment()
+    await fetchUser()
+  }, [clearWechatPayment, fetchUser])
 
   // Handle redemption
   const handleRedeem = async () => {
@@ -360,9 +381,13 @@ export function Wallet(props: WalletProps) {
         paymentAmount={paymentAmount}
         paymentMethod={selectedPaymentMethod}
         calculating={calculating}
-        processing={processing || waffoProcessing || pancakeProcessing}
+        processing={
+          processing ||
+          waffoProcessing ||
+          pancakeProcessing ||
+          wechatPayProcessing
+        }
         discountRate={getDiscountRate()}
-        usdExchangeRate={effectiveUsdExchangeRate}
       />
 
       <TransferDialog
@@ -384,6 +409,16 @@ export function Wallet(props: WalletProps) {
         onConfirm={handleCreemConfirm}
         product={selectedCreemProduct}
         processing={creemProcessing}
+      />
+
+      <WechatPayDialog
+        open={wechatPayOrder !== null}
+        onOpenChange={(open) => {
+          if (!open) clearWechatPayment()
+        }}
+        order={wechatPayOrder}
+        checkStatus={checkWechatPaymentStatus}
+        onPaid={handleWechatPayPaid}
       />
     </>
   )

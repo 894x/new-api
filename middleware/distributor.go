@@ -341,7 +341,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		}
 		c.Set("platform", string(constant.TaskPlatformSuno))
 		c.Set("relay_mode", relayMode)
-	} else if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatDoubaoVideo {
+	} else if taskResponseFormat := common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat); taskResponseFormat == constant.TaskResponseFormatDoubaoVideo || taskResponseFormat == constant.TaskResponseFormatMiniMaxVideoV2 || taskResponseFormat == constant.TaskResponseFormatAliVideo {
 		relayMode := relayconstant.RelayModeUnknown
 		if c.Request.Method == http.MethodPost {
 			req, requestErr := getModelFromRequest(c)

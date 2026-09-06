@@ -75,6 +75,10 @@ export function isStripePayment(paymentType: string): boolean {
   return paymentType === PAYMENT_TYPES.STRIPE
 }
 
+export function isWechatPayPayment(paymentType: string): boolean {
+  return paymentType === PAYMENT_TYPES.WECHAT_NATIVE
+}
+
 /**
  * Check if payment method is Waffo
  */
@@ -155,7 +159,7 @@ export function getMinTopupAmount(topupInfo: TopupInfo | null): number {
     return DEFAULT_MIN_TOPUP
   }
 
-  if (topupInfo.enable_online_topup) {
+  if (topupInfo.enable_online_topup || topupInfo.enable_wechatpay_topup) {
     return topupInfo.min_topup
   }
 
