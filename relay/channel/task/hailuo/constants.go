@@ -5,6 +5,7 @@ const (
 )
 
 var ModelList = []string{
+	"MiniMax-H3",
 	"MiniMax-Hailuo-2.3",
 	"MiniMax-Hailuo-2.3-Fast",
 	"MiniMax-Hailuo-02",
@@ -17,8 +18,12 @@ var ModelList = []string{
 }
 
 const (
+	H3Model = "MiniMax-H3"
+
 	TextToVideoEndpoint = "/v1/video_generation"
 	QueryTaskEndpoint   = "/v1/query/video_generation"
+	H3VideoEndpoint     = "/v2/video_generation"
+	H3QueryTaskEndpoint = "/v2/query/video_generation"
 )
 
 const (
@@ -37,6 +42,11 @@ const (
 	TaskStatusProcessing = "Processing"
 	TaskStatusSuccess    = "Success"
 	TaskStatusFailed     = "Fail"
+	H3TaskStatusQueued   = "queued"
+	H3TaskStatusRunning  = "running"
+	H3TaskStatusSuccess  = "succeeded"
+	H3TaskStatusFailed   = "failed"
+	H3TaskStatusCanceled = "cancelled"
 )
 
 const (
@@ -44,9 +54,23 @@ const (
 	Resolution720P  = "720P"
 	Resolution768P  = "768P"
 	Resolution1080P = "1080P"
+	Resolution2K    = "2K"
 )
 
 const (
 	DefaultDuration   = 6
 	DefaultResolution = Resolution720P
 )
+
+const (
+	H3MinDuration         = 4
+	H3MaxDuration         = 15
+	H3DefaultDuration     = 5
+	H3MaxFrameImages      = 2
+	H3MaxReferenceImages  = 9
+	H3MaxReferenceVideos  = 3
+	H3MaxReferenceAudios  = 3
+	H3MaxPromptCharacters = 7000
+)
+
+var H3Ratios = []string{"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}

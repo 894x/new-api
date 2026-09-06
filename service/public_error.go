@@ -95,6 +95,29 @@ func TaskErrorForClient(c *gin.Context, taskErr *dto.TaskError) *dto.TaskError {
 	return &result
 }
 
+// TaskErrorForClientWithSeparateRequestID prepares an error for protocols that
+// carry request_id as a dedicated response field instead of appending it to the
+// human-readable message.
+func TaskErrorForClientWithSeparateRequestID(c *gin.Context, taskErr *dto.TaskError) *dto.TaskError {
+	if taskErr == nil {
+		return nil
+	}
+	result := *taskErr
+	if ShouldHideErrorDetails(c) {
+		result.Code = "request_failed"
+		result.Message = publicErrorMessage
+		result.Data = nil
+		return &result
+	}
+	requestID := c.GetString(common.RequestIdKey)
+	if requestID == "" {
+		result.Message = upstreamRequestIDPattern.ReplaceAllString(result.Message, "request id: [redacted]")
+	} else {
+		result.Message = replaceUpstreamRequestID(result.Message, requestID)
+	}
+	return &result
+}
+
 func TaskFailReasonForClient(c *gin.Context, failReason string) string {
 	if failReason == "" {
 		return failReason

@@ -19,8 +19,9 @@ const (
 )
 
 const (
-	TaskResponseFormatDoubaoVideo = "doubao_video"
-	TaskResponseFormatAliVideo    = "ali_video"
+	TaskResponseFormatDoubaoVideo    = "doubao_video"
+	TaskResponseFormatMiniMaxVideoV2 = "minimax_video_v2"
+	TaskResponseFormatAliVideo       = "ali_video"
 )
 
 var SunoModel2Action = map[string]string{

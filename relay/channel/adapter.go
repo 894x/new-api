@@ -105,6 +105,13 @@ type TaskAdaptor interface {
 	ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error)
 }
 
+// MappedTaskRequestValidator lets an adaptor validate provider-specific
+// constraints after channel model mapping has resolved the upstream model.
+// RelayTaskSubmit calls it before pricing and quota reservation.
+type MappedTaskRequestValidator interface {
+	ValidateMappedRequest(c *gin.Context, info *relaycommon.RelayInfo) *taskdto.TaskError
+}
+
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
 }
@@ -114,6 +121,13 @@ type OpenAIVideoConverter interface {
 // implement this interface.
 type NativeVideoConverter interface {
 	ConvertToNativeVideo(originTask *model.Task) ([]byte, error)
+}
+
+// MiniMaxVideoV2Converter renders a stored task using MiniMax's official
+// /v2 video generation response contract.
+type MiniMaxVideoV2Converter interface {
+	IsMiniMaxVideoV2Task(originTask *model.Task) bool
+	ConvertToMiniMaxVideoV2(originTask *model.Task) ([]byte, error)
 }
 
 // AliNativeVideoConverter renders a stored task using the DashScope async

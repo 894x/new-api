@@ -885,7 +885,18 @@ func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		taskErr.Message = "当前分组上游负载已饱和，请稍后再试"
 	}
-	c.JSON(taskErr.StatusCode, service.TaskErrorForClient(c, taskErr))
+	if common.GetContextKeyString(c, constant.ContextKeyTaskResponseFormat) == constant.TaskResponseFormatMiniMaxVideoV2 {
+		clientError := service.TaskErrorForClientWithSeparateRequestID(c, taskErr)
+		c.JSON(taskErr.StatusCode, middleware.MiniMaxVideoV2ErrorPayload(
+			taskErr.StatusCode,
+			clientError.Code,
+			clientError.Message,
+			c.GetString(common.RequestIdKey),
+		))
+		return
+	}
+	clientError := service.TaskErrorForClient(c, taskErr)
+	c.JSON(taskErr.StatusCode, clientError)
 }
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskError, retryTimes int) bool {
