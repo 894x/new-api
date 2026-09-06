@@ -310,6 +310,19 @@ export interface MidjourneyLog {
 // Task Logs Types
 // ============================================================================
 
+export interface TaskRequestParameters {
+  resolution?: string
+  duration?: number
+  ratio?: string
+}
+
+export interface TaskProperties {
+  input?: string
+  upstream_model_name?: string
+  origin_model_name?: string
+  request_parameters?: TaskRequestParameters
+}
+
 export interface TaskLog {
   id: number
   user_id: number
@@ -322,6 +335,7 @@ export interface TaskLog {
   finish_time?: number // seconds
   progress?: string
   progress_message_en?: string
+  properties?: TaskProperties | string
   data?: unknown // Raw task response JSON
   fail_reason?: string
   result_url?: string

@@ -89,9 +89,16 @@ func (t *Task) GetData(v any) error {
 }
 
 type Properties struct {
-	Input             string `json:"input"`
-	UpstreamModelName string `json:"upstream_model_name,omitempty"`
-	OriginModelName   string `json:"origin_model_name,omitempty"`
+	Input             string                 `json:"input"`
+	UpstreamModelName string                 `json:"upstream_model_name,omitempty"`
+	OriginModelName   string                 `json:"origin_model_name,omitempty"`
+	RequestParameters *TaskRequestParameters `json:"request_parameters,omitempty"`
+}
+
+type TaskRequestParameters struct {
+	Resolution string `json:"resolution,omitempty"`
+	Duration   int    `json:"duration,omitempty"`
+	Ratio      string `json:"ratio,omitempty"`
 }
 
 func (m *Properties) Scan(val interface{}) error {

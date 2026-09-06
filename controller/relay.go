@@ -59,6 +59,38 @@ func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIErro
 	return err
 }
 
+func taskRequestParametersFromRequest(request relaycommon.TaskSubmitReq) *model.TaskRequestParameters {
+	parameters := &model.TaskRequestParameters{
+		Resolution: request.Size,
+		Duration:   request.Duration,
+	}
+	if parameters.Duration == 0 && request.Seconds != "" {
+		parameters.Duration, _ = strconv.Atoi(request.Seconds)
+	}
+
+	metadata := request.Metadata
+	if metadata != nil {
+		if parameters.Resolution == "" {
+			parameters.Resolution, _ = metadata["resolution"].(string)
+		}
+		parameters.Ratio, _ = metadata["ratio"].(string)
+
+		if nested, ok := metadata["parameters"].(map[string]any); ok {
+			if parameters.Resolution == "" {
+				parameters.Resolution, _ = nested["resolution"].(string)
+			}
+			if parameters.Ratio == "" {
+				parameters.Ratio, _ = nested["ratio"].(string)
+			}
+		}
+	}
+
+	if parameters.Resolution == "" && parameters.Duration == 0 && parameters.Ratio == "" {
+		return nil
+	}
+	return parameters
+}
+
 func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
 	var err *types.NewAPIError
 	if strings.Contains(c.Request.URL.Path, "embed") {
@@ -666,6 +698,9 @@ func RelayTask(c *gin.Context) {
 	if taskErr == nil {
 		settlementKey := "task:" + relayInfo.PublicTaskID
 		task := model.InitTask(result.Platform, relayInfo)
+		if request, requestErr := relaycommon.GetTaskRequest(c); requestErr == nil {
+			task.Properties.RequestParameters = taskRequestParametersFromRequest(request)
+		}
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
 		task.PrivateData.BillingSource = relayInfo.BillingSource
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId

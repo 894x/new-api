@@ -30,7 +30,7 @@ import { cn } from '@/lib/utils'
 
 import { TASK_ACTIONS, TASK_STATUS } from '../../constants'
 import { taskActionMapper, taskStatusMapper } from '../../lib/mappers'
-import type { TaskLog, TaskUsage } from '../../types'
+import type { TaskLog, TaskRequestParameters, TaskUsage } from '../../types'
 import {
   AudioPreviewDialog,
   type AudioClip,
@@ -118,6 +118,73 @@ function resolveTaskUsage(log: TaskLog): TaskUsage | undefined {
     total,
     ...(hasInputImages ? { input_images: inputImages } : {}),
   }
+}
+
+function parseRecord(value: unknown): Record<string, unknown> | undefined {
+  let parsed = value
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed) as unknown
+    } catch {
+      return undefined
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined
+  }
+  return parsed as Record<string, unknown>
+}
+
+function resolveTaskRequestParameters(
+  log: TaskLog
+): TaskRequestParameters | undefined {
+  const properties = parseRecord(log.properties)
+  const persisted = parseRecord(properties?.request_parameters)
+  const data = parseRecord(log.data)
+  const nestedTask = parseRecord(data?.task)
+  const fallback = nestedTask ?? data
+
+  const resolution = persisted?.resolution ?? fallback?.resolution
+  const duration = persisted?.duration ?? fallback?.duration
+  const ratio = persisted?.ratio ?? fallback?.ratio
+  const normalizedResolution =
+    typeof resolution === 'string' ? resolution.trim() : ''
+  const normalizedDuration = toNonNegativeUsageNumber(duration)
+  const normalizedRatio = typeof ratio === 'string' ? ratio.trim() : ''
+
+  if (!normalizedResolution && normalizedDuration <= 0 && !normalizedRatio) {
+    return undefined
+  }
+  return {
+    ...(normalizedResolution ? { resolution: normalizedResolution } : {}),
+    ...(normalizedDuration > 0 ? { duration: normalizedDuration } : {}),
+    ...(normalizedRatio ? { ratio: normalizedRatio } : {}),
+  }
+}
+
+function TaskRequestParametersCell(props: { log: TaskLog }) {
+  const { t } = useTranslation()
+  const parameters = resolveTaskRequestParameters(props.log)
+  if (!parameters) {
+    return <span className='text-muted-foreground/60 text-xs'>-</span>
+  }
+
+  return (
+    <div className='flex min-w-[120px] flex-col gap-0.5 text-xs'>
+      <span>
+        <span className='text-muted-foreground'>{t('Resolution')}</span>{' '}
+        {parameters.resolution || '-'}
+      </span>
+      <span>
+        <span className='text-muted-foreground'>{t('Duration')}</span>{' '}
+        {parameters.duration ? `${parameters.duration}s` : '-'}
+      </span>
+      <span>
+        <span className='text-muted-foreground'>{t('Ratio')}</span>{' '}
+        {parameters.ratio || '-'}
+      </span>
+    </div>
+  )
 }
 
 function AudioPreviewCell({ log }: { log: TaskLog }) {
@@ -280,6 +347,12 @@ export function useTaskLogsColumns(
       },
     },
     createProgressColumn<TaskLog>({ headerLabel: t('Progress') }),
+    {
+      id: 'request_parameters',
+      header: t('Request parameters'),
+      cell: ({ row }) => <TaskRequestParametersCell log={row.original} />,
+      size: 150,
+    },
     {
       accessorKey: 'usage',
       header: t('Usage'),

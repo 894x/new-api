@@ -181,6 +181,18 @@ func TestMiniMaxH3OfficialV2LifecycleEndToEnd(t *testing.T) {
 	assert.Equal(t, "h3-upstream-task", persistedTask.PrivateData.UpstreamTaskID)
 	assert.Equal(t, "MiniMax-H3", persistedTask.Properties.OriginModelName)
 	assert.Equal(t, "vendor-h3", persistedTask.Properties.UpstreamModelName)
+	propertiesJSON, err := common.Marshal(persistedTask.Properties)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"input": "",
+		"upstream_model_name": "vendor-h3",
+		"origin_model_name": "MiniMax-H3",
+		"request_parameters": {
+			"resolution": "2K",
+			"duration": 7,
+			"ratio": "16:9"
+		}
+	}`, string(propertiesJSON))
 	assert.NotContains(t, string(persistedTask.Data), "h3-upstream-task")
 
 	previousTaskAdaptorFactory := service.GetTaskAdaptorFunc
