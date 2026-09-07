@@ -170,8 +170,10 @@ func TestAssetLibraryMutationsRecordStructuredAudit(t *testing.T) {
 
 			require.Equal(t, http.StatusOK, recorder.Code)
 			var logs []model.Log
-			require.NoError(t, db.Where("user_id = ? AND type = ?", userId, model.LogTypeManage).Find(&logs).Error)
+			require.NoError(t, db.Where("user_id = ?", userId).Find(&logs).Error)
 			require.Len(t, logs, 1)
+			expectedTypes := map[string]int{"CreateAsset": 8, "DeleteAsset": 9, "DeleteAssetGroup": 9, "UpdateAsset": 10, "UpdateAssetGroup": 10, "CreateAssetGroup": 11}
+			assert.Equal(t, expectedTypes[testCase.action], logs[0].Type)
 			assert.Equal(t, "asset-owner", logs[0].Username)
 			assert.NotEmpty(t, logs[0].RequestId)
 			assert.Empty(t, logs[0].ModelName)
@@ -241,7 +243,7 @@ func TestAssetLibraryCreateAuditSurvivesReplicationFailure(t *testing.T) {
 	assert.Equal(t, "characters", groups[0].Name)
 
 	var logs []model.Log
-	require.NoError(t, db.Where("user_id = ? AND type = ?", userId, model.LogTypeManage).Find(&logs).Error)
+	require.NoError(t, db.Where("user_id = ? AND type = ?", userId, model.LogTypeAssetGroupCreate).Find(&logs).Error)
 	require.Len(t, logs, 1)
 	assert.Contains(t, logs[0].Content, groups[0].Id)
 }
@@ -610,7 +612,7 @@ func TestCreateAssetRejectsInvalidRemoteMediaBeforePersistence(t *testing.T) {
 	require.NoError(t, db.Model(&model.UserAsset{}).Count(&assetCount).Error)
 	assert.Zero(t, assetCount)
 	var logs []model.Log
-	require.NoError(t, db.Where("type = ?", model.LogTypeManage).Find(&logs).Error)
+	require.NoError(t, db.Where("type = ?", model.LogTypeAssetUpload).Find(&logs).Error)
 	require.Len(t, logs, 1, "a rejected upload must retain its diagnostic timeline")
 	var other map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
@@ -623,7 +625,7 @@ func TestCreateAssetRejectsInvalidRemoteMediaBeforePersistence(t *testing.T) {
 	assert.NotContains(t, logs[0].Other, imageURL)
 }
 
-func TestGetAssetWithoutReplicaRecordsFailedDiagnosticDespiteSuccessfulResponse(t *testing.T) {
+func TestGetAssetWithoutReplicaDoesNotRecordUsageLog(t *testing.T) {
 	db := setupAssetLibraryControllerTestDB(t)
 	asset := &model.UserAsset{Id: "asset-na-0123456789abcdef0123456789abcdef", UserId: 1, GroupId: "group-na-1", AssetType: "Image", SourceURL: "https://example.com/asset.png"}
 	require.NoError(t, db.Create(asset).Error)
@@ -635,8 +637,7 @@ func TestGetAssetWithoutReplicaRecordsFailedDiagnosticDespiteSuccessfulResponse(
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	var logs []model.Log
 	require.NoError(t, db.Find(&logs).Error)
-	require.Len(t, logs, 1)
-	assert.Contains(t, logs[0].Other, `"outcome":"failed"`)
+	assert.Empty(t, logs)
 }
 
 func TestCreateAudioAssetStoresVerifiedMediaMetadata(t *testing.T) {

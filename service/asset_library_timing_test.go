@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -78,14 +79,24 @@ func TestAssetLibraryTimelineAuditPreservesRequestCorrelationAndFailures(t *test
 	assert.Zero(t, logs[0].Quota)
 }
 
-func TestAssetLibraryTimelineOmitsFastUnchangedPollAudit(t *testing.T) {
+func TestAssetLibraryQueriesNeverRecordUsageLogs(t *testing.T) {
 	db := setupAssetLibraryServiceTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}))
 	previous := model.LOG_DB
 	model.LOG_DB = db
 	t.Cleanup(func() { model.LOG_DB = previous })
-	_, finish := BeginAssetLibraryOperation(t.Context(), 1, "GetAsset", "asset-na-1")
-	finish(nil)
+	for _, action := range []string{"GetAsset", "GetAssetGroup", "ListAssets", "ListAssetGroups"} {
+		for _, failed := range []bool{false, true} {
+			ctx, finish := BeginAssetLibraryOperation(t.Context(), 1, action, "asset-na-1")
+			assetTrace(ctx).started = time.Now().Add(-3 * time.Second)
+			observeAssetLibraryReplica(ctx, &model.UserAssetReplica{AssetId: "asset-na-1", State: model.AssetReplicaStateReady})
+			var err error
+			if failed {
+				err = errors.New("query failed")
+			}
+			finish(err)
+		}
+	}
 	var count int64
 	require.NoError(t, db.Model(&model.Log{}).Count(&count).Error)
 	assert.Zero(t, count)
@@ -136,5 +147,43 @@ func TestBatchAssetTimelineUsesPerAssetStartAndAttribution(t *testing.T) {
 		replica, err := model.GetUserAssetReplica(asset.Id, 7)
 		require.NoError(t, err)
 		assert.Equal(t, tc.start, replica.UploadStartedAtMS)
+	}
+}
+
+func TestAssetOperationCategoriesSupportUserLogFiltering(t *testing.T) {
+	db := setupAssetLibraryServiceTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}))
+	require.NoError(t, db.Create(&model.User{Id: 1, Username: "asset-owner"}).Error)
+	previous := model.LOG_DB
+	model.LOG_DB = db
+	t.Cleanup(func() { model.LOG_DB = previous })
+	for _, tc := range []struct {
+		action, requestAction string
+		logType               int
+	}{
+		{"asset_library.asset.create", "", model.LogTypeAssetUpload},
+		{"asset_library.group.delete", "", model.LogTypeAssetDelete},
+		{"asset_library.asset.update", "", model.LogTypeAssetUpdate},
+		{"asset_library.group.create", "", model.LogTypeAssetGroupCreate},
+		{"asset_library.asset.sync", "", model.LogTypeAssetSync},
+		{"asset_library.group.sync", "", model.LogTypeAssetSync},
+		{"channel.asset_library.sync", "", model.LogTypeAssetSync},
+		{"asset_library.request", "AutoImport", model.LogTypeAssetUpload},
+		{"asset_library.request", "ReplicateAsset", model.LogTypeAssetSync},
+		{"asset_library.request", "SyncAssetReplicas", model.LogTypeAssetSync},
+		{"asset_library.request", "SyncAssetGroupReplicas", model.LogTypeAssetSync},
+		{"asset_library.request", "SyncAssetLibraryChannel", model.LogTypeAssetSync},
+		{"channel.asset_library.update", "", model.LogTypeManage},
+		{"user.update", "", model.LogTypeManage},
+	} {
+		requestID := tc.action + tc.requestAction
+		model.RecordOperationAuditLog(1, "operation", "", tc.action, map[string]interface{}{"action": tc.requestAction}, map[string]interface{}{"private": "hidden"}, nil, requestID)
+		logs, total, err := model.GetUserLogs(1, tc.logType, 0, 0, "", "", 0, 20, "", requestID)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, total)
+		require.Len(t, logs, 1)
+		assert.Equal(t, tc.logType, logs[0].Type)
+		assert.NotContains(t, logs[0].Other, "private")
+		assert.Contains(t, logs[0].Other, tc.action)
 	}
 }
