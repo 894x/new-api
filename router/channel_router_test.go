@@ -19,6 +19,7 @@ func TestChannelStatusRoutesUseOperatePermission(t *testing.T) {
 }
 
 func TestChannelModelRoutingOverrideRoutesUseChannelPermissions(t *testing.T) {
+	assertChannelRoutePermission(t, http.MethodGet, "/model-matrix", authz.ChannelRead, controller.GetChannelModelMatrix)
 	assertChannelRoutePermission(t, http.MethodGet, "/:id/model-routing-overrides", authz.ChannelRead, controller.GetChannelModelRoutingOverrides)
 	assertChannelRoutePermission(t, http.MethodPatch, "/:id/model-routing-overrides", authz.ChannelWrite, controller.PatchChannelModelRoutingOverrides)
 	assertChannelRoutePermission(t, http.MethodGet, "/model-routing-overrides", authz.ChannelRead, controller.GetModelChannelRoutingOverrides)
