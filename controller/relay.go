@@ -160,12 +160,27 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	selectionRequestBody, _ := common.GetContextKeyType[[]byte](c, constant.ContextKeySelectionRequestBody)
+	retryParam := &service.RetryParam{
+		Ctx:               c,
+		TokenGroup:        relayInfo.TokenGroup,
+		ModelName:         relayInfo.OriginModelName,
+		RequestPath:       c.Request.URL.Path,
+		RequestBody:       selectionRequestBody,
+		AllowedChannelIds: assetAllowedChannelIds(c),
+		Retry:             common.GetPointer(0),
+	}
+	capacityNeedsTokens, capacityErr := service.ConfigureChannelModelCapacity(retryParam, relayInfo)
+	if capacityErr != nil {
+		newAPIError = channelCapacityAPIError(c, capacityErr)
+		return
+	}
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	tpmLimit := service.ResolveModelRequestTPMLimit(c)
 	needCountToken := constant.CountToken || tpmLimit > 0
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
-	if needSensitiveCheck || needCountToken {
+	if needSensitiveCheck || needCountToken || capacityNeedsTokens {
 		meta = request.GetTokenCountMeta()
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
@@ -190,6 +205,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	relayInfo.SetEstimatePromptTokens(tokens)
+	if retryParam.Capacity != nil {
+		capacityPromptTokens := tokens
+		if capacityNeedsTokens && !needCountToken {
+			capacityPromptTokens, err = service.EstimateRequestTokenForCapacity(c, meta, relayInfo)
+			if err != nil {
+				newAPIError = types.NewError(err, types.ErrorCodeCountTokenFailed)
+				return
+			}
+		}
+		retryParam.Capacity.PromptTokens = int64(capacityPromptTokens)
+	}
 
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
@@ -237,20 +263,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}
 
-	selectionRequestBody, _ := common.GetContextKeyType[[]byte](c, constant.ContextKeySelectionRequestBody)
-	retryParam := &service.RetryParam{
-		Ctx:               c,
-		TokenGroup:        relayInfo.TokenGroup,
-		ModelName:         relayInfo.OriginModelName,
-		RequestPath:       c.Request.URL.Path,
-		RequestBody:       selectionRequestBody,
-		AllowedChannelIds: assetAllowedChannelIds(c),
-		Retry:             common.GetPointer(0),
-	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+		relayInfo.OriginModelName = retryParam.ModelName
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		service.ResetUpstreamResponseMetadata(c)
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
@@ -301,6 +318,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError == nil {
 			relayInfo.LastError = nil
 			return
+		}
+		var denied *service.ChannelModelCapacityError
+		if errors.As(newAPIError, &denied) && !c.Writer.Written() {
+			if _, forced := c.Get("specific_channel_id"); forced {
+				newAPIError = channelCapacityAPIError(c, denied)
+				break
+			}
+			retryParam.RetryAfterCapacityDenial()
+			newAPIError = nil
+			continue
 		}
 		if c.Writer.Written() {
 			newAPIError = types.MarkResponseCommitted(newAPIError)
@@ -371,6 +398,11 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
 	if info.ChannelMeta == nil {
+		group := retryParam.TokenGroup
+		if group == "auto" {
+			group = common.GetContextKeyString(c, constant.ContextKeyAutoGroup)
+		}
+		retryParam.RecordCapacitySelection(group, retryParam.GetRetry())
 		channelId := c.GetInt("channel_id")
 		if retryParam.AllowedChannelIds != nil {
 			if _, allowed := retryParam.AllowedChannelIds[channelId]; !allowed {
@@ -391,6 +423,10 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
+		var capacityErr *service.ChannelModelCapacityError
+		if errors.As(err, &capacityErr) {
+			return nil, channelCapacityAPIError(c, capacityErr)
+		}
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {

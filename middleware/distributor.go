@@ -519,9 +519,16 @@ func getTaskOriginModelName(c *gin.Context) string {
 }
 
 func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
-	c.Set("original_model", modelName) // for retry
+	if _, exists := c.Get("original_model"); !exists {
+		c.Set("original_model", modelName)
+	} // preserve the public model across retries
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	// Optional provider settings belong to this channel, including after spillover.
+	common.SetContextKey(c, constant.ContextKeyChannelOrganization, "")
+	for _, key := range []string{"api_version", "region", "plugin", "bot_id"} {
+		c.Set(key, "")
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelId, channel.Id)
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)

@@ -26,6 +26,8 @@ type Ability struct {
 	Enabled   bool    `json:"enabled"`
 	Priority  *int64  `json:"priority" gorm:"bigint;default:0;index"`
 	Weight    uint    `json:"weight" gorm:"default:0;index"`
+	RPM       int64   `json:"rpm" gorm:"bigint"`
+	TPM       int64   `json:"tpm" gorm:"bigint"`
 	Tag       *string `json:"tag" gorm:"index"`
 }
 
@@ -107,6 +109,41 @@ func GetChannelWithFilter(group string, model string, retry int, requestPath str
 }
 
 func GetChannelWithSelectionFilters(group string, model string, retry int, filters ChannelSelectionFilters) (*Channel, error) {
+	abilities, err := listDBChannelCandidates(group, model, filters)
+	if err != nil || len(abilities) == 0 {
+		return nil, err
+	}
+
+	priorities := make([]int64, 0)
+	seenPriorities := make(map[int64]struct{})
+	for _, ability := range abilities {
+		priority := effectiveAbilityPriority(&ability)
+		if _, ok := seenPriorities[priority]; ok {
+			continue
+		}
+		seenPriorities[priority] = struct{}{}
+		priorities = append(priorities, priority)
+	}
+	sort.Slice(priorities, func(i, j int) bool { return priorities[i] > priorities[j] })
+	if retry < 0 {
+		retry = 0
+	}
+	if retry >= len(priorities) {
+		retry = len(priorities) - 1
+	}
+	targetPriority := priorities[retry]
+	targetAbilities := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		if effectiveAbilityPriority(&ability) == targetPriority {
+			targetAbilities = append(targetAbilities, ability)
+		}
+	}
+	channel := Channel{Id: chooseChannelIdByWeight(targetAbilities, common.GetRandomInt)}
+	err = DB.First(&channel, "id = ?", channel.Id).Error
+	return &channel, err
+}
+
+func listDBChannelCandidates(group, model string, filters ChannelSelectionFilters) ([]Ability, error) {
 	var abilities []Ability
 	allowedChannelIdSlice := make([]int, 0, len(filters.AllowedChannelIds))
 	if filters.AllowedChannelIds != nil {
@@ -118,7 +155,7 @@ func GetChannelWithSelectionFilters(group string, model string, retry int, filte
 		}
 	}
 
-	query := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
+	query := DB.Where(map[string]any{"group": group, "model": model, "enabled": true})
 	if filters.AllowedChannelIds != nil {
 		query = query.Where("channel_id IN ?", allowedChannelIdSlice)
 	}
@@ -130,7 +167,7 @@ func GetChannelWithSelectionFilters(group string, model string, retry int, filte
 	if len(abilities) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		if normalizedModel != "" && normalizedModel != model {
-			query = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, normalizedModel, true)
+			query = DB.Where(map[string]any{"group": group, "model": normalizedModel, "enabled": true})
 			if filters.AllowedChannelIds != nil {
 				query = query.Where("channel_id IN ?", allowedChannelIdSlice)
 			}
@@ -163,33 +200,7 @@ func GetChannelWithSelectionFilters(group string, model string, retry int, filte
 		return nil, nil
 	}
 
-	priorities := make([]int64, 0)
-	seenPriorities := make(map[int64]struct{})
-	for _, ability := range abilities {
-		priority := effectiveAbilityPriority(&ability)
-		if _, ok := seenPriorities[priority]; ok {
-			continue
-		}
-		seenPriorities[priority] = struct{}{}
-		priorities = append(priorities, priority)
-	}
-	sort.Slice(priorities, func(i, j int) bool { return priorities[i] > priorities[j] })
-	if retry < 0 {
-		retry = 0
-	}
-	if retry >= len(priorities) {
-		retry = len(priorities) - 1
-	}
-	targetPriority := priorities[retry]
-	targetAbilities := make([]Ability, 0, len(abilities))
-	for _, ability := range abilities {
-		if effectiveAbilityPriority(&ability) == targetPriority {
-			targetAbilities = append(targetAbilities, ability)
-		}
-	}
-	channel := Channel{Id: chooseChannelIdByWeight(targetAbilities, common.GetRandomInt)}
-	err = DB.First(&channel, "id = ?", channel.Id).Error
-	return &channel, err
+	return abilities, nil
 }
 
 // filterAbilitiesBySelectionFilters loads each candidate channel once, then
@@ -266,7 +277,7 @@ func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelec
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
-	if err := ValidateChannelWeight(channel.Weight); err != nil {
+	if err := ValidateChannelRoutingLimits(channel); err != nil {
 		return err
 	}
 	useDB := DB
@@ -299,7 +310,8 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
 				Priority:  common.GetPointer(routing.EffectivePriority),
 				Weight:    routing.EffectiveWeight,
-				Tag:       channel.Tag,
+				RPM:       routing.EffectiveRPM, TPM: routing.EffectiveTPM,
+				Tag: channel.Tag,
 			}
 			abilities = append(abilities, ability)
 		}
@@ -323,7 +335,7 @@ func (channel *Channel) DeleteAbilities() error {
 // UpdateAbilities updates abilities of this channel.
 // Make sure the channel is completed before calling this function.
 func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
-	if err := ValidateChannelWeight(channel.Weight); err != nil {
+	if err := ValidateChannelRoutingLimits(channel); err != nil {
 		return err
 	}
 	isNewTx := false
@@ -386,7 +398,8 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
 				Priority:  common.GetPointer(routing.EffectivePriority),
 				Weight:    routing.EffectiveWeight,
-				Tag:       channel.Tag,
+				RPM:       routing.EffectiveRPM, TPM: routing.EffectiveTPM,
+				Tag: channel.Tag,
 			}
 			abilities = append(abilities, ability)
 		}

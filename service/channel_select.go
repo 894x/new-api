@@ -19,6 +19,7 @@ type RetryParam struct {
 
 	// AllowedChannelIds is nil for ordinary requests. A non-nil map restricts
 	// selection to channels that can resolve every local asset reference.
+	Capacity          *ChannelCapacityState
 	AllowedChannelIds map[int]struct{}
 	Retry             *int
 	resetNextTry      bool
@@ -121,11 +122,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, err = model.GetRandomSatisfiedChannelWithSelectionFilters(autoGroup, param.ModelName, priorityRetry, model.ChannelSelectionFilters{
-				RequestPath:       param.RequestPath,
-				RequestBody:       param.RequestBody,
-				AllowedChannelIds: param.AllowedChannelIds,
-			})
+			channel, err = selectChannelWithCapacity(param, autoGroup, priorityRetry)
 			if err != nil && !errors.Is(err, model.ErrParameterCapabilityUnsupported) {
 				return nil, autoGroup, err
 			}
@@ -148,6 +145,8 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			selectGroup = autoGroup
 			logger.LogDebug(param.Ctx, "Auto selected group: %s", autoGroup)
 
+			param.RecordCapacitySelection(autoGroup, priorityRetry)
+
 			// Prepare state for next retry
 			// 为下一次重试准备状态
 			if crossGroupRetry && priorityRetry >= common.RetryTimes {
@@ -168,18 +167,27 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			break
 		}
+		if channel == nil {
+			if capacityErr := param.CapacityError(); capacityErr != nil {
+				return nil, selectGroup, capacityErr
+			}
+		}
 		if channel == nil && lastSelectionErr != nil {
 			return nil, selectGroup, lastSelectionErr
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannelWithSelectionFilters(param.TokenGroup, param.ModelName, param.GetRetry(), model.ChannelSelectionFilters{
-			RequestPath:       param.RequestPath,
-			RequestBody:       param.RequestBody,
-			AllowedChannelIds: param.AllowedChannelIds,
-		})
+		channel, err = selectChannelWithCapacity(param, param.TokenGroup, param.GetRetry())
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
+	}
+	if channel == nil {
+		if err := param.CapacityError(); err != nil {
+			return nil, selectGroup, err
+		}
+	}
+	if param.TokenGroup != "auto" {
+		param.RecordCapacitySelection(param.TokenGroup, param.GetRetry())
 	}
 	return channel, selectGroup, nil
 }

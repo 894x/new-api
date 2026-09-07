@@ -43,6 +43,8 @@ type Channel struct {
 	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
 	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
+	RPM               *int64  `json:"rpm" gorm:"bigint"`
+	TPM               *int64  `json:"tpm" gorm:"bigint"`
 	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
 	AutoBan           *int    `json:"auto_ban" gorm:"default:1"`
 	OtherInfo         string  `json:"other_info"`
@@ -456,7 +458,7 @@ func BatchInsertChannels(channels []Channel) error {
 		return nil
 	}
 	for i := range channels {
-		if err := ValidateChannelWeight(channels[i].Weight); err != nil {
+		if err := ValidateChannelRoutingLimits(&channels[i]); err != nil {
 			return err
 		}
 	}
@@ -561,7 +563,7 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
-	if err := ValidateChannelWeight(channel.Weight); err != nil {
+	if err := ValidateChannelRoutingLimits(channel); err != nil {
 		return err
 	}
 	tx := DB.Begin()
@@ -580,7 +582,7 @@ func (channel *Channel) Insert() error {
 }
 
 func (channel *Channel) Update() error {
-	if err := ValidateChannelWeight(channel.Weight); err != nil {
+	if err := ValidateChannelRoutingLimits(channel); err != nil {
 		return err
 	}
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
@@ -633,7 +635,7 @@ func (channel *Channel) Update() error {
 		tx.Rollback()
 		return err
 	}
-	if err := ValidateChannelWeight(channel.Weight); err != nil {
+	if err := ValidateChannelRoutingLimits(channel); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -645,7 +647,7 @@ func (channel *Channel) Update() error {
 }
 
 func (channel *Channel) UpdateModelsAndSettings(models string, settings string) error {
-	if err := ValidateChannelWeight(channel.Weight); err != nil {
+	if err := ValidateChannelRoutingLimits(channel); err != nil {
 		return err
 	}
 	tx := DB.Begin()
@@ -661,7 +663,7 @@ func (channel *Channel) UpdateModelsAndSettings(models string, settings string) 
 	}
 	channel.Models = models
 	channel.OtherSettings = settings
-	if err := ValidateChannelWeight(channel.Weight); err != nil {
+	if err := ValidateChannelRoutingLimits(channel); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -966,7 +968,7 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 			return err
 		}
 		for _, channel := range channels {
-			if err := ValidateChannelWeight(channel.Weight); err != nil {
+			if err := ValidateChannelRoutingLimits(channel); err != nil {
 				tx.Rollback()
 				return err
 			}

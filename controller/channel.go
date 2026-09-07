@@ -606,7 +606,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel == nil {
 		return fmt.Errorf("channel cannot be empty")
 	}
-	if err := model.ValidateChannelWeight(channel.Weight); err != nil {
+	if err := model.ValidateChannelRoutingLimits(channel); err != nil {
 		return err
 	}
 

@@ -56,6 +56,8 @@ export const channelSchema = z.object({
   model_mapping: z.string().nullish(),
   status_code_mapping: z.string().nullish(),
   priority: z.number().nullish(),
+  rpm: z.number().nullish(),
+  tpm: z.number().nullish(),
   auto_ban: z.number().nullish(),
   other_info: z.string().default(''),
   tag: z.string().nullish(),
@@ -88,11 +90,22 @@ export interface ModelRoutingOverride {
   weight_override: number | null
   effective_priority: number
   effective_weight: number
+  default_rpm?: number
+  default_tpm?: number
+  rpm_override?: number | null
+  tpm_override?: number | null
+  effective_rpm?: number
+  effective_tpm?: number
 }
 
 export type ModelRoutingOverridePatch = Pick<
   ModelRoutingOverride,
-  'channel_id' | 'model' | 'priority_override' | 'weight_override'
+  | 'channel_id'
+  | 'model'
+  | 'priority_override'
+  | 'weight_override'
+  | 'rpm_override'
+  | 'tpm_override'
 >
 
 // ============================================================================
@@ -386,6 +399,8 @@ export interface TagOperationParams {
   new_tag?: string
   priority?: number
   weight?: number
+  rpm?: number
+  tpm?: number
   model_mapping?: string
   models?: string
   groups?: string
@@ -406,6 +421,8 @@ export interface ChannelFormData {
   model_mapping?: string
   priority?: number
   weight?: number
+  rpm?: number
+  tpm?: number
   test_model?: string
   auto_ban?: number
   status: number

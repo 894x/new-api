@@ -18,6 +18,8 @@ import (
 type cachedChannelRouting struct {
 	ChannelId int
 	Priority  int64
+	RPM       int64
+	TPM       int64
 	Weight    uint
 }
 
@@ -79,6 +81,7 @@ func InitChannelCache() {
 				ChannelId: ability.ChannelId,
 				Priority:  effectiveAbilityPriority(ability),
 				Weight:    ability.Weight,
+				RPM:       ability.RPM, TPM: ability.TPM,
 			},
 		)
 	}
@@ -151,38 +154,9 @@ func GetRandomSatisfiedChannelWithSelectionFilters(group string, model string, r
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
-	// First, try the exact model abilities. If all exact candidates fail request
-	// constraints, normalized-model abilities remain eligible as a fallback.
-	routings, parameterCandidateCount, firstParameterViolation, selectionErr := filterCachedChannelSelectionCandidates(
-		group2model2channels[group][model], filters, model,
-	)
-	if len(routings) == 0 {
-		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		if normalizedModel != "" && normalizedModel != model {
-			var normalizedParameterCandidateCount int
-			var normalizedViolation error
-			var normalizedErr error
-			routings, normalizedParameterCandidateCount, normalizedViolation, normalizedErr = filterCachedChannelSelectionCandidates(
-				group2model2channels[group][normalizedModel], filters, model,
-			)
-			if selectionErr == nil {
-				selectionErr = normalizedErr
-			}
-			parameterCandidateCount += normalizedParameterCandidateCount
-			if firstParameterViolation == nil {
-				firstParameterViolation = normalizedViolation
-			}
-		}
-	}
-	if len(routings) == 0 && selectionErr != nil {
-		return nil, selectionErr
-	}
-	if len(routings) == 0 && firstParameterViolation != nil && parameterCandidateCount > 0 {
-		return nil, newParameterCapabilityUnsupportedError(model, firstParameterViolation)
-	}
-
-	if len(routings) == 0 {
-		return nil, nil
+	routings, err := listCachedChannelCandidates(group, model, filters)
+	if err != nil || len(routings) == 0 {
+		return nil, err
 	}
 
 	if len(routings) == 1 {
@@ -234,6 +208,45 @@ func GetRandomSatisfiedChannelWithSelectionFilters(group string, model string, r
 		return channel, nil
 	}
 	return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+}
+
+// Caller holds channelSyncLock. The returned slice must not be mutated.
+func listCachedChannelCandidates(group, model string, filters ChannelSelectionFilters) ([]cachedChannelRouting, error) {
+	// First, try the exact model abilities. If all exact candidates fail request
+	// constraints, normalized-model abilities remain eligible as a fallback.
+	routings, parameterCandidateCount, firstParameterViolation, selectionErr := filterCachedChannelSelectionCandidates(
+		group2model2channels[group][model], filters, model,
+	)
+	if len(routings) == 0 {
+		normalizedModel := ratio_setting.FormatMatchingModelName(model)
+		if normalizedModel != "" && normalizedModel != model {
+			var normalizedParameterCandidateCount int
+			var normalizedViolation error
+			var normalizedErr error
+			routings, normalizedParameterCandidateCount, normalizedViolation, normalizedErr = filterCachedChannelSelectionCandidates(
+				group2model2channels[group][normalizedModel], filters, model,
+			)
+			if selectionErr == nil {
+				selectionErr = normalizedErr
+			}
+			parameterCandidateCount += normalizedParameterCandidateCount
+			if firstParameterViolation == nil {
+				firstParameterViolation = normalizedViolation
+			}
+		}
+	}
+	if len(routings) == 0 && selectionErr != nil {
+		return nil, selectionErr
+	}
+	if len(routings) == 0 && firstParameterViolation != nil && parameterCandidateCount > 0 {
+		return nil, newParameterCapabilityUnsupportedError(model, firstParameterViolation)
+	}
+
+	if len(routings) == 0 {
+		return nil, nil
+	}
+
+	return routings, nil
 }
 
 func filterCachedChannelSelectionCandidates(routings []cachedChannelRouting, filters ChannelSelectionFilters, requestModel string) ([]cachedChannelRouting, int, error, error) {

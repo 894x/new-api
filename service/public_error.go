@@ -55,6 +55,9 @@ func PublicErrorMessage(requestId string) string {
 }
 
 func OpenAIErrorForClient(c *gin.Context, err *types.NewAPIError) types.OpenAIError {
+	if err != nil && err.GetErrorCode() == types.ErrorCodeChannelModelCapacityExhausted {
+		return types.OpenAIError{Code: string(types.ErrorCodeChannelModelCapacityExhausted), Type: "rate_limit_error", Message: "The requested model is temporarily at capacity. Retry after the indicated delay."}
+	}
 	if ShouldHideErrorDetails(c) {
 		return types.OpenAIError{
 			Message: PublicErrorMessage(c.GetString(common.RequestIdKey)),
@@ -69,6 +72,9 @@ func OpenAIErrorForClient(c *gin.Context, err *types.NewAPIError) types.OpenAIEr
 }
 
 func ClaudeErrorForClient(c *gin.Context, err *types.NewAPIError) types.ClaudeError {
+	if err != nil && err.GetErrorCode() == types.ErrorCodeChannelModelCapacityExhausted {
+		return types.ClaudeError{Type: "rate_limit_error", Message: "The requested model is temporarily at capacity. Retry after the indicated delay."}
+	}
 	if ShouldHideErrorDetails(c) {
 		return types.ClaudeError{
 			Type:    "request_failed",

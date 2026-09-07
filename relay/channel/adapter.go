@@ -135,3 +135,11 @@ type MiniMaxVideoV2Converter interface {
 type AliNativeVideoConverter interface {
 	ConvertToAliNativeVideo(originTask *model.Task) ([]byte, error)
 }
+
+// FinalOutboundRequestPreparer exposes custom wire payloads to shared request policies.
+type FinalOutboundRequestPreparer interface {
+	PrepareFinalOutboundRequest(*gin.Context, *relaycommon.RelayInfo, any) (any, error)
+}
+
+// CapacityAdmissionDeferrer admits a custom transport at its physical dispatch.
+type CapacityAdmissionDeferrer interface{ DeferChannelModelCapacityAdmission() bool }

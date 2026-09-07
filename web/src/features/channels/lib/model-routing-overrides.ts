@@ -22,12 +22,14 @@ import type {
   ModelRoutingOverridesResponse,
 } from '../types'
 
+export const MAX_MODEL_CAPACITY = Number.MAX_SAFE_INTEGER
+
 export const MAX_MODEL_ROUTING_WEIGHT = 2_147_483_637
 
 export type ModelRoutingOverrideDraft = Pick<
   Record<keyof ModelRoutingOverridePatch, string>,
   'priority_override' | 'weight_override'
->
+> & { rpm_override?: string; tpm_override?: string }
 
 export type ModelRoutingOverrideDraftField = keyof ModelRoutingOverrideDraft
 
@@ -79,6 +81,18 @@ export function createModelRoutingOverrideDrafts(
     rows.map((row) => [
       getModelRoutingOverrideKey(row.channel_id, row.model),
       {
+        ...(row.rpm_override !== undefined
+          ? {
+              rpm_override:
+                row.rpm_override === null ? '' : String(row.rpm_override),
+            }
+          : {}),
+        ...(row.tpm_override !== undefined
+          ? {
+              tpm_override:
+                row.tpm_override === null ? '' : String(row.tpm_override),
+            }
+          : {}),
         priority_override:
           row.priority_override === null ? '' : String(row.priority_override),
         weight_override:
@@ -111,7 +125,12 @@ export function mergeModelRoutingOverrideDraftState(
     const currentDraft = currentState.drafts[key]
     const mergedDraft = { ...serverDraft }
 
-    for (const field of ['priority_override', 'weight_override'] as const) {
+    for (const field of [
+      'priority_override',
+      'weight_override',
+      'rpm_override',
+      'tpm_override',
+    ] as const) {
       const dirtyFieldKey = getModelRoutingOverrideDirtyFieldKey(key, field)
       if (
         !currentDraft ||
@@ -120,7 +139,7 @@ export function mergeModelRoutingOverrideDraftState(
       ) {
         continue
       }
-      mergedDraft[field] = currentDraft[field]
+      mergedDraft[field] = currentDraft[field] ?? ''
       mergedDirtyFields.add(dirtyFieldKey)
     }
 
@@ -170,18 +189,16 @@ export function resetModelRoutingOverrideDraft(
   currentState: ModelRoutingOverrideDraftState,
   row: ModelRoutingOverride
 ): ModelRoutingOverrideDraftState {
-  const priorityResetState = updateModelRoutingOverrideDraftField(
-    currentState,
-    row,
+  let state = currentState
+  for (const field of [
     'priority_override',
-    ''
-  )
-  return updateModelRoutingOverrideDraftField(
-    priorityResetState,
-    row,
     'weight_override',
-    ''
-  )
+    'rpm_override',
+    'tpm_override',
+  ] as const) {
+    state = updateModelRoutingOverrideDraftField(state, row, field, '')
+  }
+  return state
 }
 
 export function ensureSuccessfulModelRoutingOverridesResponse(
@@ -226,14 +243,39 @@ export function collectChangedModelRoutingOverrides(
     ) {
       continue
     }
+    const capacity: Pick<
+      ModelRoutingOverridePatch,
+      'rpm_override' | 'tpm_override'
+    > = {}
+    let invalidCapacity = false
+    for (const field of ['rpm_override', 'tpm_override'] as const) {
+      if (draft[field] === undefined && row[field] === undefined) continue
+      const value = parseRoutingOverrideInput(draft[field] ?? '')
+      if (
+        value === undefined ||
+        (value ?? 0) < 0 ||
+        (value ?? 0) > MAX_MODEL_CAPACITY
+      ) {
+        errors.push({ key, field })
+        invalidCapacity = true
+      } else {
+        capacity[field] = value
+      }
+    }
+    if (invalidCapacity) {
+      continue
+    }
     if (
       priorityOverride === row.priority_override &&
-      weightOverride === row.weight_override
+      weightOverride === row.weight_override &&
+      (capacity.rpm_override ?? null) === (row.rpm_override ?? null) &&
+      (capacity.tpm_override ?? null) === (row.tpm_override ?? null)
     ) {
       continue
     }
 
     changedOverrides.push({
+      ...capacity,
       channel_id: row.channel_id,
       model: row.model,
       priority_override: priorityOverride,

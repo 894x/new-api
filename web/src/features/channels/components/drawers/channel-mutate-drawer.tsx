@@ -351,6 +351,8 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.remark?.trim() ||
     values.priority ||
     values.weight ||
+    values.rpm ||
+    values.tpm ||
     values.proxy?.trim() ||
     values.system_prompt?.trim() ||
     values.force_format ||
@@ -761,6 +763,8 @@ export function ChannelMutateDrawer({
   const currentAdvancedCustom = form.watch('advanced_custom')
   const currentPriority = form.watch('priority')
   const currentWeight = form.watch('weight')
+  const currentRPM = form.watch('rpm')
+  const currentTPM = form.watch('tpm')
   const currentTestModel = form.watch('test_model')
   const currentAutoBan = form.watch('auto_ban')
   const currentTag = form.watch('tag')
@@ -1050,6 +1054,8 @@ export function ChannelMutateDrawer({
   const routingStrategyConfigured = Boolean(
     currentPriority ||
     currentWeight ||
+    currentRPM ||
+    currentTPM ||
     currentTestModel?.trim() ||
     (currentAutoBan ?? 1) !== 1
   )
@@ -3962,6 +3968,41 @@ export function ChannelMutateDrawer({
                                   </FormItem>
                                 )}
                               />
+                              {(['rpm', 'tpm'] as const).map((name) => (
+                                <FormField
+                                  key={name}
+                                  control={form.control}
+                                  name={name}
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>
+                                        {name === 'rpm' ? t('RPM') : t('TPM')}
+                                      </FormLabel>
+                                      <FormControl>
+                                        <Input
+                                          type='number'
+                                          min={0}
+                                          max={Number.MAX_SAFE_INTEGER}
+                                          step={1}
+                                          {...field}
+                                          value={field.value ?? 0}
+                                          onChange={(event) =>
+                                            field.onChange(
+                                              Number(event.target.value)
+                                            )
+                                          }
+                                        />
+                                      </FormControl>
+                                      <FormDescription>
+                                        {t(
+                                          'Upstream capacity per public model. 0 means unlimited; model overrides take precedence.'
+                                        )}
+                                      </FormDescription>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                              ))}
                             </div>
 
                             <FormField

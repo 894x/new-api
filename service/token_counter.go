@@ -177,11 +177,25 @@ func getImageToken(c *gin.Context, fileMeta *types.FileMeta, model string, strea
 }
 
 func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
+	return estimateRequestToken(c, meta, info, info.RelayFormat, true)
+}
+
+// EstimateRequestTokenForCapacity leaves billing and user TPM metadata intact.
+func EstimateRequestTokenForCapacity(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
+	return estimateRequestToken(c, meta, info, info.RelayFormat, false)
+}
+
+// Capacity estimates final provider bodies without overwriting billing metadata.
+func estimateRequestTokenForCapacityFormat(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo, format types.RelayFormat) (int, error) {
+	return estimateRequestToken(c, meta, info, format, false)
+}
+
+func estimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo, format types.RelayFormat, recordPrompt bool) (int, error) {
 	if meta == nil {
 		return 0, errors.New("token count meta is nil")
 	}
 
-	if info.RelayFormat == types.RelayFormatOpenAIRealtime {
+	if format == types.RelayFormatOpenAIRealtime {
 		return 0, nil
 	}
 	if info.RelayMode == constant2.RelayModeAudioTranscription || info.RelayMode == constant2.RelayModeAudioTranslation {
@@ -223,7 +237,7 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 		tkm += CountTextToken(meta.CombineText, model)
 	}
 
-	if info.RelayFormat == types.RelayFormatOpenAI {
+	if format == types.RelayFormatOpenAI {
 		tkm += meta.ToolsCount * 8
 		tkm += meta.MessagesCount * 3 // 每条消息的格式化token数量
 		tkm += meta.NameCount * 3
@@ -232,7 +246,7 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 
 	shouldFetchFiles := true
 
-	if info.RelayFormat == types.RelayFormatGemini {
+	if format == types.RelayFormatGemini {
 		shouldFetchFiles = false
 	}
 
@@ -291,7 +305,9 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 		}
 	}
 
-	common.SetContextKey(c, constant.ContextKeyPromptTokens, tkm)
+	if recordPrompt {
+		common.SetContextKey(c, constant.ContextKeyPromptTokens, tkm)
+	}
 	return tkm, nil
 }
 

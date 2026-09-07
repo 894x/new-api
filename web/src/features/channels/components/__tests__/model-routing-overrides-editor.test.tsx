@@ -129,3 +129,24 @@ describe('model routing overrides editor', () => {
     )
   })
 })
+
+test('edits capacity inheritance and explicit zero with accessible field errors', async () => {
+  installRoutingFixture()
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'root', role: ROLE.SUPER_ADMIN })
+  renderEditor()
+  const rpm = await screen.findByRole('spinbutton', {
+    name: 'RPM · Enabled channel',
+  })
+  const tpm = screen.getByRole('spinbutton', { name: 'TPM · Enabled channel' })
+  fireEvent.change(rpm, { target: { value: '0' } })
+  fireEvent.change(tpm, { target: { value: '-1' } })
+  expect(tpm).toHaveAttribute('aria-invalid', 'true')
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Reset · Enabled channel' })
+  )
+  expect(rpm).toHaveValue(null)
+  expect(tpm).toHaveValue(null)
+  expect(tpm).toHaveAttribute('aria-invalid', 'false')
+})

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -21,6 +22,8 @@ type ChannelModelOverride struct {
 	Model     string `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false;index"`
 	Priority  *int64 `json:"priority_override" gorm:"bigint"`
 	Weight    *uint  `json:"weight_override"`
+	RPM       *int64 `json:"rpm_override" gorm:"bigint"`
+	TPM       *int64 `json:"tpm_override" gorm:"bigint"`
 }
 
 type ChannelModelOverridePatch struct {
@@ -28,6 +31,29 @@ type ChannelModelOverridePatch struct {
 	Model     string `json:"model"`
 	Priority  *int64 `json:"priority_override"`
 	Weight    *uint  `json:"weight_override"`
+	RPM       *int64 `json:"rpm_override" gorm:"bigint"`
+	TPM       *int64 `json:"tpm_override" gorm:"bigint"`
+	KeepRPM   bool   `json:"-"`
+	KeepTPM   bool   `json:"-"`
+}
+
+// Older clients know only priority and weight. Omitted capacity fields preserve
+// their existing overrides; explicit JSON null restores channel inheritance.
+func (patch *ChannelModelOverridePatch) UnmarshalJSON(data []byte) error {
+	type fields ChannelModelOverridePatch
+	var decoded fields
+	if err := common.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var present map[string]json.RawMessage
+	if err := common.Unmarshal(data, &present); err != nil {
+		return err
+	}
+	*patch = ChannelModelOverridePatch(decoded)
+	_, rpmPresent := present["rpm_override"]
+	_, tpmPresent := present["tpm_override"]
+	patch.KeepRPM, patch.KeepTPM = !rpmPresent, !tpmPresent
+	return nil
 }
 
 type ChannelModelRouting struct {
@@ -42,6 +68,12 @@ type ChannelModelRouting struct {
 	WeightOverride    *uint  `json:"weight_override"`
 	EffectivePriority int64  `json:"effective_priority"`
 	EffectiveWeight   uint   `json:"effective_weight"`
+	DefaultRPM        int64  `json:"default_rpm"`
+	DefaultTPM        int64  `json:"default_tpm"`
+	RPMOverride       *int64 `json:"rpm_override"`
+	TPMOverride       *int64 `json:"tpm_override"`
+	EffectiveRPM      int64  `json:"effective_rpm"`
+	EffectiveTPM      int64  `json:"effective_tpm"`
 }
 
 func normalizeChannelModels(channel *Channel) []string {
@@ -89,8 +121,18 @@ func effectiveChannelModelRouting(channel *Channel, modelName string, override *
 	effectivePriority := defaultPriority
 	effectiveWeight := defaultWeight
 	var priorityOverride *int64
+	defaultRPM, defaultTPM := channel.GetRPM(), channel.GetTPM()
+	rpm, tpm := defaultRPM, defaultTPM
+	var rpmOverride, tpmOverride *int64
 	var weightOverride *uint
 	if override != nil {
+		rpmOverride, tpmOverride = override.RPM, override.TPM
+		if override.RPM != nil {
+			rpm = *override.RPM
+		}
+		if override.TPM != nil {
+			tpm = *override.TPM
+		}
 		priorityOverride = override.Priority
 		weightOverride = override.Weight
 		if override.Priority != nil {
@@ -101,6 +143,9 @@ func effectiveChannelModelRouting(channel *Channel, modelName string, override *
 		}
 	}
 	return ChannelModelRouting{
+		DefaultRPM: defaultRPM, DefaultTPM: defaultTPM,
+		RPMOverride: rpmOverride, TPMOverride: tpmOverride,
+		EffectiveRPM: rpm, EffectiveTPM: tpm,
 		ChannelId:         channel.Id,
 		ChannelName:       channel.Name,
 		ChannelType:       channel.Type,
@@ -183,7 +228,7 @@ func ListModelChannelRoutings(modelName string) ([]ChannelModelRouting, error) {
 }
 
 func validateChannelModelOverridePatch(channel *Channel, patch ChannelModelOverridePatch) (ChannelModelOverride, error) {
-	if err := ValidateChannelWeight(channel.Weight); err != nil {
+	if err := ValidateChannelRoutingLimits(channel); err != nil {
 		return ChannelModelOverride{}, err
 	}
 	patch.Model = strings.TrimSpace(patch.Model)
@@ -206,7 +251,14 @@ func validateChannelModelOverridePatch(channel *Channel, patch ChannelModelOverr
 	if patch.Weight != nil && *patch.Weight > MaxChannelWeight {
 		return ChannelModelOverride{}, fmt.Errorf("weight override exceeds %d", MaxChannelWeight)
 	}
+	if err := ValidateChannelModelRateLimit(patch.RPM); err != nil {
+		return ChannelModelOverride{}, fmt.Errorf("rpm override: %w", err)
+	}
+	if err := ValidateChannelModelRateLimit(patch.TPM); err != nil {
+		return ChannelModelOverride{}, fmt.Errorf("tpm override: %w", err)
+	}
 	return ChannelModelOverride{
+		RPM: patch.RPM, TPM: patch.TPM,
 		ChannelId: channel.Id,
 		Model:     patch.Model,
 		Priority:  patch.Priority,
@@ -215,7 +267,7 @@ func validateChannelModelOverridePatch(channel *Channel, patch ChannelModelOverr
 }
 
 // PatchChannelModelOverrides atomically applies final sparse override states.
-// Pairs not included in patches remain unchanged. A patch with both override
+// Pairs not included in patches remain unchanged. A patch with all override
 // fields nil clears the pair and restores channel-level inheritance.
 func PatchChannelModelOverrides(patches []ChannelModelOverridePatch) error {
 	if len(patches) == 0 {
@@ -260,6 +312,20 @@ func PatchChannelModelOverrides(patches []ChannelModelOverridePatch) error {
 	}
 	validated := make([]ChannelModelOverride, 0, len(patches))
 	for _, patch := range patches {
+		if patch.KeepRPM || patch.KeepTPM {
+			var previous ChannelModelOverride
+			err := tx.Where("channel_id = ? AND model = ?", patch.ChannelId, strings.TrimSpace(patch.Model)).Take(&previous).Error
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				tx.Rollback()
+				return err
+			}
+			if patch.KeepRPM {
+				patch.RPM = previous.RPM
+			}
+			if patch.KeepTPM {
+				patch.TPM = previous.TPM
+			}
+		}
 		override, err := validateChannelModelOverridePatch(channelById[patch.ChannelId], patch)
 		if err != nil {
 			tx.Rollback()
@@ -269,7 +335,7 @@ func PatchChannelModelOverrides(patches []ChannelModelOverridePatch) error {
 	}
 
 	for _, override := range validated {
-		if override.Priority == nil && override.Weight == nil {
+		if override.Priority == nil && override.Weight == nil && override.RPM == nil && override.TPM == nil {
 			if err := tx.Where("channel_id = ? AND model = ?", override.ChannelId, override.Model).
 				Delete(&ChannelModelOverride{}).Error; err != nil {
 				tx.Rollback()
@@ -279,7 +345,7 @@ func PatchChannelModelOverrides(patches []ChannelModelOverridePatch) error {
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "channel_id"}, {Name: "model"}},
-			DoUpdates: clause.AssignmentColumns([]string{"priority", "weight"}),
+			DoUpdates: clause.AssignmentColumns([]string{"priority", "weight", "rpm", "tpm"}),
 		}).Create(&override).Error; err != nil {
 			tx.Rollback()
 			return err
@@ -313,7 +379,7 @@ func CloneChannelWithModelOverrides(sourceChannelId int, suffix string, resetBal
 		tx.Rollback()
 		return nil, err
 	}
-	if err := ValidateChannelWeight(sourceChannel.Weight); err != nil {
+	if err := ValidateChannelRoutingLimits(&sourceChannel); err != nil {
 		tx.Rollback()
 		return nil, err
 	}
