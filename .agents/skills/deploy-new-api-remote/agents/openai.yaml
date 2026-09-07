@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deploy New API Remotely"
+  short_description: "Safely deploy a pinned commit to a remote Compose instance"
+  default_prompt: "Use $deploy-new-api-remote to deploy the current committed change to the requested remote instance safely."
