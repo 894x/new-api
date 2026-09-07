@@ -37,7 +37,13 @@ type AssetMediaMetadata struct {
 
 // ValidateAssetLibraryMedia downloads a URL-backed asset through the protected
 // fetch path, inspects its content, and enforces the documented media limits.
-func ValidateAssetLibraryMedia(ctx context.Context, sourceURL string, assetType string) (AssetMediaMetadata, error) {
+func ValidateAssetLibraryMedia(ctx context.Context, sourceURL string, assetType string) (metadata AssetMediaMetadata, err error) {
+	download := startAssetLibraryStage(ctx, "source_download", "", "", 0)
+	defer func() {
+		if download.stage.Outcome == "running" {
+			download.finish(err)
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return AssetMediaMetadata{}, err
 	}
@@ -46,10 +52,14 @@ func ValidateAssetLibraryMedia(ctx context.Context, sourceURL string, assetType 
 		return AssetMediaMetadata{}, errors.New("media URL could not be downloaded")
 	}
 	defer response.Body.Close()
-	return validateAssetLibraryMediaResponse(ctx, assetType, response)
+	return inspectDownloadedAssetLibraryMedia(ctx, assetType, response, download)
 }
 
 func validateAssetLibraryMediaResponse(ctx context.Context, assetType string, response *http.Response) (AssetMediaMetadata, error) {
+	return inspectDownloadedAssetLibraryMedia(ctx, assetType, response, nil)
+}
+
+func inspectDownloadedAssetLibraryMedia(ctx context.Context, assetType string, response *http.Response, download *assetLibrarySpan) (result AssetMediaMetadata, err error) {
 	if response.StatusCode != http.StatusOK {
 		return AssetMediaMetadata{}, fmt.Errorf("media URL returned HTTP %d", response.StatusCode)
 	}
@@ -86,6 +96,12 @@ func validateAssetLibraryMediaResponse(ctx context.Context, assetType string, re
 		return AssetMediaMetadata{}, errors.New("media could not be inspected")
 	}
 
+	if download != nil {
+		download.stage.Bytes = written
+		download.finish(nil)
+	}
+	inspection := startAssetLibraryStage(ctx, "media_inspection", "", "", 0)
+	defer func() { inspection.finish(err) }()
 	metadata, err := inspectAssetLibraryMedia(ctx, assetType, temporaryFile, written)
 	if err != nil {
 		return AssetMediaMetadata{}, err

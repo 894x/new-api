@@ -467,6 +467,7 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   'channel.asset_library.sync':
     'Synchronized asset library replicas for channel (ID: {{id}})',
   // Asset library
+  'asset_library.request': 'Asset library request: {{action}} ({{id}})',
   'asset_library.group.create': 'Created asset group {{name}} (ID: {{id}})',
   'asset_library.group.update': 'Updated asset group {{name}} (ID: {{id}})',
   'asset_library.group.delete': 'Deleted asset group {{name}} (ID: {{id}})',

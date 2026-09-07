@@ -33,7 +33,7 @@ type directAssetReference struct {
 // PrepareAssetReferences imports direct media URLs into the selected channel's
 // asset library, waits for the replicas to become ready, and then rewrites both
 // direct and logical references into the upstream format.
-func PrepareAssetReferences(ctx context.Context, userId int, channelId int, payload map[string]any) (map[string]any, error) {
+func PrepareAssetReferences(ctx context.Context, userId int, channelId int, payload map[string]any) (preparedResult map[string]any, err error) {
 	if userId <= 0 || channelId <= 0 {
 		return RewriteAssetReferences(userId, channelId, payload)
 	}
@@ -56,6 +56,9 @@ func PrepareAssetReferences(ctx context.Context, userId int, channelId int, payl
 		return nil, fmt.Errorf("at most %d direct asset references may be imported per request", maxAutoImportAssetCount)
 	}
 
+	ctx, finish := BeginAssetLibraryOperation(ctx, userId, "AutoImport", "")
+	defer func() { finish(err) }()
+
 	groups, _, err := model.ListUserAssetGroups(userId, model.AssetGroupListParams{
 		ProjectName: autoImportAssetProjectName,
 		PageNumber:  1,
@@ -71,6 +74,7 @@ func PrepareAssetReferences(ctx context.Context, userId int, channelId int, payl
 
 	logicalReferences := make(map[string]string, len(references))
 	for _, reference := range references {
+		assetCtx := ctx
 		var assets []model.UserAsset
 		if group != nil {
 			assets, _, err = model.ListUserAssets(userId, model.AssetListParams{
@@ -89,7 +93,9 @@ func PrepareAssetReferences(ctx context.Context, userId int, channelId int, payl
 		if len(assets) > 0 {
 			asset = &assets[0]
 		} else {
-			metadata, validateErr := ValidateAssetLibraryMedia(ctx, reference.SourceURL, reference.AssetType)
+			assetID := "asset-na-" + common.GetUUID()
+			assetCtx = BeginAssetLibraryUpload(ctx, assetID)
+			metadata, validateErr := ValidateAssetLibraryMedia(assetCtx, reference.SourceURL, reference.AssetType)
 			if validateErr != nil {
 				return nil, fmt.Errorf("validate direct %s asset: %w", strings.ToLower(reference.AssetType), validateErr)
 			}
@@ -107,7 +113,7 @@ func PrepareAssetReferences(ctx context.Context, userId int, channelId int, payl
 				}
 			}
 			asset = &model.UserAsset{
-				Id:          "asset-na-" + common.GetUUID(),
+				Id:          assetID,
 				UserId:      userId,
 				GroupId:     group.Id,
 				Name:        autoImportedAssetName(reference.SourceURL),
@@ -121,12 +127,12 @@ func PrepareAssetReferences(ctx context.Context, userId int, channelId int, payl
 				FPS:         metadata.FPS,
 				ProjectName: group.ProjectName,
 			}
-			if err := model.CreateUserAsset(asset); err != nil {
+			if err := CreateAssetLibraryRecord(assetCtx, asset); err != nil {
 				return nil, err
 			}
 		}
 
-		if err := ensureAssetReplicaReady(ctx, asset, channelId); err != nil {
+		if err := ensureAssetReplicaReady(assetCtx, asset, channelId); err != nil {
 			return nil, fmt.Errorf("synchronize direct asset %s: %w", asset.Id, err)
 		}
 		logicalReferences[directAssetReferenceKey(reference)] = "asset://" + asset.Id
@@ -267,8 +273,7 @@ func ensureAssetReplicaReady(ctx context.Context, asset *model.UserAsset, channe
 			return errors.New("asset replica synchronization failed")
 		}
 
-		lock := getAssetLibraryChannelLock(channelId)
-		lock.Lock()
+		lock := acquireAssetLibraryChannel(ctx, channelId)
 		config, configErr := model.GetChannelAssetConfig(channelId)
 		if configErr == nil && !config.Enabled {
 			configErr = errors.New("asset library is not enabled for channel")

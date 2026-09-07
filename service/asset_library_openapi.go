@@ -193,7 +193,14 @@ type openAPIAssetResponseEnvelope struct {
 	TraceID string          `json:"trace_id"`
 }
 
-func callOpenAPIAssetLibrary(ctx context.Context, config *model.ChannelAssetConfig, path string, input any, output any) error {
+func callOpenAPIAssetLibrary(ctx context.Context, config *model.ChannelAssetConfig, path string, input any, output any) (err error) {
+	channelID := 0
+	if config != nil {
+		channelID = config.ChannelId
+	}
+	span := startAssetLibraryStage(ctx, "upstream_request", path, "", channelID)
+	span.stage.Backend = "openapi"
+	defer func() { span.finish(err) }()
 	if config == nil || !config.Enabled {
 		return errors.New("asset library is not enabled for channel")
 	}
@@ -226,6 +233,8 @@ func callOpenAPIAssetLibrary(ctx context.Context, config *model.ChannelAssetConf
 	if err != nil {
 		return err
 	}
+	span.stage.HTTPStatus = response.StatusCode
+	span.stage.UpstreamRequestID = assetTimingIdentifier(response.Header.Get("X-Request-Id"))
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
@@ -237,6 +246,9 @@ func callOpenAPIAssetLibrary(ctx context.Context, config *model.ChannelAssetConf
 			return &AssetLibraryUpstreamError{StatusCode: response.StatusCode, Message: http.StatusText(response.StatusCode)}
 		}
 		return fmt.Errorf("decode asset OpenAPI response: %w", err)
+	}
+	if id := assetTimingIdentifier(envelope.TraceID); id != "" {
+		span.stage.UpstreamRequestID = id
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices || envelope.Code != 0 {
 		message := common.MaskSensitiveInfo(common.LocalLogPreview(envelope.Message))

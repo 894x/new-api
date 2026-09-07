@@ -84,6 +84,7 @@ import {
   isTimingLogType,
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import { AssetLibraryTimeline } from '../asset-library-timeline'
 import { RequestTimingTimeline } from '../request-timing-timeline'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
@@ -505,7 +506,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
   let dialogWidthClass = 'sm:max-w-lg'
   if (isTieredBilling) {
     dialogWidthClass = 'sm:max-w-4xl lg:max-w-5xl'
-  } else if (props.isAdmin && adminInfo?.request_timing) {
+  } else if (
+    props.isAdmin &&
+    (adminInfo?.request_timing || adminInfo?.asset_timing)
+  ) {
     dialogWidthClass = 'sm:max-w-2xl'
   }
   const topupAuditFields =
@@ -1278,6 +1282,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
               </p>
             </div>
           </div>
+        )}
+
+        {props.isAdmin && other?.admin_info?.asset_timing && (
+          <AssetLibraryTimeline timing={other.admin_info.asset_timing} />
         )}
 
         {props.isAdmin && other?.admin_info?.request_timing && (

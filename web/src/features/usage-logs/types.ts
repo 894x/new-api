@@ -21,6 +21,7 @@ For commercial licensing, please contact support@quantumnous.com
  */
 import type { RequestRuleTrace } from '@/features/pricing/lib/billing-expr'
 
+import type { AssetLibraryTiming } from './asset-library-timing'
 import type { UsageLog } from './data/schema'
 // ============================================================================
 // Log Category Types
@@ -146,6 +147,7 @@ export interface LogOtherData {
     upstream_response_id?: string
     upstream_request_ids?: Record<string, string>
     request_timing?: RequestTimingInfo
+    asset_timing?: AssetLibraryTiming
     // Quota saturation marker: set when a quota conversion clamped at the
     // int32 bound (overflow/underflow) or hit a NaN fallback while computing
     // this request's charge. Admin-only (nested under admin_info).

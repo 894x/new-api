@@ -46,6 +46,17 @@ func AssetLibraryAction(c *gin.Context) {
 		writeAssetLibraryError(c, action, http.StatusUnauthorized, "Unauthorized", "user identity is missing", nil)
 		return
 	}
+	if action == "CreateAsset" || action == "GetAsset" {
+		ctx, finish := service.BeginAssetLibraryOperation(c.Request.Context(), userId, action, "")
+		c.Request = c.Request.WithContext(ctx)
+		defer func() {
+			var err error
+			if c.Writer.Status() >= 400 {
+				err = errors.New("asset request failed")
+			}
+			finish(err)
+		}()
+	}
 	includeReplication := model.IsAdmin(userId)
 	switch action {
 	case "CreateAssetGroup":
@@ -166,13 +177,15 @@ func createAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool
 			return
 		}
 	}
+	assetID := "asset-na-" + common.GetUUID()
+	c.Request = c.Request.WithContext(service.BeginAssetLibraryUpload(c.Request.Context(), assetID))
 	mediaMetadata, err := service.ValidateAssetLibraryMedia(c.Request.Context(), sourceURL, assetType)
 	if err != nil {
 		writeAssetLibraryError(c, "CreateAsset", http.StatusBadRequest, "InvalidParameter.Media", err.Error(), nil)
 		return
 	}
 	asset := &model.UserAsset{
-		Id:          "asset-na-" + common.GetUUID(),
+		Id:          assetID,
 		UserId:      userId,
 		GroupId:     group.Id,
 		Name:        name,
@@ -186,7 +199,7 @@ func createAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool
 		FPS:         mediaMetadata.FPS,
 		ProjectName: group.ProjectName,
 	}
-	if err := model.CreateUserAsset(asset); err != nil {
+	if err := service.CreateAssetLibraryRecord(c.Request.Context(), asset); err != nil {
 		writeAssetLibraryInternalError(c, "CreateAsset", err)
 		return
 	}
@@ -511,6 +524,9 @@ func deleteAssetLibraryGroup(c *gin.Context, userId int) {
 }
 
 func recordAssetLibraryAudit(c *gin.Context, userId int, action string, params map[string]interface{}) {
+	if service.SetAssetLibraryAudit(c.Request.Context(), auditContentEN(action, params), c.ClientIP(), action, params) {
+		return
+	}
 	model.RecordOperationAuditLog(userId, auditContentEN(action, params), c.ClientIP(), action, params, nil, nil)
 }
 
