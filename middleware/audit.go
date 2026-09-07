@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -107,6 +108,14 @@ func beginAdminAudit(c *gin.Context) *auditResponseWriter {
 	method := c.Request.Method
 	if method != "POST" && method != "PUT" && method != "PATCH" && method != "DELETE" {
 		return nil
+	}
+	// This endpoint uses POST for read-only RPC actions. Do not turn admin
+	// browsing into a management audit merely because the transport is POST.
+	if method == "POST" && c.FullPath() == "/api/asset-library/admin/users/:user_id" {
+		switch strings.TrimSpace(c.Query("Action")) {
+		case "ListAssetGroups", "ListAssets", "GetAssetGroup", "GetAsset":
+			return nil
+		}
 	}
 	writer := &auditResponseWriter{
 		ResponseWriter: c.Writer,

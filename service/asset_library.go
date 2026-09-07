@@ -1025,10 +1025,8 @@ func refreshAssetLibraryAsset(ctx context.Context, assetId string, includeDisabl
 
 func refreshAssetReplicaToChannelLocked(ctx context.Context, config *model.ChannelAssetConfig, replica *model.UserAssetReplica) (*AssetLibraryAssetDetails, error) {
 	ctx = context.WithValue(ctx, assetLibraryResourceKey{}, replica.AssetId)
-	previousState, previousError := replica.State, replica.LastError
 	defer func() {
 		if trace := assetTrace(ctx); trace != nil {
-			trace.changed = trace.changed || previousState != replica.State || previousError != replica.LastError
 			trace.failed = trace.failed || replica.State == model.AssetReplicaStateFailed || replica.LastError != ""
 		}
 	}()

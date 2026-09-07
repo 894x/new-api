@@ -37,7 +37,7 @@ describe('asset library timeline', () => {
       id: 1,
       user_id: 1,
       created_at: 1,
-      type: 3,
+      type: 8,
       content: 'Asset request',
       other: JSON.stringify({
         admin_info: {

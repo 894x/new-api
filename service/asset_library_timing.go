@@ -61,7 +61,6 @@ type assetLibraryTraceKey struct{}
 type assetLibraryResourceKey struct{}
 type assetLibraryUploadStartKey struct{}
 type assetLibraryTrace struct {
-	changed                  bool
 	failed                   bool
 	mu                       sync.Mutex
 	timing                   AssetLibraryTiming
@@ -104,7 +103,7 @@ func BeginAssetLibraryOperation(ctx context.Context, userID int, action, assetID
 		}
 		// The log store is initialized in production; service-only callers may
 		// intentionally run without an audit database (e.g. command-line tools).
-		if model.LOG_DB != nil && (action != "GetAsset" || trace.changed || trace.timing.Outcome == "failed" || trace.timing.DurationMS >= 2000) {
+		if model.LOG_DB != nil {
 			model.RecordOperationAuditLog(userID, trace.content, trace.ip, trace.auditAction, trace.params,
 				map[string]interface{}{"asset_timing": trace.timing}, nil, requestID)
 		}

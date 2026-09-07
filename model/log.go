@@ -82,14 +82,19 @@ type Log struct {
 
 // don't use iota, avoid change log type value
 const (
-	LogTypeUnknown = 0
-	LogTypeTopup   = 1
-	LogTypeConsume = 2
-	LogTypeManage  = 3
-	LogTypeSystem  = 4
-	LogTypeError   = 5
-	LogTypeRefund  = 6
-	LogTypeLogin   = 7
+	LogTypeUnknown          = 0
+	LogTypeTopup            = 1
+	LogTypeConsume          = 2
+	LogTypeManage           = 3
+	LogTypeSystem           = 4
+	LogTypeError            = 5
+	LogTypeRefund           = 6
+	LogTypeLogin            = 7
+	LogTypeAssetUpload      = 8
+	LogTypeAssetDelete      = 9
+	LogTypeAssetUpdate      = 10
+	LogTypeAssetGroupCreate = 11
+	LogTypeAssetSync        = 12
 )
 
 func ensureLogRequestId(log *Log) {
@@ -221,13 +226,45 @@ func RecordLoginLog(userId int, username string, content string, ip string, acti
 	}
 }
 
-// RecordOperationAuditLog 记录管理/高危操作审计日志（type=LogTypeManage）。
+// operationAuditLogType gives asset mutations first-class log categories.
+// Asset query diagnostics stay in server logs, even when slow or unsuccessful.
+func operationAuditLogType(action string, params map[string]interface{}) int {
+	switch action {
+	case "asset_library.asset.create":
+		return LogTypeAssetUpload
+	case "asset_library.asset.delete", "asset_library.group.delete":
+		return LogTypeAssetDelete
+	case "asset_library.asset.update", "asset_library.group.update":
+		return LogTypeAssetUpdate
+	case "asset_library.group.create":
+		return LogTypeAssetGroupCreate
+	case "asset_library.asset.sync", "asset_library.group.sync", "channel.asset_library.sync":
+		return LogTypeAssetSync
+	case "asset_library.request":
+		switch params["action"] {
+		case "CreateAsset", "AutoImport":
+			return LogTypeAssetUpload
+		case "ReplicateAsset", "SyncAssetReplicas", "SyncAssetGroupReplicas", "SyncAssetLibraryChannel":
+			return LogTypeAssetSync
+		default:
+			return LogTypeUnknown
+		}
+	default:
+		return LogTypeManage
+	}
+}
+
+// RecordOperationAuditLog 记录管理审计或独立类型的素材操作日志。
 // logUserId 为日志归属者，管理审计日志应归属实际操作者；目标资源/用户放入
 // action params。username 内部按 logUserId 查询。content 为英文兜底文本（供导出使用）。
 // action+params 写入 Other.op，供前端本地化渲染（普通用户可见，不含敏感信息）。
 // adminInfo 存放操作者身份（写入 Other.admin_info，普通用户查询时剥离）；
 // auditInfo 存放路由/方法/结果等中间件兜底信息（写入 Other.audit_info，普通用户查询时剥离）。
 func RecordOperationAuditLog(logUserId int, content string, ip string, action string, params map[string]interface{}, adminInfo map[string]interface{}, auditInfo map[string]interface{}, requestIDs ...string) {
+	logType := operationAuditLogType(action, params)
+	if logType == LogTypeUnknown {
+		return
+	}
 	username, _ := GetUsernameById(logUserId, false)
 	other := map[string]interface{}{
 		"op": buildOpField(action, params),
@@ -242,7 +279,7 @@ func RecordOperationAuditLog(logUserId int, content string, ip string, action st
 		UserId:    logUserId,
 		Username:  username,
 		CreatedAt: common.GetTimestamp(),
-		Type:      LogTypeManage,
+		Type:      logType,
 		Content:   content,
 		Ip:        ip,
 		Other:     common.MapToJsonStr(other),

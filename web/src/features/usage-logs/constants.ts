@@ -60,6 +60,11 @@ export const LOG_TYPE_ENUM = {
   ERROR: 5,
   REFUND: 6,
   LOGIN: 7,
+  ASSET_UPLOAD: 8,
+  ASSET_DELETE: 9,
+  ASSET_UPDATE: 10,
+  ASSET_GROUP_CREATE: 11,
+  ASSET_SYNC: 12,
 } as const
 
 /**
@@ -98,6 +103,11 @@ export const LOG_TYPES = [
   { value: 5, label: 'Error', color: 'red' },
   { value: 6, label: 'Refund', color: 'blue' },
   { value: 7, label: 'Login', color: 'teal' },
+  { value: 8, label: 'Asset upload', color: 'cyan' },
+  { value: 9, label: 'Asset deletion', color: 'red' },
+  { value: 10, label: 'Asset update', color: 'orange' },
+  { value: 11, label: 'Asset group creation', color: 'purple' },
+  { value: 12, label: 'Asset synchronization', color: 'blue' },
 ] as const
 
 /**

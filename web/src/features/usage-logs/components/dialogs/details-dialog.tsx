@@ -491,7 +491,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const isRefund = props.log.type === 6
   const isConsume = props.log.type === 2
   const isTopup = props.log.type === 1
-  const isManage = props.log.type === 3
+  const isOperationAudit =
+    props.log.type === 3 || (!!other?.op && props.log.type !== 7)
   const isSubscription = other?.billing_source === 'subscription'
   const isTieredBilling =
     isConsume &&
@@ -547,7 +548,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
     props.isAdmin &&
     (topupAuditFields.length > 0 || showLegacyTopupWarning)
   const manageOperator = (() => {
-    if (!isManage || !props.isAdmin || !adminInfo) return null
+    if (!isOperationAudit || !props.isAdmin || !adminInfo) return null
     const username = adminInfo.admin_username
     const id = adminInfo.admin_id
     const hasUsername = username != null && String(username).trim() !== ''
@@ -558,27 +559,32 @@ export function DetailsDialog(props: DetailsDialogProps) {
     return `ID: ${id}`
   })()
   const authMethodLabel = (() => {
-    if (!isManage || !props.isAdmin || !adminInfo?.auth_method) return ''
+    if (!isOperationAudit || !props.isAdmin || !adminInfo?.auth_method) {
+      return ''
+    }
     if (adminInfo.auth_method === 'access_token') return t('Access Token')
     if (adminInfo.auth_method === 'session') return t('Session')
     return String(adminInfo.auth_method)
   })()
 
   // Localized operation text rendered from the language-independent op
-  // descriptor (shared by audit type=3 and login type=7).
+  // descriptor (shared by operation and login logs).
   const operationText = renderAuditContent(other, t)
-  const auditRoute = isManage && props.isAdmin ? other?.audit_info : undefined
+  const auditRoute =
+    isOperationAudit && props.isAdmin ? other?.audit_info : undefined
   // Channel update records which fields changed (stable field tokens); render
   // them with their localized labels for admins.
   const changedFieldTokens =
-    isManage && props.isAdmin
+    isOperationAudit && props.isAdmin
       ? parseAuditChangedFields(other?.op?.params?.changed_fields)
       : []
   const changedFieldsText = changedFieldTokens
     .map((field) => t(CHANNEL_FIELD_LABELS[field] ?? field))
     .join(', ')
   const showManageAuditSection =
-    isManage && props.isAdmin && (operationText != null || auditRoute != null)
+    isOperationAudit &&
+    props.isAdmin &&
+    (operationText != null || auditRoute != null)
 
   // Login audit (type=7); visible to the log owner, not admin-only.
   const isLogin = props.log.type === 7
@@ -925,7 +931,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </DetailSection>
         )}
 
-        {/* Manage operator (type=3, admin only) */}
+        {/* Operation owner (admin only) */}
         {manageOperator && (
           <DetailRow
             label={
@@ -942,7 +948,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
           />
         )}
 
-        {/* Operation audit info (type=3, admin only) */}
+        {/* Operation audit info (admin only) */}
         {showManageAuditSection && (
           <DetailSection
             icon={<ShieldCheck className='size-3.5' aria-hidden='true' />}

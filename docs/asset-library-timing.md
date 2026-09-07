@@ -1,5 +1,10 @@
 # Asset library timing diagnostics
 
+Asset upload (8), deletion (9), update (10), group creation (11), and
+synchronization (12) are independent usage log types with list badges and filters.
+Group deletion/update use the corresponding deletion/update type; channel
+configuration changes remain management audits. Existing records are not rewritten.
+
 Administrators can open an asset operation in **Usage Logs → Details** to see
 the same segmented request timeline used by chat requests. The longest measured
 stage is highlighted. Expand **Stage Details** for individual calls, channel and
@@ -25,10 +30,10 @@ The create audit is enriched after the request finishes, including when logical
 creation succeeded but replication failed. Failed validation creates a diagnostic
 operation instead. Automatic imports and manual synchronization also produce
 diagnostic request records; admin synchronization retains its existing operator
-audit as a separate record. Fast unchanged status queries update replica
-milestones without adding database log rows. Changes, errors, and queries taking
-at least two seconds are retained. HTTP 200 preview fallback does not hide a
-failed refresh from diagnostics.
+audit as a separate record. Read-only queries (listing or viewing assets and groups) never add usage log
+rows, including slow queries, failures, or observed status changes. They still
+update replica milestones and emit server diagnostics. HTTP 200 preview fallback
+does not hide a failed refresh from server diagnostics.
 
 The server log emits `asset_library.stage_started`,
 `asset_library.stage_completed`, `asset_library.channel_released`, and
