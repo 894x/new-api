@@ -22,6 +22,7 @@ import {
   CreditCard,
   FileText,
   FlaskConical,
+  Grid2X2,
   Key,
   LayoutDashboard,
   Library,
@@ -38,7 +39,13 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import type { SidebarData } from '@/components/layout/types'
+import {
+  hasPermission,
+  ADMIN_PERMISSION_RESOURCES,
+  ADMIN_PERMISSION_ACTIONS,
+} from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 /**
  * Root navigation groups for the application sidebar.
@@ -48,6 +55,14 @@ import { ROLE } from '@/lib/roles'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const canReadChannels =
+    (user?.role ?? 0) >= ROLE.ADMIN &&
+    hasPermission(
+      user,
+      ADMIN_PERMISSION_RESOURCES.CHANNEL,
+      ADMIN_PERMISSION_ACTIONS.READ
+    )
 
   return {
     navGroups: [
@@ -135,6 +150,15 @@ export function useSidebarData(): SidebarData {
             url: '/models/metadata',
             icon: Box,
           },
+          ...(canReadChannels
+            ? [
+                {
+                  title: t('Model-channel matrix'),
+                  url: '/model-channel-matrix',
+                  icon: Grid2X2,
+                },
+              ]
+            : []),
           {
             title: t('Users'),
             url: '/users',

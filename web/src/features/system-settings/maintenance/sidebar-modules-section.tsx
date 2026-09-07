@@ -138,6 +138,12 @@ export function SidebarModulesSection({
         title: t('Models'),
         description: t('Manage catalog visibility and pricing.'),
       },
+      model_channel_matrix: {
+        title: t('Model-channel matrix'),
+        description: t(
+          'Compare and edit routing limits for each model and channel.'
+        ),
+      },
       redemption: {
         title: t('Redeem codes'),
         description: t('Create and review invite or credit codes.'),
