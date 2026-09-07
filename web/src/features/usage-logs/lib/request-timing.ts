@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+import { formatUseTime } from '@/lib/format'
+
 import type { RequestTimingInfo } from '../types'
 
 export type RequestTimingSegmentKey =
@@ -122,4 +124,9 @@ export function buildRequestTimingSegments(
   }
 
   return { segments, totalDurationMs, longestSegmentKey }
+}
+
+export function formatTimingMilliseconds(milliseconds: number): string {
+  if (milliseconds < 1_000) return `${Math.round(milliseconds)} ms`
+  return formatUseTime(milliseconds / 1_000)
 }

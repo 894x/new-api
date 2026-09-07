@@ -108,6 +108,9 @@ func TestReplicateSeedanceSLSAssetDefersGroupAndWaitsUntilActive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "lass_abc123", assetReplica.UpstreamAssetId)
 	assert.Equal(t, model.AssetReplicaStateProcessing, assetReplica.State)
+	assert.Positive(t, assetReplica.UploadStartedAtMS)
+	assert.Positive(t, assetReplica.SubmittedAtMS)
+	assert.Zero(t, assetReplica.FirstActiveAtMS)
 
 	_, err = RewriteAssetReferences(7, 17, map[string]any{"image_url": "asset://" + asset.Id})
 	require.ErrorContains(t, err, "unavailable")
@@ -117,6 +120,9 @@ func TestReplicateSeedanceSLSAssetDefersGroupAndWaitsUntilActive(t *testing.T) {
 	assetReplica, err = model.GetUserAssetReplica(asset.Id, 17)
 	require.NoError(t, err)
 	assert.Equal(t, model.AssetReplicaStateReady, assetReplica.State)
+	assert.Positive(t, assetReplica.FirstActiveAtMS)
+	assert.EqualValues(t, 1, assetReplica.PollCount)
+	firstActive := assetReplica.FirstActiveAtMS
 	rewritten, err := RewriteAssetReferences(7, 17, map[string]any{"image_url": "asset://" + asset.Id})
 	require.NoError(t, err)
 	assert.Equal(t, "asset://lass_abc123", rewritten["image_url"])
@@ -124,6 +130,12 @@ func TestReplicateSeedanceSLSAssetDefersGroupAndWaitsUntilActive(t *testing.T) {
 		"POST /v1/volcengine/assets",
 		"GET /v1/volcengine/assets/lass_abc123",
 	}, requests)
+	_, err = RefreshAssetLibraryAsset(t.Context(), asset.Id)
+	require.NoError(t, err)
+	assetReplica, err = model.GetUserAssetReplica(asset.Id, 17)
+	require.NoError(t, err)
+	assert.Equal(t, firstActive, assetReplica.FirstActiveAtMS, "later polls must not move first Active")
+	assert.EqualValues(t, 2, assetReplica.PollCount)
 }
 
 func TestSeedanceSLSReplicaUpdateIsLocalAndDeleteUsesRESTEndpoint(t *testing.T) {

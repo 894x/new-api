@@ -187,7 +187,11 @@ func TestAssetLibraryMutationsRecordStructuredAudit(t *testing.T) {
 
 			var other map[string]interface{}
 			require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
-			assert.NotContains(t, other, "admin_info")
+			if testCase.action == "CreateAsset" {
+				assert.Contains(t, other, "admin_info")
+			} else {
+				assert.NotContains(t, other, "admin_info")
+			}
 			op, ok := other["op"].(map[string]interface{})
 			require.True(t, ok)
 			assert.Equal(t, testCase.expectedAction, op["action"])
@@ -605,6 +609,34 @@ func TestCreateAssetRejectsInvalidRemoteMediaBeforePersistence(t *testing.T) {
 	var assetCount int64
 	require.NoError(t, db.Model(&model.UserAsset{}).Count(&assetCount).Error)
 	assert.Zero(t, assetCount)
+	var logs []model.Log
+	require.NoError(t, db.Where("type = ?", model.LogTypeManage).Find(&logs).Error)
+	require.Len(t, logs, 1, "a rejected upload must retain its diagnostic timeline")
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
+	admin, ok := other["admin_info"].(map[string]any)
+	require.True(t, ok)
+	timing, ok := admin["asset_timing"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "failed", timing["outcome"])
+	assert.Contains(t, logs[0].Other, "media_inspection")
+	assert.NotContains(t, logs[0].Other, imageURL)
+}
+
+func TestGetAssetWithoutReplicaRecordsFailedDiagnosticDespiteSuccessfulResponse(t *testing.T) {
+	db := setupAssetLibraryControllerTestDB(t)
+	asset := &model.UserAsset{Id: "asset-na-0123456789abcdef0123456789abcdef", UserId: 1, GroupId: "group-na-1", AssetType: "Image", SourceURL: "https://example.com/asset.png"}
+	require.NoError(t, db.Create(asset).Error)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/asset-library?Action=GetAsset&Version=2024-01-01", bytes.NewBufferString(`{"Id":"`+asset.Id+`"}`))
+	c.Set("id", 1)
+	AssetLibraryAction(c)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var logs []model.Log
+	require.NoError(t, db.Find(&logs).Error)
+	require.Len(t, logs, 1)
+	assert.Contains(t, logs[0].Other, `"outcome":"failed"`)
 }
 
 func TestCreateAudioAssetStoresVerifiedMediaMetadata(t *testing.T) {

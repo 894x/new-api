@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -211,8 +212,7 @@ func ReplicateAssetGroup(ctx context.Context, group *model.UserAssetGroup) (*Ass
 	errorsByChannel := make([]assetLibraryChannelError, 0)
 	for i := range configs {
 		channelId := configs[i].ChannelId
-		lock := getAssetLibraryChannelLock(channelId)
-		lock.Lock()
+		lock := acquireAssetLibraryChannel(ctx, channelId)
 		config, configErr := model.GetChannelAssetConfig(channelId)
 		if configErr != nil || !config.Enabled {
 			lock.Unlock()
@@ -234,7 +234,14 @@ func ReplicateAssetGroup(ctx context.Context, group *model.UserAssetGroup) (*Ass
 	return &AssetLibraryReplicationReport{Summary: summary, Errors: errorsByChannel}, nil
 }
 
-func ReplicateAsset(ctx context.Context, asset *model.UserAsset) (*AssetLibraryReplicationReport, error) {
+func ReplicateAsset(ctx context.Context, asset *model.UserAsset) (reportResult *AssetLibraryReplicationReport, err error) {
+	ctx, finish := BeginAssetLibraryOperation(ctx, asset.UserId, "ReplicateAsset", asset.Id)
+	defer func() {
+		if reportResult != nil && len(reportResult.Errors) > 0 {
+			assetTrace(ctx).failed = true
+		}
+		finish(err)
+	}()
 	configs, err := model.GetEnabledChannelAssetConfigs()
 	if err != nil {
 		return nil, err
@@ -242,8 +249,7 @@ func ReplicateAsset(ctx context.Context, asset *model.UserAsset) (*AssetLibraryR
 	errorsByChannel := make([]assetLibraryChannelError, 0)
 	for i := range configs {
 		channelId := configs[i].ChannelId
-		lock := getAssetLibraryChannelLock(channelId)
-		lock.Lock()
+		lock := acquireAssetLibraryChannel(ctx, channelId)
 		config, configErr := model.GetChannelAssetConfig(channelId)
 		if configErr != nil || !config.Enabled {
 			lock.Unlock()
@@ -377,7 +383,14 @@ func assetLibraryChannelNames(configs []model.ChannelAssetConfig) (map[int]strin
 	return names, nil
 }
 
-func SyncAssetReplicas(ctx context.Context, asset *model.UserAsset, channelIds []int) (*AssetLibraryReplicationReport, error) {
+func SyncAssetReplicas(ctx context.Context, asset *model.UserAsset, channelIds []int) (reportResult *AssetLibraryReplicationReport, err error) {
+	ctx, finish := BeginAssetLibraryOperation(ctx, asset.UserId, "SyncAssetReplicas", asset.Id)
+	defer func() {
+		if reportResult != nil && len(reportResult.Errors) > 0 {
+			assetTrace(ctx).failed = true
+		}
+		finish(err)
+	}()
 	configs, err := selectedAssetLibraryConfigs(channelIds)
 	if err != nil {
 		return nil, err
@@ -385,8 +398,7 @@ func SyncAssetReplicas(ctx context.Context, asset *model.UserAsset, channelIds [
 	errorsByChannel := make([]assetLibraryChannelError, 0)
 	for i := range configs {
 		config := &configs[i]
-		lock := getAssetLibraryChannelLock(config.ChannelId)
-		lock.Lock()
+		lock := acquireAssetLibraryChannel(ctx, config.ChannelId)
 		currentConfig, configErr := model.GetChannelAssetConfig(config.ChannelId)
 		if configErr == nil && !currentConfig.Enabled {
 			configErr = errors.New("asset library is not enabled for channel")
@@ -414,7 +426,14 @@ func SyncAssetReplicas(ctx context.Context, asset *model.UserAsset, channelIds [
 	return &AssetLibraryReplicationReport{Summary: summary, Errors: errorsByChannel}, nil
 }
 
-func SyncAssetGroupReplicas(ctx context.Context, group *model.UserAssetGroup, channelIds []int) (*AssetLibraryReplicationReport, error) {
+func SyncAssetGroupReplicas(ctx context.Context, group *model.UserAssetGroup, channelIds []int) (reportResult *AssetLibraryReplicationReport, err error) {
+	ctx, finish := BeginAssetLibraryOperation(ctx, group.UserId, "SyncAssetGroupReplicas", "")
+	defer func() {
+		if reportResult != nil && len(reportResult.Errors) > 0 {
+			assetTrace(ctx).failed = true
+		}
+		finish(err)
+	}()
 	configs, err := selectedAssetLibraryConfigs(channelIds)
 	if err != nil {
 		return nil, err
@@ -426,8 +445,7 @@ func SyncAssetGroupReplicas(ctx context.Context, group *model.UserAssetGroup, ch
 	errorsByChannel := make([]assetLibraryChannelError, 0)
 	for i := range configs {
 		config := &configs[i]
-		lock := getAssetLibraryChannelLock(config.ChannelId)
-		lock.Lock()
+		lock := acquireAssetLibraryChannel(ctx, config.ChannelId)
 		currentConfig, configErr := model.GetChannelAssetConfig(config.ChannelId)
 		if configErr == nil && !currentConfig.Enabled {
 			configErr = errors.New("asset library is not enabled for channel")
@@ -567,6 +585,9 @@ func replicateAssetGroupToChannelLocked(ctx context.Context, group *model.UserAs
 }
 
 func replicateAssetToChannelLocked(ctx context.Context, asset *model.UserAsset, config *model.ChannelAssetConfig) (bool, error) {
+	if resourceID, _ := ctx.Value(assetLibraryResourceKey{}).(string); resourceID != asset.Id {
+		ctx = BeginAssetLibraryUpload(ctx, asset.Id)
+	}
 	existing, err := model.GetUserAssetReplica(asset.Id, config.ChannelId)
 	if err == nil && existing.UpstreamAssetId != "" {
 		return false, nil
@@ -599,9 +620,10 @@ func replicateAssetToChannelLocked(ctx context.Context, asset *model.UserAsset, 
 		replica.Id = existing.Id
 		replica.CreatedTime = existing.CreatedTime
 	}
-	if err := model.SaveUserAssetReplica(replica); err != nil {
+	if err := persistAssetLibraryReplica(ctx, replica); err != nil {
 		return false, err
 	}
+	replica.UploadStartedAtMS, _ = ctx.Value(assetLibraryUploadStartKey{}).(int64)
 	result, err := backend.CreateAsset(ctx, config, group, groupReplica, asset)
 	if err != nil {
 		replica.State = model.AssetReplicaStateFailed
@@ -610,7 +632,7 @@ func replicateAssetToChannelLocked(ctx context.Context, asset *model.UserAsset, 
 		if upstreamErr, ok := err.(*AssetLibraryUpstreamError); ok {
 			replica.LastErrorCode = upstreamErr.Code
 		}
-		_ = model.SaveUserAssetReplica(replica)
+		_ = persistAssetLibraryReplica(ctx, replica)
 		return false, err
 	}
 	if strings.TrimSpace(result.AssetID) == "" {
@@ -618,7 +640,7 @@ func replicateAssetToChannelLocked(ctx context.Context, asset *model.UserAsset, 
 		replica.State = model.AssetReplicaStateFailed
 		replica.UpstreamStatus = "Failed"
 		replica.LastError = assetLibraryStoredError(err)
-		_ = model.SaveUserAssetReplica(replica)
+		_ = persistAssetLibraryReplica(ctx, replica)
 		return false, err
 	}
 	if strings.TrimSpace(result.GroupID) != "" && groupReplica.UpstreamGroupId == "" {
@@ -629,23 +651,37 @@ func replicateAssetToChannelLocked(ctx context.Context, asset *model.UserAsset, 
 			return false, err
 		}
 	}
+	replica.SubmittedAtMS = time.Now().UnixMilli()
 	replica.UpstreamAssetId = result.AssetID
 	replica.UpstreamStatus = strings.TrimSpace(result.Status)
 	if replica.UpstreamStatus == "" {
 		replica.UpstreamStatus = "Processing"
 	}
 	replica.State = assetReplicaStateForStatus(replica.UpstreamStatus)
+	if replica.State == model.AssetReplicaStateReady {
+		replica.FirstActiveAtMS = replica.SubmittedAtMS
+	}
+	if replica.State == model.AssetReplicaStateProcessing {
+		replica.LastProcessingAtMS = replica.SubmittedAtMS
+	}
+	observeAssetLibraryReplica(ctx, replica)
 	replica.LastErrorCode = ""
 	replica.LastError = ""
-	if err := model.SaveUserAssetReplica(replica); err != nil {
+	if err := persistAssetLibraryReplica(ctx, replica); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func SyncAssetLibraryChannel(ctx context.Context, channelId int) (*AssetLibrarySyncResult, error) {
-	lock := getAssetLibraryChannelLock(channelId)
-	lock.Lock()
+func SyncAssetLibraryChannel(ctx context.Context, channelId int) (reportResult *AssetLibrarySyncResult, err error) {
+	ctx, finish := BeginAssetLibraryOperation(ctx, 0, "SyncAssetLibraryChannel", "")
+	defer func() {
+		if reportResult != nil && len(reportResult.Errors) > 0 {
+			assetTrace(ctx).failed = true
+		}
+		finish(err)
+	}()
+	lock := acquireAssetLibraryChannel(ctx, channelId)
 	defer lock.Unlock()
 
 	config, err := model.GetChannelAssetConfig(channelId)
@@ -718,8 +754,7 @@ func UpdateAssetGroupReplicas(ctx context.Context, group *model.UserAssetGroup) 
 		if replica.UpstreamGroupId == "" {
 			continue
 		}
-		lock := getAssetLibraryChannelLock(replica.ChannelId)
-		lock.Lock()
+		lock := acquireAssetLibraryChannel(ctx, replica.ChannelId)
 		currentReplica, replicaErr := model.GetUserAssetGroupReplica(group.Id, replica.ChannelId)
 		if replicaErr != nil {
 			lock.Unlock()
@@ -770,8 +805,7 @@ func UpdateAssetReplicas(ctx context.Context, asset *model.UserAsset) (*AssetLib
 		if replica.UpstreamAssetId == "" {
 			continue
 		}
-		lock := getAssetLibraryChannelLock(replica.ChannelId)
-		lock.Lock()
+		lock := acquireAssetLibraryChannel(ctx, replica.ChannelId)
 		currentReplica, replicaErr := model.GetUserAssetReplica(asset.Id, replica.ChannelId)
 		if replicaErr != nil {
 			lock.Unlock()
@@ -801,7 +835,7 @@ func UpdateAssetReplicas(ctx context.Context, asset *model.UserAsset) (*AssetLib
 			replica.LastErrorCode = ""
 			replica.LastError = ""
 		}
-		_ = model.SaveUserAssetReplica(replica)
+		_ = persistAssetLibraryReplica(ctx, replica)
 		lock.Unlock()
 	}
 	summary, summaryErr := GetAssetReplicationSummary(asset.Id)
@@ -822,8 +856,7 @@ func DeleteAssetReplicas(ctx context.Context, assetId string) ([]assetLibraryCha
 		if replica.UpstreamAssetId == "" {
 			continue
 		}
-		lock := getAssetLibraryChannelLock(replica.ChannelId)
-		lock.Lock()
+		lock := acquireAssetLibraryChannel(ctx, replica.ChannelId)
 		currentReplica, replicaErr := model.GetUserAssetReplica(assetId, replica.ChannelId)
 		if replicaErr != nil {
 			lock.Unlock()
@@ -866,8 +899,7 @@ func DeleteAssetGroupReplicas(ctx context.Context, groupId string) ([]assetLibra
 		if replica.UpstreamGroupId == "" {
 			continue
 		}
-		lock := getAssetLibraryChannelLock(replica.ChannelId)
-		lock.Lock()
+		lock := acquireAssetLibraryChannel(ctx, replica.ChannelId)
 		currentReplica, replicaErr := model.GetUserAssetGroupReplica(groupId, replica.ChannelId)
 		if replicaErr != nil {
 			lock.Unlock()
@@ -921,7 +953,21 @@ func RefreshAdminAssetLibraryAsset(ctx context.Context, assetId string) (*AssetL
 	return refreshAssetLibraryAsset(ctx, assetId, true)
 }
 
-func refreshAssetLibraryAsset(ctx context.Context, assetId string, includeDisabled bool) (*AssetLibraryAssetDetails, error) {
+func refreshAssetLibraryAsset(ctx context.Context, assetId string, includeDisabled bool) (result *AssetLibraryAssetDetails, err error) {
+	if assetTrace(ctx) == nil {
+		var asset model.UserAsset
+		_ = model.DB.Where("id = ?", assetId).Find(&asset).Error
+		var finish func(error)
+		ctx, finish = BeginAssetLibraryOperation(ctx, asset.UserId, "GetAsset", assetId)
+		defer func() { finish(err) }()
+	}
+	assetTrace(ctx).timing.AssetID = assetId
+	defer func() {
+		if err != nil {
+			failure := startAssetLibraryStage(ctx, "gateway_processing", "GetAsset", assetId, 0)
+			failure.finish(err)
+		}
+	}()
 	replicas, err := model.ListUserAssetReplicas(assetId)
 	if err != nil {
 		return nil, err
@@ -933,8 +979,7 @@ func refreshAssetLibraryAsset(ctx context.Context, assetId string, includeDisabl
 		if replica.UpstreamAssetId == "" {
 			continue
 		}
-		lock := getAssetLibraryChannelLock(replica.ChannelId)
-		lock.Lock()
+		lock := acquireAssetLibraryChannel(ctx, replica.ChannelId)
 		currentReplica, replicaErr := model.GetUserAssetReplica(assetId, replica.ChannelId)
 		if replicaErr != nil {
 			lock.Unlock()
@@ -979,24 +1024,41 @@ func refreshAssetLibraryAsset(ctx context.Context, assetId string, includeDisabl
 }
 
 func refreshAssetReplicaToChannelLocked(ctx context.Context, config *model.ChannelAssetConfig, replica *model.UserAssetReplica) (*AssetLibraryAssetDetails, error) {
+	ctx = context.WithValue(ctx, assetLibraryResourceKey{}, replica.AssetId)
+	previousState, previousError := replica.State, replica.LastError
+	defer func() {
+		if trace := assetTrace(ctx); trace != nil {
+			trace.changed = trace.changed || previousState != replica.State || previousError != replica.LastError
+			trace.failed = trace.failed || replica.State == model.AssetReplicaStateFailed || replica.LastError != ""
+		}
+	}()
 	backend, err := assetLibraryBackendForChannel(replica.ChannelId)
 	if err != nil {
 		return nil, err
 	}
 	details, err := backend.GetAsset(ctx, config, replica.UpstreamAssetId)
+	replica.PollCount++
+	replica.LastPolledAtMS = time.Now().UnixMilli()
+	defer func() { observeAssetLibraryReplica(ctx, replica) }()
 	if err != nil {
 		replica.LastError = assetLibraryStoredError(err)
 		var upstreamErr *AssetLibraryUpstreamError
 		if errors.As(err, &upstreamErr) {
 			replica.LastErrorCode = upstreamErr.Code
 		}
-		if saveErr := model.SaveUserAssetReplica(replica); saveErr != nil {
+		if saveErr := persistAssetLibraryReplica(ctx, replica); saveErr != nil {
 			return nil, errors.Join(err, saveErr)
 		}
 		return nil, err
 	}
 	replica.UpstreamStatus = details.Status
 	replica.State = assetReplicaStateForStatus(details.Status)
+	if replica.State == model.AssetReplicaStateReady && replica.FirstActiveAtMS == 0 {
+		replica.FirstActiveAtMS = replica.LastPolledAtMS
+	}
+	if replica.State == model.AssetReplicaStateProcessing && replica.FirstActiveAtMS == 0 {
+		replica.LastProcessingAtMS = replica.LastPolledAtMS
+	}
 	replica.LastInferenceTime = details.LastInferenceTime
 	replica.LastErrorCode = ""
 	replica.LastError = ""
@@ -1004,7 +1066,7 @@ func refreshAssetReplicaToChannelLocked(ctx context.Context, config *model.Chann
 		replica.LastErrorCode = details.Error.Code
 		replica.LastError = common.MaskSensitiveInfo(common.LocalLogPreview(details.Error.Message))
 	}
-	if err := model.SaveUserAssetReplica(replica); err != nil {
+	if err := persistAssetLibraryReplica(ctx, replica); err != nil {
 		return nil, err
 	}
 	return details, nil

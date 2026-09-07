@@ -311,7 +311,14 @@ type seedanceSLSResponseEnvelope struct {
 	Data    json.RawMessage `json:"data"`
 }
 
-func callSeedanceSLSAssetLibrary(ctx context.Context, config *model.ChannelAssetConfig, method string, assetId string, input any, output any) error {
+func callSeedanceSLSAssetLibrary(ctx context.Context, config *model.ChannelAssetConfig, method string, assetId string, input any, output any) (err error) {
+	channelID := 0
+	if config != nil {
+		channelID = config.ChannelId
+	}
+	span := startAssetLibraryStage(ctx, "upstream_request", method, "", channelID)
+	span.stage.Backend = "seedance_sls"
+	defer func() { span.finish(err) }()
 	if config == nil || !config.Enabled {
 		return errors.New("asset library is not enabled for channel")
 	}
@@ -349,6 +356,8 @@ func callSeedanceSLSAssetLibrary(ctx context.Context, config *model.ChannelAsset
 	if err != nil {
 		return err
 	}
+	span.stage.HTTPStatus = response.StatusCode
+	span.stage.UpstreamRequestID = assetTimingIdentifier(response.Header.Get("X-Request-Id"))
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {

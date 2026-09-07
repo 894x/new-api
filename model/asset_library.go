@@ -86,6 +86,13 @@ func (UserAssetGroupReplica) TableName() string {
 }
 
 type UserAssetReplica struct {
+	UploadStartedAtMS  int64 `json:"-" gorm:"type:bigint"`
+	SubmittedAtMS      int64 `json:"-" gorm:"type:bigint"`
+	FirstActiveAtMS    int64 `json:"-" gorm:"type:bigint"`
+	LastPolledAtMS     int64 `json:"-" gorm:"type:bigint"`
+	LastProcessingAtMS int64 `json:"-" gorm:"type:bigint"`
+	PollCount          int64 `json:"-" gorm:"type:bigint"`
+
 	Id                int    `json:"id" gorm:"primaryKey"`
 	AssetId           string `json:"asset_id" gorm:"type:varchar(64);not null;uniqueIndex:idx_asset_replica,priority:1"`
 	ChannelId         int    `json:"channel_id" gorm:"not null;uniqueIndex:idx_asset_replica,priority:2;index"`
@@ -372,9 +379,15 @@ func SaveUserAssetReplica(replica *UserAssetReplica) error {
 	}
 	return DB.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "asset_id"}, {Name: "channel_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
+		DoUpdates: append(clause.AssignmentColumns([]string{
 			"upstream_asset_id", "state", "upstream_status", "last_error_code", "last_error",
 			"last_inference_time", "updated_time",
+			"upload_started_at_ms", "submitted_at_ms", "last_polled_at_ms", "last_processing_at_ms", "poll_count",
+		}), clause.Assignment{
+			Column: clause.Column{Name: "first_active_at_ms"},
+			Value: gorm.Expr("CASE WHEN COALESCE(?, 0) > 0 THEN ? ELSE ? END",
+				clause.Column{Table: "user_asset_replicas", Name: "first_active_at_ms"},
+				clause.Column{Table: "user_asset_replicas", Name: "first_active_at_ms"}, replica.FirstActiveAtMS),
 		}),
 	}).Create(replica).Error
 }

@@ -56,7 +56,14 @@ type assetLibraryResultEnvelope struct {
 	Result any `json:"Result"`
 }
 
-func CallAssetLibraryUpstream(ctx context.Context, config *model.ChannelAssetConfig, action string, input any, output any) error {
+func CallAssetLibraryUpstream(ctx context.Context, config *model.ChannelAssetConfig, action string, input any, output any) (err error) {
+	channelID := 0
+	if config != nil {
+		channelID = config.ChannelId
+	}
+	span := startAssetLibraryStage(ctx, "upstream_request", action, "", channelID)
+	span.stage.Backend = "action"
+	defer func() { span.finish(err) }()
 	if config == nil || !config.Enabled {
 		return errors.New("asset library is not enabled for channel")
 	}
@@ -109,6 +116,8 @@ func CallAssetLibraryUpstream(ctx context.Context, config *model.ChannelAssetCon
 	if err != nil {
 		return err
 	}
+	span.stage.HTTPStatus = response.StatusCode
+	span.stage.UpstreamRequestID = assetTimingIdentifier(response.Header.Get("X-Request-Id"))
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
@@ -120,6 +129,9 @@ func CallAssetLibraryUpstream(ctx context.Context, config *model.ChannelAssetCon
 			return &AssetLibraryUpstreamError{StatusCode: response.StatusCode, Message: http.StatusText(response.StatusCode)}
 		}
 		return fmt.Errorf("decode asset library response: %w", err)
+	}
+	if id := assetTimingIdentifier(envelope.ResponseMetadata.RequestId); id != "" {
+		span.stage.UpstreamRequestID = id
 	}
 	if envelope.Result == nil {
 		var resultEnvelope assetLibraryResultEnvelope
