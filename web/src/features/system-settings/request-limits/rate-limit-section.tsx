@@ -302,11 +302,21 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                     />
                   )}
                 </FormControl>
+                <FormDescription>
+                  {t(
+                    'Each user and model is counted separately. Empty fields inherit the group limits; 0 = unlimited.'
+                  )}
+                </FormDescription>
                 {!useVisualEditor && (
                   <FormDescription>
                     <div className='space-y-1 text-xs'>
                       <p className='font-semibold'>{t('Format:')}</p>
                       <ul className='list-inside list-disc space-y-0.5 pl-2'>
+                        <li>
+                          {t('Model rules')}
+                          {': '}
+                          <code>{`{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"rpm":30,"tpm":10000}}}}`}</code>
+                        </li>
                         <li>
                           {t('JSON object:')}{' '}
                           {`{"groupName": [maxRequests, maxSuccess, tpm]}`}

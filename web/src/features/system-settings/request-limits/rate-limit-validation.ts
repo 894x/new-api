@@ -16,6 +16,67 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+export type ModelRateLimit = { rpm?: number | null; tpm?: number | null }
+export type GroupRateLimit = {
+  limits: [number, number, number]
+  models: Record<string, ModelRateLimit>
+}
+
+export function parseGroupRateLimit(value: unknown): GroupRateLimit | null {
+  let limits: unknown = value
+  let models: unknown = {}
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const config = value as Record<string, unknown>
+    if (
+      Object.keys(config).some((key) => key !== 'limits' && key !== 'models')
+    ) {
+      return null
+    }
+    limits = config.limits
+    models = config.models === undefined ? {} : config.models
+  }
+  if (!Array.isArray(limits) || (limits.length !== 2 && limits.length !== 3)) {
+    return null
+  }
+  if (
+    !limits.every(
+      (limit) => Number.isInteger(limit) && limit >= 0 && limit <= 2147483647
+    )
+  ) {
+    return null
+  }
+  if (limits[1] < 1) return null
+  if (typeof models !== 'object' || models === null || Array.isArray(models)) {
+    return null
+  }
+  for (const [name, rule] of Object.entries(models)) {
+    if (
+      !name.trim() ||
+      typeof rule !== 'object' ||
+      rule === null ||
+      Array.isArray(rule)
+    ) {
+      return null
+    }
+    for (const [key, limit] of Object.entries(rule)) {
+      if (key !== 'rpm' && key !== 'tpm') return null
+      if (
+        limit !== null &&
+        (!Number.isInteger(limit) ||
+          typeof limit !== 'number' ||
+          limit < 0 ||
+          limit > 2147483647)
+      ) {
+        return null
+      }
+    }
+  }
+  return {
+    limits: [limits[0], limits[1], limits[2] ?? 0],
+    models: models as Record<string, ModelRateLimit>,
+  }
+}
+
 export function isValidRateLimitJSON(value: string | undefined): boolean {
   if (!value || value.trim() === '') return true
 
@@ -29,25 +90,9 @@ export function isValidRateLimitJSON(value: string | undefined): boolean {
       return false
     }
 
-    for (const limits of Object.values(parsed)) {
-      if (
-        !Array.isArray(limits) ||
-        (limits.length !== 2 && limits.length !== 3)
-      ) {
-        return false
-      }
-      if (!limits.every((limit) => Number.isInteger(limit))) return false
-      const [maxRequests, maxSuccess, tpm = 0] = limits
-      if (maxRequests < 0 || maxSuccess < 1 || tpm < 0) return false
-      if (
-        maxRequests > 2147483647 ||
-        maxSuccess > 2147483647 ||
-        tpm > 2147483647
-      ) {
-        return false
-      }
-    }
-    return true
+    return Object.values(parsed).every(
+      (value) => parseGroupRateLimit(value) !== null
+    )
   } catch {
     return false
   }

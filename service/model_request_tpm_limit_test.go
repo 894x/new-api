@@ -112,6 +112,46 @@ func TestResolveModelRequestTPMLimitIsUnlimitedWhenRateLimitingIsDisabled(t *tes
 	assert.Zero(t, ResolveModelRequestTPMLimit(ctx))
 }
 
+func TestModelTPMOverridesInheritPerField(t *testing.T) {
+	useModelRequestTPMSettings(t, true, 1000, `{"vip":{"limits":[200,100,60000],"models":{"rpm-only":{"rpm":30},"limited":{"tpm":100},"unlimited":{"tpm":0}}}}`)
+	for _, test := range []struct {
+		model string
+		want  int
+	}{
+		{"rpm-only", 60000}, {"limited", 100}, {"unlimited", 0}, {"unconfigured", 60000},
+	} {
+		ctx := newModelRequestTPMTestContext()
+		common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "vip")
+		common.SetContextKey(ctx, constant.ContextKeyOriginalModel, test.model)
+		assert.Equal(t, test.want, ResolveModelRequestTPMLimit(ctx), test.model)
+	}
+}
+
+func TestModelTPMReservationsAreIndependentByUserAndModel(t *testing.T) {
+	for _, useRedis := range []bool{false, true} {
+		t.Run(fmt.Sprint(useRedis), func(t *testing.T) {
+			if useRedis {
+				useModelRequestTPMRedis(t)
+			} else {
+				useModelRequestTPMMemory(t)
+			}
+			for _, request := range []struct {
+				user  int
+				model string
+				want  bool
+			}{
+				{501, "gpt-5", true}, {501, "gpt-5", false}, {501, "claude-sonnet", true}, {502, "gpt-5", true},
+			} {
+				ctx := newModelRequestTPMTestContext()
+				common.SetContextKey(ctx, constant.ContextKeyOriginalModel, request.model)
+				allowed, _, err := ReserveModelRequestTPM(ctx, request.user, 100, 60)
+				require.NoError(t, err)
+				assert.Equal(t, request.want, allowed, "%d/%s", request.user, request.model)
+			}
+		})
+	}
+}
+
 func TestRedisModelRequestTPMSettlementReplacesEstimateWithActualUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	useModelRequestTPMRedis(t)

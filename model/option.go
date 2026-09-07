@@ -264,6 +264,9 @@ func validateOptionValue(key string, value string) error {
 	if key == "ModelRequestRateLimitTPM" {
 		return setting.ValidateModelRequestRateLimitTPM(value)
 	}
+	if key == "ModelRequestRateLimitGroup" {
+		return setting.CheckModelRequestRateLimitGroup(value)
+	}
 	if key == "GroupRatio" {
 		return ratio_setting.CheckGroupRatio(value)
 	}

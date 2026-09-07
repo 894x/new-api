@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -21,6 +22,8 @@ const (
 	ModelRequestRateLimitSuccessCountMark = "MRRLS"
 	modelRateLimitTimeFormat              = "2006-01-02T15:04:05.000Z"
 )
+
+var modelRequestMemoryRateLimiter = &common.InMemoryRateLimiter{}
 
 // 检查Redis中的请求限制
 func checkRedisRateLimit(ctx context.Context, rdb *redis.Client, key string, maxCount int, duration int64) (bool, error) {
@@ -79,6 +82,9 @@ func recordRedisRequest(ctx context.Context, rdb *redis.Client, key string, maxC
 func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userId := strconv.Itoa(c.GetInt("id"))
+		if modelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel); modelName != "" {
+			userId += fmt.Sprintf(":model:%x", sha256.Sum256([]byte(modelName)))
+		}
 		ctx := context.Background()
 		rdb := common.RDB
 
@@ -115,7 +121,8 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 			}
 
 			if !allowed {
-				abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次，包括失败次数，请检查您的请求是否正确", setting.ModelRequestRateLimitDurationMinutes, totalMaxCount))
+				abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次，包括失败次数，请检查您的请求是否正确", duration/60, totalMaxCount))
+				return
 			}
 		}
 
@@ -131,15 +138,19 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 
 // 内存限流处理器
 func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
-	inMemoryRateLimiter.Init(time.Duration(setting.ModelRequestRateLimitDurationMinutes) * time.Minute)
+	memoryLimiter := modelRequestMemoryRateLimiter
+	memoryLimiter.Init(time.Duration(max(setting.ModelRequestRateLimitDurationMinutes, 1)) * time.Minute)
 
 	return func(c *gin.Context) {
 		userId := strconv.Itoa(c.GetInt("id"))
+		if modelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel); modelName != "" {
+			userId += fmt.Sprintf(":model:%x", sha256.Sum256([]byte(modelName)))
+		}
 		totalKey := ModelRequestRateLimitCountMark + userId
 		successKey := ModelRequestRateLimitSuccessCountMark + userId
 
 		// 1. 检查总请求数限制（当totalMaxCount为0时跳过）
-		if totalMaxCount > 0 && !inMemoryRateLimiter.Request(totalKey, totalMaxCount, duration) {
+		if totalMaxCount > 0 && !memoryLimiter.Request(totalKey, totalMaxCount, duration) {
 			c.Status(http.StatusTooManyRequests)
 			c.Abort()
 			return
@@ -148,7 +159,7 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 		// 2. 检查成功请求数限制
 		// 使用一个临时key来检查限制，这样可以避免实际记录
 		checkKey := successKey + "_check"
-		if !inMemoryRateLimiter.Request(checkKey, successMaxCount, duration) {
+		if successMaxCount > 0 && !memoryLimiter.Request(checkKey, successMaxCount, duration) {
 			c.Status(http.StatusTooManyRequests)
 			c.Abort()
 			return
@@ -158,8 +169,8 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 		c.Next()
 
 		// 4. 如果请求成功，记录到实际的成功请求计数中
-		if c.Writer.Status() < 400 {
-			inMemoryRateLimiter.Request(successKey, successMaxCount, duration)
+		if successMaxCount > 0 && c.Writer.Status() < 400 {
+			memoryLimiter.Request(successKey, successMaxCount, duration)
 		}
 	}
 }
@@ -173,10 +184,13 @@ func ModelRequestRateLimit() func(c *gin.Context) {
 			return
 		}
 
-		// 计算限流参数
-		duration := int64(setting.ModelRequestRateLimitDurationMinutes * 60)
-		totalMaxCount := setting.ModelRequestRateLimitCount
-		successMaxCount := setting.ModelRequestRateLimitSuccessCount
+		// Reuse the distributor's protocol-aware model extraction. Invalid
+		// requests keep the legacy user bucket and are rejected by Distribute.
+		modelName := ""
+		if request, _, err := getModelRequest(c); err == nil {
+			modelName = request.Model
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, modelName)
+		}
 
 		// 获取分组
 		group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
@@ -184,12 +198,7 @@ func ModelRequestRateLimit() func(c *gin.Context) {
 			group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 		}
 
-		//获取分组的限流配置
-		groupTotalCount, groupSuccessCount, _, found := setting.GetGroupRateLimit(group)
-		if found {
-			totalMaxCount = groupTotalCount
-			successMaxCount = groupSuccessCount
-		}
+		totalMaxCount, successMaxCount, _, duration := setting.ResolveGroupModelRateLimit(group, modelName)
 
 		// 根据存储类型选择并执行限流处理器
 		if common.RedisEnabled {

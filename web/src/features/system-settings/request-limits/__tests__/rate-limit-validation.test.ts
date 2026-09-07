@@ -18,11 +18,31 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 
-import { describe, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 
 import { isValidRateLimitJSON } from '../rate-limit-validation'
 
 describe('group rate limit JSON validation', () => {
+  test('accepts model RPM and TPM overrides with independent inheritance and explicit unlimited', () => {
+    expect(
+      isValidRateLimitJSON(
+        '{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"rpm":30},"claude-sonnet":{"tpm":0},"inherited":{}}}}'
+      )
+    ).toBe(true)
+  })
+
+  test.each([
+    '{"vip":{"models":{"gpt-5":{"rpm":30}}}}',
+    '{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"rpm":-1}}}}',
+    '{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"tpm":2147483648}}}}',
+    '{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"rpm":1.5}}}}',
+    '{"vip":{"limits":[200,100,60000],"models":{"":{"rpm":1}}}}',
+    '{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"rmp":1}}}}',
+    '{"vip":{"limits":[200,100,60000],"models":{"gpt-5":null}}}',
+  ])('rejects invalid model rules: %s', (value) => {
+    expect(isValidRateLimitJSON(value)).toBe(false)
+  })
+
   test('accepts legacy limits and limits with TPM', () => {
     assert.equal(isValidRateLimitJSON('{"default":[200,100]}'), true)
     assert.equal(isValidRateLimitJSON('{"vip":[0,1000,60000]}'), true)

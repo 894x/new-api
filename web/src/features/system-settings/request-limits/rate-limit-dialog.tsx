@@ -35,6 +35,8 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 
+import { RateLimitModelRulesEditor } from './rate-limit-model-rules-editor'
+
 const rateLimitDialogSchema = z.object({
   groupName: z.string().min(1, 'Group name is required'),
   maxRequests: z
@@ -49,18 +51,46 @@ const rateLimitDialogSchema = z.object({
     .number()
     .min(0, 'Must be ≥ 0')
     .max(2147483647, 'Must be ≤ 2,147,483,647'),
+  models: z
+    .array(
+      z.object({
+        modelName: z
+          .string()
+          .refine((name) => name.trim().length > 0, 'Model name is required'),
+        rpm: z
+          .number()
+          .int('Must be an integer')
+          .min(0, 'Must be ≥ 0')
+          .max(2147483647, 'Must be ≤ 2,147,483,647')
+          .nullish(),
+        tpm: z
+          .number()
+          .int('Must be an integer')
+          .min(0, 'Must be ≥ 0')
+          .max(2147483647, 'Must be ≤ 2,147,483,647')
+          .nullish(),
+      })
+    )
+    .superRefine((rules, ctx) => {
+      const names = new Set<string>()
+      rules.forEach((rule, index) => {
+        if (names.has(rule.modelName)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [index, 'modelName'],
+            message: 'Model names must be unique',
+          })
+        }
+        names.add(rule.modelName)
+      })
+    }),
 })
 
-type RateLimitDialogFormValues = z.infer<typeof rateLimitDialogSchema>
+export type RateLimitDialogFormValues = z.infer<typeof rateLimitDialogSchema>
 
 const RATE_LIMIT_FORM_ID = 'rate-limit-form'
 
-export type RateLimitEntryData = {
-  groupName: string
-  maxRequests: number
-  maxSuccess: number
-  maxTPM: number
-}
+export type RateLimitEntryData = RateLimitDialogFormValues
 
 type RateLimitDialogProps = {
   open: boolean
@@ -85,6 +115,7 @@ export function RateLimitDialog({
       maxRequests: 0,
       maxSuccess: 1,
       maxTPM: 0,
+      models: [],
     },
   })
 
@@ -97,6 +128,7 @@ export function RateLimitDialog({
         maxRequests: 0,
         maxSuccess: 1,
         maxTPM: 0,
+        models: [],
       })
     }
   }, [editData, form, open])
@@ -117,7 +149,7 @@ export function RateLimitDialog({
       description={t(
         'Configure rate limiting rules for a specific user group.'
       )}
-      contentClassName='sm:max-w-[500px]'
+      contentClassName='sm:max-w-[680px]'
       contentHeight='auto'
       bodyClassName='space-y-4'
       footer={
@@ -258,6 +290,7 @@ export function RateLimitDialog({
               </FormItem>
             )}
           />
+          <RateLimitModelRulesEditor />
         </form>
       </Form>
     </Dialog>

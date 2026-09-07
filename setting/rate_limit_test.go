@@ -88,3 +88,26 @@ func TestGetGroupRateLimitReturnsConfiguredTPM(t *testing.T) {
 	assert.Equal(t, 1000, successCount)
 	assert.Equal(t, 60000, tpm)
 }
+
+func TestGroupModelRateLimitsRoundTripAndRejectInvalidOverrides(t *testing.T) {
+	previous := ModelRequestRateLimitGroup2JSONString()
+	t.Cleanup(func() { require.NoError(t, UpdateModelRequestRateLimitGroupByJSONString(previous)) })
+	config := `{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"rpm":30},"claude-sonnet":{"tpm":0}}},"legacy":[200,100]}`
+	require.NoError(t, UpdateModelRequestRateLimitGroupByJSONString(config))
+	saved := ModelRequestRateLimitGroup2JSONString()
+	assert.JSONEq(t, `{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"rpm":30},"claude-sonnet":{"tpm":0}}},"legacy":[200,100,0]}`, saved)
+	for _, invalid := range []string{
+		`{"vip":{"models":{"gpt-5":{"rpm":30}}}}`,
+		`{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"rpm":-1}}}}`,
+		`{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"tpm":2147483648}}}}`,
+		`{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"rpm":1.5}}}}`,
+		`{"vip":{"limits":[200,100,60000],"models":{"":{"rpm":1}}}}`,
+		`{"vip":{"limits":[200,100,60000],"models":{"gpt-5":{"rmp":1}}}}`,
+		`{"vip":{"limits":[200,100,60000],"models":{"gpt-5":null}}}`,
+	} {
+		t.Run(invalid, func(t *testing.T) {
+			assert.Error(t, UpdateModelRequestRateLimitGroupByJSONString(invalid))
+			assert.JSONEq(t, saved, ModelRequestRateLimitGroup2JSONString(), "invalid updates must preserve active limits")
+		})
+	}
+}

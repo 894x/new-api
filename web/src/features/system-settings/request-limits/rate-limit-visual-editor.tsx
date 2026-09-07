@@ -28,6 +28,10 @@ import { Input } from '@/components/ui/input'
 import { safeJsonParseWithValidation } from '../utils/json-parser'
 import { isObjectRecord } from '../utils/json-validators'
 import { RateLimitDialog, type RateLimitEntryData } from './rate-limit-dialog'
+import {
+  isValidRateLimitJSON,
+  parseGroupRateLimit,
+} from './rate-limit-validation'
 
 type RateLimitVisualEditorProps = {
   value: string
@@ -56,19 +60,19 @@ export function RateLimitVisualEditor({
     })
 
     return Object.entries(parsed)
-      .map(([groupName, limits]) => {
-        if (
-          Array.isArray(limits) &&
-          (limits.length === 2 || limits.length === 3) &&
-          typeof limits[0] === 'number' &&
-          typeof limits[1] === 'number' &&
-          (limits[2] === undefined || typeof limits[2] === 'number')
-        ) {
+      .map(([groupName, limits]): RateLimitEntry | null => {
+        const config = parseGroupRateLimit(limits)
+        if (config) {
           return {
             groupName,
-            maxRequests: limits[0],
-            maxSuccess: limits[1],
-            maxTPM: limits[2] ?? 0,
+            maxRequests: config.limits[0],
+            maxSuccess: config.limits[1],
+            maxTPM: config.limits[2],
+            models: Object.entries(config.models).map(([modelName, rule]) => ({
+              modelName,
+              rpm: rule.rpm ?? null,
+              tpm: rule.tpm ?? null,
+            })),
           }
         }
         return null
@@ -95,7 +99,19 @@ export function RateLimitVisualEditor({
       delete parsed[editData.groupName]
     }
 
-    parsed[data.groupName] = [data.maxRequests, data.maxSuccess, data.maxTPM]
+    const limits = [data.maxRequests, data.maxSuccess, data.maxTPM]
+    parsed[data.groupName] =
+      data.models.length > 0
+        ? {
+            limits,
+            models: Object.fromEntries(
+              data.models.map((rule) => [
+                rule.modelName,
+                { rpm: rule.rpm ?? undefined, tpm: rule.tpm ?? undefined },
+              ])
+            ),
+          }
+        : limits
 
     onChange(JSON.stringify(parsed, null, 2))
   }
@@ -122,6 +138,14 @@ export function RateLimitVisualEditor({
     setDialogOpen(true)
   }
 
+  if (!isValidRateLimitJSON(value)) {
+    return (
+      <p role='alert' className='text-destructive text-sm'>
+        {t('Invalid JSON format or values out of allowed range')}
+      </p>
+    )
+  }
+
   return (
     <div className='space-y-4'>
       <div className='flex items-center gap-4'>
@@ -134,7 +158,7 @@ export function RateLimitVisualEditor({
             className='pl-9'
           />
         </div>
-        <Button onClick={handleAdd}>
+        <Button type='button' onClick={handleAdd}>
           <Plus className='mr-2 h-4 w-4' />
           {t('Add group')}
         </Button>
@@ -193,6 +217,11 @@ export function RateLimitVisualEditor({
                   : limit.maxTPM.toLocaleString()}
               </span>
             ),
+          },
+          {
+            id: 'models',
+            header: t('Model rules'),
+            cell: (limit) => limit.models.length,
           },
           {
             id: 'actions',

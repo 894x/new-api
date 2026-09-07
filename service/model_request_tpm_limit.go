@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strconv"
@@ -96,15 +97,11 @@ func ResolveModelRequestTPMLimit(c *gin.Context) int {
 		return 0
 	}
 
-	limit := setting.ModelRequestRateLimitTPM
 	group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
 	if group == "" {
 		group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 	}
-	_, _, groupTPM, found := setting.GetGroupRateLimit(group)
-	if found {
-		limit = groupTPM
-	}
+	_, _, limit, _ := setting.ResolveGroupModelRateLimit(group, common.GetContextKeyString(c, constant.ContextKeyOriginalModel))
 	if limit < 0 {
 		return 0
 	}
@@ -123,6 +120,9 @@ func ReserveModelRequestTPM(c *gin.Context, userID, limit, estimatedTokens int) 
 	}
 
 	key := fmt.Sprintf("rateLimit:v2:user:%s:%d", modelRequestTPMRedisMark, userID)
+	if modelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel); modelName != "" {
+		key += fmt.Sprintf(":model:%x", sha256.Sum256([]byte(modelName)))
+	}
 	requested := int64(estimatedTokens)
 	if common.RedisEnabled {
 		allowed, retryAfter, err := reserveRedisModelRequestTPM(c, key, int64(limit), requested)
