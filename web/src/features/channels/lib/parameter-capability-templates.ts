@@ -89,6 +89,17 @@ export function applyParameterCapabilityTemplate(
       on_violation: 'reject',
       participate_in_selection: false,
     },
+    frames: {
+      supported: false,
+      on_violation: 'reject',
+      participate_in_selection: false,
+    },
+    draft: {
+      supported: true,
+      allowed_values: ['false'],
+      on_violation: 'reject',
+      participate_in_selection: false,
+    },
     service_tier: {
       supported: true,
       allowed_values: ['default'],

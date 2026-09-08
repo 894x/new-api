@@ -89,6 +89,30 @@ describe('Seedance capability templates', () => {
     }
   })
 
+  it.each(PARAMETER_CAPABILITY_TEMPLATES)(
+    'rejects frames and enabled draft for $name while accepting omitted parameters and disabled draft',
+    (template) => {
+      const config = applyParameterCapabilityTemplate(
+        {},
+        template,
+        template.model,
+        false
+      )
+      for (const request of [{ frames: 29 }, { frames: 0 }, { draft: true }]) {
+        expect(
+          evaluateParameterCapabilities(config, template.model, request)
+            .compatible
+        ).toBe(false)
+      }
+      for (const request of [{}, { draft: false }]) {
+        expect(
+          evaluateParameterCapabilities(config, template.model, request)
+            .compatible
+        ).toBe(true)
+      }
+    }
+  )
+
   it('preserves existing effective constraints unless replacement is requested and does not duplicate rules', () => {
     const template = PARAMETER_CAPABILITY_TEMPLATES[0]
     const source = { defaults: { duration: { min: 5, max: 10 } } }
