@@ -28,6 +28,11 @@ export interface ModelChannelCapabilityGroup {
 }
 
 export interface ModelParameterCapability {
+  transform?:
+    | 'none'
+    | 'image_url_to_base64'
+    | 'audio_url_to_base64'
+    | 'video_url_to_base64'
   supported?: boolean
   min?: number
   max?: number

@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 
 import { Window } from 'happy-dom'
-import { afterAll, afterEach, describe, test } from 'vitest'
+import { afterAll, afterEach, describe, expect, test } from 'vitest'
 
 const domWindow = new Window()
 const domGlobals = [
@@ -180,5 +180,28 @@ describe('ParameterCapabilityEditorDialog JSON editing', () => {
 
     assert.deepEqual(saved, [])
     assert.equal(textarea.value, '{"defaults":')
+  })
+
+  test('saves a media conversion selected in the capability form', async () => {
+    const saved: string[] = []
+    rendered = await renderDialog((value) => saved.push(value))
+    await enterJsonDraft(
+      '{"defaults":{"messages.*.content.*.image_url":{"supported":true}}}'
+    )
+    await act(async () => findButton('Capabilities')?.click())
+    const { getByRole, getByLabelText } = await import('@testing-library/dom')
+    const trigger = getByLabelText(document.body, 'Input conversion')
+    await act(async () => trigger.click())
+    await act(async () =>
+      getByRole(document.body, 'option', {
+        name: 'Image URL to Base64',
+      }).click()
+    )
+    expect(trigger.textContent).toContain('Image URL to Base64')
+    await act(async () => findButton('Save')?.click())
+    expect(saved).toHaveLength(1)
+    expect(
+      JSON.parse(saved[0]).defaults['messages.*.content.*.image_url'].transform
+    ).toBe('image_url_to_base64')
   })
 })

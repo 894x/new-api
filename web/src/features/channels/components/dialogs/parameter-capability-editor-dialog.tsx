@@ -831,12 +831,19 @@ function ParameterCapabilityRow(props: {
     value: option.value,
     label: t(option.label),
   }))
-  const selectionValue =
-    capability.participate_in_selection === undefined
-      ? 'inherit'
-      : capability.participate_in_selection
-        ? 'enabled'
-        : 'disabled'
+  const transformItems = [
+    { value: 'inherit', label: t('Inherit') },
+    { value: 'none', label: t('No conversion') },
+    { value: 'image_url_to_base64', label: t('Image URL to Base64') },
+    { value: 'audio_url_to_base64', label: t('Audio URL to Base64') },
+    { value: 'video_url_to_base64', label: t('Video URL to Base64') },
+  ]
+  let selectionValue = 'inherit'
+  if (capability.participate_in_selection !== undefined) {
+    selectionValue = capability.participate_in_selection
+      ? 'enabled'
+      : 'disabled'
+  }
   return (
     <div className='flex flex-col gap-4 rounded-lg border p-4'>
       <div className='flex items-center gap-3'>
@@ -863,7 +870,51 @@ function ParameterCapabilityRow(props: {
           <Trash2 aria-hidden='true' />
         </Button>
       </div>
-      <FieldGroup className='grid grid-cols-2 gap-3 lg:grid-cols-6'>
+      <FieldGroup className='grid grid-cols-2 gap-3 lg:grid-cols-3'>
+        <Field className='col-span-2 lg:col-span-3'>
+          <FieldLabel htmlFor={`${props.path}-transform`}>
+            {t('Input conversion')}
+          </FieldLabel>
+          <Select
+            items={transformItems}
+            value={capability.transform ?? 'inherit'}
+            onValueChange={(value) =>
+              props.onChange({
+                ...capability,
+                transform:
+                  value === 'inherit'
+                    ? undefined
+                    : (value as ParameterCapability['transform']),
+              })
+            }
+          >
+            <SelectTrigger id={`${props.path}-transform`} className='w-full'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                {transformItems.map((item) => (
+                  <SelectItem
+                    key={item.value}
+                    value={item.value}
+                    disabled={
+                      isBillingSensitiveParameter(props.path) &&
+                      item.value !== 'inherit' &&
+                      item.value !== 'none'
+                    }
+                  >
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <FieldDescription>
+            {t(
+              'Downloads HTTP(S) media locally before validation. Requires body pass-through off. URL fields use data URLs; input_audio uses MP3/WAV Base64.'
+            )}
+          </FieldDescription>
+        </Field>
         <Field>
           <FieldLabel htmlFor={`${props.path}-support`}>
             {t('Support status')}
@@ -1023,6 +1074,14 @@ function ParameterCapabilityRow(props: {
 
 function CapabilitySummary(props: { capability: ParameterCapability }) {
   const { t } = useTranslation()
+  if (props.capability.transform && props.capability.transform !== 'none') {
+    const labels = {
+      image_url_to_base64: t('Image URL to Base64'),
+      audio_url_to_base64: t('Audio URL to Base64'),
+      video_url_to_base64: t('Video URL to Base64'),
+    }
+    return <Badge variant='outline'>{labels[props.capability.transform]}</Badge>
+  }
   if (props.capability.supported === false) {
     return <Badge variant='outline'>{t('Unsupported')}</Badge>
   }
@@ -1064,6 +1123,11 @@ function CapabilityValidationPanel(props: {
   })
 
   const evaluation = evaluateParameterCapabilities(props.config, model, request)
+  let evaluationLabel = t('Compatible')
+  if (!evaluation.compatible) evaluationLabel = t('Rejected')
+  else if (evaluation.evaluations.some((item) => item.status === 'pending')) {
+    evaluationLabel = t('Download required')
+  }
 
   function runValidation(): void {
     try {
@@ -1153,7 +1217,7 @@ function CapabilityValidationPanel(props: {
             <Badge
               variant={evaluation.compatible ? 'secondary' : 'destructive'}
             >
-              {evaluation.compatible ? t('Compatible') : t('Rejected')}
+              {evaluationLabel}
             </Badge>
             <span className='text-muted-foreground text-sm'>
               {t('{{count}} evaluated parameter(s)', {
@@ -1225,6 +1289,8 @@ function CapabilityStatusLabel(props: {
 }) {
   const { t } = useTranslation()
   switch (props.status) {
+    case 'pending':
+      return t('Download required')
     case 'compatible':
       return t('Compatible')
     case 'rejected':
@@ -1241,6 +1307,10 @@ function CapabilityEvaluationMessage(props: {
 }) {
   const { t } = useTranslation()
   switch (props.evaluation.reason) {
+    case 'media_download_required':
+      return t(
+        'Media downloads run on the server; this preview does not fetch URLs.'
+      )
     case 'compatible':
       return t('Compatible')
     case 'unsupported':
@@ -1286,6 +1356,10 @@ function CapabilityConfigErrorMessage(props: {
         scope: props.error.scope,
         path: props.error.path,
       })
+    case 'invalid_media_constraints':
+      return t(
+        'Media conversion cannot use numeric, allowed-value, or billing constraints.'
+      )
     case 'unsafe_billing_action':
       return t(
         '{{scope}}: {{path}} affects billing and must reject incompatible values',

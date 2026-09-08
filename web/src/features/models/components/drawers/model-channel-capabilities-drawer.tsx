@@ -89,6 +89,15 @@ function CapabilityValue(props: {
 }) {
   const { t } = useTranslation()
   const parts: string[] = []
+  if (props.capability.transform) {
+    const labels = {
+      none: t('No conversion'),
+      image_url_to_base64: t('Image URL to Base64'),
+      audio_url_to_base64: t('Audio URL to Base64'),
+      video_url_to_base64: t('Video URL to Base64'),
+    }
+    parts.push(labels[props.capability.transform])
+  }
   if (props.capability.supported === true) parts.push(t('Supported'))
   if (props.capability.supported === false) parts.push(t('Unsupported'))
   if (props.capability.min !== undefined) {

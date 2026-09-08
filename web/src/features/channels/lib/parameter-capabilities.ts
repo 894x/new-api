@@ -39,6 +39,36 @@ export const PARAMETER_CAPABILITY_CATALOG = [
     kind: 'presence',
   },
   { path: 'size', category: 'Multimodal', kind: 'enum' },
+  {
+    path: 'messages.*.content.*.input_audio',
+    category: 'Multimodal',
+    kind: 'presence',
+  },
+  {
+    path: 'messages.*.content.*.audio_url',
+    category: 'Multimodal',
+    kind: 'presence',
+  },
+  {
+    path: 'messages.*.content.*.video_url',
+    category: 'Multimodal',
+    kind: 'presence',
+  },
+  {
+    path: 'input.*.content.*.image_url',
+    category: 'Multimodal',
+    kind: 'presence',
+  },
+  {
+    path: 'input.*.content.*.input_audio',
+    category: 'Multimodal',
+    kind: 'presence',
+  },
+  {
+    path: 'input.*.content.*.video_url',
+    category: 'Multimodal',
+    kind: 'presence',
+  },
   { path: 'quality', category: 'Multimodal', kind: 'enum' },
 ] as const
 
@@ -52,7 +82,7 @@ export interface ResolvedParameterCapability {
 
 export interface CapabilityEvaluation {
   parameter: string
-  status: 'compatible' | 'rejected' | 'dropped' | 'clamped'
+  status: 'compatible' | 'rejected' | 'dropped' | 'clamped' | 'pending'
   reason:
     | 'compatible'
     | 'unsupported'
@@ -60,6 +90,7 @@ export interface CapabilityEvaluation {
     | 'minimum'
     | 'maximum'
     | 'allowed_values'
+    | 'media_download_required'
   constraint?: number | string
   from?: unknown
   to?: unknown
@@ -78,6 +109,7 @@ export interface ParameterCapabilityConfigError {
     | 'inverted_range'
     | 'clamp_without_boundary'
     | 'unsafe_billing_action'
+    | 'invalid_media_constraints'
   scope: string
   path?: string
 }
@@ -185,12 +217,20 @@ function isParameterCapability(value: unknown): value is ParameterCapability {
       'allowed_values',
       'on_violation',
       'participate_in_selection',
+      'transform',
     ])
   ) {
     return false
   }
 
   return (
+    (value.transform === undefined ||
+      [
+        'none',
+        'image_url_to_base64',
+        'audio_url_to_base64',
+        'video_url_to_base64',
+      ].includes(String(value.transform))) &&
     (value.supported === undefined || typeof value.supported === 'boolean') &&
     (value.min === undefined ||
       (typeof value.min === 'number' && Number.isFinite(value.min))) &&
@@ -323,6 +363,24 @@ export function evaluateParameterCapabilities(
     const currentValues = getPathValues(request, parameter)
     if (action === 'drop') currentValues.reverse()
     for (const current of currentValues) {
+      if (
+        capability.transform &&
+        capability.transform !== 'none' &&
+        capability.supported !== false
+      ) {
+        let source: unknown = current.value
+        if (isPlainRecord(current.value)) {
+          source = current.value.url ?? current.value.data
+        }
+        if (typeof source === 'string' && /^https?:\/\//i.test(source)) {
+          evaluations.push({
+            parameter: current.path,
+            status: 'pending',
+            reason: 'media_download_required',
+          })
+          continue
+        }
+      }
       let reason: CapabilityEvaluation['reason'] | '' = ''
       let constraint: number | string | undefined
       let clampValue: number | undefined
@@ -415,14 +473,17 @@ function mergeCapabilities(
 ): void {
   for (const [path, override] of Object.entries(source)) {
     const current = target[path]?.capability || {}
+    const definedOverride = Object.fromEntries(
+      Object.entries(override).filter(([, value]) => value !== undefined)
+    )
     target[path] = {
       capability: {
         ...current,
-        ...override,
-        allowed_values:
-          override.allowed_values?.length === 0
-            ? current.allowed_values
-            : override.allowed_values,
+        ...definedOverride,
+        transform: override.transform ?? current.transform,
+        allowed_values: override.allowed_values?.length
+          ? override.allowed_values
+          : current.allowed_values,
       },
       source: sourceLabel,
     }
@@ -448,6 +509,16 @@ function validateCapabilityMap(
   errors: ParameterCapabilityConfigError[]
 ): void {
   for (const [path, capability] of Object.entries(parameters)) {
+    if (
+      capability.transform &&
+      capability.transform !== 'none' &&
+      (isBillingSensitiveParameter(path) ||
+        capability.min !== undefined ||
+        capability.max !== undefined ||
+        capability.allowed_values?.length)
+    ) {
+      errors.push({ code: 'invalid_media_constraints', scope, path })
+    }
     if (!PARAMETER_PATH_PATTERN.test(path)) {
       errors.push({ code: 'invalid_path', scope, path })
     }
@@ -535,8 +606,9 @@ function setPathValue(
         !Number.isInteger(arrayIndex) ||
         arrayIndex < 0 ||
         arrayIndex >= current.length
-      )
+      ) {
         return
+      }
       current = current[arrayIndex]
       continue
     }
@@ -569,8 +641,9 @@ function deletePathValue(object: Record<string, unknown>, path: string): void {
         !Number.isInteger(arrayIndex) ||
         arrayIndex < 0 ||
         arrayIndex >= current.length
-      )
+      ) {
         return
+      }
       current = current[arrayIndex]
       continue
     }

@@ -28,6 +28,70 @@ import {
 } from '../parameter-capabilities'
 
 describe('parameter capability resolution', () => {
+  it('round-trips all built-in media conversions and lets exact models disable inherited conversion', () => {
+    const config: ParameterCapabilityConfig = {
+      defaults: {
+        image_url: { transform: 'image_url_to_base64' },
+        audio_url: { transform: 'audio_url_to_base64' },
+        video_url: { transform: 'video_url_to_base64' },
+      },
+      rules: [
+        {
+          selector: { type: 'exact', value: 'native' },
+          parameters: { image_url: { transform: 'none' } },
+        },
+      ],
+    }
+    expect(
+      parseParameterCapabilityConfigStrict(
+        stringifyParameterCapabilityConfig(config)
+      )
+    ).toEqual({ success: true, config })
+    expect(
+      resolveParameterCapabilities(config, 'native').image_url.capability
+        .transform
+    ).toBe('none')
+    expect(
+      resolveParameterCapabilities(config, 'other').image_url.capability
+        .transform
+    ).toBe('image_url_to_base64')
+  })
+
+  it('marks remote media as pending without fetching or pretending to encode in the preview', () => {
+    const input = { image_url: { url: 'https://media.test/a', detail: 'high' } }
+    const result = evaluateParameterCapabilities(
+      { defaults: { image_url: { transform: 'image_url_to_base64' } } },
+      'model',
+      input
+    )
+    expect(result.request).toEqual(input)
+    expect(result.evaluations).toEqual([
+      {
+        parameter: 'image_url',
+        status: 'pending',
+        reason: 'media_download_required',
+      },
+    ])
+  })
+
+  it('rejects unknown transforms and conflicting numeric constraints', () => {
+    expect(
+      parseParameterCapabilityConfigStrict(
+        '{"defaults":{"image_url":{"transform":"download"}}}'
+      ).success
+    ).toBe(false)
+    expect(
+      validateParameterCapabilityConfig({
+        defaults: { image_url: { transform: 'image_url_to_base64', min: 0 } },
+      })
+    ).toEqual([
+      {
+        code: 'invalid_media_constraints',
+        scope: 'Channel default',
+        path: 'image_url',
+      },
+    ])
+  })
   it('applies channel defaults, pattern rules, and exact rules in precedence order', () => {
     const config: ParameterCapabilityConfig = {
       defaults: {

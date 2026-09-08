@@ -423,7 +423,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	//	}
 	//}
 
-	jsonData, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(jsonData, info)
+	jsonData, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(jsonData, info, service.NewParameterMediaTransformer(c))
 	if err != nil {
 		if capabilityErr, ok := relaycommon.AsParameterCapabilityViolation(err); ok {
 			return testResult{

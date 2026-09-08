@@ -81,7 +81,7 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 
-	chatJSON, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(chatJSON, info)
+	chatJSON, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(chatJSON, info, service.NewParameterMediaTransformer(c))
 	if err != nil {
 		return nil, newAPIErrorFromRequestPolicy(err)
 	}

@@ -14,6 +14,11 @@ const (
 	ParameterCapabilityActionDrop   = "drop"
 	ParameterCapabilityActionClamp  = "clamp"
 
+	ParameterTransformNone  = "none"
+	ParameterTransformImage = "image_url_to_base64"
+	ParameterTransformAudio = "audio_url_to_base64"
+	ParameterTransformVideo = "video_url_to_base64"
+
 	maxParameterCapabilityRules      = 256
 	maxParameterCapabilitiesPerScope = 128
 )
@@ -57,6 +62,7 @@ type ParameterCapabilitySelector struct {
 }
 
 type ParameterCapability struct {
+	Transform              string   `json:"transform,omitempty"`
 	Supported              *bool    `json:"supported,omitempty"`
 	Min                    *float64 `json:"min,omitempty"`
 	Max                    *float64 `json:"max,omitempty"`
@@ -158,6 +164,19 @@ func validateParameterCapabilityMap(parameters map[string]ParameterCapability) e
 		return fmt.Errorf("too many parameters in one scope: %d", len(parameters))
 	}
 	for path, capability := range parameters {
+		switch capability.Transform {
+		case "", ParameterTransformNone, ParameterTransformImage, ParameterTransformAudio, ParameterTransformVideo:
+		default:
+			return fmt.Errorf("parameter %s has unsupported input transform %q", path, capability.Transform)
+		}
+		if capability.HasMediaTransform() {
+			if _, sensitive := billingSensitiveParameterPaths[path]; sensitive {
+				return fmt.Errorf("billing-sensitive parameter %s cannot use a media transform", path)
+			}
+			if capability.Min != nil || capability.Max != nil || len(capability.AllowedValues) > 0 {
+				return fmt.Errorf("parameter %s cannot combine media conversion with numeric or allowed-value constraints", path)
+			}
+		}
 		if !parameterCapabilityPathPattern.MatchString(path) {
 			return fmt.Errorf("invalid parameter path %q", path)
 		}
@@ -183,6 +202,9 @@ func validateParameterCapabilityMap(parameters map[string]ParameterCapability) e
 func mergeParameterCapabilityMap(target map[string]ParameterCapability, source map[string]ParameterCapability) {
 	for path, override := range source {
 		base := target[path]
+		if override.Transform != "" {
+			base.Transform = override.Transform
+		}
 		if override.Supported != nil {
 			base.Supported = override.Supported
 		}
@@ -203,6 +225,19 @@ func mergeParameterCapabilityMap(target map[string]ParameterCapability, source m
 		}
 		target[path] = base
 	}
+}
+
+func (c ParameterCapability) HasMediaTransform() bool {
+	return c.Transform != "" && c.Transform != ParameterTransformNone
+}
+
+func (c *ParameterCapabilityConfig) HasMediaTransforms(model string) bool {
+	for _, capability := range c.Resolve(model) {
+		if capability.HasMediaTransform() && (capability.Supported == nil || *capability.Supported) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchModelCapabilityPattern(model string, pattern string) bool {

@@ -131,6 +131,10 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 	}
 
+	if err := relaycommon.CheckMediaTransformPassThrough(info); err != nil {
+		return newAPIErrorFromRequestPolicy(err)
+	}
+
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
@@ -197,12 +201,16 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 
-		jsonData, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(jsonData, info)
+		jsonData, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(jsonData, info, service.NewParameterMediaTransformer(c))
 		if err != nil {
 			return newAPIErrorFromRequestPolicy(err)
 		}
 
-		logger.LogDebug(c, "Gemini request body: %s", jsonData)
+		if common.DebugEnabled && !info.HasMediaTransforms() {
+
+			logger.LogDebug(c, "Gemini request body: %s", jsonData)
+
+		}
 
 		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 		if err != nil {
@@ -303,11 +311,13 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 
-	jsonData, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(jsonData, info)
+	jsonData, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(jsonData, info, service.NewParameterMediaTransformer(c))
 	if err != nil {
 		return newAPIErrorFromRequestPolicy(err)
 	}
-	logger.LogDebug(c, "Gemini embedding request body: %s", jsonData)
+	if common.DebugEnabled && !info.HasMediaTransforms() {
+		logger.LogDebug(c, "Gemini embedding request body: %s", jsonData)
+	}
 	body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())

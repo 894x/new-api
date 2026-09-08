@@ -72,6 +72,10 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
+	if err := relaycommon.CheckMediaTransformPassThrough(info); err != nil {
+		return newAPIErrorFromRequestPolicy(err)
+	}
+
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
@@ -103,12 +107,16 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 
-		jsonData, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(jsonData, info)
+		jsonData, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(jsonData, info, service.NewParameterMediaTransformer(c))
 		if err != nil {
 			return newAPIErrorFromRequestPolicy(err)
 		}
 
-		logger.LogDebug(c, "requestBody: %s", jsonData)
+		if common.DebugEnabled && !info.HasMediaTransforms() {
+
+			logger.LogDebug(c, "requestBody: %s", jsonData)
+
+		}
 		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
