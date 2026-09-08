@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaykitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -37,6 +38,59 @@ func TestBuildRequestURLUsesSLSVideoEndpoint(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "https://lm.sls.cn/v1/video/generations", got)
+}
+
+func TestMappedSLSCapabilitiesValidateFinalParameters(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		duration     string
+		override     map[string]interface{}
+		allowed      []string
+		wantDuration float64
+		wantError    bool
+	}{
+		{"automatic duration", "-1", nil, []string{"-1", "4", "15"}, -1, false},
+		{"automatic duration disabled by configuration", "-1", nil, []string{"4", "15"}, 0, true},
+		{"duration rejected", "16", nil, []string{"-1", "4", "15"}, 0, true},
+		{"override before validation", "16", map[string]interface{}{"duration": 4}, []string{"4"}, 4, false},
+		{"override cannot bypass validation", "4", map[string]interface{}{"duration": 16}, []string{"4"}, 0, true},
+		{"string duration rejected", `"4"`, nil, []string{"4"}, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(`{"model":"public-model","content":[{"type":"text","text":"A cat"}],"duration":`+tc.duration+`,"generate_audio":false,"seed":0}`))
+			ctx.Request.Header.Set("Content-Type", gin.MIMEJSON)
+			defer common.CleanupBodyStorage(ctx)
+			minimum, maximum := -1.0, 15.0
+			info := &relaycommon.RelayInfo{OriginModelName: "public-model", ChannelMeta: &relaycommon.ChannelMeta{
+				ParamOverride:     tc.override,
+				UpstreamModelName: "upstream-model",
+				ChannelOtherSettings: relaykitdto.ChannelOtherSettings{ParameterCapabilities: &relaykitdto.ParameterCapabilityConfig{Rules: []relaykitdto.ModelParameterCapabilityRule{{
+					Selector:   relaykitdto.ParameterCapabilitySelector{Type: "exact", Value: "upstream-model"},
+					Parameters: map[string]relaykitdto.ParameterCapability{"duration": {Min: &minimum, Max: &maximum, AllowedValues: tc.allowed}},
+				}}}},
+			}}
+			adaptor := &TaskAdaptor{}
+			require.Nil(t, adaptor.ValidateRequestAndSetAction(ctx, info))
+			taskErr := adaptor.ValidateMappedRequest(ctx, info)
+			if tc.wantError {
+				require.NotNil(t, taskErr)
+				assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+				assert.True(t, taskErr.LocalError)
+				assert.Contains(t, taskErr.Message, "duration")
+				return
+			}
+			require.Nil(t, taskErr)
+			body, err := adaptor.BuildRequestBody(ctx, info)
+			require.NoError(t, err)
+			var payload map[string]any
+			require.NoError(t, common.DecodeJson(body, &payload))
+			assert.Equal(t, tc.wantDuration, payload["duration"])
+			assert.Equal(t, "upstream-model", payload["model"])
+			assert.Equal(t, false, payload["generate_audio"])
+			assert.Equal(t, float64(0), payload["seed"])
+		})
+	}
 }
 
 func TestValidateNativeSLSRequestStoresLosslessPayload(t *testing.T) {
@@ -61,6 +115,37 @@ func TestValidateNativeSLSRequestStoresLosslessPayload(t *testing.T) {
 	assert.Equal(t, "A cat runs through neon rain", req.Prompt)
 	assert.Equal(t, 5, req.Duration)
 	assert.Equal(t, constant.TaskActionGenerate, info.Action)
+}
+
+func TestSLSBillingAndSerializationUsePreparedParameters(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(`{"model":"doubao-seedance-2-0-260128","content":[{"type":"text","text":"A cat"}],"resolution":"720p","duration":-1}`))
+	ctx.Request.Header.Set("Content-Type", gin.MIMEJSON)
+	defer common.CleanupBodyStorage(ctx)
+	info := &relaycommon.RelayInfo{OriginModelName: "doubao-seedance-2-0-260128", ChannelMeta: &relaycommon.ChannelMeta{
+		UpstreamModelName: "doubao-seedance-2-0-260128",
+		ParamOverride:     map[string]interface{}{"resolution": "1080p"},
+	}}
+	adaptor := &TaskAdaptor{}
+	require.Nil(t, adaptor.ValidateRequestAndSetAction(ctx, info))
+	require.Nil(t, adaptor.ValidateMappedRequest(ctx, info))
+	assert.InDelta(t, 51.0/46.0, adaptor.EstimateBilling(ctx, info)["video_input"], 1e-12)
+	body, err := adaptor.BuildRequestBody(ctx, info)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, common.DecodeJson(body, &payload))
+	assert.Equal(t, "1080p", payload["resolution"])
+	assert.Equal(t, float64(-1), payload["duration"])
+
+	// A routing retry must rebuild from the original request, not the prior channel's override.
+	info.ParamOverride = nil
+	require.Nil(t, adaptor.ValidateRequestAndSetAction(ctx, info))
+	require.Nil(t, adaptor.ValidateMappedRequest(ctx, info))
+	assert.Empty(t, adaptor.EstimateBilling(ctx, info))
+	body, err = adaptor.BuildRequestBody(ctx, info)
+	require.NoError(t, err)
+	require.NoError(t, common.DecodeJson(body, &payload))
+	assert.Equal(t, "720p", payload["resolution"])
 }
 
 func TestEstimateBillingUsesNativeSLSResolutionAndVideoInputPricing(t *testing.T) {

@@ -80,6 +80,7 @@ import type {
   ParameterCapabilityAction,
   ParameterCapabilityConfig,
 } from '../../types'
+import { ParameterCapabilityTemplatePanel } from './parameter-capability-template-panel'
 
 export interface ParameterCapabilityEditorDialogProps {
   open: boolean
@@ -91,7 +92,7 @@ export interface ParameterCapabilityEditorDialogProps {
 }
 
 type ScopeSelection = { type: 'default' } | { type: 'rule'; index: number }
-type EditorTab = 'capabilities' | 'json' | 'validation'
+type EditorTab = 'capabilities' | 'json' | 'validation' | 'templates'
 
 const PARAMETER_CAPABILITY_JSON_PLACEHOLDER = JSON.stringify(
   {
@@ -383,6 +384,9 @@ function ParameterCapabilityEditorSession(
               <FlaskConical data-icon='inline-start' />
               {t('Request validation')}
             </TabsTrigger>
+            <TabsTrigger value='templates'>
+              {t('Built-in templates')}
+            </TabsTrigger>
           </TabsList>
           <span className='text-muted-foreground text-xs'>
             {t('Exact model overrides take precedence over pattern rules.')}
@@ -401,6 +405,16 @@ function ParameterCapabilityEditorSession(
           </Alert>
         )}
 
+        <TabsContent value='templates' className='min-h-0 overflow-hidden'>
+          <ParameterCapabilityTemplatePanel
+            config={config}
+            onApply={(nextConfig) => {
+              setConfig(nextConfig)
+              setSelection({ type: 'default' })
+              setActiveTab('capabilities')
+            }}
+          />
+        </TabsContent>
         <TabsContent value='capabilities' className='min-h-0 overflow-hidden'>
           <div className='grid h-full min-h-0 grid-cols-[260px_minmax(0,1fr)]'>
             <ScopeSidebar
@@ -831,12 +845,12 @@ function ParameterCapabilityRow(props: {
     value: option.value,
     label: t(option.label),
   }))
-  const selectionValue =
-    capability.participate_in_selection === undefined
-      ? 'inherit'
-      : capability.participate_in_selection
-        ? 'enabled'
-        : 'disabled'
+  let selectionValue = 'inherit'
+  if (capability.participate_in_selection !== undefined) {
+    selectionValue = capability.participate_in_selection
+      ? 'enabled'
+      : 'disabled'
+  }
   return (
     <div className='flex flex-col gap-4 rounded-lg border p-4'>
       <div className='flex items-center gap-3'>

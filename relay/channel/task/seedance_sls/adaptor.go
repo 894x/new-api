@@ -26,6 +26,7 @@ import (
 )
 
 const nativeRequestContextKey = "seedance_sls_native_request"
+const preparedRequestContextKey = "seedance_sls_prepared_request"
 
 type TaskAdaptor struct {
 	taskcommon.BaseBilling
@@ -117,6 +118,8 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *taskdto.TaskError {
+	delete(c.Keys, preparedRequestContextKey)
+	delete(c.Keys, nativeRequestContextKey)
 	if !strings.HasPrefix(c.GetHeader("Content-Type"), gin.MIMEJSON) {
 		return localTaskError(fmt.Errorf("Seedance SLS requires application/json requests"), "invalid_request")
 	}
@@ -176,8 +179,8 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	if err != nil {
 		return localTaskError(err, "invalid_seconds")
 	}
-	if duration < 0 || duration > relaycommon.MaxTaskDurationSeconds {
-		return localTaskError(fmt.Errorf("duration must be between 0 and %d", relaycommon.MaxTaskDurationSeconds), "invalid_seconds")
+	if duration < -1 || duration > relaycommon.MaxTaskDurationSeconds {
+		return localTaskError(fmt.Errorf("duration must be -1 or between 0 and %d", relaycommon.MaxTaskDurationSeconds), "invalid_seconds")
 	}
 
 	modelName, _ := payload["model"].(string)
@@ -209,8 +212,8 @@ func requestDuration(value any) (int, error) {
 	case nil:
 		return 0, nil
 	case float64:
-		if duration < 0 || duration > relaycommon.MaxTaskDurationSeconds {
-			return 0, fmt.Errorf("duration must be between 0 and %d", relaycommon.MaxTaskDurationSeconds)
+		if duration < -1 || duration > relaycommon.MaxTaskDurationSeconds {
+			return 0, fmt.Errorf("duration must be -1 or between 0 and %d", relaycommon.MaxTaskDurationSeconds)
 		}
 		if duration != float64(int(duration)) {
 			return 0, fmt.Errorf("duration must be an integer")
@@ -240,7 +243,9 @@ func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, _ *r
 
 func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
 	var metadata map[string]any
-	if nativeValue, ok := c.Get(nativeRequestContextKey); ok {
+	if preparedValue, ok := c.Get(preparedRequestContextKey); ok {
+		metadata, _ = preparedValue.(map[string]any)
+	} else if nativeValue, ok := c.Get(nativeRequestContextKey); ok {
 		metadata, _ = nativeValue.(map[string]any)
 	} else {
 		request, err := relaycommon.GetTaskRequest(c)
@@ -281,17 +286,18 @@ func hasVideoInMetadata(metadata map[string]any) bool {
 	return false
 }
 
-func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
+// ValidateMappedRequest finalizes parameters before quota reservation or asset uploads.
+func (a *TaskAdaptor) ValidateMappedRequest(c *gin.Context, info *relaycommon.RelayInfo) *taskdto.TaskError {
 	request, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
-		return nil, err
+		return localTaskError(err, "invalid_request")
 	}
 
 	payload := make(map[string]any)
 	if nativeValue, ok := c.Get(nativeRequestContextKey); ok {
 		nativePayload, ok := nativeValue.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("invalid Seedance SLS request payload")
+			return localTaskError(fmt.Errorf("invalid Seedance SLS request payload"), "invalid_request")
 		}
 		for key, value := range nativePayload {
 			payload[key] = value
@@ -329,11 +335,57 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		info.UpstreamModelName = modelName
 	}
 	payload["model"] = modelName
+	data, err := common.Marshal(payload)
+	if err != nil {
+		return localTaskError(err, "invalid_request")
+	}
+	data, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(data, info)
+	if err != nil {
+		return localTaskError(err, "invalid_request")
+	}
+	var prepared map[string]any
+	if err := common.Unmarshal(data, &prepared); err != nil {
+		return localTaskError(err, "invalid_request")
+	}
+	// Model changes belong in model mapping so pricing and capability selection agree.
+	if prepared["model"] != modelName {
+		return localTaskError(fmt.Errorf("use channel model mapping to change the Seedance model"), "invalid_request")
+	}
+	duration, err := requestDuration(prepared["duration"])
+	if err != nil || duration < -1 || duration > relaycommon.MaxTaskDurationSeconds {
+		if err == nil {
+			err = fmt.Errorf("duration must be -1 or between 0 and %d", relaycommon.MaxTaskDurationSeconds)
+		}
+		return localTaskError(err, "invalid_seconds")
+	}
+	request.Duration = duration
+	request.Seconds = ""
+	c.Set("task_request", request)
+	c.Set(preparedRequestContextKey, prepared)
+	return nil
+}
+
+func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
+	preparedValue, ok := c.Get(preparedRequestContextKey)
+	if !ok {
+		if taskErr := a.ValidateMappedRequest(c, info); taskErr != nil {
+			return nil, taskErr.Error
+		}
+		preparedValue, _ = c.Get(preparedRequestContextKey)
+	}
+	prepared, ok := preparedValue.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("invalid prepared Seedance SLS request")
+	}
+	payload := make(map[string]any, len(prepared))
+	for key, value := range prepared {
+		payload[key] = value
+	}
 	requestContext := context.Background()
 	if c.Request != nil {
 		requestContext = c.Request.Context()
 	}
-	payload, err = service.PrepareAssetReferences(requestContext, info.UserId, info.ChannelId, payload)
+	payload, err := service.PrepareAssetReferences(requestContext, info.UserId, info.ChannelId, payload)
 	if err != nil {
 		return nil, errors.Wrap(err, "prepare asset references failed")
 	}

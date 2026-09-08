@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import type { ParameterCapability, ParameterCapabilityConfig } from '../types'
 
 export const PARAMETER_CAPABILITY_CATALOG = [
+  { path: 'duration', category: 'Multimodal', kind: 'number' },
+  { path: 'resolution', category: 'Multimodal', kind: 'enum' },
+  { path: 'ratio', category: 'Multimodal', kind: 'enum' },
+  { path: 'service_tier', category: 'Output', kind: 'enum' },
   { path: 'temperature', category: 'Sampling', kind: 'number' },
   { path: 'top_p', category: 'Sampling', kind: 'number' },
   { path: 'top_k', category: 'Sampling', kind: 'number' },
@@ -535,8 +539,9 @@ function setPathValue(
         !Number.isInteger(arrayIndex) ||
         arrayIndex < 0 ||
         arrayIndex >= current.length
-      )
+      ) {
         return
+      }
       current = current[arrayIndex]
       continue
     }
@@ -569,8 +574,9 @@ function deletePathValue(object: Record<string, unknown>, path: string): void {
         !Number.isInteger(arrayIndex) ||
         arrayIndex < 0 ||
         arrayIndex >= current.length
-      )
+      ) {
         return
+      }
       current = current[arrayIndex]
       continue
     }
