@@ -481,6 +481,15 @@ func (a *TaskAdaptor) parseTaskResult(respBody []byte, depth int) (*relaycommon.
 		if taskInfo.Reason == "" {
 			taskInfo.Reason = taskInfo.Url
 			taskInfo.Url = ""
+		} else if detail := strings.TrimSpace(taskInfo.Url); detail != "" {
+			// SLS can return a generic fail_reason alongside provider error text in result_url.
+			resultURL, err := url.Parse(detail)
+			if err != nil || resultURL.Host == "" || (resultURL.Scheme != "http" && resultURL.Scheme != "https") {
+				if detail != strings.TrimSpace(taskInfo.Reason) {
+					taskInfo.Reason += "\n" + detail
+				}
+				taskInfo.Url = ""
+			}
 		}
 		if taskInfo.Progress == "" {
 			taskInfo.Progress = taskcommon.ProgressComplete

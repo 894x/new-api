@@ -753,6 +753,32 @@ func TestParseSLSWrappedTaskResult(t *testing.T) {
 	}
 }
 
+func TestParseFailedTaskPreservesResultDetails(t *testing.T) {
+	const summary = "任务提交失败，请稍后重试"
+	const detail = "The parameter content[2] is not valid: audio duration must be less than or equal to 15.2 seconds (code=InvalidParameter)"
+	for _, tc := range []struct {
+		name       string
+		result     string
+		wantReason string
+		wantURL    string
+	}{
+		{"detailed error", detail, summary + "\n" + detail, ""},
+		{"actual URL", "https://example.com/video.mp4", summary, "https://example.com/video.mp4"},
+		{"duplicate reason", summary, summary, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := common.Marshal(map[string]any{"code": "success", "data": map[string]any{
+				"task_id": "task_failed", "status": "FAILURE", "fail_reason": summary, "result_url": tc.result,
+			}})
+			require.NoError(t, err)
+			got, err := (&TaskAdaptor{}).ParseTaskResult(body)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantReason, got.Reason)
+			assert.Equal(t, tc.wantURL, got.Url)
+		})
+	}
+}
+
 func TestParseNestedNewAPIWrapperMergesProviderUsage(t *testing.T) {
 	body := []byte(`{
 		"code":"success",
