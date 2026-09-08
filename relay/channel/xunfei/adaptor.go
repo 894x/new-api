@@ -127,9 +127,9 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		return nil, types.NewError(admissionErr, types.ErrorCodeCountTokenFailed, types.ErrOptionWithSkipRetry())
 	}
 	if info.IsStream {
-		usage, err = xunfeiStreamHandler(c, *a.request, splits[0], splits[1], splits[2], a.finalBody)
+		usage, err = xunfeiStreamHandler(c, info, *a.request, splits[0], splits[1], splits[2], a.finalBody)
 	} else {
-		usage, err = xunfeiHandler(c, *a.request, splits[0], splits[1], splits[2], a.finalBody)
+		usage, err = xunfeiHandler(c, info, *a.request, splits[0], splits[1], splits[2], a.finalBody)
 	}
 	return
 }

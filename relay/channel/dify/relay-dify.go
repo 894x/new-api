@@ -211,16 +211,82 @@ func streamResponseDify2OpenAI(difyResponse DifyChunkChatCompletionResponse) *dt
 			choice.Delta.SetReasoningContent(text + "\n")
 		}
 	} else if difyResponse.Event == "message" || difyResponse.Event == "agent_message" {
-		if difyResponse.Answer == "<details style=\"color:gray;background-color: #f8f8f8;padding: 8px;border-radius: 4px;\" open> <summary> Thinking... </summary>\n" {
-			difyResponse.Answer = "<think>"
-		} else if difyResponse.Answer == "</details>" {
-			difyResponse.Answer = "</think>"
-		}
-
-		choice.Delta.SetContentString(difyResponse.Answer)
+		choice.Delta.SetContentString(normalizeDifyVisibleAnswer(difyResponse.Answer))
 	}
 	response.Choices = append(response.Choices, choice)
 	return &response
+}
+
+const (
+	difyThinkingOpen  = "<details style=\"color:gray;background-color: #f8f8f8;padding: 8px;border-radius: 4px;\" open> <summary> Thinking... </summary>\n"
+	difyThinkingClose = "</details>"
+)
+
+func normalizeDifyVisibleAnswer(answer string) string {
+	if answer == difyThinkingOpen {
+		return "<think>"
+	}
+	if answer == difyThinkingClose {
+		return "</think>"
+	}
+	return answer
+}
+
+type difyVisibleTextState struct {
+	thinking bool
+	pending  string
+}
+
+func newDifyStreamVisibleTextExtractor() func(string) string {
+	state := &difyVisibleTextState{}
+	return func(data string) string {
+		var response DifyChunkChatCompletionResponse
+		if err := common.Unmarshal([]byte(data), &response); err != nil {
+			return ""
+		}
+		if response.Event != "message" && response.Event != "agent_message" {
+			return ""
+		}
+		return state.consume(response.Answer)
+	}
+}
+
+func (state *difyVisibleTextState) consume(answer string) string {
+	state.pending += answer
+	var visible strings.Builder
+	for state.pending != "" {
+		marker := difyThinkingOpen
+		if state.thinking {
+			marker = difyThinkingClose
+		}
+
+		if markerIndex := strings.Index(state.pending, marker); markerIndex >= 0 {
+			if !state.thinking {
+				visible.WriteString(state.pending[:markerIndex])
+			}
+			state.pending = state.pending[markerIndex+len(marker):]
+			state.thinking = !state.thinking
+			continue
+		}
+
+		prefixLength := difyMarkerPrefixSuffixLength(state.pending, marker)
+		if !state.thinking {
+			visible.WriteString(state.pending[:len(state.pending)-prefixLength])
+		}
+		state.pending = state.pending[len(state.pending)-prefixLength:]
+		return visible.String()
+	}
+	return visible.String()
+}
+
+func difyMarkerPrefixSuffixLength(text string, marker string) int {
+	maxLength := min(len(text), len(marker)-1)
+	for length := maxLength; length > 0; length-- {
+		if strings.HasSuffix(text, marker[:length]) {
+			return length
+		}
+	}
+	return 0
 }
 
 func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -228,11 +294,11 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	usage := &dto.Usage{}
 	var nodeToken int
 	helper.SetEventStreamHeaders(c)
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.StreamScannerHandlerWithVisibleText(c, resp, info, newDifyStreamVisibleTextExtractor(), func(data string, sr *helper.StreamResult) {
 		var difyResponse DifyChunkChatCompletionResponse
 		if err := json.Unmarshal([]byte(data), &difyResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
-			sr.Error(err)
+			sr.ScannerError(err)
 			return
 		}
 		if difyResponse.Event == "message_end" {
@@ -240,7 +306,19 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			sr.Done()
 			return
 		} else if difyResponse.Event == "error" {
-			sr.Stop(fmt.Errorf("dify error event"))
+			if difyResponse.Status < http.StatusBadRequest || difyResponse.Status > 599 {
+				sr.ScannerError(fmt.Errorf("malformed Dify upstream error event: status=%d code=%s", difyResponse.Status, difyResponse.Code))
+				return
+			}
+			message := difyResponse.Message
+			if message == "" {
+				message = difyResponse.Code
+			}
+			sr.Stop(types.NewErrorWithStatusCode(
+				fmt.Errorf("Dify upstream error %s: %s", difyResponse.Code, message),
+				types.ErrorCodeBadResponse,
+				difyResponse.Status,
+			))
 			return
 		}
 		openaiResponse := *streamResponseDify2OpenAI(difyResponse)
@@ -252,10 +330,13 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		}
 		if err := helper.ObjectData(c, openaiResponse); err != nil {
 			common.SysLog(err.Error())
-			sr.Error(err)
+			sr.ClientGone(err)
 		}
 	})
-	helper.Done(c)
+	if err := helper.Done(c); err != nil {
+		info.StreamStatus.SetClientGone(err)
+		return usage, types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+	}
 	if usage.TotalTokens == 0 {
 		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
 	}

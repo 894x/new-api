@@ -465,6 +465,14 @@ type GeminiChatResponse struct {
 	PromptFeedback   *GeminiChatPromptFeedback `json:"promptFeedback,omitempty"`
 	UsageMetadata    GeminiUsageMetadata       `json:"usageMetadata"`
 	HasUsageMetadata bool                      `json:"-"`
+	Error            *GeminiError              `json:"error,omitempty"`
+}
+
+type GeminiError struct {
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Status  string          `json:"status"`
+	Details json.RawMessage `json:"details,omitempty"`
 }
 
 // UnmarshalJSON records whether Gemini returned usageMetadata while preserving
@@ -478,12 +486,14 @@ func (r *GeminiChatResponse) UnmarshalJSON(data []byte) error {
 		Candidates     []GeminiChatCandidate     `json:"candidates"`
 		PromptFeedback *GeminiChatPromptFeedback `json:"promptFeedback,omitempty"`
 		UsageMetadata  *GeminiUsageMetadata      `json:"usageMetadata"`
+		Error          *GeminiError              `json:"error,omitempty"`
 	}
 	if err := kitutil.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 	r.Candidates = aux.Candidates
 	r.PromptFeedback = aux.PromptFeedback
+	r.Error = aux.Error
 	r.HasUsageMetadata = aux.UsageMetadata != nil
 	if aux.UsageMetadata != nil {
 		r.UsageMetadata = *aux.UsageMetadata

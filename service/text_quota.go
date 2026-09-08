@@ -430,6 +430,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
+	recordAttemptVisibleCompletionTokens(relayInfo)
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false
@@ -605,4 +606,23 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Other:            other,
 	})
 	perfmetrics.RecordRelaySampleAsync(relayInfo, true, performanceTokenUsage(billingUsage), completedAt)
+}
+
+// recordAttemptVisibleCompletionTokens keeps the TPOT denominator in the same
+// scope as its timing interval: only user-visible streamed text is counted.
+var countAttemptVisibleTextTokens = CountTextToken
+
+func recordAttemptVisibleCompletionTokens(relayInfo *relaycommon.RelayInfo) {
+	if relayInfo == nil {
+		return
+	}
+	visibleText := relayInfo.DynamicRoutingAttemptVisibleText()
+	if visibleText == "" {
+		return
+	}
+	publicModel := relayInfo.DynamicRoutingAttemptModel()
+	if publicModel == "" {
+		return
+	}
+	relayInfo.SetAttemptCompletionTokens(countAttemptVisibleTextTokens(visibleText, publicModel))
 }

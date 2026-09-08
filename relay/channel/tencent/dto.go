@@ -44,7 +44,7 @@ type TencentChatRequest struct {
 }
 
 type TencentError struct {
-	Code    int    `json:"Code"`
+	Code    any    `json:"Code"`
 	Message string `json:"Message"`
 }
 
@@ -61,13 +61,14 @@ type TencentResponseChoices struct {
 }
 
 type TencentChatResponse struct {
-	Choices []TencentResponseChoices `json:"Choices,omitempty"` // 结果
-	Created int64                    `json:"Created,omitempty"` // unix 时间戳的字符串
-	Id      string                   `json:"Id,omitempty"`      // 会话 id
-	Usage   TencentUsage             `json:"Usage,omitempty"`   // token 数量
-	Error   TencentError             `json:"Error,omitempty"`   // 错误信息 注意：此字段可能返回 null，表示取不到有效值
-	Note    string                   `json:"Note,omitempty"`    // 注释
-	ReqID   string                   `json:"Req_id,omitempty"`  // 唯一请求 Id，每次请求都会返回。用于反馈接口入参
+	Choices  []TencentResponseChoices `json:"Choices,omitempty"`  // 结果
+	Created  int64                    `json:"Created,omitempty"`  // unix 时间戳的字符串
+	Id       string                   `json:"Id,omitempty"`       // 会话 id
+	Usage    TencentUsage             `json:"Usage,omitempty"`    // token 数量
+	Error    TencentError             `json:"Error,omitempty"`    // 旧版错误字段，兼容数值 Code
+	ErrorMsg TencentError             `json:"ErrorMsg,omitempty"` // 官方流式错误字段，Code 通常为字符串
+	Note     string                   `json:"Note,omitempty"`     // 注释
+	ReqID    string                   `json:"Req_id,omitempty"`   // 唯一请求 Id，每次请求都会返回。用于反馈接口入参
 }
 
 type TencentChatResponseSB struct {

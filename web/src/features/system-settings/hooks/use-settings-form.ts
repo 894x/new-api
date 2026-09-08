@@ -23,12 +23,15 @@ import {
   type UseFormProps,
   type FieldValues,
   type FieldNamesMarkedBoolean,
+  type FieldPath,
+  type FieldPathValue,
 } from 'react-hook-form'
 import { toast } from 'sonner'
 
 type SettingsFormOptions<T extends FieldValues> = UseFormProps<T> & {
   onSubmit: (data: T, changedFields: Record<string, unknown>) => Promise<void>
   compareValues?: (a: unknown, b: unknown) => boolean
+  preserveDirtyValuesOnDefaultChange?: boolean
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -164,8 +167,7 @@ function expandDotPaths<T extends FieldValues>(
  * Unified hook for system settings forms
  *
  * Key features:
- * - Initializes form with defaultValues only on mount
- * - No automatic resets that could overwrite user input
+ * - Synchronizes new defaultValues without overwriting dirty input when asked
  * - Tracks changed fields to minimize API calls
  * - Provides manual reset functionality
  *
@@ -186,6 +188,7 @@ export function useSettingsForm<T extends FieldValues>({
   onSubmit,
   compareValues,
   defaultValues,
+  preserveDirtyValuesOnDefaultChange = false,
   ...formOptions
 }: SettingsFormOptions<T>) {
   const expandedDefaults = useMemo(
@@ -194,6 +197,7 @@ export function useSettingsForm<T extends FieldValues>({
   )
 
   const form = useForm<T>({ ...formOptions, defaultValues: expandedDefaults })
+  const { dirtyFields, isDirty, isSubmitting } = form.formState
 
   const defaultValuesRef = useRef<T>((expandedDefaults ?? ({} as T)) as T)
   const baselineRef = useRef<Record<string, unknown>>(
@@ -201,7 +205,9 @@ export function useSettingsForm<T extends FieldValues>({
   )
 
   /* eslint-disable react-hooks/refs */
-  const serializedDefaultsRef = useRef<string>(
+  // Track only snapshots received from props; a successful save must not make
+  // unchanged query data look like a fresh external update.
+  const receivedDefaultsRef = useRef<string>(
     JSON.stringify(baselineRef.current)
   )
   /* eslint-enable react-hooks/refs */
@@ -212,15 +218,25 @@ export function useSettingsForm<T extends FieldValues>({
     const flattened = flattenValues(expandedDefaults as T)
     const serialized = JSON.stringify(flattened)
 
-    if (serialized === serializedDefaultsRef.current) {
+    if (serialized === receivedDefaultsRef.current) {
       return
     }
 
     baselineRef.current = flattened
     defaultValuesRef.current = expandedDefaults as T
-    serializedDefaultsRef.current = serialized
+    receivedDefaultsRef.current = serialized
+    const dirtyValues = preserveDirtyValuesOnDefaultChange
+      ? collectDirtyValues(dirtyFields, form.getValues())
+      : {}
+
     form.reset(expandedDefaults as T)
-  }, [expandedDefaults, form])
+    for (const [path, value] of Object.entries(dirtyValues)) {
+      const fieldPath = path as FieldPath<T>
+      form.setValue(fieldPath, value as FieldPathValue<T, typeof fieldPath>, {
+        shouldDirty: true,
+      })
+    }
+  }, [dirtyFields, expandedDefaults, form, preserveDirtyValuesOnDefaultChange])
 
   const defaultCompare = (a: unknown, b: unknown): boolean => {
     if (a === b) return true
@@ -243,7 +259,7 @@ export function useSettingsForm<T extends FieldValues>({
   const compare = compareValues || defaultCompare
 
   const handleSubmit = async (data: T) => {
-    const dirtyValues = collectDirtyValues(form.formState.dirtyFields, data)
+    const dirtyValues = collectDirtyValues(dirtyFields, data)
     const changedEntries = Object.entries(dirtyValues).filter(
       ([key, value]) => !compare(value, baselineRef.current[key])
     )
@@ -266,7 +282,6 @@ export function useSettingsForm<T extends FieldValues>({
     const flattenedValues = flattenValues(data)
     baselineRef.current = flattenedValues
     defaultValuesRef.current = data
-    serializedDefaultsRef.current = JSON.stringify(flattenedValues)
     form.reset(data)
   }
 
@@ -280,7 +295,7 @@ export function useSettingsForm<T extends FieldValues>({
     // eslint-disable-next-line react-hooks/refs
     handleSubmit: form.handleSubmit(handleSubmit),
     handleReset,
-    isDirty: form.formState.isDirty,
-    isSubmitting: form.formState.isSubmitting,
+    isDirty,
+    isSubmitting,
   }
 }

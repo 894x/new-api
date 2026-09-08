@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -202,6 +204,9 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	dynamicRoutingOptionsMu.Lock()
+	defer dynamicRoutingOptionsMu.Unlock()
+	dynamicValues := make(map[string]string)
 	groupPricingOptionMutex.Lock()
 	defer groupPricingOptionMutex.Unlock()
 
@@ -232,6 +237,10 @@ func loadOptionsFromDatabase() {
 		}
 	}
 	for _, option := range options {
+		if strings.HasPrefix(option.Key, dynamic_routing_setting.OptionPrefix) {
+			dynamicValues[option.Key] = option.Value
+			continue
+		}
 		if updatesGroupPricing &&
 			(option.Key == "GroupRatio" || option.Key == ratio_setting.ModelTieredRatiosOptionKey) {
 			continue
@@ -240,6 +249,23 @@ func loadOptionsFromDatabase() {
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
+	}
+	if len(dynamicValues) == 0 {
+		return
+	}
+	candidate, err := dynamic_routing_setting.MergeOptionValues(dynamic_routing_setting.GetSetting(), dynamicValues)
+	if err != nil {
+		common.SysLog("failed to load dynamic routing options: " + err.Error())
+		return
+	}
+	common.OptionMapRWMutex.Lock()
+	defer common.OptionMapRWMutex.Unlock()
+	if err := dynamic_routing_setting.ReplaceAndSync(candidate); err != nil {
+		common.SysLog("failed to publish dynamic routing options: " + err.Error())
+		return
+	}
+	for key, value := range dynamicValues {
+		common.OptionMap[key] = value
 	}
 }
 
@@ -252,6 +278,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if strings.HasPrefix(key, dynamic_routing_setting.OptionPrefix) {
+		return fmt.Errorf("dynamic routing settings must be updated atomically")
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}
@@ -413,6 +442,9 @@ func applyGroupPricingOptions(groupRatios, modelTieredRatios string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	if strings.HasPrefix(key, dynamic_routing_setting.OptionPrefix) {
+		return fmt.Errorf("dynamic routing settings must be updated atomically")
+	}
 	if key == retiredThemeOptionKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
@@ -788,7 +820,6 @@ func handleConfigUpdate(key, value string) bool {
 
 	configName := parts[0]
 	configKey := parts[1]
-
 	// 获取配置对象
 	cfg := config.GlobalConfig.Get(configName)
 	if cfg == nil {

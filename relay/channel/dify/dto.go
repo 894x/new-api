@@ -42,6 +42,9 @@ type DifyChunkChatCompletionResponse struct {
 	Event          string       `json:"event"`
 	ConversationId string       `json:"conversation_id"`
 	Answer         string       `json:"answer"`
+	Status         int          `json:"status"`
+	Code           string       `json:"code"`
+	Message        string       `json:"message"`
 	Data           DifyData     `json:"data"`
 	MetaData       DifyMetaData `json:"metadata"`
 }

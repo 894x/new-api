@@ -2,6 +2,7 @@ package tencent
 
 import (
 	"bufio"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -91,23 +92,104 @@ func streamResponseTencent2OpenAI(TencentResponse *TencentChatResponse) *dto.Cha
 }
 
 func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	info.StreamStatus = relaycommon.NewStreamStatus()
+	streamCtx, cancel := context.WithCancel(c.Request.Context())
 	var responseText string
 	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
+	dataChan := make(chan string, 10)
+	producerDone := make(chan struct{})
+	idleWatchdog := helper.NewConfiguredStreamIdleWatchdog()
+	var producerErr *types.NewAPIError
 
 	helper.SetEventStreamHeaders(c)
+	go func() {
+		defer close(producerDone)
+		defer close(dataChan)
+		for scanner.Scan() {
+			idleWatchdog.Reset()
+			data := strings.TrimSpace(scanner.Text())
+			if helper.IsNullJSONStreamEvent(data) {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, helper.ErrNullJSONStreamEvent)
+				return
+			}
 
-	for scanner.Scan() {
-		data := scanner.Text()
-		if len(data) < 5 || !strings.HasPrefix(data, "data:") {
-			continue
+			var response TencentChatResponse
+			if strings.HasPrefix(data, "data:") {
+				data = strings.TrimSpace(strings.TrimPrefix(data, "data:"))
+				if helper.IsNullJSONStreamEvent(data) {
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, helper.ErrNullJSONStreamEvent)
+					return
+				}
+				if err := common.Unmarshal([]byte(data), &response); err != nil {
+					common.SysLog("error unmarshalling stream response: " + err.Error())
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
+					return
+				}
+			} else if strings.HasPrefix(data, "{") {
+				var wrapped TencentChatResponseSB
+				if err := common.Unmarshal([]byte(data), &wrapped); err != nil {
+					common.SysLog("error unmarshalling stream error response: " + err.Error())
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
+					return
+				}
+				response = wrapped.Response
+				if _, ok := tencentResponseError(&response); !ok {
+					continue
+				}
+			} else {
+				continue
+			}
+			if responseError, ok := tencentResponseError(&response); ok {
+				producerErr = types.WithOpenAIError(types.OpenAIError{
+					Message: responseError.Message,
+					Type:    "upstream_error",
+					Code:    responseError.Code,
+				}, tencentStreamErrorStatus(responseError.Code, data, resp.StatusCode))
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, producerErr)
+				return
+			}
+			terminalOnly := len(response.Choices) > 0 && response.Choices[0].FinishReason == "stop" && response.Choices[0].Delta.Content == ""
+			if !terminalOnly {
+				info.SetFirstResponseTime()
+			}
+			if len(response.Choices) > 0 {
+				info.RecordAttemptVisibleText(response.Choices[0].Delta.Content)
+				if response.Choices[0].FinishReason == "stop" {
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+				}
+			}
+			if !helper.EnqueueStreamDataWithBackpressure(streamCtx, dataChan, data, info) {
+				return
+			}
+			if len(response.Choices) > 0 && response.Choices[0].FinishReason == "stop" {
+				return
+			}
 		}
-		data = strings.TrimPrefix(data, "data:")
+		if requestErr := c.Request.Context().Err(); requestErr != nil {
+			info.StreamStatus.SetClientGone(requestErr)
+		} else if err := scanner.Err(); err != nil {
+			common.SysLog("error reading stream: " + err.Error())
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
+		} else {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
+		}
+	}()
+	watcherDone := helper.CloseUpstreamOnContext(c.Request.Context(), resp.Body, producerDone)
+	idleWatcherDone := helper.CloseUpstreamOnIdleTimeout(c.Request.Context(), info, resp.Body, producerDone, idleWatchdog)
+	defer func() {
+		cancel()
+		idleWatchdog.Stop()
+		service.CloseResponseBodyGracefully(resp)
+		<-producerDone
+		<-watcherDone
+		<-idleWatcherDone
+	}()
 
+	for data := range dataChan {
 		var tencentResponse TencentChatResponse
 		err := common.Unmarshal([]byte(data), &tencentResponse)
 		if err != nil {
-			common.SysLog("error unmarshalling stream response: " + err.Error())
 			continue
 		}
 
@@ -119,18 +201,101 @@ func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		err = helper.ObjectData(c, response)
 		if err != nil {
 			common.SysLog(err.Error())
+			info.StreamStatus.SetClientGone(err)
+			return service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens()), types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		common.SysLog("error reading stream: " + err.Error())
+	if requestErr := c.Request.Context().Err(); requestErr != nil {
+		info.StreamStatus.SetClientGone(requestErr)
+	}
+	if producerErr != nil {
+		return service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens()), producerErr
 	}
 
-	helper.Done(c)
-
-	service.CloseResponseBodyGracefully(resp)
+	if err := helper.Done(c); err != nil {
+		info.StreamStatus.SetClientGone(err)
+		return service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens()), types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+	}
 
 	return service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens()), nil
+}
+
+func tencentResponseError(response *TencentChatResponse) (*TencentError, bool) {
+	if response == nil {
+		return nil, false
+	}
+	if tencentErrorPresent(&response.ErrorMsg) {
+		return &response.ErrorMsg, true
+	}
+	if tencentErrorPresent(&response.Error) {
+		return &response.Error, true
+	}
+	return nil, false
+}
+
+func tencentErrorPresent(responseError *TencentError) bool {
+	if responseError == nil {
+		return false
+	}
+	if responseError.Message != "" {
+		return true
+	}
+	switch code := responseError.Code.(type) {
+	case string:
+		return strings.TrimSpace(code) != "" && strings.TrimSpace(code) != "0"
+	case float64:
+		return code != 0
+	case int:
+		return code != 0
+	default:
+		return code != nil
+	}
+}
+
+func tencentStreamErrorStatus(code any, data string, responseStatus int) int {
+	codeText := strings.TrimSpace(fmt.Sprint(code))
+	switch {
+	case strings.HasPrefix(codeText, "InvalidParameter"), strings.HasPrefix(codeText, "UnsupportedOperation"),
+		strings.HasPrefix(codeText, "MissingParameter"), strings.HasPrefix(codeText, "UnknownParameter"),
+		strings.HasPrefix(codeText, "InvalidAction"), strings.HasPrefix(codeText, "NoSuchVersion"):
+		return http.StatusBadRequest
+	case strings.HasPrefix(codeText, "FailedOperation.SensitiveContent"),
+		strings.HasPrefix(codeText, "OperationDenied.TextIllegalDetected"),
+		strings.HasPrefix(codeText, "OperationDenied.ImageIllegalDetected"):
+		return http.StatusUnprocessableEntity
+	case strings.HasPrefix(codeText, "FailedOperation.EngineRequestTimeout"):
+		return http.StatusRequestTimeout
+	case strings.HasPrefix(codeText, "FailedOperation.EngineServerLimitExceeded"),
+		strings.HasPrefix(codeText, "FailedOperation.FreeResourcePackExhausted"),
+		strings.HasPrefix(codeText, "FailedOperation.ResourcePackExhausted"):
+		return http.StatusTooManyRequests
+	case strings.HasPrefix(codeText, "FailedOperation.EngineServerError"),
+		strings.HasPrefix(codeText, "FailedOperation.ConsoleServerError"):
+		return http.StatusInternalServerError
+	case strings.HasPrefix(codeText, "FailedOperation.ServiceNotActivated"),
+		strings.HasPrefix(codeText, "FailedOperation.ServiceStop"),
+		strings.HasPrefix(codeText, "FailedOperation.PartnerAccountUnSupport"),
+		strings.HasPrefix(codeText, "FailedOperation.SetPayModeExceed"):
+		return http.StatusServiceUnavailable
+	case strings.HasPrefix(codeText, "FailedOperation.UserUnAuthError"):
+		return http.StatusForbidden
+	case strings.HasPrefix(codeText, "FailedOperation"):
+		return http.StatusBadGateway
+	case strings.HasPrefix(codeText, "AuthFailure"):
+		return http.StatusUnauthorized
+	case strings.HasPrefix(codeText, "UnauthorizedOperation"):
+		return http.StatusForbidden
+	case strings.HasPrefix(codeText, "RequestLimitExceeded"), strings.HasPrefix(codeText, "LimitExceeded"):
+		return http.StatusTooManyRequests
+	case strings.HasPrefix(codeText, "InternalError"):
+		return http.StatusInternalServerError
+	case strings.HasPrefix(codeText, "ResourceUnavailable"), strings.HasPrefix(codeText, "ResourceInsufficient"),
+		strings.HasPrefix(codeText, "ResourceNotFound"):
+		return http.StatusServiceUnavailable
+	default:
+		return helper.ResolveUpstreamStreamErrorStatus(data, responseStatus)
+	}
 }
 
 func tencentHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -144,11 +309,11 @@ func tencentHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Resp
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	if tencentSb.Response.Error.Code != 0 {
+	if responseError, ok := tencentResponseError(&tencentSb.Response); ok {
 		return nil, types.WithOpenAIError(types.OpenAIError{
-			Message: tencentSb.Response.Error.Message,
-			Code:    tencentSb.Response.Error.Code,
-		}, resp.StatusCode)
+			Message: responseError.Message,
+			Code:    responseError.Code,
+		}, tencentStreamErrorStatus(responseError.Code, string(responseBody), resp.StatusCode))
 	}
 	fullTextResponse := responseTencent2OpenAI(&tencentSb.Response)
 	jsonResponse, err := common.Marshal(fullTextResponse)

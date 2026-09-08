@@ -1,6 +1,7 @@
 package xai
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -40,14 +41,27 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var responseTextBuilder strings.Builder
 	var toolCount int
 	var containStreamUsage bool
+	var streamErr *types.NewAPIError
 
 	helper.SetEventStreamHeaders(c)
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		var errorResp dto.OpenAITextResponse
+		if err := common.UnmarshalJsonStr(data, &errorResp); err == nil {
+			if upstreamErr := errorResp.GetOpenAIError(); upstreamErr.IsPresent() {
+				streamErr = types.WithOpenAIError(*upstreamErr, helper.ResolveUpstreamStreamErrorStatus(data, resp.StatusCode))
+				sr.Stop(streamErr)
+				return
+			}
+		}
 		var xAIResp *dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &xAIResp); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
-			sr.Error(err)
+			sr.ScannerError(err)
+			return
+		}
+		if xAIResp == nil {
+			sr.ScannerError(fmt.Errorf("unmarshal upstream xAI event: null response"))
 			return
 		}
 
@@ -63,16 +77,25 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		_ = openai.ProcessStreamResponse(*openaiResponse, &responseTextBuilder, &toolCount)
 		if err := helper.ObjectData(c, openaiResponse); err != nil {
 			common.SysLog(err.Error())
-			sr.Error(err)
+			streamErr = types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+			sr.ClientGone(err)
 		}
 	})
+	if streamErr != nil {
+		service.CloseResponseBodyGracefully(resp)
+		return nil, streamErr
+	}
 
 	if !containStreamUsage {
 		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		usage.CompletionTokens += toolCount * 7
 	}
 
-	helper.Done(c)
+	if err := helper.Done(c); err != nil {
+		info.StreamStatus.SetClientGone(err)
+		service.CloseResponseBodyGracefully(resp)
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody, types.ErrOptionWithSkipRetry())
+	}
 	service.CloseResponseBodyGracefully(resp)
 	return usage, nil
 }
