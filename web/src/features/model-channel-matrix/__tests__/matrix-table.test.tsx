@@ -53,14 +53,18 @@ describe('model-channel matrix table', () => {
     ).toEqual(['model-a', 'model-b'])
     expect(
       screen.getAllByRole('columnheader').map((header) => header.textContent)
-    ).toEqual(['Model', 'Alpha#7Enableddefault', 'Beta#8Enabledpremium'])
+    ).toEqual([
+      'Model* Override',
+      'Alpha#7Enableddefault',
+      'Beta#8Enabledpremium',
+    ])
     const cell = screen.getByRole('button', {
       name: 'Configure model-a on Alpha (#7)',
     })
     expect(within(cell).getByText('500')).toBeVisible()
     expect(within(cell).getByText('Unlimited')).toBeVisible()
     expect(within(cell).getAllByText('Inherit')).toHaveLength(3)
-    expect(within(cell).getByText('Override')).toBeVisible()
+    expect(within(cell).getByTitle('TPM: Unlimited (Override)')).toBeVisible()
     expect(cell).toHaveAccessibleDescription(
       expect.stringMatching(/RPM.*500.*Inherit.*TPM.*Unlimited.*Override/)
     )
@@ -72,7 +76,7 @@ describe('model-channel matrix table', () => {
     )
   })
 
-  test('keeps both headers fixed in one scroll region and wraps long names', () => {
+  test('keeps both headers fixed and truncates long names without losing their full text', () => {
     const fixture = createMatrixFixture()
     fixture.models = ['a-very-long-public-model-name-with-no-spaces']
     fixture.channels[0].name = 'a-very-long-channel-name-with-no-spaces'
@@ -80,17 +84,22 @@ describe('model-channel matrix table', () => {
     const region = screen.getByRole('region', { name: 'Model-channel matrix' })
     expect(region).toHaveClass('overflow-auto')
     expect(region).toHaveAttribute('tabindex', '0')
-    expect(screen.getByRole('rowheader')).toHaveClass(
-      'sticky',
-      'left-0',
-      'break-all'
+    expect(screen.getByRole('rowheader')).toHaveClass('sticky', 'left-0')
+    expect(screen.getByText(fixture.models[0])).toHaveClass('truncate')
+    expect(screen.getByText(fixture.models[0])).toHaveAttribute(
+      'title',
+      fixture.models[0]
     )
     expect(screen.getByRole('columnheader', { name: 'Model' })).toHaveClass(
       'sticky',
       'top-0',
       'left-0'
     )
-    expect(screen.getByText(fixture.channels[0].name)).toHaveClass('break-all')
+    expect(screen.getByText(fixture.channels[0].name)).toHaveClass('truncate')
+    expect(screen.getByText(fixture.channels[0].name)).toHaveAttribute(
+      'title',
+      fixture.channels[0].name
+    )
   })
 
   test('marks disabled channels and prevents editing a stale page during loading', () => {

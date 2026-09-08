@@ -55,22 +55,37 @@ function MatrixCellValues(props: { cell: MatrixCell; id: string }) {
     },
   ]
   return (
-    <span id={props.id} className='grid w-full grid-cols-2 gap-x-4 gap-y-2'>
-      {fields.map((field) => (
-        <span key={field.label} className='flex min-w-0 flex-col gap-0.5'>
-          <span className='text-muted-foreground text-xs font-normal'>
-            {field.label}
+    <span
+      id={props.id}
+      className='grid min-w-0 flex-1 grid-cols-[minmax(0,4fr)_minmax(0,6fr)] gap-x-1.5 gap-y-1 text-xs'
+    >
+      {fields.map((field) => {
+        const value =
+          field.capacity && field.value === 0
+            ? t('Unlimited')
+            : field.value.toLocaleString(toIntlLocale(i18n.language))
+        const source = field.override == null ? t('Inherit') : t('Override')
+        return (
+          <span
+            key={field.label}
+            className='flex min-w-0 items-baseline justify-between gap-0.5'
+            title={`${field.label}: ${value} (${source})`}
+          >
+            <span className='text-muted-foreground shrink-0 font-normal'>
+              {field.label}
+            </span>
+            <span className='flex min-w-0 items-baseline gap-0.5 font-semibold tabular-nums'>
+              <span className='truncate'>{value}</span>
+              {field.override != null && (
+                <span aria-hidden='true' className='text-primary shrink-0'>
+                  *
+                </span>
+              )}
+            </span>
+            <span className='sr-only'> {source}</span>
           </span>
-          <span className='font-semibold break-all tabular-nums'>
-            {field.capacity && field.value === 0
-              ? t('Unlimited')
-              : field.value.toLocaleString(toIntlLocale(i18n.language))}
-          </span>
-          <span className='text-muted-foreground text-xs font-normal'>
-            {field.override == null ? t('Inherit') : t('Override')}
-          </span>
-        </span>
-      ))}
+        )
+      })}
     </span>
   )
 }
@@ -102,37 +117,60 @@ export function MatrixTable(props: {
       className='focus-visible:outline-ring min-h-0 min-w-0 flex-1 overflow-auto rounded-lg border focus-visible:outline-2'
     >
       {/* A single scroll container keeps both sticky axes in the same viewport. */}
-      <table className='w-full border-separate border-spacing-0 text-sm'>
+      <table
+        className='table-fixed border-separate border-spacing-0 text-xs'
+        style={{ width: `${8 + props.data.channels.length * 12}rem` }}
+      >
         <caption className='sr-only'>
           {t('Models as rows, channels as columns.')}
         </caption>
+        <colgroup>
+          <col className='w-32' />
+          {props.data.channels.map((channel) => (
+            <col key={channel.id} className='w-48' />
+          ))}
+        </colgroup>
         <thead>
           <tr>
             <th
               scope='col'
-              className='bg-muted sticky top-0 left-0 z-30 min-w-48 border-r border-b px-4 py-3 text-left'
+              className='bg-muted sticky top-0 left-0 z-30 border-r border-b px-2 py-1.5 text-left'
             >
               {t('Model')}
+              <span
+                aria-hidden='true'
+                className='text-muted-foreground mt-1 block font-normal'
+              >
+                <span aria-hidden='true' className='text-primary'>
+                  *
+                </span>{' '}
+                {t('Override')}
+              </span>
             </th>
             {props.data.channels.map((channel) => (
               <th
                 key={channel.id}
                 scope='col'
-                className='bg-muted sticky top-0 z-20 min-w-64 border-r border-b px-4 py-3 text-left align-top'
+                className='bg-muted sticky top-0 z-20 border-r border-b px-2 py-1.5 text-left align-top'
               >
                 <div className='flex items-start justify-between gap-2'>
-                  <span className='max-w-52 break-all'>{channel.name}</span>
+                  <span className='min-w-0 truncate' title={channel.name}>
+                    {channel.name}
+                  </span>
                   <span className='text-muted-foreground shrink-0 font-normal'>
                     #{channel.id}
                   </span>
                 </div>
-                <div className='mt-1 flex flex-wrap items-center gap-1.5'>
+                <div className='mt-1 flex min-w-0 items-center gap-1'>
                   <Badge
                     variant={channel.status === 1 ? 'secondary' : 'outline'}
                   >
                     {channel.status === 1 ? t('Enabled') : t('Disabled')}
                   </Badge>
-                  <span className='text-muted-foreground max-w-64 text-xs font-normal break-all'>
+                  <span
+                    className='text-muted-foreground min-w-0 truncate font-normal'
+                    title={channel.groups.join(', ')}
+                  >
                     {channel.groups.join(', ')}
                   </span>
                 </div>
@@ -145,9 +183,11 @@ export function MatrixTable(props: {
             <tr key={model}>
               <th
                 scope='row'
-                className='bg-background sticky left-0 z-10 max-w-64 min-w-48 border-r border-b px-4 py-3 text-left align-top font-medium break-all'
+                className='bg-background sticky left-0 z-10 border-r border-b px-2 py-1 text-left font-medium'
               >
-                {model}
+                <span className='block truncate' title={model}>
+                  {model}
+                </span>
               </th>
               {props.data.channels.map((channel) => {
                 const cell = cells.get(
@@ -157,13 +197,14 @@ export function MatrixTable(props: {
                 return (
                   <td
                     key={channel.id}
-                    className='border-r border-b p-1.5 align-top'
+                    className='border-r border-b p-0.5 align-middle'
                   >
                     {cell ? (
                       <Button
                         type='button'
                         variant='ghost'
-                        className='h-auto min-h-32 w-full justify-start rounded-md p-3 text-left whitespace-normal'
+                        size='xs'
+                        className='h-12 w-full min-w-0 justify-start px-1.5 py-1 text-left'
                         aria-label={t(
                           'Configure {{model}} on {{channel}} (#{{id}})',
                           { model, channel: channel.name, id: channel.id }
@@ -178,9 +219,12 @@ export function MatrixTable(props: {
                         <MatrixCellValues cell={cell} id={descriptionId} />
                       </Button>
                     ) : (
-                      <div className='text-muted-foreground flex min-h-32 items-center justify-center gap-2 p-3'>
+                      <div
+                        className='text-muted-foreground flex h-12 items-center justify-center'
+                        title={t('Not configured')}
+                      >
                         <span aria-hidden='true'>—</span>
-                        {t('Not configured')}
+                        <span className='sr-only'>{t('Not configured')}</span>
                       </div>
                     )}
                   </td>
