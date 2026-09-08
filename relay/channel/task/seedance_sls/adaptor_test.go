@@ -1019,3 +1019,36 @@ func TestSeedanceSLSModelsHaveDefaultBillingRatios(t *testing.T) {
 	}
 	assert.InDelta(t, 4.794520547945205, defaults["doubao-seedance-2-5-260628"], 1e-12)
 }
+
+func TestSLSMappedMediaValidationRejectsFinalContent(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		override  map[string]interface{}
+		wantError bool
+	}{
+		{"mapped model validates media", nil, true},
+		{"final override removes invalid media", map[string]interface{}{"content": []any{map[string]any{"type": "text", "text": "A cat"}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(`{"model":"public-alias","content":[{"type":"text","text":"A cat"},{"type":"audio_url","audio_url":{"url":"data:audio/wav;base64,YQ=="}}]}`))
+			ctx.Request.Header.Set("Content-Type", gin.MIMEJSON)
+			defer common.CleanupBodyStorage(ctx)
+			info := &relaycommon.RelayInfo{UserId: 7, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "doubao-seedance-2-5", ParamOverride: tc.override}}
+			adaptor := &TaskAdaptor{}
+			require.Nil(t, adaptor.ValidateRequestAndSetAction(ctx, info))
+			taskErr := adaptor.ValidateMappedRequest(ctx, info)
+			if !tc.wantError {
+				require.Nil(t, taskErr)
+				return
+			}
+			require.NotNil(t, taskErr)
+			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+			assert.True(t, taskErr.LocalError)
+			assert.Equal(t, "invalid_request", taskErr.Code)
+			assert.Contains(t, taskErr.Message, "content[1].audio_url")
+			_, prepared := ctx.Get(preparedRequestContextKey)
+			assert.False(t, prepared)
+		})
+	}
+}

@@ -52,8 +52,12 @@ func PrepareAssetReferences(ctx context.Context, userId int, channelId int, payl
 	if len(references) == 0 {
 		return RewriteAssetReferences(userId, channelId, payload)
 	}
-	if len(references) > maxAutoImportAssetCount {
-		return nil, fmt.Errorf("at most %d direct asset references may be imported per request", maxAutoImportAssetCount)
+	limit := maxAutoImportAssetCount
+	if cache, ok := ctx.Value(seedanceMediaCacheKey{}).(*seedanceMediaCache); ok && cache.userID == userId && payload["model"] == cache.model && cache.maxDirectReferences > limit {
+		limit = cache.maxDirectReferences
+	}
+	if len(references) > limit {
+		return nil, fmt.Errorf("at most %d direct asset references may be imported per request", limit)
 	}
 
 	ctx, finish := BeginAssetLibraryOperation(ctx, userId, "AutoImport", "")
@@ -92,10 +96,33 @@ func PrepareAssetReferences(ctx context.Context, userId int, channelId int, payl
 		var asset *model.UserAsset
 		if len(assets) > 0 {
 			asset = &assets[0]
-		} else {
+			// A mutable source URL may now describe different media. Do not send an
+			// older imported clip after validating the bytes currently at that URL.
+			if cache, ok := ctx.Value(seedanceMediaCacheKey{}).(*seedanceMediaCache); ok && cache.userID == userId {
+				if verified, exists := cache.metadata[reference]; exists {
+					stored := AssetMediaMetadata{Format: asset.MediaFormat, FileSize: asset.FileSize, Width: asset.Width, Height: asset.Height, Duration: asset.Duration, FPS: asset.FPS}
+					if stored != verified {
+						asset = nil
+					}
+				}
+			}
+		}
+		if asset == nil {
 			assetID := "asset-na-" + common.GetUUID()
 			assetCtx = BeginAssetLibraryUpload(ctx, assetID)
-			metadata, validateErr := ValidateAssetLibraryMedia(assetCtx, reference.SourceURL, reference.AssetType)
+			var metadata AssetMediaMetadata
+			var validateErr error
+			cache, _ := ctx.Value(seedanceMediaCacheKey{}).(*seedanceMediaCache)
+			cached := false
+			if cache != nil && cache.userID == userId {
+				metadata, cached = cache.metadata[reference]
+			}
+			if cached {
+				validateErr = validateAssetLibraryMediaMetadata(reference.AssetType, metadata)
+			}
+			if !cached {
+				metadata, validateErr = ValidateAssetLibraryMedia(assetCtx, reference.SourceURL, reference.AssetType)
+			}
 			if validateErr != nil {
 				return nil, fmt.Errorf("validate direct %s asset: %w", strings.ToLower(reference.AssetType), validateErr)
 			}

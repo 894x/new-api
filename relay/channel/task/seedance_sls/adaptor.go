@@ -360,6 +360,17 @@ func (a *TaskAdaptor) ValidateMappedRequest(c *gin.Context, info *relaycommon.Re
 	}
 	request.Duration = duration
 	request.Seconds = ""
+	requestContext := context.Background()
+	if c.Request != nil {
+		requestContext = c.Request.Context()
+	}
+	requestContext, err = service.ValidateSeedanceMedia(requestContext, info.UserId, modelName, prepared)
+	if err != nil {
+		return localTaskError(err, "invalid_request")
+	}
+	if c.Request != nil {
+		c.Request = c.Request.WithContext(requestContext)
+	}
 	c.Set("task_request", request)
 	c.Set(preparedRequestContextKey, prepared)
 	return nil
