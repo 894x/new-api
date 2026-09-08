@@ -39,6 +39,8 @@ export interface AssetLibraryReadiness {
   asset_id: string
   channel_id: number
   status: string
+  error_code?: string
+  error_message?: string
   upload_started_at_ms?: number
   submitted_at_ms?: number
   first_active_at_ms?: number

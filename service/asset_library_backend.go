@@ -32,6 +32,7 @@ type assetLibraryCreateAssetResult struct {
 	AssetID string
 	GroupID string
 	Status  string
+	Error   *dto.AssetLibraryError
 }
 
 type assetLibraryBackend interface {
@@ -237,6 +238,7 @@ type seedanceSLSAssetData struct {
 	Name           string `json:"name"`
 	AssetType      string `json:"asset_type"`
 	SourceURL      string `json:"source_url"`
+	FailReason     string `json:"fail_reason"`
 }
 
 func (seedanceSLSAssetLibraryBackend) CreateAsset(ctx context.Context, config *model.ChannelAssetConfig, group *model.UserAssetGroup, groupReplica *model.UserAssetGroupReplica, asset *model.UserAsset) (*assetLibraryCreateAssetResult, error) {
@@ -265,6 +267,7 @@ func (seedanceSLSAssetLibraryBackend) CreateAsset(ctx context.Context, config *m
 		AssetID: strings.TrimSpace(result.LogicalID),
 		GroupID: groupID,
 		Status:  strings.TrimSpace(result.Status),
+		Error:   result.failure(),
 	}, nil
 }
 
@@ -289,7 +292,7 @@ func (seedanceSLSAssetLibraryBackend) GetAsset(ctx context.Context, config *mode
 	if err := callSeedanceSLSAssetLibrary(ctx, config, http.MethodGet, upstreamAssetId, nil, &result); err != nil {
 		return nil, err
 	}
-	return &AssetLibraryAssetDetails{
+	details := &AssetLibraryAssetDetails{
 		Id:          result.LogicalID,
 		Name:        result.Name,
 		URL:         result.SourceURL,
@@ -297,7 +300,24 @@ func (seedanceSLSAssetLibraryBackend) GetAsset(ctx context.Context, config *mode
 		AssetType:   result.AssetType,
 		Status:      result.Status,
 		ProjectName: assetLibraryProject(config),
-	}, nil
+	}
+	details.Error = result.failure()
+	return details, nil
+}
+
+func (result seedanceSLSAssetData) failure() *dto.AssetLibraryError {
+	if !strings.EqualFold(strings.TrimSpace(result.Status), "Failed") {
+		return nil
+	}
+	message := strings.TrimSpace(result.FailReason)
+	code := "AssetProcessingFailed"
+	if prefix, rest, ok := strings.Cut(message, ": "); ok && prefix != "" && assetTimingIdentifier(prefix) == prefix && !strings.ContainsAny(prefix, "/:") {
+		code, message = prefix, rest
+	}
+	if message == "" {
+		message = "Asset processing failed"
+	}
+	return &dto.AssetLibraryError{Code: code, Message: AssetLibraryFailureMessage(message)}
 }
 
 func (seedanceSLSAssetLibraryBackend) FormatAssetReference(upstreamAssetId string) string {

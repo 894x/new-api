@@ -667,6 +667,10 @@ func replicateAssetToChannelLocked(ctx context.Context, asset *model.UserAsset, 
 	observeAssetLibraryReplica(ctx, replica)
 	replica.LastErrorCode = ""
 	replica.LastError = ""
+	if result.Error != nil {
+		replica.LastErrorCode = result.Error.Code
+		replica.LastError = AssetLibraryFailureMessage(result.Error.Message)
+	}
 	if err := persistAssetLibraryReplica(ctx, replica); err != nil {
 		return false, err
 	}
@@ -1049,6 +1053,7 @@ func refreshAssetReplicaToChannelLocked(ctx context.Context, config *model.Chann
 		}
 		return nil, err
 	}
+	previousState, previousError := replica.State, replica.LastError
 	replica.UpstreamStatus = details.Status
 	replica.State = assetReplicaStateForStatus(details.Status)
 	if replica.State == model.AssetReplicaStateReady && replica.FirstActiveAtMS == 0 {
@@ -1062,10 +1067,13 @@ func refreshAssetReplicaToChannelLocked(ctx context.Context, config *model.Chann
 	replica.LastError = ""
 	if details.Error != nil {
 		replica.LastErrorCode = details.Error.Code
-		replica.LastError = common.MaskSensitiveInfo(common.LocalLogPreview(details.Error.Message))
+		replica.LastError = AssetLibraryFailureMessage(details.Error.Message)
 	}
 	if err := persistAssetLibraryReplica(ctx, replica); err != nil {
 		return nil, err
+	}
+	if replica.State == model.AssetReplicaStateFailed && (previousState != replica.State || (previousError == "" && replica.LastError != "")) {
+		recordAssetLibraryFailure(ctx, replica)
 	}
 	return details, nil
 }
@@ -1150,7 +1158,7 @@ func GetAssetReplicationSummary(assetId string) (*dto.AssetReplicaSummary, error
 	return summary, nil
 }
 
-func GetAssetLibraryAggregateState(assetId string) (string, *dto.AssetLibraryError, string, error) {
+func GetAssetLibraryAggregateState(assetId string, includeDetails bool) (string, *dto.AssetLibraryError, string, error) {
 	replicas, err := model.ListUserAssetReplicas(assetId)
 	if err != nil {
 		return "", nil, "", err
@@ -1159,6 +1167,7 @@ func GetAssetLibraryAggregateState(assetId string) (string, *dto.AssetLibraryErr
 	lastInferenceTime := ""
 	failed := 0
 	var assetError *dto.AssetLibraryError
+	hasFailureDetails := false
 	configs, err := model.GetEnabledChannelAssetConfigs()
 	if err != nil {
 		return "", nil, "", err
@@ -1178,8 +1187,13 @@ func GetAssetLibraryAggregateState(assetId string) (string, *dto.AssetLibraryErr
 		}
 		if strings.EqualFold(replica.UpstreamStatus, "Failed") {
 			failed++
-			if assetError == nil && (replica.LastErrorCode != "" || replica.LastError != "") {
+			if assetError == nil {
 				assetError = &dto.AssetLibraryError{Code: "AssetProcessingFailed", Message: "Asset processing failed"}
+			}
+			if includeDetails && !hasFailureDetails && replica.LastError != "" && replica.LastError != "Asset processing failed" {
+				assetError.Code = replica.LastErrorCode
+				assetError.Message = AssetLibraryFailureMessage(replica.LastError)
+				hasFailureDetails = true
 			}
 		}
 		if replica.LastInferenceTime > lastInferenceTime {

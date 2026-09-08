@@ -234,7 +234,7 @@ func operationAuditLogType(action string, params map[string]interface{}) int {
 		return LogTypeAssetUpload
 	case "asset_library.asset.delete", "asset_library.group.delete":
 		return LogTypeAssetDelete
-	case "asset_library.asset.update", "asset_library.group.update":
+	case "asset_library.asset.update", "asset_library.group.update", "asset_library.asset.failed":
 		return LogTypeAssetUpdate
 	case "asset_library.group.create":
 		return LogTypeAssetGroupCreate

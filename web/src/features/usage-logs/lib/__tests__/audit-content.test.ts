@@ -51,6 +51,11 @@ describe('asset library audit content', () => {
       expected: string
     }> = [
       {
+        action: 'asset_library.asset.failed',
+        params: { id: 'asset-na-failed' },
+        expected: 'Asset processing failed (ID: asset-na-failed)',
+      },
+      {
         action: 'asset_library.group.create',
         params: { id: 'group-na-1', name: 'Characters' },
         expected: 'Created asset group Characters (ID: group-na-1)',

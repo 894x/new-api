@@ -25,6 +25,7 @@ import { TableId } from '@/components/table-id'
 
 import type { Asset, AssetGroup } from '../types'
 import { getAssetStatusVariant } from './asset-columns'
+import { AssetFailureMessage } from './asset-failure-message'
 import { AssetRowActions } from './asset-row-actions'
 import { AssetThumbnail } from './asset-thumbnail'
 import { ReplicationBadge } from './replication-badge'
@@ -60,6 +61,7 @@ function AssetCardComponent(props: { row: Row<Asset>; group?: AssetGroup }) {
           <AssetRowActions row={props.row} />
         </div>
 
+        <AssetFailureMessage asset={asset} />
         <div className='flex flex-wrap gap-1'>
           <StatusBadge
             label={t(asset.AssetType)}
@@ -104,6 +106,7 @@ function AssetCardComponent(props: { row: Row<Asset>; group?: AssetGroup }) {
         <AssetRowActions row={props.row} />
       </div>
 
+      <AssetFailureMessage asset={asset} />
       <div className='grid grid-cols-2 gap-2.5 text-sm'>
         <div className='min-w-0'>
           <p className='text-muted-foreground text-xs'>{t('Asset Group')}</p>

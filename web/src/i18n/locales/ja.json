@@ -543,6 +543,8 @@
     "Asset name must be 64 characters or fewer": "素材名は 64 文字以内で入力してください",
     "Asset OpenAPI v1": "アセット OpenAPI v1",
     "Asset preview": "素材プレビュー",
+    "Asset processing failed": "素材の処理に失敗しました",
+    "Asset processing failed (ID: {{id}})": "素材の処理に失敗しました（ID: {{id}}）",
     "Asset service base URL": "素材サービスのベース URL",
     "Asset service URL is required": "素材サービス URL を入力してください",
     "Asset status refreshed.": "素材のステータスを更新しました。",

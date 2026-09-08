@@ -175,3 +175,37 @@ describe('asset library timeline', () => {
     expect(screen.queryByText('First Active Observation')).toBeNull()
   })
 })
+
+it('shows asset processing failure details even when the upstream HTTP request succeeded', () => {
+  render(
+    <AssetLibraryTimeline
+      timing={{
+        version: 1,
+        request_id: 'req-failed',
+        action: 'AssetFailed',
+        started_at_ms: 3000,
+        completed_at_ms: 3000,
+        duration_ms: 0,
+        outcome: 'failed',
+        stages: [],
+        replicas: [
+          {
+            asset_id: 'asset-na-failed',
+            channel_id: 6,
+            status: 'failed',
+            poll_count: 2,
+            submitted_at_ms: 1000,
+            last_polled_at_ms: 3000,
+            error_code: 'ContentRejected',
+            error_message: 'Input image violates copyright restrictions.',
+          },
+        ],
+      }}
+    />
+  )
+  expect(
+    screen.getByText('Input image violates copyright restrictions.')
+  ).toBeVisible()
+  expect(screen.getByText('ContentRejected')).toBeVisible()
+  expect(screen.queryByText('Waiting for Active Observation')).toBeNull()
+})

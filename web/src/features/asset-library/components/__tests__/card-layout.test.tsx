@@ -118,3 +118,22 @@ describe('asset library card layout', () => {
     expectContainerResponsiveGrid(container)
   })
 })
+
+test('shows the failure reason on the asset card', async () => {
+  const previous = { ...assets[0] }
+  assets[0] = {
+    ...previous,
+    Status: 'Failed',
+    Error: { Code: 'ContentRejected', Message: 'Copyright restrictions' },
+  }
+  try {
+    render(
+      <TestProviders>
+        <AssetsTable />
+      </TestProviders>
+    )
+    expect(await screen.findByText('Copyright restrictions')).toBeVisible()
+  } finally {
+    assets[0] = previous
+  }
+})

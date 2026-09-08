@@ -543,6 +543,8 @@
     "Asset name must be 64 characters or fewer": "Название ресурса не должно превышать 64 символа",
     "Asset OpenAPI v1": "OpenAPI v1 для ресурсов",
     "Asset preview": "Предпросмотр ресурса",
+    "Asset processing failed": "Ошибка обработки ресурса",
+    "Asset processing failed (ID: {{id}})": "Ошибка обработки ресурса (ID: {{id}})",
     "Asset service base URL": "Базовый URL службы ресурсов",
     "Asset service URL is required": "Требуется URL службы ресурсов",
     "Asset status refreshed.": "Статус ресурса обновлён.",

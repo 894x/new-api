@@ -211,12 +211,13 @@ export function AssetLibraryTimeline(props: { timing: AssetLibraryTiming }) {
             colorClass: 'bg-cyan-500',
           })
         }
+        let observationLabel = t('Waiting for Active Observation')
+        if (observed) observationLabel = t('First Active Observation')
+        else if (replica.status === 'failed') observationLabel = t('Failed')
         if (submitted > 0 && end >= submitted) {
           lifecycle.push({
             key: 'activation',
-            label: observed
-              ? t('First Active Observation')
-              : t('Waiting for Active Observation'),
+            label: observationLabel,
             durationMs: end - submitted,
             colorClass: 'bg-amber-500',
           })
@@ -234,6 +235,12 @@ export function AssetLibraryTimeline(props: { timing: AssetLibraryTiming }) {
                 replica.status !== 'failed' &&
                 t('Processing')}
             </p>
+            {(replica.error_code || replica.error_message) && (
+              <div className='text-destructive rounded-md border p-2 text-xs break-words'>
+                {replica.error_code && <p>{replica.error_code}</p>}
+                {replica.error_message && <p>{replica.error_message}</p>}
+              </div>
+            )}
             <TimingTimeline
               title={t('Asset Activation Timeline')}
               segments={lifecycle}

@@ -25,6 +25,7 @@ import { TruncatedText } from '@/components/truncated-text'
 import dayjs from '@/lib/dayjs'
 
 import type { Asset, AssetGroup } from '../types'
+import { AssetFailureMessage } from './asset-failure-message'
 import { AssetRowActions } from './asset-row-actions'
 import { AssetThumbnail } from './asset-thumbnail'
 import { ReplicationBadge } from './replication-badge'
@@ -71,6 +72,7 @@ export function useAssetColumns(
             value={row.original.Id}
             className='max-w-56 truncate text-xs'
           />
+          <AssetFailureMessage asset={row.original} />
         </div>
       ),
       size: 240,

@@ -477,6 +477,7 @@ const AUDIT_TEMPLATES: Record<string, string> = {
     'Updated asset (ID: {{id}}, type: {{asset_type}}, group: {{group_id}})',
   'asset_library.asset.delete':
     'Deleted asset (ID: {{id}}, type: {{asset_type}}, group: {{group_id}})',
+  'asset_library.asset.failed': 'Asset processing failed (ID: {{id}})',
   'asset_library.asset.sync':
     'Synchronized asset {{id}} (errors: {{error_count}})',
   'asset_library.group.sync':

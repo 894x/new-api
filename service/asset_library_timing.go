@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 )
 
 // Asset timelines contain allow-listed identifiers and measurements, never URLs,
-// credentials, provider bodies or arbitrary error messages. They are admin-only.
+// credentials or provider bodies. Bounded, redacted asset failure details are admin-only.
 type AssetLibraryTiming struct {
 	Version       int                        `json:"version"`
 	RequestID     string                     `json:"request_id"`
@@ -49,6 +50,8 @@ type AssetLibraryReadiness struct {
 	AssetID            string `json:"asset_id"`
 	ChannelID          int    `json:"channel_id"`
 	Status             string `json:"status"`
+	ErrorCode          string `json:"error_code,omitempty"`
+	ErrorMessage       string `json:"error_message,omitempty"`
 	UploadStartedAtMS  int64  `json:"upload_started_at_ms,omitempty"`
 	SubmittedAtMS      int64  `json:"submitted_at_ms,omitempty"`
 	FirstActiveAtMS    int64  `json:"first_active_at_ms,omitempty"`
@@ -217,6 +220,7 @@ func observeAssetLibraryReplica(ctx context.Context, replica *model.UserAssetRep
 	}
 	trace.failed = trace.failed || replica.State == model.AssetReplicaStateFailed
 	item := AssetLibraryReadiness{AssetID: replica.AssetId, ChannelID: replica.ChannelId, Status: replica.State,
+		ErrorCode: assetTimingIdentifier(replica.LastErrorCode), ErrorMessage: AssetLibraryFailureMessage(replica.LastError),
 		UploadStartedAtMS: replica.UploadStartedAtMS, SubmittedAtMS: replica.SubmittedAtMS, FirstActiveAtMS: replica.FirstActiveAtMS,
 		LastPolledAtMS: replica.LastPolledAtMS, LastProcessingAtMS: replica.LastProcessingAtMS, PollCount: replica.PollCount}
 	for i, previous := range trace.timing.Replicas {
@@ -228,6 +232,31 @@ func observeAssetLibraryReplica(ctx context.Context, replica *model.UserAssetRep
 	if len(trace.timing.Replicas) < 256 {
 		trace.timing.Replicas = append(trace.timing.Replicas, item)
 	}
+}
+
+// Queries stay out of usage logs, but a newly observed failure is a resource
+// state change. Preserve its diagnostic snapshot even after later retries.
+func recordAssetLibraryFailure(ctx context.Context, replica *model.UserAssetReplica) {
+	if model.LOG_DB == nil {
+		return
+	}
+	var asset model.UserAsset
+	if err := model.DB.Where("id = ?", replica.AssetId).First(&asset).Error; err != nil {
+		common.SysError("asset failure audit: could not resolve asset owner")
+		return
+	}
+	now := time.Now().UnixMilli()
+	timing := AssetLibraryTiming{Version: 1, Action: "AssetFailed", AssetID: replica.AssetId,
+		StartedAtMS: now, CompletedAtMS: now, Outcome: "failed", Stages: []*AssetLibraryTimingStage{}}
+	if trace := assetTrace(ctx); trace != nil {
+		timing.RequestID = trace.timing.RequestID
+	}
+	timing.Replicas = []AssetLibraryReadiness{{AssetID: replica.AssetId, ChannelID: replica.ChannelId, Status: replica.State,
+		ErrorCode: assetTimingIdentifier(replica.LastErrorCode), ErrorMessage: AssetLibraryFailureMessage(replica.LastError),
+		UploadStartedAtMS: replica.UploadStartedAtMS, SubmittedAtMS: replica.SubmittedAtMS, FirstActiveAtMS: replica.FirstActiveAtMS,
+		LastPolledAtMS: replica.LastPolledAtMS, LastProcessingAtMS: replica.LastProcessingAtMS, PollCount: replica.PollCount}}
+	model.RecordOperationAuditLog(asset.UserId, "Asset processing failed ("+asset.Id+")", "", "asset_library.asset.failed",
+		map[string]interface{}{"id": asset.Id}, map[string]interface{}{"asset_timing": timing}, nil, timing.RequestID)
 }
 
 // CreateAssetLibraryRecord measures logical persistence before replication.
@@ -283,4 +312,14 @@ func (guard *assetLibraryChannelGuard) Unlock() {
 			logger.LogInfo(guard.span.ctx, "asset_library.channel_released "+string(data))
 		}
 	}
+}
+
+// AssetLibraryFailureMessage is safe for bounded admin diagnostics regardless
+// of the server's debug logging configuration.
+func AssetLibraryFailureMessage(message string) string {
+	message = common.MaskSensitiveInfo(strings.TrimSpace(message))
+	if len(message) > common.LocalLogContentLimit {
+		message = strings.ToValidUTF8(message[:common.LocalLogContentLimit], "") + "..."
+	}
+	return message
 }

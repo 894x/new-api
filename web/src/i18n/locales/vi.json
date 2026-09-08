@@ -543,6 +543,8 @@
     "Asset name must be 64 characters or fewer": "Tên tài nguyên không được quá 64 ký tự",
     "Asset OpenAPI v1": "OpenAPI v1 cho tài nguyên",
     "Asset preview": "Xem trước tài nguyên",
+    "Asset processing failed": "Xử lý tài nguyên thất bại",
+    "Asset processing failed (ID: {{id}})": "Xử lý tài nguyên thất bại (ID: {{id}})",
     "Asset service base URL": "URL gốc của dịch vụ tài nguyên",
     "Asset service URL is required": "Cần nhập URL dịch vụ tài nguyên",
     "Asset status refreshed.": "Đã làm mới trạng thái tài nguyên.",

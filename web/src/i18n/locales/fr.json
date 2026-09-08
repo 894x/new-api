@@ -543,6 +543,8 @@
     "Asset name must be 64 characters or fewer": "Le nom doit contenir 64 caractères maximum",
     "Asset OpenAPI v1": "OpenAPI v1 des ressources",
     "Asset preview": "Aperçu de la ressource",
+    "Asset processing failed": "Échec du traitement du média",
+    "Asset processing failed (ID: {{id}})": "Échec du traitement du média (ID : {{id}})",
     "Asset service base URL": "URL de base du service de ressources",
     "Asset service URL is required": "L’URL du service de ressources est requise",
     "Asset status refreshed.": "État de la ressource actualisé.",

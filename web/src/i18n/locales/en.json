@@ -543,6 +543,8 @@
     "Asset name must be 64 characters or fewer": "Asset name must be 64 characters or fewer",
     "Asset OpenAPI v1": "Asset OpenAPI v1",
     "Asset preview": "Asset preview",
+    "Asset processing failed": "Asset processing failed",
+    "Asset processing failed (ID: {{id}})": "Asset processing failed (ID: {{id}})",
     "Asset service base URL": "Asset service base URL",
     "Asset service URL is required": "Asset service URL is required",
     "Asset status refreshed.": "Asset status refreshed.",

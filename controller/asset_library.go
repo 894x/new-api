@@ -560,7 +560,7 @@ func buildAssetLibraryResult(asset *model.UserAsset, details *service.AssetLibra
 			return dto.AssetResult{}, err
 		}
 	}
-	status, assetError, lastInferenceTime, err := service.GetAssetLibraryAggregateState(asset.Id)
+	status, assetError, lastInferenceTime, err := service.GetAssetLibraryAggregateState(asset.Id, includeReplication)
 	if err != nil {
 		return dto.AssetResult{}, err
 	}
@@ -588,6 +588,9 @@ func buildAssetLibraryResult(asset *model.UserAsset, details *service.AssetLibra
 		result.Status = details.Status
 		if details.Error != nil && (details.Error.Code != "" || details.Error.Message != "") {
 			result.Error = &dto.AssetLibraryError{Code: "AssetProcessingFailed", Message: "Asset processing failed"}
+			if includeReplication {
+				result.Error = &dto.AssetLibraryError{Code: details.Error.Code, Message: service.AssetLibraryFailureMessage(details.Error.Message)}
+			}
 		}
 		result.LastInferenceTime = details.LastInferenceTime
 	}

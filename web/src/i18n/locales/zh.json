@@ -543,6 +543,8 @@
     "Asset name must be 64 characters or fewer": "素材名称不能超过 64 个字符",
     "Asset OpenAPI v1": "素材 OpenAPI v1",
     "Asset preview": "素材预览",
+    "Asset processing failed": "素材处理失败",
+    "Asset processing failed (ID: {{id}})": "素材处理失败（ID：{{id}}）",
     "Asset service base URL": "素材服务基础 URL",
     "Asset service URL is required": "请输入素材服务 URL",
     "Asset status refreshed.": "素材状态已刷新。",
