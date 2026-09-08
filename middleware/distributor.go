@@ -29,6 +29,7 @@ type ModelRequest struct {
 	Model       string `json:"model"`
 	Group       string `json:"group,omitempty"`
 	RequestBody []byte `json:"-"`
+	Stream      bool   `json:"stream,omitempty"`
 }
 
 func Distribute() func(c *gin.Context) {
@@ -44,6 +45,8 @@ func Distribute() func(c *gin.Context) {
 		if len(modelRequest.RequestBody) > 0 {
 			common.SetContextKey(c, constant.ContextKeySelectionRequestBody, modelRequest.RequestBody)
 		}
+		dynamicRoutingEligible := shouldSelectChannel && isDynamicRoutingRequestEligible(c.Request.URL.Path, modelRequest.Stream)
+		common.SetContextKey(c, constant.ContextKeyDynamicRoutingEligible, dynamicRoutingEligible)
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -122,7 +125,12 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
+				preferredChannelID := 0
+				preferredChannelFound := false
+				if !dynamicRoutingEligible || !service.DynamicRoutingEnabled() {
+					preferredChannelID, preferredChannelFound = service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup)
+				}
+				if preferredChannelFound {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					parametersSupported := false
@@ -160,13 +168,14 @@ func Distribute() func(c *gin.Context) {
 
 				if channel == nil {
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:               c,
-						ModelName:         modelRequest.Model,
-						TokenGroup:        usingGroup,
-						RequestPath:       c.Request.URL.Path,
-						RequestBody:       modelRequest.RequestBody,
-						AllowedChannelIds: allowedChannelIds,
-						Retry:             common.GetPointer(0),
+						Ctx:                    c,
+						ModelName:              modelRequest.Model,
+						TokenGroup:             usingGroup,
+						RequestPath:            c.Request.URL.Path,
+						RequestBody:            modelRequest.RequestBody,
+						AllowedChannelIds:      allowedChannelIds,
+						Retry:                  common.GetPointer(0),
+						DynamicRoutingEligible: dynamicRoutingEligible,
 					})
 					if err != nil {
 						if errors.Is(err, model.ErrParameterCapabilityUnsupported) {
@@ -266,7 +275,7 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 		return nil, errors.New("invalid JSON request body")
 	}
 
-	values := gjson.GetManyBytes(requestBody, "model", "group")
+	values := gjson.GetManyBytes(requestBody, "model", "group", "stream")
 	model, err := getJSONStringValue(values[0], "model")
 	if err != nil {
 		return nil, err
@@ -285,6 +294,7 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 		Model:       model,
 		Group:       group,
 		RequestBody: requestBody,
+		Stream:      values[2].Type == gjson.True,
 	}, nil
 }
 
@@ -409,6 +419,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		if modelName != "" {
 			modelRequest.Model = modelName
 		}
+		modelRequest.Stream = strings.Contains(c.Request.URL.Path, ":streamGenerateContent")
 		c.Set("relay_mode", relayMode)
 	} else if !strings.HasPrefix(c.Request.URL.Path, "/v1/audio/transcriptions") && !strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
 		req, err := getModelFromRequest(c)
@@ -417,6 +428,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		}
 		modelRequest.Model = req.Model
 		modelRequest.RequestBody = req.RequestBody
+		modelRequest.Stream = req.Stream
 	}
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/realtime") {
 		//wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01
@@ -477,6 +489,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		modelRequest.Model = req.Model
 		modelRequest.Group = req.Group
 		modelRequest.RequestBody = req.RequestBody
+		modelRequest.Stream = req.Stream
 		common.SetContextKey(c, constant.ContextKeyTokenGroup, modelRequest.Group)
 	}
 
@@ -615,4 +628,18 @@ func extractModelNameFromGeminiPath(path string) string {
 
 	// 返回模型名部分
 	return path[startIndex : startIndex+colonIndex]
+}
+
+func isDynamicRoutingRequestEligible(path string, stream bool) bool {
+	if strings.HasPrefix(path, "/v1beta/models/") || strings.HasPrefix(path, "/v1/models/") {
+		return strings.Contains(path, ":streamGenerateContent")
+	}
+	if !stream || strings.HasPrefix(path, "/v1/responses/compact") {
+		return false
+	}
+	return strings.HasPrefix(path, "/v1/chat/completions") ||
+		strings.HasPrefix(path, "/pg/chat/completions") ||
+		strings.HasPrefix(path, "/v1/completions") ||
+		strings.HasPrefix(path, "/v1/messages") ||
+		strings.HasPrefix(path, "/v1/responses")
 }

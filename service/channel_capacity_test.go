@@ -20,9 +20,10 @@ import (
 )
 
 func TestChannelCapacitySpilloverPreservesAutoGroupAndParameterFilters(t *testing.T) {
-	for _, cache := range []bool{false, true} {
-		t.Run(fmt.Sprint(cache), func(t *testing.T) {
+	for _, tc := range []struct{ cache, dynamic bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		t.Run(fmt.Sprintf("cache=%t/dynamic=%t", tc.cache, tc.dynamic), func(t *testing.T) {
 			db := setupChannelSelectAutoGroupsTest(t)
+			configureDynamicRoutingForTest(t, tc.dynamic)
 			previousRedis, previousLimiter, previousClock := common.RedisEnabled, channelCapacityMemoryLimiter, channelCapacityNow
 			common.RedisEnabled = false
 			channelCapacityMemoryLimiter = channelcapacity.NewMemoryLimiter()
@@ -47,13 +48,13 @@ func TestChannelCapacitySpilloverPreservesAutoGroupAndParameterFilters(t *testin
 			setChannelSelectResolutionParameters(t, db, 8202, "720p")
 			setChannelSelectResolutionParameters(t, db, 8204, "720p")
 			model.InitChannelCache()
-			common.MemoryCacheEnabled = cache
+			common.MemoryCacheEnabled = tc.cache
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 			common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, []string{"vip", "default"})
 			common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, true)
-			param := &RetryParam{Ctx: c, TokenGroup: "auto", ModelName: "capacity-model", RequestPath: c.Request.URL.Path, RequestBody: []byte(`{"metadata":{"resolution":"1080p"}}`)}
+			param := &RetryParam{DynamicRoutingEligible: true, Ctx: c, TokenGroup: "auto", ModelName: "capacity-model", RequestPath: c.Request.URL.Path, RequestBody: []byte(`{"metadata":{"resolution":"1080p"}}`)}
 			info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI, RelayMode: relayconstant.RelayModeChatCompletions, OriginModelName: param.ModelName, ChannelMeta: &relaycommon.ChannelMeta{}}
 			needsTokens, err := ConfigureChannelModelCapacity(param, info)
 			require.NoError(t, err)

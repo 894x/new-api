@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,6 +36,49 @@ func newHTTP200ErrorTestContext(t *testing.T, body, contentType string, stream b
 		IsStream:    stream,
 	}
 	return c, recorder, resp, info
+}
+
+func TestOaiStreamEmbeddedErrorDynamicRoutingClassification(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	tests := []struct {
+		name       string
+		statusJSON string
+		wantStatus int
+		hard       bool
+	}{
+		{name: "unknown status is bad gateway", wantStatus: http.StatusBadGateway, hard: true},
+		{name: "explicit bad request is neutral", statusJSON: `,"status_code":400`, wantStatus: 400, hard: false},
+		{name: "explicit authentication error is hard", statusJSON: `,"status":401`, wantStatus: 401, hard: true},
+		{name: "explicit rate limit is hard", statusJSON: `,"status_code":429`, wantStatus: 429, hard: true},
+		{name: "explicit server error is hard", statusJSON: `,"status":500`, wantStatus: 500, hard: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := fmt.Sprintf(`{"error":{"code":"upstream_error","message":"failed"}%s}`, tt.statusJSON)
+			c, _, resp, info := newHTTP200ErrorTestContext(t, "data: "+payload+"\n\n", "text/event-stream", true)
+			info.OriginModelName = "public-model"
+			info.BeginDynamicRoutingAttempt(10, info.GetChannelType(), info.OriginModelName, true)
+			info.MarkAttemptUpstreamStarted()
+			info.SetAttemptHTTPStatus(resp.StatusCode)
+
+			usage, handlerErr := OaiStreamHandler(c, info, resp)
+			require.Nil(t, usage)
+			require.NotNil(t, handlerErr)
+			assert.Equal(t, tt.wantStatus, handlerErr.StatusCode)
+			sample, ok := info.FinishDynamicRoutingAttempt(handlerErr)
+
+			require.True(t, ok)
+			assert.Equal(t, tt.hard, sample.HardFailure)
+			assert.False(t, sample.Success)
+		})
+	}
 }
 
 func TestOpenAIChatHandlersRejectHTTP200BusinessError(t *testing.T) {

@@ -64,7 +64,10 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	channel.SetupApiRequestHeader(info, c, req)
 	keyParts := strings.Split(info.ApiKey, "|")
 	if len(keyParts) == 0 || keyParts[0] == "" {
-		return errors.New("invalid API key: authorization token is required")
+		return types.NewError(
+			errors.New("invalid API key: authorization token is required"),
+			types.ErrorCodeChannelInvalidKey,
+		)
 	}
 	if len(keyParts) > 1 {
 		if keyParts[1] != "" {

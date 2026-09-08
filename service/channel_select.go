@@ -11,18 +11,32 @@ import (
 )
 
 type RetryParam struct {
-	Ctx         *gin.Context
-	TokenGroup  string
-	ModelName   string
-	RequestPath string
-	RequestBody []byte
+	Ctx                    *gin.Context
+	TokenGroup             string
+	ModelName              string
+	RequestPath            string
+	RequestBody            []byte
+	Capacity               *ChannelCapacityState
+	DynamicRoutingEligible bool
 
 	// AllowedChannelIds is nil for ordinary requests. A non-nil map restricts
 	// selection to channels that can resolve every local asset reference.
-	Capacity          *ChannelCapacityState
-	AllowedChannelIds map[int]struct{}
-	Retry             *int
-	resetNextTry      bool
+	AllowedChannelIds   map[int]struct{}
+	AttemptedChannelIds map[int]struct{}
+	Retry               *int
+	resetNextTry        bool
+}
+
+func (p *RetryParam) MarkAttempted(channelID int) {
+	if p.AttemptedChannelIds == nil {
+		p.AttemptedChannelIds = make(map[int]struct{})
+	}
+	p.AttemptedChannelIds[channelID] = struct{}{}
+}
+
+func (p *RetryParam) HasAttempted(channelID int) bool {
+	_, ok := p.AttemptedChannelIds[channelID]
+	return ok
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -122,7 +136,8 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, err = selectChannelWithCapacity(param, autoGroup, priorityRetry)
+			var allAttempted bool
+			channel, allAttempted, err = getSatisfiedChannelForRoute(param, autoGroup, priorityRetry)
 			if err != nil && !errors.Is(err, model.ErrParameterCapabilityUnsupported) {
 				return nil, autoGroup, err
 			}
@@ -130,6 +145,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				lastSelectionErr = err
 			}
 			if channel == nil {
+				if allAttempted && !crossGroupRetry {
+					return nil, autoGroup, nil
+				}
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
 				logger.LogDebug(param.Ctx, "No available channel in group %s for model %s at priorityRetry %d, trying next group", autoGroup, param.ModelName, priorityRetry)
@@ -176,7 +194,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			return nil, selectGroup, lastSelectionErr
 		}
 	} else {
-		channel, err = selectChannelWithCapacity(param, param.TokenGroup, param.GetRetry())
+		channel, _, err = getSatisfiedChannelForRoute(param, param.TokenGroup, param.GetRetry())
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}

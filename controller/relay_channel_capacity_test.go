@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,19 @@ import (
 )
 
 func TestRelayChannelCapacitySharesUpstreamLimitsAndSpillsBeforeDispatch(t *testing.T) {
+	for _, dynamic := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dynamic=%t", dynamic), func(t *testing.T) {
+			testRelayChannelCapacitySpillover(t, dynamic)
+		})
+	}
+}
+
+func testRelayChannelCapacitySpillover(t *testing.T, dynamic bool) {
+	previous := dynamic_routing_setting.GetSetting()
+	configured := previous
+	configured.Enabled = dynamic
+	require.NoError(t, dynamic_routing_setting.ReplaceAndSync(configured))
+	t.Cleanup(func() { require.NoError(t, dynamic_routing_setting.ReplaceAndSync(previous)) })
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.UserSubscription{}))
 	oldCache, oldRetry, oldRatio, oldCount := common.MemoryCacheEnabled, common.RetryTimes, ratio_setting.ModelRatio2JSONString(), constant.CountToken
@@ -45,6 +59,12 @@ func TestRelayChannelCapacitySharesUpstreamLimitsAndSpillsBeforeDispatch(t *test
 	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		firstHits.Add(1)
 		assert.Equal(t, "organization-first", r.Header.Get("OpenAI-Organization"))
+		if dynamic {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, err := w.Write([]byte("data: {\"id\":\"upstream-stream\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))
+			assert.NoError(t, err)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, err := w.Write([]byte(`{"id":"upstream-1","object":"chat.completion","model":"mapped-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
 		assert.NoError(t, err)
@@ -53,6 +73,12 @@ func TestRelayChannelCapacitySharesUpstreamLimitsAndSpillsBeforeDispatch(t *test
 	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		secondHits.Add(1)
 		assert.Empty(t, r.Header.Get("OpenAI-Organization"))
+		if dynamic {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, err := w.Write([]byte("data: {\"id\":\"upstream-stream\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))
+			assert.NoError(t, err)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, err := w.Write([]byte(`{"id":"upstream-2","object":"chat.completion","model":"mapped-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
 		assert.NoError(t, err)
@@ -75,8 +101,9 @@ func TestRelayChannelCapacitySharesUpstreamLimitsAndSpillsBeforeDispatch(t *test
 	for i := range 3 {
 		recorder := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(recorder)
-		c.Request = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"capacity-http-regression","messages":[{"role":"user","content":"hi"}],"max_tokens":1}`))
+		c.Request = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(fmt.Sprintf(`{"model":"capacity-http-regression","messages":[{"role":"user","content":"hi"}],"max_tokens":1,"stream":%t}`, dynamic)))
 		c.Request.Header.Set("Content-Type", "application/json")
+		common.SetContextKey(c, constant.ContextKeyDynamicRoutingEligible, dynamic)
 		common.SetContextKey(c, constant.ContextKeyUserId, 8801+i)
 		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")

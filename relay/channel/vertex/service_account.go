@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/bytedance/gopkg/cache/asynccache"
@@ -51,7 +52,10 @@ func getAccessToken(a *Adaptor, info *relaycommon.RelayInfo) (string, error) {
 
 	signedJWT, err := createSignedJWT(a.AccountCredentials.ClientEmail, a.AccountCredentials.PrivateKey)
 	if err != nil {
-		return "", fmt.Errorf("failed to create signed JWT: %w", err)
+		return "", types.NewError(
+			fmt.Errorf("failed to create signed JWT: %w", err),
+			types.ErrorCodeChannelInvalidKey,
+		)
 	}
 	newToken, err := exchangeJwtForAccessToken(signedJWT, info)
 	if err != nil {
