@@ -141,6 +141,20 @@ describe('ParameterCapabilityEditorDialog JSON editing', () => {
     domWindow.close()
   })
 
+  test('saves an applied built-in template through the channel editor', async () => {
+    const saved: string[] = []
+    rendered = await renderDialog((value) => saved.push(value))
+    await act(async () => findButton('Built-in templates')?.click())
+    expect(findButton('Apply template')).toBeDefined()
+    await act(async () => findButton('Apply template')?.click())
+    expect(saved).toEqual([])
+    await act(async () => findButton('Save')?.click())
+    expect(saved).toHaveLength(1)
+    const config = JSON.parse(saved[0])
+    expect(config.rules[0].selector.value).toBe('doubao-seedance-2-0-260128')
+    expect(config.rules[0].parameters.duration.allowed_values).toContain('-1')
+  })
+
   test('saves a valid JSON draft through the JSON editor tab', async () => {
     const saved: string[] = []
     rendered = await renderDialog((value) => saved.push(value))

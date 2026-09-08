@@ -37,7 +37,11 @@ type AssetMediaMetadata struct {
 
 // ValidateAssetLibraryMedia downloads a URL-backed asset through the protected
 // fetch path, inspects its content, and enforces the documented media limits.
-func ValidateAssetLibraryMedia(ctx context.Context, sourceURL string, assetType string) (metadata AssetMediaMetadata, err error) {
+func ValidateAssetLibraryMedia(ctx context.Context, sourceURL string, assetType string) (AssetMediaMetadata, error) {
+	return validateRemoteAssetMedia(ctx, sourceURL, assetType, validateAssetLibraryMediaMetadata)
+}
+
+func validateRemoteAssetMedia(ctx context.Context, sourceURL string, assetType string, validateMetadata func(string, AssetMediaMetadata) error) (metadata AssetMediaMetadata, err error) {
 	download := startAssetLibraryStage(ctx, "source_download", "", "", 0)
 	defer func() {
 		if download.stage.Outcome == "running" {
@@ -52,14 +56,14 @@ func ValidateAssetLibraryMedia(ctx context.Context, sourceURL string, assetType 
 		return AssetMediaMetadata{}, errors.New("media URL could not be downloaded")
 	}
 	defer response.Body.Close()
-	return inspectDownloadedAssetLibraryMedia(ctx, assetType, response, download)
+	return inspectDownloadedAssetLibraryMedia(ctx, assetType, response, download, validateMetadata)
 }
 
 func validateAssetLibraryMediaResponse(ctx context.Context, assetType string, response *http.Response) (AssetMediaMetadata, error) {
-	return inspectDownloadedAssetLibraryMedia(ctx, assetType, response, nil)
+	return inspectDownloadedAssetLibraryMedia(ctx, assetType, response, nil, validateAssetLibraryMediaMetadata)
 }
 
-func inspectDownloadedAssetLibraryMedia(ctx context.Context, assetType string, response *http.Response, download *assetLibrarySpan) (result AssetMediaMetadata, err error) {
+func inspectDownloadedAssetLibraryMedia(ctx context.Context, assetType string, response *http.Response, download *assetLibrarySpan, validateMetadata func(string, AssetMediaMetadata) error) (result AssetMediaMetadata, err error) {
 	if response.StatusCode != http.StatusOK {
 		return AssetMediaMetadata{}, fmt.Errorf("media URL returned HTTP %d", response.StatusCode)
 	}
@@ -106,7 +110,7 @@ func inspectDownloadedAssetLibraryMedia(ctx context.Context, assetType string, r
 	if err != nil {
 		return AssetMediaMetadata{}, err
 	}
-	if err := validateAssetLibraryMediaMetadata(assetType, metadata); err != nil {
+	if err := validateMetadata(assetType, metadata); err != nil {
 		return AssetMediaMetadata{}, err
 	}
 	return metadata, nil
