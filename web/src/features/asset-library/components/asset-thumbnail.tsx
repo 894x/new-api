@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 import type { Asset } from '../types'
+import { AssetImage } from './asset-image'
 import { useAssetLibrary } from './asset-library-provider'
 
 export function AssetThumbnail(props: {
@@ -43,10 +44,9 @@ export function AssetThumbnail(props: {
         title={t('Preview')}
         onClick={() => openAssetDialog('preview-asset', props.asset)}
       >
-        <img
-          src={props.asset.URL}
-          alt={props.asset.Name || t('Asset preview')}
-          loading='lazy'
+        <AssetImage
+          asset={props.asset}
+          lazy
           className={cn(
             'size-12 rounded-md border object-cover transition-opacity group-hover/button:opacity-90',
             props.className

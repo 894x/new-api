@@ -65,6 +65,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/oauth/:provider", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TryUserAuth(), controller.HandleOAuth)
 		apiRouter.GET("/ratio_config", middleware.CriticalRateLimit(), controller.GetRatioConfig)
 		apiRouter.POST("/asset-library", middleware.TokenOrUserAuth(), controller.AssetLibraryAction)
+		apiRouter.GET("/asset-library/assets/:id/preview", middleware.UserAuth(), controller.GetAssetLibraryImagePreview)
 
 		apiRouter.POST("/stripe/webhook", anonymousRequestBodyLimit, controller.StripeWebhook)
 		apiRouter.POST("/creem/webhook", anonymousRequestBodyLimit, controller.CreemWebhook)

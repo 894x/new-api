@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, test } from 'vitest'
@@ -48,10 +49,12 @@ describe('AssetThumbnail preview', () => {
   test('opens the image preview when clicked', async () => {
     const user = userEvent.setup()
     render(
-      <AssetLibraryProvider>
-        <AssetThumbnail asset={imageAsset} />
-        <PreviewState />
-      </AssetLibraryProvider>
+      <QueryClientProvider client={new QueryClient()}>
+        <AssetLibraryProvider>
+          <AssetThumbnail asset={imageAsset} />
+          <PreviewState />
+        </AssetLibraryProvider>
+      </QueryClientProvider>
     )
 
     await user.click(
@@ -64,10 +67,12 @@ describe('AssetThumbnail preview', () => {
   test('opens the image preview from the keyboard', async () => {
     const user = userEvent.setup()
     render(
-      <AssetLibraryProvider>
-        <AssetThumbnail asset={imageAsset} />
-        <PreviewState />
-      </AssetLibraryProvider>
+      <QueryClientProvider client={new QueryClient()}>
+        <AssetLibraryProvider>
+          <AssetThumbnail asset={imageAsset} />
+          <PreviewState />
+        </AssetLibraryProvider>
+      </QueryClientProvider>
     )
 
     await user.tab()
@@ -81,9 +86,11 @@ describe('AssetThumbnail preview', () => {
 
   test('keeps non-image placeholders non-interactive', () => {
     render(
-      <AssetLibraryProvider>
-        <AssetThumbnail asset={{ ...imageAsset, AssetType: 'Video' }} />
-      </AssetLibraryProvider>
+      <QueryClientProvider client={new QueryClient()}>
+        <AssetLibraryProvider>
+          <AssetThumbnail asset={{ ...imageAsset, AssetType: 'Video' }} />
+        </AssetLibraryProvider>
+      </QueryClientProvider>
     )
 
     expect(screen.queryByRole('button')).not.toBeInTheDocument()

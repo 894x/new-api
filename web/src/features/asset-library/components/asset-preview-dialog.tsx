@@ -42,6 +42,7 @@ import {
 import { assetLibraryQueryKeys, getAssetLibraryErrorMessage } from '../lib'
 import type { Asset } from '../types'
 import { AdminReplicaDetails } from './admin-replica-details'
+import { AssetImage } from './asset-image'
 import { useAssetLibrary } from './asset-library-provider'
 import { ReplicationBadge } from './replication-badge'
 
@@ -63,9 +64,8 @@ function AssetMediaPreview(props: { asset: Asset }) {
   if (asset.AssetType === 'Image') {
     return (
       <div className='bg-muted/30 flex min-h-56 items-center justify-center rounded-lg border p-2'>
-        <img
-          src={asset.URL}
-          alt={asset.Name || t('Asset preview')}
+        <AssetImage
+          asset={asset}
           className='max-h-[60vh] max-w-full rounded object-contain'
         />
       </div>

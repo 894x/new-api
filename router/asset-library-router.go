@@ -13,6 +13,7 @@ func registerAssetLibraryAdminRoutes(apiRouter *gin.RouterGroup) {
 	assetLibraryRoute := apiRouter.Group("/asset-library/admin")
 	assetLibraryRoute.Use(middleware.AdminAuth())
 	assetLibraryRoute.POST("/users/:user_id", controller.AdminAssetLibraryAction)
+	assetLibraryRoute.GET("/users/:user_id/assets/:id/preview", controller.GetAssetLibraryImagePreview)
 	for _, route := range assetLibraryAdminPermissionRoutes {
 		assetLibraryRoute.Handle(
 			route.method,
