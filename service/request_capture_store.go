@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,15 +22,13 @@ var requestCaptureStore *RequestCaptureStore
 var captureIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 type RequestCaptureStore struct {
-	root      string
-	id        string
-	retention time.Duration
-	maxBytes  int64
-	slots     chan struct{}
-	queue     chan *RequestCaptureSession
-	stop      chan struct{}
-	done      chan struct{}
-	stopOnce  sync.Once
+	root     string
+	id       string
+	slots    chan struct{}
+	queue    chan *RequestCaptureSession
+	stop     chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 // StartRequestCaptureStorage uses a persistent volume. An installation marker
@@ -41,18 +38,7 @@ func StartRequestCaptureStorage() {
 	if root == "" {
 		root = filepath.Join("data", "request-captures")
 	}
-	days, maxGB := 3, 10
-	for key, target := range map[string]*int{"REQUEST_CAPTURE_RETENTION_DAYS": &days, "REQUEST_CAPTURE_MAX_GB": &maxGB} {
-		if raw := os.Getenv(key); raw != "" {
-			value, err := strconv.Atoi(raw)
-			if err != nil || value < 1 || value > 365 {
-				common.SysError("invalid request capture storage limits; capture unavailable")
-				return
-			}
-			*target = value
-		}
-	}
-	store, err := newRequestCaptureStore(root, time.Duration(days)*24*time.Hour, int64(maxGB)<<30)
+	store, err := newRequestCaptureStore(root)
 	if err != nil {
 		common.SysError("request capture storage initialization failed; capture unavailable")
 		return
@@ -110,7 +96,7 @@ func (store *RequestCaptureStore) recoverInterrupted() error {
 	})
 }
 
-func newRequestCaptureStore(root string, retention time.Duration, maxBytes int64) (*RequestCaptureStore, error) {
+func newRequestCaptureStore(root string) (*RequestCaptureStore, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -136,17 +122,19 @@ func newRequestCaptureStore(root string, retention time.Duration, maxBytes int64
 	if err != nil || !captureIDPattern.Match(id) {
 		return nil, errors.New("invalid capture store identity")
 	}
-	return &RequestCaptureStore{root: abs, id: string(id), retention: retention, maxBytes: maxBytes,
+	return &RequestCaptureStore{root: abs, id: string(id),
 		slots: make(chan struct{}, 8), queue: make(chan *RequestCaptureSession, 8), stop: make(chan struct{}), done: make(chan struct{})}, nil
 }
 
 func (store *RequestCaptureStore) run() {
 	defer close(store.done)
-	ticker := time.NewTicker(time.Hour)
+	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
+	lastCapacity := model.GetRequestCaptureStorageSettings().MaxGiB
 	if err := store.cleanup(0); err != nil {
 		common.SysError("request capture cleanup failed")
 	}
+	lastCleanup := time.Now()
 	for {
 		select {
 		case <-store.stop:
@@ -159,8 +147,13 @@ func (store *RequestCaptureStore) run() {
 			store.persist(session)
 			<-store.slots
 		case <-ticker.C:
-			if err := store.cleanup(0); err != nil {
-				common.SysError("request capture cleanup failed")
+			capacity := model.GetRequestCaptureStorageSettings().MaxGiB
+			if capacity != lastCapacity || time.Since(lastCleanup) >= time.Hour {
+				if err := store.cleanup(0); err != nil {
+					common.SysError("request capture cleanup failed")
+					continue
+				}
+				lastCapacity, lastCleanup = capacity, time.Now()
 			}
 		}
 	}
@@ -273,7 +266,7 @@ func (store *RequestCaptureStore) write(path string, record *model.RequestCaptur
 	if sizeErr != nil {
 		return sizeErr
 	}
-	if total+stat.Size() > store.maxBytes {
+	if total+stat.Size() > int64(model.GetRequestCaptureStorageSettings().MaxGiB)<<30 {
 		err = store.cleanup(stat.Size())
 	}
 	if err != nil {
@@ -289,7 +282,8 @@ func (store *RequestCaptureStore) write(path string, record *model.RequestCaptur
 // cleanup evicts oldest files before admitting new bytes and retains small
 // expired indexes for seven additional days so the UI can explain their absence.
 func (store *RequestCaptureStore) cleanup(incoming int64) error {
-	if incoming > store.maxBytes {
+	maxBytes := int64(model.GetRequestCaptureStorageSettings().MaxGiB) << 30
+	if incoming > maxBytes {
 		return errors.New("capture exceeds storage limit")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -306,7 +300,7 @@ func (store *RequestCaptureStore) cleanup(incoming int64) error {
 	for i := range records {
 		record := &records[i]
 		expired := record.ExpiresAt <= now
-		if !expired && (total+incoming <= store.maxBytes || record.StoredBytes == 0) {
+		if !expired && (total+incoming <= maxBytes || record.StoredBytes == 0) {
 			continue
 		}
 		path, err := store.path(record)
@@ -330,7 +324,7 @@ func (store *RequestCaptureStore) cleanup(incoming int64) error {
 			return err
 		}
 	}
-	if total+incoming > store.maxBytes {
+	if total+incoming > maxBytes {
 		return errors.New("capture storage full")
 	}
 	return nil

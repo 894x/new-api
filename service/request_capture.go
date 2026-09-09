@@ -72,9 +72,10 @@ func BeginRequestCapture(c *gin.Context) *RequestCaptureSession {
 	id := common.GetUUID()
 	id = strings.ReplaceAll(id, "-", "")
 	now := time.Now()
+	retention := time.Duration(model.GetRequestCaptureStorageSettings().RetentionDays) * 24 * time.Hour
 	s := &RequestCaptureSession{store: store, remaining: captureBudget, Record: model.RequestCapture{
 		ID: id, RequestID: c.GetString(common.RequestIdKey), UserID: policy.UserID,
-		StoreID: store.id, CreatedAt: now.Unix(), ExpiresAt: now.Add(store.retention).Unix(), Status: "recording",
+		StoreID: store.id, CreatedAt: now.Unix(), ExpiresAt: now.Add(retention).Unix(), Status: "recording",
 	}}
 	select {
 	case store.slots <- struct{}{}:

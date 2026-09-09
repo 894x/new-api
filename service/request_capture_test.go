@@ -28,10 +28,19 @@ func captureFixture(t *testing.T) (*RequestCaptureStore, *gin.Context, *httptest
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, db.AutoMigrate(&model.RequestCapturePolicy{}, &model.RequestCapture{}))
+	require.NoError(t, db.AutoMigrate(&model.RequestCapturePolicy{}, &model.RequestCapture{}, &model.Option{}))
+	common.OptionMapRWMutex.Lock()
+	previousOptions := common.OptionMap
+	common.OptionMap = map[string]string{}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previousOptions
+		common.OptionMapRWMutex.Unlock()
+	})
 	previousDB, previousStore := model.DB, requestCaptureStore
 	model.DB = db
-	store, err := newRequestCaptureStore(t.TempDir(), 72*time.Hour, 10<<20)
+	store, err := newRequestCaptureStore(t.TempDir())
 	require.NoError(t, err)
 	requestCaptureStore = store
 	t.Cleanup(func() { model.DB, requestCaptureStore = previousDB, previousStore; _ = sqlDB.Close() })
@@ -232,12 +241,33 @@ func TestRequestCaptureCapacityEvictsFileBeforeNewArchive(t *testing.T) {
 	require.NoError(t, err)
 	path, err := store.path(record)
 	require.NoError(t, err)
-	store.maxBytes = record.StoredBytes
-	require.NoError(t, store.cleanup(record.StoredBytes))
+	record.StoredBytes = 1 << 30
+	require.NoError(t, model.SaveRequestCapture(context.Background(), record))
+	require.NoError(t, model.UpdateOption(model.RequestCaptureStorageOptionKey, `{"retention_days":3,"max_gib":1}`))
+	require.NoError(t, store.cleanup(1))
 	assert.NoFileExists(t, path)
 	record, err = model.FindRequestCapture(context.Background(), s.Record.RequestID)
 	require.NoError(t, err)
 	assert.Equal(t, "storage_limit", record.Reason)
+}
+
+func TestRequestCaptureSettingsApplyWithoutRestartAndKeepExistingExpiry(t *testing.T) {
+	store, c, _ := captureFixture(t)
+	require.NoError(t, model.SetRequestCapturePolicy(context.Background(), model.RequestCapturePolicy{UserID: 7, Enabled: true}))
+	first := BeginRequestCapture(c)
+	require.NotNil(t, first)
+	assert.Equal(t, int64(3*24*60*60), first.Record.ExpiresAt-first.Record.CreatedAt)
+	first.Finish()
+	store.persist(<-store.queue)
+	require.NoError(t, model.UpdateOption(model.RequestCaptureStorageOptionKey, `{"retention_days":7,"max_gib":2}`))
+	c.Set(common.RequestIdKey, "capture-after-settings-change")
+	second := BeginRequestCapture(c)
+	require.NotNil(t, second)
+	assert.Equal(t, int64(7*24*60*60), second.Record.ExpiresAt-second.Record.CreatedAt)
+	previous, err := model.FindRequestCapture(context.Background(), first.Record.RequestID)
+	require.NoError(t, err)
+	assert.Equal(t, first.Record.ExpiresAt, previous.ExpiresAt)
+	assert.Equal(t, 2, model.GetRequestCaptureStorageSettings().MaxGiB)
 }
 
 func TestRequestCaptureHTTPErrorThenStreamingRetryRetainsActualExchanges(t *testing.T) {

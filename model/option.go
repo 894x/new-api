@@ -35,6 +35,7 @@ func AllOption() ([]*Option, error) {
 func InitOptionMap() {
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap = make(map[string]string)
+	common.OptionMap[RequestCaptureStorageOptionKey] = DefaultRequestCaptureStorageJSON
 
 	// 添加原有的系统配置
 	common.OptionMap["FileUploadPermission"] = strconv.Itoa(common.FileUploadPermission)
@@ -278,6 +279,10 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == RequestCaptureStorageOptionKey {
+		_, err := ParseRequestCaptureStorageSettings(value)
+		return err
+	}
 	if strings.HasPrefix(key, dynamic_routing_setting.OptionPrefix) {
 		return fmt.Errorf("dynamic routing settings must be updated atomically")
 	}
@@ -442,6 +447,11 @@ func applyGroupPricingOptions(groupRatios, modelTieredRatios string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	if key == RequestCaptureStorageOptionKey {
+		if _, err := ParseRequestCaptureStorageSettings(value); err != nil {
+			return err
+		}
+	}
 	if strings.HasPrefix(key, dynamic_routing_setting.OptionPrefix) {
 		return fmt.Errorf("dynamic routing settings must be updated atomically")
 	}

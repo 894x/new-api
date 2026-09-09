@@ -77,6 +77,7 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import type { LogCleanupTask } from '../types'
+import { RequestCaptureSettings } from './request-capture-settings'
 
 const logSettingsSchema = z.object({
   LogConsumeEnabled: z.boolean(),
@@ -336,6 +337,7 @@ export function LogSettingsSection({
 
   return (
     <SettingsSection title={t('Log Maintenance')}>
+      <RequestCaptureSettings />
       <Form {...form}>
         <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
           <SettingsPageFormActions
