@@ -85,6 +85,7 @@ import {
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
 import { AssetLibraryTimeline } from '../asset-library-timeline'
+import { RequestCapture } from '../request-capture'
 import { RequestTimingTimeline } from '../request-timing-timeline'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
@@ -1264,6 +1265,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </DetailSection>
         )}
 
+        {props.open && props.isAdmin && props.log.request_id && showTiming && (
+          <RequestCapture
+            key={props.log.request_id}
+            requestId={props.log.request_id}
+          />
+        )}
         {/* Content */}
         {details && (
           <div className='space-y-1.5'>
