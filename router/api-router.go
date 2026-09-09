@@ -155,6 +155,8 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
 				adminRoute.DELETE("/:id/bindings/:binding_type", controller.AdminClearUserBinding)
 				adminRoute.GET("/:id", controller.GetUser)
+				adminRoute.GET("/:id/request-capture", middleware.DisableCache(), controller.GetUserRequestCapture)
+				adminRoute.PUT("/:id/request-capture", middleware.DisableCache(), controller.UpdateUserRequestCapture)
 				adminRoute.POST("/", controller.CreateUser)
 				adminRoute.POST("/manage", controller.ManageUser)
 				adminRoute.PUT("/", controller.UpdateUser)
@@ -288,6 +290,7 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
 		}
 		logRoute := apiRouter.Group("/log")
+		logRoute.GET("/request-capture/:request_id", middleware.AdminAuth(), middleware.DisableCache(), controller.GetRequestCapture)
 		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)
 		logRoute.POST("/export", middleware.AdminAuth(), controller.ExportLogs)
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)

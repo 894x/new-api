@@ -616,7 +616,9 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 
 	info.MarkAttemptUpstreamStarted()
+	finishCapture := service.CaptureUpstreamExchange(c, req, info.ChannelId, info.UpstreamModelName)
 	resp, err := relayClient.Do(req)
+	finishCapture(resp, err)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))

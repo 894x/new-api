@@ -262,6 +262,8 @@ func migrateDB() error {
 	}
 
 	err := DB.AutoMigrate(
+		&RequestCapturePolicy{},
+		&RequestCapture{},
 		&Channel{},
 		&ChannelAssetConfig{},
 		&UserAssetGroup{},
@@ -352,6 +354,8 @@ func migrateDBFast() error {
 		{&Channel{}, "Channel"},
 		{&Token{}, "Token"},
 		{&User{}, "User"},
+		{&RequestCapturePolicy{}, "RequestCapturePolicy"},
+		{&RequestCapture{}, "RequestCapture"},
 		{&UserSession{}, "UserSession"},
 		{&AuthFlow{}, "AuthFlow"},
 		{&ExternalIdentityClaim{}, "ExternalIdentityClaim"},
