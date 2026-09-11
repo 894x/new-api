@@ -1,5 +1,8 @@
 {
   "translation": {
+    "In Set": "属于集合",
+    "Subset Of": "是其子集",
+    "Match Value Path (optional)": "匹配值路径（可选）",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

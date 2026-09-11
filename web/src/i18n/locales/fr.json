@@ -1,5 +1,8 @@
 {
   "translation": {
+    "In Set": "Appartient à l’ensemble",
+    "Subset Of": "Sous-ensemble de",
+    "Match Value Path (optional)": "Chemin de la valeur de comparaison (facultatif)",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

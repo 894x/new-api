@@ -276,6 +276,9 @@ export const STATIC_I18N_KEYS = [
 
   // Models constants
   'Exact Match',
+  'In Set',
+  'Subset Of',
+  'Match Value Path (optional)',
   'Prefix Match',
   'Contains Match',
   'Suffix Match',

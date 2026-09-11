@@ -1,5 +1,8 @@
 {
   "translation": {
+    "In Set": "Thuộc tập hợp",
+    "Subset Of": "Là tập con của",
+    "Match Value Path (optional)": "Đường dẫn giá trị so khớp (tùy chọn)",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

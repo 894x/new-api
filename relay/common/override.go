@@ -52,11 +52,12 @@ type paramOverrideAuditRecorder struct {
 }
 
 type ConditionOperation struct {
-	Path           string      `json:"path"`             // JSON路径
-	Mode           string      `json:"mode"`             // full, prefix, suffix, contains, gt, gte, lt, lte
-	Value          interface{} `json:"value"`            // 匹配的值
-	Invert         bool        `json:"invert"`           // 反选功能，true表示取反结果
-	PassMissingKey bool        `json:"pass_missing_key"` // 未获取到json key时的行为
+	Path           string      `json:"path"`                 // JSON路径
+	Mode           string      `json:"mode"`                 // full, prefix, suffix, contains, gt, gte, lt, lte, in, subset
+	Value          interface{} `json:"value"`                // 匹配的值
+	ValuePath      string      `json:"value_path,omitempty"` // Read comparison value from the current request root.
+	Invert         bool        `json:"invert"`               // 反选功能，true表示取反结果
+	PassMissingKey bool        `json:"pass_missing_key"`     // 未获取到json key时的行为
 }
 
 type ParamOperation struct {
@@ -162,6 +163,9 @@ func ApplyParamOverride(jsonData []byte, paramOverride map[string]interface{}, c
 		return applyOperations(workingJSON, operations, conditionContext)
 	}
 
+	if _, exists := paramOverride["operations"]; exists {
+		return nil, fmt.Errorf("invalid parameter override operations")
+	}
 	// 直接使用旧方法
 	return applyOperationsLegacy(jsonData, paramOverride, auditRecorder)
 }
@@ -564,22 +568,27 @@ func checkConditions(data []byte, contextJSON string, conditions []ConditionOper
 	if len(conditions) == 0 {
 		return true, nil // 没有条件，直接通过
 	}
-	results := make([]bool, len(conditions))
-	for i, condition := range conditions {
+	all := strings.ToUpper(logic) == "AND"
+	for _, condition := range conditions {
 		result, err := checkSingleCondition(data, contextJSON, condition)
 		if err != nil {
 			return false, err
 		}
-		results[i] = result
+		if all && !result {
+			return false, nil
+		}
+		if !all && result {
+			return true, nil
+		}
 	}
-
-	if strings.ToUpper(logic) == "AND" {
-		return lo.EveryBy(results, func(item bool) bool { return item }), nil
-	}
-	return lo.SomeBy(results, func(item bool) bool { return item }), nil
+	return all, nil
 }
 
 func checkSingleCondition(data []byte, contextJSON string, condition ConditionOperation) (bool, error) {
+	condition, err := resolveConditionValue(data, condition)
+	if err != nil {
+		return false, err
+	}
 	// 处理负数索引
 	path := processNegativeIndex(data, condition.Path)
 	value := gjson.GetBytes(data, path)
@@ -609,6 +618,21 @@ func checkSingleCondition(data []byte, contextJSON string, condition ConditionOp
 		result = !result
 	}
 	return result, nil
+}
+
+// resolveConditionValue resolves operands against the current request,
+// never against an individual prune candidate or the relay context.
+func resolveConditionValue(data []byte, condition ConditionOperation) (ConditionOperation, error) {
+	if condition.ValuePath == "" {
+		return condition, nil
+	}
+	value := gjson.GetBytes(data, processNegativeIndex(data, condition.ValuePath))
+	if !value.Exists() {
+		return condition, fmt.Errorf("condition value_path %s does not exist", condition.ValuePath)
+	}
+	condition.Value = value.Value()
+	condition.ValuePath = ""
+	return condition, nil
 }
 
 func processNegativeIndex(data []byte, path string) string {
@@ -644,6 +668,8 @@ func processNegativeIndex(data []byte, path string) string {
 // compareGjsonValues 直接比较两个gjson.Result，支持所有比较模式
 func compareGjsonValues(jsonValue, targetValue gjson.Result, mode string) (bool, error) {
 	switch mode {
+	case "in", "subset":
+		return compareSetValues(jsonValue, targetValue, mode)
 	case "full":
 		return compareEqual(jsonValue, targetValue)
 	case "prefix":
@@ -663,6 +689,43 @@ func compareGjsonValues(jsonValue, targetValue gjson.Result, mode string) (bool,
 	default:
 		return false, fmt.Errorf("unsupported comparison mode: %s", mode)
 	}
+}
+
+// compareSetValues uses typed scalar equality, so strings cannot match numbers
+// and tool names are compared exactly rather than by substring.
+func compareSetValues(value, target gjson.Result, mode string) (bool, error) {
+	if !target.IsArray() {
+		return false, fmt.Errorf("%s value must be an array", mode)
+	}
+	items := []gjson.Result{value}
+	if mode == "subset" {
+		if !value.IsArray() {
+			return false, fmt.Errorf("subset condition path must resolve to an array")
+		}
+		items = value.Array()
+	}
+	type scalarKey struct {
+		kind   gjson.Type
+		text   string
+		number float64
+	}
+	allowed := make(map[scalarKey]struct{})
+	for _, item := range target.Array() {
+		if item.Type == gjson.JSON {
+			return false, fmt.Errorf("%s value must contain only scalars", mode)
+		}
+		allowed[scalarKey{item.Type, item.Str, item.Num}] = struct{}{}
+	}
+	matched := true
+	for _, item := range items {
+		if item.Type == gjson.JSON {
+			return false, fmt.Errorf("%s condition must compare scalars", mode)
+		}
+		if _, ok := allowed[scalarKey{item.Type, item.Str, item.Num}]; !ok {
+			matched = false
+		}
+	}
+	return matched, nil
 }
 
 func compareEqual(jsonValue, targetValue gjson.Result) (bool, error) {
@@ -1779,6 +1842,14 @@ func pruneObjects(data []byte, path, contextJSON string, value interface{}) ([]b
 	if err != nil {
 		return nil, err
 	}
+	// Resolve before traversal: every candidate sees the same request-level set,
+	// including when the referenced array is itself being pruned.
+	for i, condition := range options.conditions {
+		options.conditions[i], err = resolveConditionValue(data, condition)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if path == "" {
 		var root interface{}
@@ -1927,6 +1998,16 @@ func parseConditionOperations(raw interface{}) ([]ConditionOperation, error) {
 			}
 			if value, exists := itemMap["value"]; exists {
 				condition.Value = value
+			}
+			if rawPath, exists := itemMap["value_path"]; exists {
+				valuePath, ok := rawPath.(string)
+				if !ok || strings.TrimSpace(valuePath) == "" {
+					return nil, fmt.Errorf("condition value_path must be a non-empty string")
+				}
+				if _, hasValue := itemMap["value"]; hasValue {
+					return nil, fmt.Errorf("condition value and value_path are mutually exclusive")
+				}
+				condition.ValuePath = valuePath
 			}
 			if invert, ok := itemMap["invert"].(bool); ok {
 				condition.Invert = invert

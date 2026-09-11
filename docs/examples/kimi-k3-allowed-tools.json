@@ -1,0 +1,296 @@
+{
+  "operations": [
+    {
+      "mode": "return_error",
+      "value": {
+        "status_code": 400,
+        "type": "invalid_request_error",
+        "code": "invalid_allowed_tools",
+        "message": "allowed_tools.mode must be auto or required"
+      },
+      "conditions": [
+        {
+          "path": "model",
+          "mode": "full",
+          "value": "kimi-k3"
+        },
+        {
+          "path": "tool_choice.type",
+          "mode": "full",
+          "value": "allowed_tools"
+        },
+        {
+          "path": "tool_choice.allowed_tools.mode",
+          "mode": "in",
+          "value": [
+            "auto",
+            "required"
+          ],
+          "invert": true,
+          "pass_missing_key": true
+        }
+      ],
+      "logic": "AND"
+    },
+    {
+      "mode": "return_error",
+      "value": {
+        "status_code": 400,
+        "type": "invalid_request_error",
+        "code": "invalid_allowed_tools",
+        "message": "tools must be an array"
+      },
+      "conditions": [
+        {
+          "path": "model",
+          "mode": "full",
+          "value": "kimi-k3"
+        },
+        {
+          "path": "tool_choice.type",
+          "mode": "full",
+          "value": "allowed_tools"
+        },
+        {
+          "path": "tools.#",
+          "mode": "gte",
+          "value": 0,
+          "invert": true,
+          "pass_missing_key": true
+        }
+      ],
+      "logic": "AND"
+    },
+    {
+      "mode": "return_error",
+      "value": {
+        "status_code": 400,
+        "type": "invalid_request_error",
+        "code": "invalid_allowed_tools",
+        "message": "tool_choice.allowed_tools.tools must be an array"
+      },
+      "conditions": [
+        {
+          "path": "model",
+          "mode": "full",
+          "value": "kimi-k3"
+        },
+        {
+          "path": "tool_choice.type",
+          "mode": "full",
+          "value": "allowed_tools"
+        },
+        {
+          "path": "tool_choice.allowed_tools.tools.#",
+          "mode": "gte",
+          "value": 0,
+          "invert": true,
+          "pass_missing_key": true
+        }
+      ],
+      "logic": "AND"
+    },
+    {
+      "mode": "return_error",
+      "value": {
+        "status_code": 400,
+        "type": "invalid_request_error",
+        "code": "invalid_allowed_tools",
+        "message": "allowed_tools supports function tools only"
+      },
+      "conditions": [
+        {
+          "path": "model",
+          "mode": "full",
+          "value": "kimi-k3"
+        },
+        {
+          "path": "tool_choice.type",
+          "mode": "full",
+          "value": "allowed_tools"
+        },
+        {
+          "path": "tool_choice.allowed_tools.tools.#(type==\"function\")#|#",
+          "mode": "full",
+          "value_path": "tool_choice.allowed_tools.tools.#",
+          "invert": true,
+          "pass_missing_key": true
+        }
+      ],
+      "logic": "AND"
+    },
+    {
+      "mode": "return_error",
+      "value": {
+        "status_code": 400,
+        "type": "invalid_request_error",
+        "code": "invalid_allowed_tools",
+        "message": "Every allowed tool must specify function.name"
+      },
+      "conditions": [
+        {
+          "path": "model",
+          "mode": "full",
+          "value": "kimi-k3"
+        },
+        {
+          "path": "tool_choice.type",
+          "mode": "full",
+          "value": "allowed_tools"
+        },
+        {
+          "path": "tool_choice.allowed_tools.tools.#.function.name|#",
+          "mode": "full",
+          "value_path": "tool_choice.allowed_tools.tools.#",
+          "invert": true,
+          "pass_missing_key": true
+        }
+      ],
+      "logic": "AND"
+    },
+    {
+      "mode": "return_error",
+      "value": {
+        "status_code": 400,
+        "type": "invalid_request_error",
+        "code": "invalid_allowed_tools",
+        "message": "Every allowed function must be declared in tools"
+      },
+      "conditions": [
+        {
+          "path": "model",
+          "mode": "full",
+          "value": "kimi-k3"
+        },
+        {
+          "path": "tool_choice.type",
+          "mode": "full",
+          "value": "allowed_tools"
+        },
+        {
+          "path": "tool_choice.allowed_tools.tools.#.function.name",
+          "mode": "subset",
+          "value_path": "tools.#(type==\"function\")#.function.name",
+          "invert": true,
+          "pass_missing_key": true
+        }
+      ],
+      "logic": "AND"
+    },
+    {
+      "mode": "return_error",
+      "value": {
+        "status_code": 400,
+        "type": "invalid_request_error",
+        "code": "invalid_allowed_tools",
+        "message": "required needs at least one allowed tool"
+      },
+      "conditions": [
+        {
+          "path": "model",
+          "mode": "full",
+          "value": "kimi-k3"
+        },
+        {
+          "path": "tool_choice.type",
+          "mode": "full",
+          "value": "allowed_tools"
+        },
+        {
+          "path": "tool_choice.allowed_tools.mode",
+          "mode": "full",
+          "value": "required"
+        },
+        {
+          "path": "tool_choice.allowed_tools.tools.#",
+          "mode": "full",
+          "value": 0
+        }
+      ],
+      "logic": "AND"
+    },
+    {
+      "mode": "prune_objects",
+      "path": "tools",
+      "value": {
+        "recursive": false,
+        "logic": "OR",
+        "conditions": [
+          {
+            "path": "type",
+            "mode": "full",
+            "value": "function",
+            "invert": true,
+            "pass_missing_key": true
+          },
+          {
+            "path": "function.name",
+            "mode": "in",
+            "value_path": "tool_choice.allowed_tools.tools.#.function.name",
+            "invert": true,
+            "pass_missing_key": true
+          }
+        ]
+      },
+      "conditions": [
+        {
+          "path": "model",
+          "mode": "full",
+          "value": "kimi-k3"
+        },
+        {
+          "path": "tool_choice.type",
+          "mode": "full",
+          "value": "allowed_tools"
+        }
+      ],
+      "logic": "AND"
+    },
+    {
+      "mode": "set",
+      "path": "tool_choice",
+      "value": "none",
+      "conditions": [
+        {
+          "path": "model",
+          "mode": "full",
+          "value": "kimi-k3"
+        },
+        {
+          "path": "tool_choice.type",
+          "mode": "full",
+          "value": "allowed_tools"
+        },
+        {
+          "path": "tool_choice.allowed_tools.mode",
+          "mode": "full",
+          "value": "auto"
+        },
+        {
+          "path": "tools.#",
+          "mode": "full",
+          "value": 0
+        }
+      ],
+      "logic": "AND"
+    },
+    {
+      "mode": "copy",
+      "from": "tool_choice.allowed_tools.mode",
+      "to": "tool_choice",
+      "conditions": [
+        {
+          "path": "model",
+          "mode": "full",
+          "value": "kimi-k3"
+        },
+        {
+          "path": "tool_choice.type",
+          "mode": "full",
+          "value": "allowed_tools"
+        }
+      ],
+      "logic": "AND"
+    }
+  ]
+}

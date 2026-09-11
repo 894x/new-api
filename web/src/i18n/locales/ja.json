@@ -1,5 +1,8 @@
 {
   "translation": {
+    "In Set": "集合に含まれる",
+    "Subset Of": "部分集合",
+    "Match Value Path (optional)": "比較値のパス（任意）",
     "360": "360",
     "1000": "1000",
     "10000": "10000",
