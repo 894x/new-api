@@ -14,6 +14,8 @@ func registerAssetLibraryAdminRoutes(apiRouter *gin.RouterGroup) {
 	assetLibraryRoute.Use(middleware.AdminAuth())
 	assetLibraryRoute.POST("/users/:user_id", controller.AdminAssetLibraryAction)
 	assetLibraryRoute.GET("/users/:user_id/assets/:id/preview", controller.GetAssetLibraryImagePreview)
+	assetLibraryRoute.GET("/users/:user_id/assets/:id/content", controller.GetAssetLibraryContent)
+	assetLibraryRoute.HEAD("/users/:user_id/assets/:id/content", controller.GetAssetLibraryContent)
 	for _, route := range assetLibraryAdminPermissionRoutes {
 		assetLibraryRoute.Handle(
 			route.method,

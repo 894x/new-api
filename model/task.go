@@ -118,9 +118,10 @@ func (m Properties) Value() (driver.Value, error) {
 }
 
 type TaskPrivateData struct {
-	Key            string `json:"key,omitempty"`
-	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
-	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	AssetReferences *TaskAssetReferences `json:"asset_references,omitempty"`
+	Key             string               `json:"key,omitempty"`
+	UpstreamTaskID  string               `json:"upstream_task_id,omitempty"` // 上游真实 task ID
+	ResultURL       string               `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource  string               `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
 	SubscriptionId int                  `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
@@ -128,6 +129,16 @@ type TaskPrivateData struct {
 	NodeName       string               `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
 	BillingContext *TaskBillingContext  `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
 	Usage          *hosttypes.TaskUsage `json:"usage,omitempty"`           // 上游最终用量（安全公开字段的持久化来源）
+}
+
+// TaskAssetReferences records immutable originals without persisting expiring URLs.
+type TaskAssetReferences struct {
+	Items []TaskAssetReference `json:"items"`
+}
+
+type TaskAssetReference struct {
+	AssetID        string `json:"asset_id"`
+	StoredObjectID string `json:"stored_object_id"`
 }
 
 func (t *Task) AfterFind(_ *gorm.DB) error {

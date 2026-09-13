@@ -268,6 +268,8 @@ func migrateDB() error {
 		&ChannelAssetConfig{},
 		&UserAssetGroup{},
 		&UserAsset{},
+		&AssetStoredObject{},
+		&AssetStorageAccount{},
 		&UserAssetGroupReplica{},
 		&UserAssetReplica{},
 		&Token{},

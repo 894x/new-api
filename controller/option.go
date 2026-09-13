@@ -197,6 +197,12 @@ func UpdateOption(c *gin.Context) {
 		}
 	}
 	switch option.Key {
+	case "asset_storage_setting.default_quota_mb":
+		mb, err := strconv.ParseInt(common.Interface2String(option.Value), 10, 64)
+		if err != nil || mb < 0 || mb > system_setting.MaxAssetQuotaMB {
+			common.ApiErrorMsg(c, "Asset quota must be an integer between 0 and 1000000 MB")
+			return
+		}
 	case "GitHubOAuthEnabled":
 		if option.Value == "true" && common.GitHubClientId == "" {
 			c.JSON(http.StatusOK, gin.H{

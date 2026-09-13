@@ -99,6 +99,7 @@ type AssetGroupResult struct {
 }
 
 type AssetResult struct {
+	StorageStatus     string               `json:"StorageStatus"`
 	Id                string               `json:"Id"`
 	Name              string               `json:"Name,omitempty"`
 	URL               string               `json:"URL,omitempty"`

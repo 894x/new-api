@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -179,10 +181,18 @@ func createAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool
 	}
 	assetID := "asset-na-" + common.GetUUID()
 	c.Request = c.Request.WithContext(service.BeginAssetLibraryUpload(c.Request.Context(), assetID))
-	mediaMetadata, err := service.ValidateAssetLibraryMedia(c.Request.Context(), sourceURL, assetType)
+	storage, err := system_setting.LoadAssetStorageConfig()
 	if err != nil {
-		writeAssetLibraryError(c, "CreateAsset", http.StatusBadRequest, "InvalidParameter.Media", err.Error(), nil)
+		writeAssetLibraryInternalError(c, "CreateAsset", err)
 		return
+	}
+	var mediaMetadata service.AssetMediaMetadata
+	if !storage.Enabled {
+		mediaMetadata, err = service.ValidateAssetLibraryMedia(c.Request.Context(), sourceURL, assetType)
+		if err != nil {
+			writeAssetLibraryError(c, "CreateAsset", http.StatusBadRequest, "InvalidParameter.Media", err.Error(), nil)
+			return
+		}
 	}
 	asset := &model.UserAsset{
 		Id:          assetID,
@@ -198,6 +208,16 @@ func createAssetLibraryAsset(c *gin.Context, userId int, includeReplication bool
 		Duration:    mediaMetadata.Duration,
 		FPS:         mediaMetadata.FPS,
 		ProjectName: group.ProjectName,
+	}
+	if storage.Enabled {
+		if err := service.ImportAssetContent(c.Request.Context(), asset); err != nil {
+			if errors.Is(err, model.ErrAssetQuotaExceeded) {
+				writeAssetLibraryError(c, "CreateAsset", http.StatusForbidden, "AssetQuotaExceeded", err.Error(), nil)
+				return
+			}
+			writeAssetLibraryError(c, "CreateAsset", http.StatusBadGateway, "AssetStorageFailed", err.Error(), nil)
+			return
+		}
 	}
 	if err := service.CreateAssetLibraryRecord(c.Request.Context(), asset); err != nil {
 		writeAssetLibraryInternalError(c, "CreateAsset", err)
@@ -583,6 +603,15 @@ func buildAssetLibraryResult(asset *model.UserAsset, details *service.AssetLibra
 		UpdateTime:        assetLibraryFormatTime(asset.UpdatedTime),
 		LastInferenceTime: lastInferenceTime,
 		Replication:       summary,
+	}
+	result.StorageStatus = "unmanaged"
+	if asset.StoredObjectId != "" {
+		result.StorageStatus = "ready"
+		contentURL, err := service.AssetContentURL(context.Background(), asset)
+		if err != nil {
+			return dto.AssetResult{}, err
+		}
+		result.URL = contentURL
 	}
 	if details != nil {
 		result.Status = details.Status

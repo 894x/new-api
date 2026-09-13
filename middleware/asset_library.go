@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -41,6 +42,23 @@ func AssetLibraryRouting() gin.HandlerFunc {
 			return
 		}
 		if len(assetIds) == 0 {
+			c.Next()
+			return
+		}
+		storage, storageErr := system_setting.LoadAssetStorageConfig()
+		if storageErr != nil {
+			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "Asset storage configuration is invalid")
+			return
+		}
+		if storage.Enabled {
+			// Unified custody resolves owned logical IDs into HTTPS references
+			// before the selected video adaptor builds its provider request.
+			for _, id := range assetIds {
+				if _, err := model.GetUserAsset(common.GetContextKeyInt(c, constant.ContextKeyUserId), id); err != nil {
+					abortWithOpenAiMessage(c, http.StatusForbidden, "Asset does not exist or does not belong to the current account", types.ErrorCodeAccessDenied)
+					return
+				}
+			}
 			c.Next()
 			return
 		}

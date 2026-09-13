@@ -36,7 +36,9 @@ export function AssetImage(props: {
 }) {
   const { t } = useTranslation()
   const { targetUserId } = useAssetLibrary()
-  const proxy = /^http:\/\//i.test(props.asset.URL ?? '')
+  const proxy =
+    props.asset.StorageStatus === 'ready' ||
+    /^http:\/\//i.test(props.asset.URL ?? '')
   const placeholder = useRef<HTMLSpanElement>(null)
   const [visible, setVisible] = useState(
     !props.lazy || typeof IntersectionObserver === 'undefined'

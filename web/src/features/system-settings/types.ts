@@ -413,6 +413,7 @@ export type BillingSettings = {
 }
 
 export type OperationsSettings = {
+  'asset_storage_setting.default_quota_mb'?: number
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean

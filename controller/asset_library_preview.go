@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -37,6 +38,19 @@ func GetAssetLibraryImagePreview(c *gin.Context) {
 	}
 	if asset.AssetType != "Image" {
 		c.AbortWithStatus(http.StatusUnsupportedMediaType)
+		return
+	}
+	if asset.StoredObjectId != "" {
+		response, err := service.ReadAssetContent(c.Request.Context(), asset, "")
+		if err != nil {
+			c.AbortWithStatus(http.StatusBadGateway)
+			return
+		}
+		defer response.Body.Close()
+		c.Header("Content-Security-Policy", "default-src 'none'; sandbox")
+		c.Header("Content-Type", response.Header.Get("Content-Type"))
+		c.Status(response.StatusCode)
+		_, _ = io.Copy(c.Writer, response.Body)
 		return
 	}
 	data, contentType, err := service.LoadAssetLibraryImagePreview(c.Request.Context(), asset.SourceURL)

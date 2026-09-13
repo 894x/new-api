@@ -49,21 +49,22 @@ func (UserAssetGroup) TableName() string {
 }
 
 type UserAsset struct {
-	Id          string  `json:"id" gorm:"type:varchar(64);primaryKey"`
-	UserId      int     `json:"user_id" gorm:"not null;index:idx_user_assets_user_created,priority:1"`
-	GroupId     string  `json:"group_id" gorm:"type:varchar(64);not null;index"`
-	Name        string  `json:"name" gorm:"type:varchar(64)"`
-	SourceURL   string  `json:"-" gorm:"type:text;not null"`
-	AssetType   string  `json:"asset_type" gorm:"type:varchar(32);not null;index"`
-	MediaFormat string  `json:"media_format" gorm:"type:varchar(16)"`
-	FileSize    int64   `json:"file_size"`
-	Width       int     `json:"width"`
-	Height      int     `json:"height"`
-	Duration    float64 `json:"duration"`
-	FPS         float64 `json:"fps"`
-	ProjectName string  `json:"project_name" gorm:"type:varchar(128);not null;index"`
-	CreatedTime int64   `json:"created_time" gorm:"autoCreateTime;index:idx_user_assets_user_created,priority:2"`
-	UpdatedTime int64   `json:"updated_time" gorm:"autoUpdateTime"`
+	StoredObjectId string  `json:"-" gorm:"type:varchar(64);index"`
+	Id             string  `json:"id" gorm:"type:varchar(64);primaryKey"`
+	UserId         int     `json:"user_id" gorm:"not null;index:idx_user_assets_user_created,priority:1"`
+	GroupId        string  `json:"group_id" gorm:"type:varchar(64);not null;index"`
+	Name           string  `json:"name" gorm:"type:varchar(64)"`
+	SourceURL      string  `json:"-" gorm:"type:text;not null"`
+	AssetType      string  `json:"asset_type" gorm:"type:varchar(32);not null;index"`
+	MediaFormat    string  `json:"media_format" gorm:"type:varchar(16)"`
+	FileSize       int64   `json:"file_size"`
+	Width          int     `json:"width"`
+	Height         int     `json:"height"`
+	Duration       float64 `json:"duration"`
+	FPS            float64 `json:"fps"`
+	ProjectName    string  `json:"project_name" gorm:"type:varchar(128);not null;index"`
+	CreatedTime    int64   `json:"created_time" gorm:"autoCreateTime;index:idx_user_assets_user_created,priority:2"`
+	UpdatedTime    int64   `json:"updated_time" gorm:"autoUpdateTime"`
 }
 
 func (UserAsset) TableName() string {
@@ -253,7 +254,18 @@ func UpdateUserAssetGroup(group *UserAssetGroup) error {
 }
 
 func CreateUserAsset(asset *UserAsset) error {
-	return DB.Create(asset).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if asset.StoredObjectId != "" {
+			var object AssetStoredObject
+			if err := lockForUpdate(tx).Where("id = ? AND user_id = ? AND state = ?", asset.StoredObjectId, asset.UserId, "ready").First(&object).Error; err != nil {
+				return err
+			}
+			if err := reserveAssetObjectQuota(tx, &object); err != nil {
+				return err
+			}
+		}
+		return tx.Create(asset).Error
+	})
 }
 
 func GetUserAsset(userId int, assetId string) (*UserAsset, error) {
@@ -475,11 +487,37 @@ func DeleteUserAssetGroupReplica(groupId string, channelId int) error {
 
 func DeleteUserAsset(userId int, assetId string) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("asset_id = ?", assetId).Delete(&UserAssetReplica{}).Error; err != nil {
+		return deleteUserAsset(tx, userId, assetId)
+	})
+}
+
+func deleteUserAsset(tx *gorm.DB, userId int, assetId string) error {
+	var asset UserAsset
+	if err := tx.Where("id = ? AND user_id = ?", assetId, userId).First(&asset).Error; err != nil {
+		return err
+	}
+	var object AssetStoredObject
+	if asset.StoredObjectId != "" {
+		if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", asset.StoredObjectId, userId).First(&object).Error; err != nil {
 			return err
 		}
-		return tx.Where("id = ? AND user_id = ?", assetId, userId).Delete(&UserAsset{}).Error
-	})
+	}
+	if err := tx.Where("asset_id = ?", assetId).Delete(&UserAssetReplica{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("id = ? AND user_id = ?", assetId, userId).Delete(&UserAsset{}).Error; err != nil {
+		return err
+	}
+	if asset.StoredObjectId != "" {
+		var references int64
+		if err := tx.Model(&UserAsset{}).Where("stored_object_id = ?", object.Id).Count(&references).Error; err != nil {
+			return err
+		}
+		if references == 0 {
+			return releaseAssetObjectQuota(tx, &object)
+		}
+	}
+	return nil
 }
 
 func DeleteUserAssetGroup(userId int, groupId string) error {
@@ -489,8 +527,10 @@ func DeleteUserAssetGroup(userId int, groupId string) error {
 			return err
 		}
 		if len(assetIds) > 0 {
-			if err := tx.Where("asset_id IN ?", assetIds).Delete(&UserAssetReplica{}).Error; err != nil {
-				return err
+			for _, id := range assetIds {
+				if err := deleteUserAsset(tx, userId, id); err != nil {
+					return err
+				}
 			}
 		}
 		if err := tx.Where("group_id = ?", groupId).Delete(&UserAssetGroupReplica{}).Error; err != nil {
@@ -522,8 +562,10 @@ func DeleteUserAssetLibraryData(tx *gorm.DB, userId int) error {
 		return err
 	}
 	if len(assetIds) > 0 {
-		if err := tx.Where("asset_id IN ?", assetIds).Delete(&UserAssetReplica{}).Error; err != nil {
-			return err
+		for _, id := range assetIds {
+			if err := deleteUserAsset(tx, userId, id); err != nil {
+				return err
+			}
 		}
 	}
 	var groupIds []string

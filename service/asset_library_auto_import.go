@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"gorm.io/gorm"
 )
@@ -34,6 +35,13 @@ type directAssetReference struct {
 // asset library, waits for the replicas to become ready, and then rewrites both
 // direct and logical references into the upstream format.
 func PrepareAssetReferences(ctx context.Context, userId int, channelId int, payload map[string]any) (preparedResult map[string]any, err error) {
+	storage, err := system_setting.LoadAssetStorageConfig()
+	if err != nil {
+		return nil, err
+	}
+	if storage.Enabled {
+		return prepareStoredLibraryReferences(ctx, userId, channelId, payload)
+	}
 	if userId <= 0 || channelId <= 0 {
 		return RewriteAssetReferences(userId, channelId, payload)
 	}

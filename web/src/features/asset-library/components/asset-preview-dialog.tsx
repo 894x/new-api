@@ -44,6 +44,7 @@ import type { Asset } from '../types'
 import { AdminReplicaDetails } from './admin-replica-details'
 import { AssetImage } from './asset-image'
 import { useAssetLibrary } from './asset-library-provider'
+import { AssetStoredMedia } from './asset-stored-media'
 import { ReplicationBadge } from './replication-badge'
 
 function AssetMediaPreview(props: { asset: Asset }) {
@@ -72,6 +73,9 @@ function AssetMediaPreview(props: { asset: Asset }) {
     )
   }
   if (asset.AssetType === 'Video') {
+    if (asset.StorageStatus === 'ready') {
+      return <AssetStoredMedia asset={asset} />
+    }
     return (
       <video
         src={asset.URL}
@@ -85,6 +89,9 @@ function AssetMediaPreview(props: { asset: Asset }) {
     )
   }
   if (asset.AssetType === 'Audio') {
+    if (asset.StorageStatus === 'ready') {
+      return <AssetStoredMedia asset={asset} />
+    }
     return (
       <div className='bg-muted/30 rounded-lg border p-5'>
         <audio src={asset.URL} controls preload='metadata' className='w-full'>
@@ -202,6 +209,17 @@ export function AssetPreviewDialog(props: {
             copyable={false}
           />
           <ReplicationBadge replication={asset.Replication} />
+          {asset.StorageStatus && (
+            <StatusBadge
+              label={
+                asset.StorageStatus === 'ready'
+                  ? t('Original stored')
+                  : t('Original not stored')
+              }
+              variant={asset.StorageStatus === 'ready' ? 'success' : 'warning'}
+              copyable={false}
+            />
+          )}
         </div>
         {asset.Error?.Message && (
           <p className='text-destructive border-destructive/30 rounded-lg border p-3 text-sm'>

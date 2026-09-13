@@ -258,6 +258,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 	adaptor.Init(info)
+	if platform != constant.TaskPlatformSuno {
+		if err := prepareManagedVideoRequest(c, info.UserId); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "asset_storage_failed", http.StatusBadRequest)
+		}
+	}
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
 		return nil, taskErr
 	}

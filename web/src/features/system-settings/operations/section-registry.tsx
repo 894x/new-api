@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { AssetStorageSection } from '../general/asset-storage-section'
 import { SystemBehaviorSection } from '../general/system-behavior-section'
 import { EmailSettingsSection } from '../integrations/email-settings-section'
 import { MonitoringSettingsSection } from '../integrations/monitoring-settings-section'
@@ -27,6 +28,15 @@ import type { OperationsSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 
 const OPERATIONS_SECTIONS = [
+  {
+    id: 'asset-storage',
+    titleKey: 'Asset storage',
+    build: (settings: OperationsSettings) => (
+      <AssetStorageSection
+        quotaMB={settings['asset_storage_setting.default_quota_mb'] ?? 1024}
+      />
+    ),
+  },
   {
     id: 'behavior',
     titleKey: 'System Behavior',

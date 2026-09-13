@@ -809,6 +809,7 @@ func RelayTask(c *gin.Context) {
 			task.Properties.RequestParameters = taskRequestParametersFromRequest(request)
 		}
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
+		task.PrivateData.AssetReferences = relay.ManagedVideoTaskReferences(c)
 		task.PrivateData.BillingSource = relayInfo.BillingSource
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 		task.PrivateData.TokenId = relayInfo.TokenId

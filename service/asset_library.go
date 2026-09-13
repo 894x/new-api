@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -585,15 +586,33 @@ func replicateAssetGroupToChannelLocked(ctx context.Context, group *model.UserAs
 }
 
 func replicateAssetToChannelLocked(ctx context.Context, asset *model.UserAsset, config *model.ChannelAssetConfig) (bool, error) {
-	if resourceID, _ := ctx.Value(assetLibraryResourceKey{}).(string); resourceID != asset.Id {
-		ctx = BeginAssetLibraryUpload(ctx, asset.Id)
-	}
 	existing, err := model.GetUserAssetReplica(asset.Id, config.ChannelId)
 	if err == nil && existing.UpstreamAssetId != "" {
 		return false, nil
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, err
+	}
+	storage, storageErr := system_setting.LoadAssetStorageConfig()
+	if storageErr != nil {
+		return false, storageErr
+	}
+	if storage.Enabled {
+		if err := EnsureAssetContentStored(ctx, asset); err != nil {
+			return false, err
+		}
+	}
+	if asset.StoredObjectId != "" {
+		contentURL, err := AssetContentURL(ctx, asset)
+		if err != nil {
+			return false, err
+		}
+		copy := *asset
+		copy.SourceURL = contentURL
+		asset = &copy
+	}
+	if resourceID, _ := ctx.Value(assetLibraryResourceKey{}).(string); resourceID != asset.Id {
+		ctx = BeginAssetLibraryUpload(ctx, asset.Id)
 	}
 	group, err := model.GetUserAssetGroup(asset.UserId, asset.GroupId)
 	if err != nil {
@@ -1023,6 +1042,19 @@ func refreshAssetLibraryAsset(ctx context.Context, assetId string, includeDisabl
 	}
 	if len(refreshErrors) > 0 {
 		return nil, errors.Join(refreshErrors...)
+	}
+	var asset model.UserAsset
+	if err := model.DB.Where("id = ?", assetId).First(&asset).Error; err != nil {
+		return nil, err
+	}
+	if asset.StoredObjectId != "" {
+		object, err := model.GetAssetStoredObject(asset.UserId, asset.StoredObjectId)
+		if err != nil {
+			return nil, err
+		}
+		if object.State == "ready" {
+			return nil, nil
+		}
 	}
 	return nil, errors.New("asset has no available upstream replica")
 }

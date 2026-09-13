@@ -28,6 +28,7 @@ import { AdminAssetLibraryUserScope } from './components/admin-user-scope'
 import { AssetLibraryDialogs } from './components/asset-library-dialogs'
 import { AssetLibraryPrimaryButtons } from './components/asset-library-primary-buttons'
 import { AssetLibraryProvider } from './components/asset-library-provider'
+import { AssetStorageUsage } from './components/asset-storage-usage'
 import { AssetsTable } from './components/assets-table'
 import { GroupsTable } from './components/groups-table'
 
@@ -67,6 +68,7 @@ export function AssetLibrary() {
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
           <div className='flex h-full min-h-0 flex-col gap-3'>
+            {!targetUserId ? <AssetStorageUsage /> : null}
             {isAdmin && user ? (
               <AdminAssetLibraryUserScope
                 currentUser={user}

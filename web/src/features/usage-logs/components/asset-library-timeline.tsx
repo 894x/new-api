@@ -44,6 +44,11 @@ export function AssetLibraryTimeline(props: { timing: AssetLibraryTiming }) {
       colorClass: 'bg-slate-500 dark:bg-slate-400',
     },
     {
+      key: 'storage_upload',
+      label: t('Original Storage Upload'),
+      colorClass: 'bg-emerald-500 dark:bg-emerald-400',
+    },
+    {
       key: 'channel_lock',
       label: t('Channel Lock Wait'),
       colorClass: 'bg-amber-500 dark:bg-amber-400',

@@ -38,6 +38,7 @@ export type AssetGroup = {
 }
 
 export type Asset = {
+  StorageStatus?: 'ready' | 'unmanaged'
   Id: string
   Name?: string
   URL?: string
