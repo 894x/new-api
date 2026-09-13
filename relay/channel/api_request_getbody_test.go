@@ -417,20 +417,26 @@ func runGoAwayAfterFirstRequestServer(ln net.Listener) <-chan h2ServerResult {
 
 			if attempt == 0 {
 				err = framer.WriteGoAway(0, http2.ErrCodeNo, nil)
-				conn.Close()
-				if err != nil {
-					res.err = err
-					return
-				}
-				continue
+			} else {
+				err = writeH2TestResponse(framer, streamID)
 			}
 
-			err = writeH2TestResponse(framer, streamID)
+			// Deliver the final frames and FIN, then drain the peer's remaining
+			// SETTINGS acknowledgments until it closes. Closing a TCP connection
+			// with unread input can send RST (notably on Windows), racing GOAWAY
+			// delivery and turning this graceful-shutdown test into a reset test.
+			// The connection deadline bounds the drain; no timing sleep is needed.
+			if err == nil {
+				err = conn.(*net.TCPConn).CloseWrite()
+			}
+			if err == nil {
+				_, err = io.Copy(io.Discard, conn)
+			}
 			conn.Close()
 			if err != nil {
 				res.err = err
+				return
 			}
-			return
 		}
 	}()
 	return resCh
