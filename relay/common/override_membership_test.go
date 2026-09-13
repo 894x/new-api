@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestParamOverrideMembershipConditions(t *testing.T) {
@@ -95,6 +96,61 @@ func TestParamOverrideConditionGuardsDynamicReference(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMessageLevelToolsCanTriggerTrailingSystemConflictOverride(t *testing.T) {
+	var request dto.GeneralOpenAIRequest
+	require.NoError(t, commonjson.UnmarshalJsonStr(`{
+		"model":"kimi-k3",
+		"messages":[
+			{"role":"user","content":"Compute 2+2"},
+			{"role":"system","content":"dynamic tools","tools":[{"type":"function","function":{"name":"calculator","parameters":{"type":"object"}}}]}
+		]
+	}`, &request))
+	input, err := commonjson.Marshal(request)
+	require.NoError(t, err)
+
+	var config map[string]interface{}
+	require.NoError(t, commonjson.UnmarshalJsonStr(`{
+		"operations":[{
+			"mode":"return_error",
+			"value":{
+				"message":"Invalid request: message tools cannot be used with content",
+				"status_code":400,
+				"code":"invalid_request",
+				"type":"invalid_request_error",
+				"skip_retry":true
+			},
+			"conditions":[
+				{"path":"model","mode":"full","value":"kimi-k3"},
+				{"path":"messages.-1.role","mode":"full","value":"system"},
+				{"path":"messages.-1.content","mode":"full","value":null,"invert":true},
+				{"path":"messages.-1.tools.#","mode":"gt","value":0}
+			],
+			"logic":"AND"
+		}]
+	}`, &config))
+
+	_, err = ApplyParamOverride(input, config, nil)
+	var rejected *ParamOverrideReturnError
+	require.ErrorAs(t, err, &rejected)
+	assert.Equal(t, 400, rejected.StatusCode)
+	assert.True(t, rejected.SkipRetry)
+
+	request = dto.GeneralOpenAIRequest{}
+	require.NoError(t, commonjson.UnmarshalJsonStr(`{
+		"model":"kimi-k3",
+		"messages":[
+			{"role":"user","content":"Compute 2+2"},
+			{"role":"system","tools":[{"type":"function","function":{"name":"calculator","parameters":{"type":"object"}}}]}
+		]
+	}`, &request))
+	input, err = commonjson.Marshal(request)
+	require.NoError(t, err)
+
+	out, err := ApplyParamOverride(input, config, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "calculator", gjson.GetBytes(out, "messages.1.tools.0.function.name").String())
 }
 
 func TestKimiAllowedToolsConfigurationWithoutDeclaredTools(t *testing.T) {

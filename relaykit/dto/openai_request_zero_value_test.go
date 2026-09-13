@@ -52,6 +52,25 @@ func TestGeneralOpenAIRequestPreserveExplicitZeroValues(t *testing.T) {
 	require.True(t, gjson.GetBytes(encoded, "return_related_questions").Exists())
 }
 
+func TestGeneralOpenAIRequestPreservesMessageLevelTools(t *testing.T) {
+	raw := []byte(`{
+		"model":"kimi-k3",
+		"messages":[
+			{"role":"user","content":"Compute 2+2"},
+			{"role":"system","tools":[{"type":"function","function":{"name":"calculator","parameters":{"type":"object"}}}]}
+		]
+	}`)
+
+	var req GeneralOpenAIRequest
+	require.NoError(t, kitutil.Unmarshal(raw, &req))
+
+	encoded, err := kitutil.Marshal(req)
+	require.NoError(t, err)
+
+	assert.Equal(t, "calculator", gjson.GetBytes(encoded, "messages.1.tools.0.function.name").String())
+	assert.False(t, gjson.GetBytes(encoded, "messages.0.tools").Exists())
+}
+
 func TestGeneralOpenAIRequestPreserveQwenThinkingBudget(t *testing.T) {
 	raw := []byte(`{
 		"model":"qwen-plus",
