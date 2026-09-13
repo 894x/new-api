@@ -846,6 +846,19 @@ func applyOperations(jsonData []byte, operations []ParamOperation, conditionCont
 
 	result := jsonData
 	for _, op := range operations {
+		matches, expanded, expandErr := expandWildcardOperation(result, contextJSON, op)
+		if expandErr != nil {
+			return nil, fmt.Errorf("operation %s failed: %w", op.Mode, expandErr)
+		}
+		if expanded {
+			// Conditions were evaluated against this operation's input snapshot.
+			// Each concrete operation retains the original audit/error behavior.
+			result, err = applyOperations(result, matches, context)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
 		// 检查条件是否满足
 		ok, err := checkConditions(result, contextJSON, op.Conditions, op.Logic)
 		if err != nil {
@@ -1661,9 +1674,24 @@ func moveValue(data []byte, fromPath, toPath string) ([]byte, error) {
 	if !sourceValue.Exists() {
 		return data, fmt.Errorf("source path does not exist: %s", fromPath)
 	}
-	result, err := sjson.SetBytes(data, toPath, sourceValue.Value())
+	if fromPath == toPath {
+		return data, nil
+	}
+	if strings.HasPrefix(toPath, fromPath+".") {
+		wrapped, err := sjson.SetRawBytes([]byte(`{}`), strings.TrimPrefix(toPath, fromPath+"."), []byte(sourceValue.Raw))
+		if err != nil {
+			return nil, err
+		}
+		return sjson.SetRawBytes(data, fromPath, wrapped)
+	}
+	result, err := sjson.SetRawBytes(data, toPath, []byte(sourceValue.Raw))
 	if err != nil {
 		return nil, err
+	}
+	// A parent/child move replaces the overlapping subtree. Deleting the
+	// source afterwards would delete the destination or part of its new value.
+	if strings.HasPrefix(fromPath, toPath+".") {
+		return result, nil
 	}
 	return sjson.DeleteBytes(result, fromPath)
 }
@@ -1673,7 +1701,7 @@ func copyValue(data []byte, fromPath, toPath string) ([]byte, error) {
 	if !sourceValue.Exists() {
 		return data, fmt.Errorf("source path does not exist: %s", fromPath)
 	}
-	return sjson.SetBytes(data, toPath, sourceValue.Value())
+	return sjson.SetRawBytes(data, toPath, []byte(sourceValue.Raw))
 }
 
 func isPathBasedOperation(mode string) bool {
