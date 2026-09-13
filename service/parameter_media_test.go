@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
@@ -25,6 +26,11 @@ func TestParameterMediaDownloaderCachesAndValidatesContent(t *testing.T) {
 	hits := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
+		// Some media hosts reject the default Go client identification with 403.
+		if r.UserAgent() == "" || strings.HasPrefix(r.UserAgent(), "Go-http-client/") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		switch r.URL.Path {
 		case "/image":
 			w.Header().Set("Content-Type", "image/png")
@@ -40,6 +46,8 @@ func TestParameterMediaDownloaderCachesAndValidatesContent(t *testing.T) {
 		case "/video":
 			w.Header().Set("Content-Type", "application/octet-stream")
 			_, _ = w.Write(mp4Header)
+		case "/redirect":
+			http.Redirect(w, r, "/video", http.StatusFound)
 		case "/chunked":
 			w.(http.Flusher).Flush()
 			_, _ = w.Write(bytes.Repeat([]byte{0}, (1<<20)+1))
@@ -75,6 +83,7 @@ func TestParameterMediaDownloaderCachesAndValidatesContent(t *testing.T) {
 	}{
 		{"/audio", "audio", "audio/wave", wavBytes},
 		{"/video", "video", "video/mp4", mp4Header},
+		{"/redirect", "video", "video/mp4", mp4Header},
 	} {
 		data, err := transform(server.URL+tc.path, tc.kind)
 		require.NoError(t, err)

@@ -75,6 +75,8 @@ func NewParameterMediaTransformer(c *gin.Context) relayparam.MediaTransformer {
 		if err != nil {
 			return "", errors.New("invalid media URL")
 		}
+		// Identify media fetches explicitly; some hosts reject Go's default User-Agent.
+		req.Header.Set("User-Agent", "new-api/1.0 (media downloader)")
 		resp, err := GetSSRFProtectedHTTPClient().Do(req)
 		if err != nil {
 			return "", errors.New("media download failed or timed out")
