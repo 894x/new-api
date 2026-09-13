@@ -30,8 +30,9 @@ type AssetStoredObject struct {
 }
 
 type AssetStorageAccount struct {
-	UserId    int   `gorm:"primaryKey;autoIncrement:false"`
-	UsedBytes int64 `gorm:"type:bigint;not null"`
+	UserId          int    `gorm:"primaryKey;autoIncrement:false"`
+	UsedBytes       int64  `gorm:"type:bigint;not null"`
+	QuotaOverrideMB *int64 `gorm:"type:bigint"`
 }
 
 var ErrAssetQuotaExceeded = errors.New("free asset storage quota exceeded; remove unused assets or ask an administrator to increase the quota")
@@ -44,13 +45,15 @@ func reserveAssetObjectQuota(tx *gorm.DB, object *AssetStoredObject) error {
 	if err != nil {
 		return err
 	}
-	if object.FileSize <= 0 || object.FileSize > limit {
+	if object.FileSize <= 0 || object.FileSize > system_setting.MaxAssetQuotaMB*system_setting.AssetQuotaMB {
 		return ErrAssetQuotaExceeded
 	}
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&AssetStorageAccount{UserId: object.UserId}).Error; err != nil {
 		return err
 	}
-	result := tx.Model(&AssetStorageAccount{}).Where("user_id = ? AND used_bytes <= ?", object.UserId, limit-object.FileSize).UpdateColumn("used_bytes", gorm.Expr("used_bytes + ?", object.FileSize))
+	// Resolve the override inside the conditional update so concurrent quota
+	// changes and reservations serialize on the same account row.
+	result := tx.Model(&AssetStorageAccount{}).Where("user_id = ? AND used_bytes <= COALESCE(quota_override_mb, ?) * ? - ?", object.UserId, limit/system_setting.AssetQuotaMB, system_setting.AssetQuotaMB, object.FileSize).UpdateColumn("used_bytes", gorm.Expr("used_bytes + ?", object.FileSize))
 	if result.Error != nil {
 		return result.Error
 	}
@@ -79,12 +82,40 @@ func releaseAssetObjectQuota(tx *gorm.DB, object *AssetStoredObject) error {
 }
 
 func GetAssetStorageUsedBytes(userID int) (int64, error) {
-	var account AssetStorageAccount
+	account, err := GetAssetStorageAccount(userID)
+	return account.UsedBytes, err
+}
+
+func GetAssetStorageAccount(userID int) (*AssetStorageAccount, error) {
+	account := AssetStorageAccount{UserId: userID}
 	err := DB.Where("user_id = ?", userID).First(&account).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return 0, nil
+		return &account, nil
 	}
-	return account.UsedBytes, err
+	return &account, err
+}
+
+func (account *AssetStorageAccount) QuotaBytes() (int64, error) {
+	if account.QuotaOverrideMB == nil {
+		return system_setting.AssetQuotaBytes()
+	}
+	if *account.QuotaOverrideMB < 0 || *account.QuotaOverrideMB > system_setting.MaxAssetQuotaMB {
+		return 0, errors.New("asset quota must be between 0 and 1000000 MB")
+	}
+	return *account.QuotaOverrideMB * system_setting.AssetQuotaMB, nil
+}
+
+func SetAssetStorageQuotaOverride(userID int, quotaMB *int64) error {
+	if userID <= 0 {
+		return errors.New("asset owner is required")
+	}
+	if quotaMB != nil && (*quotaMB < 0 || *quotaMB > system_setting.MaxAssetQuotaMB) {
+		return errors.New("asset quota must be between 0 and 1000000 MB")
+	}
+	return DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "user_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"quota_override_mb"}),
+	}).Create(&AssetStorageAccount{UserId: userID, QuotaOverrideMB: quotaMB}).Error
 }
 
 func GetAssetStoredObject(userID int, id string) (*AssetStoredObject, error) {

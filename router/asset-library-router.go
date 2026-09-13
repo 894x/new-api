@@ -13,6 +13,8 @@ func registerAssetLibraryAdminRoutes(apiRouter *gin.RouterGroup) {
 	assetLibraryRoute := apiRouter.Group("/asset-library/admin")
 	assetLibraryRoute.Use(middleware.AdminAuth())
 	assetLibraryRoute.POST("/users/:user_id", controller.AdminAssetLibraryAction)
+	assetLibraryRoute.GET("/users/:user_id/storage", controller.GetAdminAssetStorageUsage)
+	assetLibraryRoute.PUT("/users/:user_id/storage", controller.UpdateAdminAssetStorageQuota)
 	assetLibraryRoute.GET("/users/:user_id/assets/:id/preview", controller.GetAssetLibraryImagePreview)
 	assetLibraryRoute.GET("/users/:user_id/assets/:id/content", controller.GetAssetLibraryContent)
 	assetLibraryRoute.HEAD("/users/:user_id/assets/:id/content", controller.GetAssetLibraryContent)

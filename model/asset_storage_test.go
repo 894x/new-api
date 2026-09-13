@@ -96,3 +96,54 @@ func TestAssetQuotaRecoveryReleasesOnlyAbandonedReservations(t *testing.T) {
 	assert.Zero(t, used)
 	require.Error(t, CompleteAssetStoredObject(object.Id, "dead-worker", nil))
 }
+
+func TestAssetQuotaOverridePrecedenceAndResetPreserveUsage(t *testing.T) {
+	db := setupAssetLibraryModelTestDB(t)
+	require.NoError(t, db.AutoMigrate(&AssetStoredObject{}, &AssetStorageAccount{}))
+	previous := system_setting.GetAssetStorageSetting().DefaultQuotaMB
+	system_setting.GetAssetStorageSetting().DefaultQuotaMB = 0
+	t.Cleanup(func() { system_setting.GetAssetStorageSetting().DefaultQuotaMB = previous })
+	custom := int64(2)
+	require.NoError(t, SetAssetStorageQuotaOverride(7, &custom))
+	first := &AssetStoredObject{Id: "custom", UserId: 7, SHA256: "large", AssetType: "Image", FileSize: 1500000, State: "pending"}
+	_, claimed, err := ClaimAssetStoredObject(first, "upload")
+	require.NoError(t, err)
+	require.True(t, claimed)
+	account, err := GetAssetStorageAccount(7)
+	require.NoError(t, err)
+	quota, err := account.QuotaBytes()
+	require.NoError(t, err)
+	assert.EqualValues(t, 2000000, quota)
+	assert.EqualValues(t, 1500000, account.UsedBytes)
+	other := &AssetStoredObject{Id: "other", UserId: 8, SHA256: "small", AssetType: "Image", FileSize: 1, State: "pending"}
+	_, _, err = ClaimAssetStoredObject(other, "other-upload")
+	require.ErrorIs(t, err, ErrAssetQuotaExceeded)
+	zero := int64(0)
+	require.NoError(t, SetAssetStorageQuotaOverride(7, &zero))
+	_, _, err = ClaimAssetStoredObject(first, "reuse")
+	require.NoError(t, err, "quota reduction must preserve already-reserved originals")
+	newObject := &AssetStoredObject{Id: "new", UserId: 7, SHA256: "new", AssetType: "Image", FileSize: 1, State: "pending"}
+	_, _, err = ClaimAssetStoredObject(newObject, "new-upload")
+	require.ErrorIs(t, err, ErrAssetQuotaExceeded)
+	system_setting.GetAssetStorageSetting().DefaultQuotaMB = 3
+	_, _, err = ClaimAssetStoredObject(newObject, "new-upload")
+	require.ErrorIs(t, err, ErrAssetQuotaExceeded, "explicit zero must not inherit the default")
+	require.NoError(t, SetAssetStorageQuotaOverride(7, nil))
+	account, err = GetAssetStorageAccount(7)
+	require.NoError(t, err)
+	assert.Nil(t, account.QuotaOverrideMB)
+	assert.EqualValues(t, 1500000, account.UsedBytes)
+	quota, err = account.QuotaBytes()
+	require.NoError(t, err)
+	assert.EqualValues(t, 3000000, quota)
+	_, claimed, err = ClaimAssetStoredObject(newObject, "new-upload")
+	require.NoError(t, err)
+	assert.True(t, claimed)
+	for _, invalid := range []int64{-1, system_setting.MaxAssetQuotaMB + 1, 9223372036854775807} {
+		require.Error(t, SetAssetStorageQuotaOverride(7, &invalid))
+	}
+	account, err = GetAssetStorageAccount(7)
+	require.NoError(t, err)
+	assert.Nil(t, account.QuotaOverrideMB)
+	assert.EqualValues(t, 1500001, account.UsedBytes)
+}

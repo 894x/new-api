@@ -68,7 +68,6 @@ export function AssetLibrary() {
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
           <div className='flex h-full min-h-0 flex-col gap-3'>
-            {!targetUserId ? <AssetStorageUsage /> : null}
             {isAdmin && user ? (
               <AdminAssetLibraryUserScope
                 currentUser={user}
@@ -76,9 +75,14 @@ export function AssetLibrary() {
                 onTargetUserIdChange={changeTargetUser}
               />
             ) : null}
+            <AssetStorageUsage
+              key={targetUserId ?? user?.id ?? 'self'}
+              targetUserId={targetUserId}
+              currentAdminId={isAdmin ? user?.id : undefined}
+            />
             {targetUserId ? (
               <p className='text-muted-foreground text-sm'>
-                {t('Viewing user #{{id}} in read-only mode.', {
+                {t('Assets owned by user #{{id}} are read-only here.', {
                   id: targetUserId,
                 })}
               </p>

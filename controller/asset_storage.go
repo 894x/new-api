@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -14,22 +15,75 @@ import (
 )
 
 func GetAssetStorageUsage(c *gin.Context) {
-	quota, err := system_setting.AssetQuotaBytes()
+	writeAssetStorageUsage(c, c.GetInt("id"), false)
+}
+
+func writeAssetStorageUsage(c *gin.Context, userID int, canEdit bool) {
+	account, err := model.GetAssetStorageAccount(userID)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	used, err := model.GetAssetStorageUsedBytes(c.GetInt("id"))
+	quota, err := account.QuotaBytes()
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	remaining := quota - used
+	remaining := quota - account.UsedBytes
 	if remaining < 0 {
 		remaining = 0
 	}
 	config, configErr := system_setting.LoadAssetStorageConfig()
-	common.ApiSuccess(c, gin.H{"enabled": configErr == nil && config.Enabled, "quota_mb": quota / system_setting.AssetQuotaMB, "used_bytes": used, "remaining_bytes": remaining, "bytes_per_mb": system_setting.AssetQuotaMB})
+	common.ApiSuccess(c, gin.H{"enabled": configErr == nil && config.Enabled, "quota_mb": quota / system_setting.AssetQuotaMB, "quota_override_mb": account.QuotaOverrideMB, "default_quota_mb": system_setting.GetAssetStorageSetting().DefaultQuotaMB, "used_bytes": account.UsedBytes, "remaining_bytes": remaining, "bytes_per_mb": system_setting.AssetQuotaMB, "can_edit": canEdit})
+}
+
+func GetAdminAssetStorageUsage(c *gin.Context) {
+	userID, err := strconv.Atoi(c.Param("user_id"))
+	if err != nil || userID <= 0 {
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	user, err := model.GetUserById(userID, false)
+	if err != nil {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	writeAssetStorageUsage(c, userID, canManageTargetRole(c.GetInt("role"), user.Role))
+}
+
+func UpdateAdminAssetStorageQuota(c *gin.Context) {
+	userID, err := strconv.Atoi(c.Param("user_id"))
+	if err != nil || userID <= 0 {
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	user, err := model.GetUserById(userID, false)
+	if err != nil {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	if !canManageTargetRole(c.GetInt("role"), user.Role) {
+		c.AbortWithStatus(http.StatusForbidden)
+		return
+	}
+	var request struct {
+		QuotaMB json.RawMessage `json:"quota_mb"`
+	}
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil || len(request.QuotaMB) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "quota_mb must be null or an integer between 0 and 1000000 MB"})
+		return
+	}
+	var quotaMB *int64
+	if err := common.Unmarshal(request.QuotaMB, &quotaMB); err != nil || (quotaMB != nil && (*quotaMB < 0 || *quotaMB > system_setting.MaxAssetQuotaMB)) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "quota_mb must be null or an integer between 0 and 1000000 MB"})
+		return
+	}
+	if err := model.SetAssetStorageQuotaOverride(userID, quotaMB); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.RecordOperationAuditLog(c.GetInt("id"), "Updated user asset storage quota", c.ClientIP(), "asset_library.storage.quota.update", map[string]interface{}{"user_id": userID, "quota_mb": quotaMB}, nil, nil)
+	writeAssetStorageUsage(c, userID, true)
 }
 
 func GetAssetLibraryContent(c *gin.Context) {
