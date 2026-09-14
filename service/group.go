@@ -5,7 +5,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -104,21 +103,6 @@ func GetRequestAutoGroups(c *gin.Context, userGroup string) []string {
 		return []string{}
 	}
 	return FilterUserTokenAutoGroups(userGroup, groups)
-}
-
-// GetGroupsEnabledModels 按 groups 顺序获取各分组启用的模型并去重
-func GetGroupsEnabledModels(groups []string) []string {
-	seen := make(map[string]struct{})
-	models := make([]string, 0)
-	for _, group := range groups {
-		for _, modelName := range model.GetGroupEnabledModels(group) {
-			if _, ok := seen[modelName]; !ok {
-				seen[modelName] = struct{}{}
-				models = append(models, modelName)
-			}
-		}
-	}
-	return models
 }
 
 // GetUserGroupRatio 获取用户使用某个分组的倍率

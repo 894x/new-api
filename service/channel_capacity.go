@@ -58,12 +58,16 @@ func ConfigureChannelModelCapacity(param *RetryParam, info *relaycommon.RelayInf
 		}
 		candidates = []model.Ability{{ChannelId: channel.Id, RPM: rpm, TPM: tpm}}
 	} else {
+		filters, err := param.SelectionFilters()
+		if err != nil {
+			return false, err
+		}
 		groups := []string{param.TokenGroup}
 		if param.TokenGroup == "auto" {
 			groups = GetRequestAutoGroups(param.Ctx, common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup))
 		}
 		for _, group := range groups {
-			groupCandidates, err := model.ListChannelSelectionCandidates(group, param.ModelName, model.ChannelSelectionFilters{RequestPath: param.RequestPath, RequestBody: param.RequestBody, AllowedChannelIds: param.AllowedChannelIds})
+			groupCandidates, err := model.ListChannelSelectionCandidates(group, param.ModelName, filters)
 			if err != nil {
 				if param.TokenGroup == "auto" && errors.Is(err, model.ErrParameterCapabilityUnsupported) {
 					continue
@@ -128,7 +132,10 @@ func (p *RetryParam) CapacityError() error {
 }
 
 func selectChannelWithCapacity(param *RetryParam, group string, retry int) (*model.Channel, error) {
-	filters := model.ChannelSelectionFilters{RequestPath: param.RequestPath, RequestBody: param.RequestBody, AllowedChannelIds: param.AllowedChannelIds}
+	filters, err := param.SelectionFilters()
+	if err != nil {
+		return nil, err
+	}
 	if param.Capacity == nil {
 		return model.GetRandomSatisfiedChannelWithSelectionFilters(group, param.ModelName, retry, filters)
 	}

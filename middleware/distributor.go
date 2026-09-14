@@ -140,6 +140,7 @@ func Distribute() func(c *gin.Context) {
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
 						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) &&
 						parametersSupported &&
+						service.ValidateSelectedChannelGroupPolicy(c, preferred.Id, modelRequest.Model) == nil &&
 						channelAllowedForAssets(preferred.Id, allowedChannelIds, assetConstrained) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
@@ -537,6 +538,9 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	} // preserve the public model across retries
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if err := service.ValidateSelectedChannelGroupPolicy(c, channel.Id, c.GetString("original_model")); err != nil {
+		return types.NewError(err, types.ErrorCodeAccessDenied, types.ErrOptionWithStatusCode(http.StatusForbidden), types.ErrOptionWithSkipRetry())
 	}
 	// Optional provider settings belong to this channel, including after spillover.
 	common.SetContextKey(c, constant.ContextKeyChannelOrganization, "")

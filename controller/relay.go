@@ -475,6 +475,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		}
 		retryParam.RecordCapacitySelection(group, retryParam.GetRetry())
 		channelId := c.GetInt("channel_id")
+		if err := service.ValidateSelectedChannelGroupPolicy(c, channelId, retryParam.ModelName); err != nil {
+			return nil, types.NewError(err, types.ErrorCodeAccessDenied, types.ErrOptionWithStatusCode(http.StatusForbidden), types.ErrOptionWithSkipRetry())
+		}
 		if retryParam.AllowedChannelIds != nil {
 			if _, allowed := retryParam.AllowedChannelIds[channelId]; !allowed {
 				return nil, types.NewError(errors.New("selected channel has no replica for every referenced asset"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -742,6 +745,10 @@ func RelayTask(c *gin.Context) {
 		var channel *model.Channel
 
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
+			if err := service.ValidateSelectedChannelGroupPolicy(c, lockedCh.Id, retryParam.ModelName); err != nil {
+				taskErr = service.TaskErrorWrapperLocal(err, "access_denied", http.StatusForbidden)
+				break
+			}
 			if retryParam.AllowedChannelIds != nil {
 				if _, allowed := retryParam.AllowedChannelIds[lockedCh.Id]; !allowed {
 					taskErr = service.TaskErrorWrapperLocal(errors.New("the locked channel has no replica for every referenced asset"), "asset_channel_unavailable", http.StatusServiceUnavailable)

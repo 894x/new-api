@@ -36,6 +36,7 @@ func InitOptionMap() {
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap = make(map[string]string)
 	common.OptionMap[RequestCaptureStorageOptionKey] = DefaultRequestCaptureStorageJSON
+	common.OptionMap[setting.GroupModelChannelGroupsOptionKey] = setting.GroupModelChannelGroupsJSON()
 
 	// 添加原有的系统配置
 	common.OptionMap["FileUploadPermission"] = strconv.Itoa(common.FileUploadPermission)
@@ -279,6 +280,10 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == setting.GroupModelChannelGroupsOptionKey {
+		_, err := setting.ParseGroupModelChannelGroups(value)
+		return err
+	}
 	if key == RequestCaptureStorageOptionKey {
 		_, err := ParseRequestCaptureStorageSettings(value)
 		return err
@@ -463,6 +468,13 @@ func updateOptionMap(key string, value string) (err error) {
 	}
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
+	if key == setting.GroupModelChannelGroupsOptionKey {
+		if err := setting.UpdateGroupModelChannelGroups(value); err != nil {
+			return err
+		}
+		common.OptionMap[key] = value
+		return nil
+	}
 	if key == "error_setting.blocked_response_headers" {
 		headers, validateErr := operation_setting.ValidateBlockedResponseHeadersJSON(value)
 		if validateErr != nil {

@@ -70,11 +70,11 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 		return nil, false, false, err
 	}
 
-	eligible, err := model.ListChannelSelectionCandidates(group, param.ModelName, model.ChannelSelectionFilters{
-		RequestPath:       param.RequestPath,
-		RequestBody:       param.RequestBody,
-		AllowedChannelIds: param.AllowedChannelIds,
-	})
+	filters, err := param.SelectionFilters()
+	if err != nil {
+		return nil, true, false, err
+	}
+	eligible, err := model.ListChannelSelectionCandidates(group, param.ModelName, filters)
 	if err != nil {
 		return nil, true, false, err
 	}

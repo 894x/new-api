@@ -55,6 +55,7 @@ type GroupFormValues = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   GroupSpecialUsableGroup: string
+  GroupModelChannelGroups: string
   ModelTieredRatios: string
 }
 
@@ -105,6 +106,7 @@ function FormHarness(props: FormHarnessProps) {
       MaxTokenAutoGroups: 5,
       DefaultUseAutoGroup: false,
       GroupSpecialUsableGroup: '{}',
+      GroupModelChannelGroups: '{}',
       ModelTieredRatios: props.tieredRatios,
     },
   })
@@ -199,12 +201,13 @@ describe('group ratio form tiered-policy draft validation', () => {
       })
     )
 
-    expect(screen.getByRole('option', { name: 'premium' })).toBeInTheDocument()
+    const choices = within(screen.getByRole('listbox'))
+    expect(choices.getByRole('option', { name: 'premium' })).toBeInTheDocument()
     expect(
-      screen.queryByRole('option', { name: 'topup-only' })
+      choices.queryByRole('option', { name: 'topup-only' })
     ).not.toBeInTheDocument()
     expect(
-      screen.queryByRole('option', { name: 'usable-only' })
+      choices.queryByRole('option', { name: 'usable-only' })
     ).not.toBeInTheDocument()
   })
 

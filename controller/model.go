@@ -239,7 +239,11 @@ func ListModels(c *gin.Context, modelType int) {
 			tokenModelLimit = map[string]bool{}
 		}
 	}
-	models := service.GetGroupsEnabledModels(ownerGroups)
+	models, err := service.GetUserGroupsEnabledModels(groups.userGroup, ownerGroups)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	for _, modelName := range models {
 		if modelLimitEnable {
 			matchingName := ratio_setting.FormatMatchingModelName(modelName)

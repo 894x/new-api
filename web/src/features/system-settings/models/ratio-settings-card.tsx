@@ -34,6 +34,7 @@ import { useUpdateOption } from '../hooks/use-update-option'
 import { safeJsonParse } from '../utils/json-parser'
 import { positiveIntegerSchema } from '../utils/numeric-field'
 import { GroupRatioForm } from './group-ratio-form'
+import { parseGroupModelChannelGroups } from './lib/group-model-channel-groups'
 import {
   formatGroupModelTieredRatiosForTextarea,
   getUnknownTieredRatioGroups,
@@ -143,6 +144,14 @@ const createGroupSchema = (t: Translate) =>
       MaxTokenAutoGroups: positiveIntegerSchema(t('Enter a positive integer')),
       DefaultUseAutoGroup: z.boolean(),
       GroupSpecialUsableGroup: createJsonStringField(t),
+      GroupModelChannelGroups: z
+        .string()
+        .refine(
+          (value) => parseGroupModelChannelGroups(value) !== null,
+          t(
+            'Invalid channel pool policy. Use an object of user groups, models, and channel group arrays.'
+          )
+        ),
       ModelTieredRatios: z.string().superRefine((value, context) => {
         const result = parseGroupModelTieredRatiosJson(value)
         if (!result.success) {
@@ -271,6 +280,9 @@ export function RatioSettingsCard({
     GroupSpecialUsableGroup: normalizeJsonString(
       groupDefaults.GroupSpecialUsableGroup
     ),
+    GroupModelChannelGroups: normalizeJsonString(
+      groupDefaults.GroupModelChannelGroups
+    ),
     ModelTieredRatios: normalizeGroupModelTieredRatiosJson(
       groupDefaults.ModelTieredRatios || '{}'
     ),
@@ -310,6 +322,9 @@ export function RatioSettingsCard({
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
+      ),
+      GroupModelChannelGroups: formatJsonForTextarea(
+        groupDefaults.GroupModelChannelGroups
       ),
       ModelTieredRatios: formatGroupModelTieredRatiosForTextarea(
         groupDefaults.ModelTieredRatios || '{}'
@@ -364,6 +379,9 @@ export function RatioSettingsCard({
       GroupSpecialUsableGroup: normalizeJsonString(
         groupDefaults.GroupSpecialUsableGroup
       ),
+      GroupModelChannelGroups: normalizeJsonString(
+        groupDefaults.GroupModelChannelGroups
+      ),
       ModelTieredRatios: normalizeGroupModelTieredRatiosJson(
         groupDefaults.ModelTieredRatios || '{}'
       ),
@@ -378,6 +396,9 @@ export function RatioSettingsCard({
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
+      ),
+      GroupModelChannelGroups: formatJsonForTextarea(
+        groupDefaults.GroupModelChannelGroups
       ),
       ModelTieredRatios: formatGroupModelTieredRatiosForTextarea(
         groupDefaults.ModelTieredRatios || '{}'
@@ -446,6 +467,9 @@ export function RatioSettingsCard({
         DefaultUseAutoGroup: values.DefaultUseAutoGroup,
         GroupSpecialUsableGroup: normalizeJsonString(
           values.GroupSpecialUsableGroup
+        ),
+        GroupModelChannelGroups: normalizeJsonString(
+          values.GroupModelChannelGroups
         ),
         ModelTieredRatios: normalizeGroupModelTieredRatiosJson(
           values.ModelTieredRatios
