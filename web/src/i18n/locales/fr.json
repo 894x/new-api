@@ -6270,6 +6270,13 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Managed User Access": "Accès aux utilisateurs gérés",
+    "Create managed users": "Créer des utilisateurs gérés",
+    "Create ordinary users that are assigned to you.": "Créer des utilisateurs ordinaires qui vous sont attribués.",
+    "View managed users": "Voir les utilisateurs gérés",
+    "View users that are assigned to you.": "Voir les utilisateurs qui vous sont attribués.",
+    "View managed billing": "Voir la facturation gérée",
+    "View billing records for users that are assigned to you.": "Voir les relevés de facturation des utilisateurs qui vous sont attribués."
   }
 }

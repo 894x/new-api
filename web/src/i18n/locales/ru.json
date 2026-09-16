@@ -6270,6 +6270,13 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Managed User Access": "Доступ к управляемым пользователям",
+    "Create managed users": "Создание управляемых пользователей",
+    "Create ordinary users that are assigned to you.": "Создавать обычных пользователей, назначенных вам.",
+    "View managed users": "Просмотр управляемых пользователей",
+    "View users that are assigned to you.": "Просматривать пользователей, назначенных вам.",
+    "View managed billing": "Просмотр счетов управляемых пользователей",
+    "View billing records for users that are assigned to you.": "Просматривать платежные записи пользователей, назначенных вам."
   }
 }

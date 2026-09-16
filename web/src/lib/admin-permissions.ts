@@ -25,10 +25,13 @@ export type AdminCapabilities = AdminPermissionMatrix
 
 export const ADMIN_PERMISSION_RESOURCES = {
   CHANNEL: 'channel',
+  USER: 'user',
 } as const
 
 export const ADMIN_PERMISSION_ACTIONS = {
   READ: 'read',
+  CREATE: 'create',
+  BILLING_READ: 'billing_read',
   OPERATE: 'operate',
   WRITE: 'write',
   SENSITIVE_WRITE: 'sensitive_write',
@@ -94,9 +97,10 @@ export function roleGrants(
 // value missing from `value` with the admin role's baseline grant.
 export function normalizeAdminPermissions(
   value: AdminPermissionMatrix | null | undefined,
-  catalog: PermissionCatalog
+  catalog: PermissionCatalog,
+  baselineRoleKey: string | null = ADMIN_ROLE_KEY
 ): AdminPermissionMatrix {
-  const baseline = roleGrants(catalog, ADMIN_ROLE_KEY)
+  const baseline = baselineRoleKey ? roleGrants(catalog, baselineRoleKey) : {}
   const normalized: AdminPermissionMatrix = {}
   for (const resource of catalog.resources) {
     const actions: Record<string, boolean> = {}

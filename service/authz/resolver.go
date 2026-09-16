@@ -6,19 +6,16 @@ import "github.com/casbin/casbin/v2"
 // short-circuits to allow. Otherwise a per-user override wins, then the union of
 // the subject's role baselines applies.
 func Can(userID int, systemRole int, permission Permission) bool {
-	roles := resolveSubjectRoles(userID, systemRole)
-	if len(roles) == 0 {
+	if !isKnownPermission(permission) {
 		return false
 	}
+
+	roles := resolveSubjectRoles(userID, systemRole)
 	for _, role := range roles {
 		if isSuperuserRole(role) {
 			return true
 		}
 	}
-	if !isKnownPermission(permission) {
-		return false
-	}
-
 	e := currentEnforcer()
 	if e == nil {
 		return false

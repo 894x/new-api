@@ -6270,6 +6270,13 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Managed User Access": "受管使用者權限",
+    "Create managed users": "建立受管使用者",
+    "Create ordinary users that are assigned to you.": "建立歸屬於你的普通使用者。",
+    "View managed users": "檢視受管使用者",
+    "View users that are assigned to you.": "檢視歸屬於你的使用者。",
+    "View managed billing": "檢視受管帳單",
+    "View billing records for users that are assigned to you.": "檢視歸屬於你的使用者帳單記錄。"
   }
 }

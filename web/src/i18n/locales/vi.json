@@ -6270,6 +6270,13 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Managed User Access": "Quyền truy cập người dùng được quản lý",
+    "Create managed users": "Tạo người dùng được quản lý",
+    "Create ordinary users that are assigned to you.": "Tạo người dùng thông thường được giao cho bạn.",
+    "View managed users": "Xem người dùng được quản lý",
+    "View users that are assigned to you.": "Xem người dùng được giao cho bạn.",
+    "View managed billing": "Xem thanh toán được quản lý",
+    "View billing records for users that are assigned to you.": "Xem hồ sơ thanh toán của người dùng được giao cho bạn."
   }
 }

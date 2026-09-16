@@ -65,6 +65,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
+  ADMIN_ROLE_KEY,
   EMPTY_PERMISSION_CATALOG,
   hasPermission,
   normalizeAdminPermissions,
@@ -111,12 +112,15 @@ export function UsersMutateDrawer({
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
+  const isAdmin = (currentUser?.role ?? 0) >= ROLE.ADMIN
+  const canEditAdminPermissions = currentUser?.role === ROLE.SUPER_ADMIN
 
   // Fetch groups
   const { data: groupsData } = useQuery({
     queryKey: ['groups'],
     queryFn: getGroups,
     staleTime: 5 * 60 * 1000,
+    enabled: isAdmin,
   })
 
   const groups = groupsData?.data || []
@@ -126,6 +130,7 @@ export function UsersMutateDrawer({
     queryKey: ['admin-permission-catalog'],
     queryFn: getPermissionCatalog,
     staleTime: 5 * 60 * 1000,
+    enabled: canEditAdminPermissions,
   })
 
   const form = useForm<UserFormValues>({
@@ -156,8 +161,7 @@ export function UsersMutateDrawer({
 
   const currentQuotaRaw = form.watch('quota_dollars') || 0
   const selectedRole = form.watch('role')
-  const canEditAdminPermissions = currentUser?.role === ROLE.SUPER_ADMIN
-  const targetIsAdmin = (selectedRole ?? currentRow?.role ?? 0) >= ROLE.ADMIN
+  const targetRole = selectedRole ?? currentRow?.role ?? ROLE.USER
 
   const onSubmit = async (data: UserFormValues) => {
     if (!isUpdate) {
@@ -176,7 +180,7 @@ export function UsersMutateDrawer({
       const payload = transformFormDataToPayload(
         data,
         currentRow?.id,
-        permissionCatalog
+        canEditAdminPermissions ? permissionCatalog : undefined
       )
       const result = isUpdate
         ? await updateUser(payload as typeof payload & { id: number })
@@ -244,7 +248,7 @@ export function UsersMutateDrawer({
               onSubmit={form.handleSubmit(onSubmit)}
               className={sideDrawerFormClassName()}
             >
-              {open && currentRow && (
+              {open && currentRow && isAdmin && (
                 <UserRequestCapture
                   key={currentRow.id}
                   userId={currentRow.id}
@@ -274,7 +278,7 @@ export function UsersMutateDrawer({
                   )}
                 />
 
-                {!isUpdate && (
+                {!isUpdate && isAdmin && (
                   <FormField
                     control={form.control}
                     name='role'
@@ -287,7 +291,8 @@ export function UsersMutateDrawer({
                             { value: '10', label: t('Admin') },
                           ]}
                           onValueChange={(value) =>
-                            value !== null && field.onChange(parseInt(value))
+                            value !== null &&
+                            field.onChange(Number.parseInt(value))
                           }
                           value={String(field.value)}
                         >
@@ -458,16 +463,11 @@ export function UsersMutateDrawer({
               )}
 
               {canEditAdminPermissions &&
-                targetIsAdmin &&
                 permissionCatalog.resources.length > 0 && (
                   <SideDrawerSection>
-                    <h3 className='text-sm font-medium'>
-                      {t('Admin Permissions')}
-                    </h3>
+                    <h3 className='text-sm font-medium'>{t('Capabilities')}</h3>
                     <p className='text-muted-foreground text-xs'>
-                      {t(
-                        'Default administrator permissions can be overridden for this user.'
-                      )}
+                      {t('Configure capabilities')}
                     </p>
                     <FormField
                       control={form.control}
@@ -475,55 +475,65 @@ export function UsersMutateDrawer({
                       render={({ field }) => {
                         const selected = normalizeAdminPermissions(
                           field.value,
-                          permissionCatalog
+                          permissionCatalog,
+                          targetRole >= ROLE.ADMIN ? ADMIN_ROLE_KEY : null
                         )
                         return (
                           <FormItem>
                             <div className='space-y-3'>
-                              {permissionCatalog.resources.map((resource) => (
-                                <div
-                                  key={resource.resource}
-                                  className='space-y-2 rounded-md border p-3'
-                                >
-                                  <div className='text-sm font-medium'>
-                                    {t(resource.label_key)}
-                                  </div>
-                                  <div className='space-y-2'>
-                                    {resource.actions.map((option) => (
-                                      <label
-                                        key={option.action}
-                                        className='flex items-start gap-3'
-                                      >
-                                        <Checkbox
-                                          checked={
-                                            selected[resource.resource]?.[
-                                              option.action
-                                            ] === true
-                                          }
-                                          onCheckedChange={(checked) => {
-                                            field.onChange({
-                                              ...selected,
-                                              [resource.resource]: {
-                                                ...selected[resource.resource],
-                                                [option.action]:
-                                                  checked === true,
-                                              },
-                                            })
-                                          }}
-                                        />
-                                        <span className='flex flex-col gap-1'>
-                                          <span className='text-sm font-medium'>
-                                            {t(option.label_key)}
+                              {permissionCatalog.resources
+                                .filter(
+                                  (resource) =>
+                                    targetRole >= ROLE.ADMIN ||
+                                    resource.resource ===
+                                      ADMIN_PERMISSION_RESOURCES.USER
+                                )
+                                .map((resource) => (
+                                  <div
+                                    key={resource.resource}
+                                    className='space-y-2 rounded-md border p-3'
+                                  >
+                                    <div className='text-sm font-medium'>
+                                      {t(resource.label_key)}
+                                    </div>
+                                    <div className='space-y-2'>
+                                      {resource.actions.map((option) => (
+                                        <label
+                                          key={option.action}
+                                          className='flex items-start gap-3'
+                                        >
+                                          <Checkbox
+                                            checked={
+                                              selected[resource.resource]?.[
+                                                option.action
+                                              ] === true
+                                            }
+                                            onCheckedChange={(checked) => {
+                                              field.onChange({
+                                                ...selected,
+                                                [resource.resource]: {
+                                                  ...selected[
+                                                    resource.resource
+                                                  ],
+                                                  [option.action]:
+                                                    checked === true,
+                                                },
+                                              })
+                                            }}
+                                          />
+                                          <span className='flex flex-col gap-1'>
+                                            <span className='text-sm font-medium'>
+                                              {t(option.label_key)}
+                                            </span>
+                                            <span className='text-muted-foreground text-xs'>
+                                              {t(option.description_key)}
+                                            </span>
                                           </span>
-                                          <span className='text-muted-foreground text-xs'>
-                                            {t(option.description_key)}
-                                          </span>
-                                        </span>
-                                      </label>
-                                    ))}
+                                        </label>
+                                      ))}
+                                    </div>
                                   </div>
-                                </div>
-                              ))}
+                                ))}
                             </div>
                             <FormMessage />
                           </FormItem>

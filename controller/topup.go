@@ -586,10 +586,16 @@ func GetAllTopUps(c *gin.Context) {
 		total  int64
 		err    error
 	)
-	if keyword != "" {
-		topups, total, err = model.SearchAllTopUps(keyword, pageInfo)
+	if c.GetInt("role") >= common.RoleAdminUser {
+		if keyword != "" {
+			topups, total, err = model.SearchAllTopUps(keyword, pageInfo)
+		} else {
+			topups, total, err = model.GetAllTopUps(pageInfo)
+		}
+	} else if keyword != "" {
+		topups, total, err = model.SearchTopUpsManagedBy(c.GetInt("id"), keyword, pageInfo)
 	} else {
-		topups, total, err = model.GetAllTopUps(pageInfo)
+		topups, total, err = model.GetTopUpsManagedBy(c.GetInt("id"), pageInfo)
 	}
 	if err != nil {
 		common.ApiError(c, err)

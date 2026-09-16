@@ -63,6 +63,11 @@ export function useSidebarData(): SidebarData {
       ADMIN_PERMISSION_RESOURCES.CHANNEL,
       ADMIN_PERMISSION_ACTIONS.READ
     )
+  const canReadManagedUsers = hasPermission(
+    user,
+    ADMIN_PERMISSION_RESOURCES.USER,
+    ADMIN_PERMISSION_ACTIONS.READ
+  )
 
   return {
     navGroups: [
@@ -136,6 +141,21 @@ export function useSidebarData(): SidebarData {
           },
         ],
       },
+      ...(canReadManagedUsers && (user?.role ?? 0) < ROLE.ADMIN
+        ? [
+            {
+              id: 'management',
+              title: t('Management'),
+              items: [
+                {
+                  title: t('Users'),
+                  url: '/users',
+                  icon: Users,
+                },
+              ],
+            },
+          ]
+        : []),
       {
         id: 'admin',
         title: t('Admin'),

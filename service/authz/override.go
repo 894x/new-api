@@ -30,7 +30,7 @@ func SetUserPermissions(userID int, permissions PermissionsMap) error {
 		if _, err := e.RemoveFilteredPolicy(0, UserSubject(userID), resource); err != nil {
 			return err
 		}
-		for _, policy := range userOverridePolicies(e, resource, actions) {
+		for _, policy := range userOverridePolicies(e, resource, actions, managedRoleKey) {
 			if _, err := e.AddPolicy(UserSubject(userID), policy.Resource, policy.Action, policy.Effect); err != nil {
 				return err
 			}
@@ -52,7 +52,52 @@ func SetUserPermissionsInTx(tx *gorm.DB, userID int, permissions PermissionsMap)
 		if err := tx.Where("ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(userID), resource).Delete(&model.CasbinRule{}).Error; err != nil {
 			return err
 		}
-		policies := userOverridePolicies(e, resource, actions)
+		policies := userOverridePolicies(e, resource, actions, managedRoleKey)
+		if len(policies) == 0 {
+			continue
+		}
+		rules := make([]model.CasbinRule, 0, len(policies))
+		for _, policy := range policies {
+			rules = append(rules, newRule("p", []string{UserSubject(userID), policy.Resource, policy.Action, policy.Effect}))
+		}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rules).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SetUserPermissionsForRoleInTx stores overrides relative to the target user's
+// actual system-role baseline. Ordinary users have no baseline grants, while
+// administrators retain the existing administrator baseline behavior.
+func SetUserPermissionsForRoleInTx(tx *gorm.DB, userID int, systemRole int, permissions PermissionsMap) error {
+	e := currentEnforcer()
+	if e == nil {
+		return fmt.Errorf("authz enforcer is not initialized")
+	}
+
+	baselineRole := ""
+	if systemRole >= common.RoleAdminUser {
+		baselineRole = managedRoleKey
+	} else if err := tx.Where(
+		"ptype = ? AND v0 = ? AND v1 <> ?",
+		"p",
+		UserSubject(userID),
+		ResourceUser,
+	).Delete(&model.CasbinRule{}).Error; err != nil {
+		return err
+	}
+	for resource, actions := range permissions {
+		if !isKnownResource(resource) {
+			continue
+		}
+		if systemRole < common.RoleAdminUser && resource != ResourceUser {
+			continue
+		}
+		if err := tx.Where("ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(userID), resource).Delete(&model.CasbinRule{}).Error; err != nil {
+			return err
+		}
+		policies := userOverridePolicies(e, resource, actions, baselineRole)
 		if len(policies) == 0 {
 			continue
 		}
@@ -135,7 +180,7 @@ func ExplicitUserOverrides(userID int) PermissionsMap {
 
 // userOverridePolicies returns the override entries that differ from the managed
 // role baseline; entries matching the baseline are omitted.
-func userOverridePolicies(e *casbin.SyncedEnforcer, resource string, actions map[string]bool) []overridePolicy {
+func userOverridePolicies(e *casbin.SyncedEnforcer, resource string, actions map[string]bool, baselineRole string) []overridePolicy {
 	overrides := make([]overridePolicy, 0, len(actions))
 	for _, action := range catalogActions(resource) {
 		desired, ok := actions[action.Action]
@@ -143,7 +188,8 @@ func userOverridePolicies(e *casbin.SyncedEnforcer, resource string, actions map
 			continue
 		}
 		permission := Permission{Resource: resource, Action: action.Action}
-		if desired == roleBaselineAllows(e, managedRoleKey, permission) {
+		baselineAllows := baselineRole != "" && roleBaselineAllows(e, baselineRole, permission)
+		if desired == baselineAllows {
 			continue
 		}
 		effect := EffectDeny

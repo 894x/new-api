@@ -47,6 +47,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { manageUser, resetUserPasskey, resetUserTwoFA } from '../api'
 import {
@@ -72,6 +74,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
   const [subscriptionsDialogOpen, setSubscriptionsDialogOpen] = useState(false)
+  const currentUser = useAuthStore((state) => state.auth.user)
 
   const handleEdit = () => {
     setCurrentRow(user)
@@ -135,7 +138,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const isAdmin = user.role >= USER_ROLE.ADMIN
   const isRoot = user.role === USER_ROLE.ROOT
 
-  if (isUserDeleted(user)) {
+  if ((currentUser?.role ?? 0) < ROLE.ADMIN || isUserDeleted(user)) {
     return null
   }
 

@@ -6270,6 +6270,13 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Managed User Access": "管理対象ユーザーへのアクセス",
+    "Create managed users": "管理対象ユーザーを作成",
+    "Create ordinary users that are assigned to you.": "自分に割り当てられる一般ユーザーを作成します。",
+    "View managed users": "管理対象ユーザーを表示",
+    "View users that are assigned to you.": "自分に割り当てられたユーザーを表示します。",
+    "View managed billing": "管理対象の請求を表示",
+    "View billing records for users that are assigned to you.": "自分に割り当てられたユーザーの請求記録を表示します。"
   }
 }

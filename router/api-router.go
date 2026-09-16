@@ -3,6 +3,7 @@ package router
 import (
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
+	"github.com/QuantumNous/new-api/service/authz"
 
 	// Import oauth package to register providers via init()
 	_ "github.com/QuantumNous/new-api/oauth"
@@ -148,20 +149,25 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.DELETE("/oauth/bindings/:provider_id", controller.UnbindCustomOAuth)
 			}
 
+			managedUserRoute := userRoute.Group("/")
+			managedUserRoute.Use(middleware.UserAuth())
+			{
+				managedUserRoute.GET("/", middleware.RequirePermission(authz.UserRead), controller.GetAllUsers)
+				managedUserRoute.GET("/topup", middleware.RequirePermission(authz.UserBillingRead), controller.GetAllTopUps)
+				managedUserRoute.GET("/search", middleware.RequirePermission(authz.UserRead), controller.SearchUsers)
+				managedUserRoute.GET("/:id", middleware.RequirePermission(authz.UserRead), controller.GetUser)
+				managedUserRoute.POST("/", middleware.RequirePermission(authz.UserCreate), controller.CreateUser)
+			}
+
 			adminRoute := userRoute.Group("/")
 			adminRoute.Use(middleware.AdminAuth())
 			{
-				adminRoute.GET("/", controller.GetAllUsers)
-				adminRoute.GET("/topup", controller.GetAllTopUps)
 				adminRoute.POST("/topup/complete", controller.AdminCompleteTopUp)
-				adminRoute.GET("/search", controller.SearchUsers)
 				adminRoute.GET("/:id/oauth/bindings", controller.GetUserOAuthBindingsByAdmin)
 				adminRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
 				adminRoute.DELETE("/:id/bindings/:binding_type", controller.AdminClearUserBinding)
-				adminRoute.GET("/:id", controller.GetUser)
 				adminRoute.GET("/:id/request-capture", middleware.DisableCache(), controller.GetUserRequestCapture)
 				adminRoute.PUT("/:id/request-capture", middleware.DisableCache(), controller.UpdateUserRequestCapture)
-				adminRoute.POST("/", controller.CreateUser)
 				adminRoute.POST("/manage", controller.ManageUser)
 				adminRoute.PUT("/", controller.UpdateUser)
 				adminRoute.DELETE("/:id", controller.DeleteUser)

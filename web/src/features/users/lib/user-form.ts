@@ -19,15 +19,16 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import {
+  ADMIN_ROLE_KEY,
+  normalizeAdminPermissions,
   type PermissionCatalog,
   type AdminPermissionMatrix,
-  normalizeAdminPermissions,
 } from '@/lib/admin-permissions'
 import { quotaUnitsToDollars } from '@/lib/format'
 import { ROLE } from '@/lib/roles'
 
 import { DEFAULT_GROUP } from '../constants'
-import { type UserFormData, type User } from '../types'
+import type { UserFormData, User } from '../types'
 
 // ============================================================================
 // Form Schema
@@ -84,13 +85,13 @@ export function transformFormDataToPayload(
 
   const role = userId === undefined ? data.role || 1 : (data.role ?? 0)
 
-  // Only send the permission matrix when the target is an admin and the catalog
-  // is available; without the catalog we cannot build a full matrix, so we omit
-  // the field (the backend then leaves existing permissions untouched).
-  if (role >= ROLE.ADMIN && catalog) {
+  // Root may grant explicit capabilities to either an administrator or an
+  // ordinary user. Ordinary users have an empty role baseline.
+  if (catalog && catalog.resources.length > 0) {
     payload.admin_permissions = normalizeAdminPermissions(
       data.admin_permissions as AdminPermissionMatrix | undefined,
-      catalog
+      catalog,
+      role >= ROLE.ADMIN ? ADMIN_ROLE_KEY : null
     )
   }
 

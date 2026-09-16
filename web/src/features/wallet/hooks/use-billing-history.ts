@@ -22,6 +22,12 @@ import { toast } from 'sonner'
 
 import { useIsAdmin } from '@/hooks/use-admin'
 import { useDebounce } from '@/hooks/use-debounce'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getUserBillingHistory,
@@ -45,6 +51,14 @@ interface UseBillingHistoryOptions {
 export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const { initialPage = 1, initialPageSize = 10 } = options
   const isAdmin = useIsAdmin()
+  const user = useAuthStore((state) => state.auth.user)
+  const canViewManagedBilling =
+    isAdmin ||
+    hasPermission(
+      user,
+      ADMIN_PERMISSION_RESOURCES.USER,
+      ADMIN_PERMISSION_ACTIONS.BILLING_READ
+    )
 
   const [records, setRecords] = useState<TopupRecord[]>([])
   const [total, setTotal] = useState(0)
@@ -63,7 +77,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     const requestId = ++requestIdRef.current
     setLoading(true)
     try {
-      const response = isAdmin
+      const response = canViewManagedBilling
         ? await getAllBillingHistory(page, pageSize, debouncedKeyword)
         : await getUserBillingHistory(page, pageSize, debouncedKeyword)
 
@@ -92,7 +106,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
         setLoading(false)
       }
     }
-  }, [debouncedKeyword, isAdmin, page, pageSize])
+  }, [canViewManagedBilling, debouncedKeyword, page, pageSize])
 
   /**
    * Complete a pending order (admin only)
@@ -168,6 +182,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     loading,
     completing,
     isAdmin,
+    canViewManagedBilling,
     handlePageChange,
     handlePageSizeChange,
     handleSearch,

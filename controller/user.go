@@ -326,7 +326,14 @@ func Register(c *gin.Context) {
 func GetAllUsers(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	users, total, err := model.GetAllUsers(pageInfo, sortOptions)
+	var users []*model.User
+	var total int64
+	var err error
+	if c.GetInt("role") >= common.RoleAdminUser {
+		users, total, err = model.GetAllUsers(pageInfo, sortOptions)
+	} else {
+		users, total, err = model.GetUsersManagedBy(c.GetInt("id"), pageInfo, sortOptions)
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -356,7 +363,14 @@ func SearchUsers(c *gin.Context) {
 	}
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	var users []*model.User
+	var total int64
+	var err error
+	if c.GetInt("role") >= common.RoleAdminUser {
+		users, total, err = model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	} else {
+		users, total, err = model.SearchUsersManagedBy(c.GetInt("id"), keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -384,7 +398,18 @@ func GetUser(c *gin.Context) {
 		return
 	}
 	myRole := c.GetInt("role")
-	if !canManageTargetRole(myRole, user.Role) {
+	canReadTarget := canManageTargetRole(myRole, user.Role)
+	if myRole < common.RoleAdminUser {
+		canReadTarget = user.ManagedByUserId != nil && *user.ManagedByUserId == c.GetInt("id")
+		if !canReadTarget {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
+			})
+			return
+		}
+	}
+	if !canReadTarget {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
 		return
 	}
@@ -1017,16 +1042,30 @@ func CreateUser(c *gin.Context) {
 		user.DisplayName = user.Username
 	}
 	myRole := c.GetInt("role")
-	if user.Role >= myRole {
+	managedByUserID := (*int)(nil)
+	if myRole < common.RoleAdminUser {
+		if user.Role != 0 && user.Role != common.RoleCommonUser {
+			common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
+			return
+		}
+		if user.AdminPermissions != nil {
+			common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
+			return
+		}
+		user.Role = common.RoleCommonUser
+		managerID := c.GetInt("id")
+		managedByUserID = &managerID
+	} else if user.Role >= myRole {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
 		return
 	}
 	// Even for admin users, we cannot fully trust them!
 	cleanUser := model.User{
-		Username:    user.Username,
-		Password:    user.Password,
-		DisplayName: user.DisplayName,
-		Role:        user.Role, // 保持管理员设置的角色
+		Username:        user.Username,
+		Password:        user.Password,
+		DisplayName:     user.DisplayName,
+		Role:            user.Role, // 保持管理员设置的角色
+		ManagedByUserId: managedByUserID,
 	}
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
@@ -1061,18 +1100,12 @@ func CreateUser(c *gin.Context) {
 
 func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, userRole int, permissions map[string]map[string]bool) (bool, error) {
 	if permissions == nil {
-		if userRole < common.RoleAdminUser && c.GetInt("role") == common.RoleRootUser {
-			return true, authz.ClearUserAuthorizationInTx(tx, userID)
-		}
 		return false, nil
 	}
 	if c.GetInt("role") != common.RoleRootUser {
 		return false, fmt.Errorf("only root can update admin permissions")
 	}
-	if userRole < common.RoleAdminUser {
-		return true, authz.ClearUserAuthorizationInTx(tx, userID)
-	}
-	return true, authz.SetUserPermissionsInTx(tx, userID, permissions)
+	return true, authz.SetUserPermissionsForRoleInTx(tx, userID, userRole, permissions)
 }
 
 type ManageRequest struct {

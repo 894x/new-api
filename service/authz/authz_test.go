@@ -105,6 +105,11 @@ func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 			ActionSensitiveWrite: true,
 			ActionSecretView:     false,
 		},
+		ResourceUser: {
+			ActionCreate:      true,
+			ActionRead:        true,
+			ActionBillingRead: true,
+		},
 	}, ExplicitUserPermissions(42))
 	assert.Equal(t, PermissionsMap{
 		ResourceChannel: {
@@ -132,6 +137,11 @@ func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 			ActionWrite:          true,
 			ActionSensitiveWrite: false,
 			ActionSecretView:     false,
+		},
+		ResourceUser: {
+			ActionCreate:      true,
+			ActionRead:        true,
+			ActionBillingRead: true,
 		},
 	}, ExplicitUserPermissions(42))
 	assert.Empty(t, ExplicitUserOverrides(42))
@@ -193,6 +203,41 @@ func TestSetUserPermissionsInTxRollbackLeavesNoPolicy(t *testing.T) {
 	var count int64
 	require.NoError(t, db.Model(&model.CasbinRule{}).Where("v0 = ?", UserSubject(43)).Count(&count).Error)
 	assert.Equal(t, int64(0), count)
+}
+
+func TestOrdinaryUserCanReceiveExplicitManagedUserPermissions(t *testing.T) {
+	db := newAuthzTestDB(t)
+	require.NoError(t, Init(db))
+
+	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+		return SetUserPermissionsForRoleInTx(tx, 44, common.RoleCommonUser, PermissionsMap{
+			ResourceUser: {
+				ActionCreate:      true,
+				ActionRead:        true,
+				ActionBillingRead: false,
+			},
+			ResourceChannel: {
+				ActionRead: true,
+			},
+		})
+	}))
+	require.NoError(t, ReloadPolicy())
+
+	assert.True(t, Can(44, common.RoleCommonUser, UserCreate))
+	assert.True(t, Can(44, common.RoleCommonUser, UserRead))
+	assert.False(t, Can(44, common.RoleCommonUser, UserBillingRead))
+	assert.False(t, Can(44, common.RoleCommonUser, ChannelRead))
+	assert.Equal(t, PermissionsMap{
+		ResourceUser: {
+			ActionCreate: true,
+			ActionRead:   true,
+		},
+	}, ExplicitUserOverrides(44))
+
+	require.NoError(t, SetUserPermissions(1, PermissionsMap{
+		ResourceUser: {ActionRead: false},
+	}))
+	assert.True(t, Can(1, common.RoleRootUser, UserRead))
 }
 
 func TestAdapterAddPolicyIsIdempotent(t *testing.T) {
