@@ -171,13 +171,23 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 
 			clientData, isStreamError := service.StreamErrorDataForClient(c, data)
-			lastStreamData = clientData
 			if isStreamError {
+				lastStreamData = clientData
 				streamErr = markStreamErrorIfCommitted(c, types.NewOpenAIError(fmt.Errorf("upstream stream error: %s", common.LocalLogPreview(data)), types.ErrorCodeBadResponse, http.StatusBadGateway))
 				lastStreamData = ""
 				sr.Stop(streamErr)
 				return
 			}
+			if info.RelayFormat == types.RelayFormatOpenAI {
+				clientDataWithCachedTokens, cachedTokensErr := addTopLevelCachedTokensToChatResponseBody(common.StringToByteSlice(clientData), &errorResponse.Usage)
+				if cachedTokensErr != nil {
+					lastStreamData = ""
+					sr.ScannerError(fmt.Errorf("add top-level cached tokens: %w", cachedTokensErr))
+					return
+				}
+				clientData = string(clientDataWithCachedTokens)
+			}
+			lastStreamData = clientData
 			if err := processTokenData(info.RelayMode, clientData, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.ScannerError(err)
@@ -354,6 +364,10 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 			}
 			bodyMap["usage"] = simpleResponse.Usage
 			responseBody, _ = common.Marshal(bodyMap)
+		}
+		responseBody, err = addTopLevelCachedTokensToChatResponseBody(responseBody, &simpleResponse.Usage)
+		if err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 		if forceFormat {
 			responseBody, err = common.Marshal(simpleResponse)

@@ -5,6 +5,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/tidwall/sjson"
 )
 
 func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {
@@ -48,6 +49,19 @@ func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, res
 			}
 		}
 	}
+}
+
+func addTopLevelCachedTokensToChatResponseBody(body []byte, usage *dto.Usage) ([]byte, error) {
+	if len(body) == 0 || usage == nil {
+		return body, nil
+	}
+	cachedTokens := usage.PromptTokensDetails.CachedTokens
+	if cachedTokens <= 0 {
+		return body, nil
+	}
+
+	usage.CachedTokens = cachedTokens
+	return sjson.SetBytes(body, "usage.cached_tokens", cachedTokens)
 }
 
 func extractCachedTokensFromBody(body []byte) (int, bool) {
