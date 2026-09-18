@@ -66,6 +66,72 @@ func TestOpenAIErrorForClientShowsDetailsWhenSettingDisabled(t *testing.T) {
 	assert.Contains(t, result.Message, "request-visible")
 }
 
+func TestOpenAIErrorForClientUsesConfiguredReplacementForRegularUsers(t *testing.T) {
+	setHideErrorDetails(t, true)
+	setErrorResponseReplacementRules(t, []operation_setting.ErrorResponseReplacementRule{{
+		StatusCode:  http.StatusInternalServerError,
+		Match:       "Moonshot AI",
+		Replacement: "rhzs",
+	}})
+	c := newErrorClientContext(common.RoleCommonUser, "request-replaced")
+	err := types.NewOpenAIError(
+		errors.New("服务处理请求时发生内部错误，请稍后重试。若持续出现该问题，请联系 Moonshot AI 技术支持。"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusInternalServerError,
+	)
+
+	result := OpenAIErrorForClient(c, err)
+
+	assert.Contains(t, result.Message, "请联系 rhzs 技术支持")
+	assert.Contains(t, result.Message, "request-replaced")
+	assert.NotContains(t, result.Message, "Moonshot AI")
+	assert.Equal(t, "request_failed", result.Code)
+	assert.Equal(t, "new_api_error", result.Type)
+	assert.Contains(t, err.Error(), "Moonshot AI")
+	assert.Equal(t, http.StatusInternalServerError, err.StatusCode)
+}
+
+func TestOpenAIErrorForClientPreservesErrorShapeWhenDetailsAreVisible(t *testing.T) {
+	setHideErrorDetails(t, false)
+	setErrorResponseReplacementRules(t, []operation_setting.ErrorResponseReplacementRule{{
+		StatusCode:  http.StatusBadGateway,
+		Match:       "provider failure",
+		Replacement: "service unavailable",
+	}})
+	c := newErrorClientContext(common.RoleCommonUser, "request-visible-replaced")
+	err := types.NewOpenAIError(
+		errors.New("provider failure"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadGateway,
+	)
+
+	result := OpenAIErrorForClient(c, err)
+
+	assert.Contains(t, result.Message, "service unavailable")
+	assert.Contains(t, result.Message, "request-visible-replaced")
+	assert.Equal(t, types.ErrorCodeBadResponseStatusCode, result.Code)
+}
+
+func TestOpenAIErrorForClientKeepsOriginalMessageForAdministrators(t *testing.T) {
+	setHideErrorDetails(t, true)
+	setErrorResponseReplacementRules(t, []operation_setting.ErrorResponseReplacementRule{{
+		StatusCode:  http.StatusInternalServerError,
+		Match:       "provider failure",
+		Replacement: "service unavailable",
+	}})
+	c := newErrorClientContext(common.RoleAdminUser, "request-admin-original")
+	err := types.NewOpenAIError(
+		errors.New("provider failure"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusInternalServerError,
+	)
+
+	result := OpenAIErrorForClient(c, err)
+
+	assert.Contains(t, result.Message, "provider failure")
+	assert.NotContains(t, result.Message, "service unavailable")
+}
+
 func TestTaskErrorForClientDoesNotMutateInternalError(t *testing.T) {
 	setHideErrorDetails(t, true)
 	c := newErrorClientContext(common.RoleCommonUser, "request-task")
@@ -83,6 +149,31 @@ func TestTaskErrorForClientDoesNotMutateInternalError(t *testing.T) {
 	assert.Nil(t, result.Data)
 	assert.Contains(t, result.Message, "request-task")
 	assert.Equal(t, "secret provider reason", taskErr.Message)
+	assert.NotNil(t, taskErr.Data)
+}
+
+func TestTaskErrorForClientUsesConfiguredReplacement(t *testing.T) {
+	setHideErrorDetails(t, true)
+	setErrorResponseReplacementRules(t, []operation_setting.ErrorResponseReplacementRule{{
+		StatusCode:  http.StatusBadGateway,
+		Match:       "provider task failure",
+		Replacement: "任务服务暂时不可用。",
+	}})
+	c := newErrorClientContext(common.RoleCommonUser, "request-task-replaced")
+	taskErr := &dto.TaskError{
+		Code:       "provider_error",
+		Message:    "provider task failure",
+		Data:       map[string]any{"provider": "private"},
+		StatusCode: http.StatusBadGateway,
+	}
+
+	result := TaskErrorForClient(c, taskErr)
+
+	assert.Contains(t, result.Message, "任务服务暂时不可用。")
+	assert.Contains(t, result.Message, "request-task-replaced")
+	assert.Equal(t, "request_failed", result.Code)
+	assert.Nil(t, result.Data)
+	assert.Equal(t, "provider task failure", taskErr.Message)
 	assert.NotNil(t, taskErr.Data)
 }
 
@@ -185,6 +276,15 @@ func setHideErrorDetails(t *testing.T, enabled bool) {
 	operation_setting.UpdateHideErrorDetails(enabled)
 	t.Cleanup(func() {
 		operation_setting.UpdateHideErrorDetails(original)
+	})
+}
+
+func setErrorResponseReplacementRules(t *testing.T, rules []operation_setting.ErrorResponseReplacementRule) {
+	t.Helper()
+	original := append([]operation_setting.ErrorResponseReplacementRule(nil), operation_setting.GetErrorSetting().ResponseReplacementRules...)
+	require.NoError(t, operation_setting.UpdateErrorResponseReplacementRules(rules))
+	t.Cleanup(func() {
+		require.NoError(t, operation_setting.UpdateErrorResponseReplacementRules(original))
 	})
 }
 

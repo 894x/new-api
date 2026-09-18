@@ -42,6 +42,12 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import type { ErrorResponseReplacementRule } from '../types'
+import {
+  errorResponseReplacementRulesTextSchema,
+  formatErrorResponseReplacementRules,
+  parseErrorResponseReplacementRules,
+} from './error-response-replacement-rules'
 
 const maxBlockedResponseHeaderCount = 32
 const maxBlockedResponseHeaderNameLength = 128
@@ -50,6 +56,7 @@ const validHeaderNamePattern = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const errorDetailSchema = z.object({
   error_setting: z.object({
     hide_error_details: z.boolean(),
+    response_replacement_rules: errorResponseReplacementRulesTextSchema,
     blocked_response_headers: z.string().refine(
       (value) => {
         const headers = value
@@ -78,6 +85,7 @@ type ErrorDetailSectionProps = {
   defaultValues: {
     'error_setting.hide_error_details': boolean
     'error_setting.blocked_response_headers': string[]
+    'error_setting.response_replacement_rules': ErrorResponseReplacementRule[]
   }
 }
 
@@ -86,6 +94,9 @@ const buildFormDefaults = (
 ): ErrorDetailFormValues => ({
   error_setting: {
     hide_error_details: defaults['error_setting.hide_error_details'],
+    response_replacement_rules: formatErrorResponseReplacementRules(
+      defaults['error_setting.response_replacement_rules']
+    ),
     blocked_response_headers:
       defaults['error_setting.blocked_response_headers'].join('\n'),
   },
@@ -111,6 +122,19 @@ export function ErrorDetailSection({ defaultValues }: ErrorDetailSectionProps) {
       await updateOption.mutateAsync({
         key: 'error_setting.hide_error_details',
         value: hideErrorDetails,
+      })
+    }
+
+    const responseReplacementRules = parseErrorResponseReplacementRules(
+      values.error_setting.response_replacement_rules
+    )
+    if (
+      JSON.stringify(responseReplacementRules) !==
+      JSON.stringify(defaultValues['error_setting.response_replacement_rules'])
+    ) {
+      await updateOption.mutateAsync({
+        key: 'error_setting.response_replacement_rules',
+        value: JSON.stringify(responseReplacementRules),
       })
     }
 
@@ -144,6 +168,34 @@ export function ErrorDetailSection({ defaultValues }: ErrorDetailSectionProps) {
             onSave={form.handleSubmit(onSubmit)}
             isSaving={updateOption.isPending}
             saveLabel='Save error detail settings'
+          />
+          <FormField
+            control={form.control}
+            name='error_setting.response_replacement_rules'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Error response replacement rules')}</FormLabel>
+                <FormControl>
+                  <Textarea
+                    rows={10}
+                    placeholder={`[
+  {
+    "status_code": 500,
+    "match": "upstream error text",
+    "replacement": "Service temporarily unavailable."
+  }
+]`}
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Rules are applied from top to bottom. For matching HTTP statuses, every occurrence of match in the extracted error message is replaced with replacement. The status code and administrator diagnostics stay unchanged.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
           />
           <FormField
             control={form.control}

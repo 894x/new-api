@@ -39,15 +39,26 @@ func ShouldHideErrorDetails(c *gin.Context) bool {
 	if !operation_setting.ShouldHideErrorDetails() {
 		return false
 	}
+	return !isAdminErrorViewer(c)
+}
+
+func isAdminErrorViewer(c *gin.Context) bool {
 	if c == nil {
-		return true
+		return false
 	}
 	if roleValue, exists := c.Get("role"); exists {
 		if role, ok := roleValue.(int); ok {
-			return role < common.RoleAdminUser
+			return role >= common.RoleAdminUser
 		}
 	}
-	return !model.IsAdmin(c.GetInt("id"))
+	return model.IsAdmin(c.GetInt("id"))
+}
+
+func errorResponseReplacementForClient(c *gin.Context, statusCode int, message string) (string, bool) {
+	if isAdminErrorViewer(c) {
+		return "", false
+	}
+	return operation_setting.MatchErrorResponseReplacement(statusCode, message)
 }
 
 func PublicErrorMessage(requestId string) string {
@@ -57,6 +68,18 @@ func PublicErrorMessage(requestId string) string {
 func OpenAIErrorForClient(c *gin.Context, err *types.NewAPIError) types.OpenAIError {
 	if err != nil && err.GetErrorCode() == types.ErrorCodeChannelModelCapacityExhausted {
 		return types.OpenAIError{Code: string(types.ErrorCodeChannelModelCapacityExhausted), Type: "rate_limit_error", Message: "The requested model is temporarily at capacity. Retry after the indicated delay."}
+	}
+	if err != nil {
+		result := err.ToOpenAIError()
+		if replacement, matched := errorResponseReplacementForClient(c, err.StatusCode, result.Message); matched {
+			result.Message = common.MessageWithRequestId(replacement, c.GetString(common.RequestIdKey))
+			if ShouldHideErrorDetails(c) {
+				result.Type = "new_api_error"
+				result.Param = ""
+				result.Code = "request_failed"
+			}
+			return result
+		}
 	}
 	if ShouldHideErrorDetails(c) {
 		return types.OpenAIError{
@@ -75,6 +98,16 @@ func ClaudeErrorForClient(c *gin.Context, err *types.NewAPIError) types.ClaudeEr
 	if err != nil && err.GetErrorCode() == types.ErrorCodeChannelModelCapacityExhausted {
 		return types.ClaudeError{Type: "rate_limit_error", Message: "The requested model is temporarily at capacity. Retry after the indicated delay."}
 	}
+	if err != nil {
+		result := err.ToClaudeError()
+		if replacement, matched := errorResponseReplacementForClient(c, err.StatusCode, result.Message); matched {
+			result.Message = common.MessageWithRequestId(replacement, c.GetString(common.RequestIdKey))
+			if ShouldHideErrorDetails(c) {
+				result.Type = "request_failed"
+			}
+			return result
+		}
+	}
 	if ShouldHideErrorDetails(c) {
 		return types.ClaudeError{
 			Type:    "request_failed",
@@ -91,6 +124,14 @@ func TaskErrorForClient(c *gin.Context, taskErr *dto.TaskError) *dto.TaskError {
 		return nil
 	}
 	result := *taskErr
+	if replacement, matched := errorResponseReplacementForClient(c, taskErr.StatusCode, taskErr.Message); matched {
+		result.Message = common.MessageWithRequestId(replacement, c.GetString(common.RequestIdKey))
+		if ShouldHideErrorDetails(c) {
+			result.Code = "request_failed"
+			result.Data = nil
+		}
+		return &result
+	}
 	if ShouldHideErrorDetails(c) {
 		result.Code = "request_failed"
 		result.Message = PublicErrorMessage(c.GetString(common.RequestIdKey))
@@ -109,6 +150,14 @@ func TaskErrorForClientWithSeparateRequestID(c *gin.Context, taskErr *dto.TaskEr
 		return nil
 	}
 	result := *taskErr
+	if replacement, matched := errorResponseReplacementForClient(c, taskErr.StatusCode, taskErr.Message); matched {
+		result.Message = replacement
+		if ShouldHideErrorDetails(c) {
+			result.Code = "request_failed"
+			result.Data = nil
+		}
+		return &result
+	}
 	if ShouldHideErrorDetails(c) {
 		result.Code = "request_failed"
 		result.Message = publicErrorMessage

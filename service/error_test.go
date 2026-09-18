@@ -11,7 +11,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -120,6 +122,33 @@ func TestRelayErrorHandlerKeepsOpenAIErrorMessage(t *testing.T) {
 
 	require.NotNil(t, newAPIError)
 	require.Equal(t, message, newAPIError.Error())
+}
+
+func TestRelayErrorHandlerResponseBodyUsesConfiguredClientReplacement(t *testing.T) {
+	setHideErrorDetails(t, true)
+	setErrorResponseReplacementRules(t, []operation_setting.ErrorResponseReplacementRule{{
+		StatusCode:  http.StatusInternalServerError,
+		Match:       "Moonshot AI",
+		Replacement: "rhzs",
+	}})
+	body := `{"error":{"message":"服务处理请求时发生内部错误，请稍后重试。若持续出现该问题，请联系 Moonshot AI 技术支持。","type":"server_error","code":"server_error"}}`
+	resp := &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+	require.NotNil(t, newAPIError)
+	clientError := OpenAIErrorForClient(
+		newErrorClientContext(common.RoleCommonUser, "request-moonshot"),
+		newAPIError,
+	)
+
+	assert.Contains(t, newAPIError.Error(), "Moonshot AI 技术支持")
+	assert.Contains(t, clientError.Message, "请联系 rhzs 技术支持")
+	assert.Contains(t, clientError.Message, "request-moonshot")
+	assert.NotContains(t, clientError.Message, "Moonshot AI")
+	assert.Equal(t, http.StatusInternalServerError, newAPIError.StatusCode)
 }
 
 func TestRelayErrorHandlerKeepsInvalidJSONBodyInDebugLog(t *testing.T) {

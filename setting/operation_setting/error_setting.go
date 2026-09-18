@@ -12,13 +12,22 @@ import (
 )
 
 const (
-	MaxBlockedResponseHeaderCount      = 32
-	MaxBlockedResponseHeaderNameLength = 128
+	MaxBlockedResponseHeaderCount         = 32
+	MaxBlockedResponseHeaderNameLength    = 128
+	MaxErrorResponseReplacementRuleCount  = 32
+	MaxErrorResponseReplacementTextLength = 4096
 )
 
+type ErrorResponseReplacementRule struct {
+	StatusCode  int    `json:"status_code"`
+	Match       string `json:"match"`
+	Replacement string `json:"replacement"`
+}
+
 type ErrorSetting struct {
-	HideErrorDetails       bool     `json:"hide_error_details"`
-	BlockedResponseHeaders []string `json:"blocked_response_headers"`
+	HideErrorDetails         bool                           `json:"hide_error_details"`
+	BlockedResponseHeaders   []string                       `json:"blocked_response_headers"`
+	ResponseReplacementRules []ErrorResponseReplacementRule `json:"response_replacement_rules"`
 }
 
 var errorSetting = ErrorSetting{
@@ -28,6 +37,10 @@ var errorSetting = ErrorSetting{
 		"X-Request-Id",
 		"X-Trace-Id",
 	},
+	ResponseReplacementRules: []ErrorResponseReplacementRule{
+		{StatusCode: http.StatusInternalServerError, Match: "Moonshot AI", Replacement: "rhzs"},
+		{StatusCode: http.StatusTooManyRequests, Match: "Tencent Cloud", Replacement: "rhzs"},
+	},
 }
 
 type blockedResponseHeaderIndex struct {
@@ -35,7 +48,12 @@ type blockedResponseHeaderIndex struct {
 	names   map[string]struct{}
 }
 
+type errorResponseReplacementRuleIndex struct {
+	rules []ErrorResponseReplacementRule
+}
+
 var currentBlockedResponseHeaders atomic.Pointer[blockedResponseHeaderIndex]
+var currentErrorResponseReplacementRules atomic.Pointer[errorResponseReplacementRuleIndex]
 var currentHideErrorDetails atomic.Bool
 
 func init() {
@@ -49,6 +67,9 @@ func GetErrorSetting() *ErrorSetting {
 	snapshot := &ErrorSetting{HideErrorDetails: currentHideErrorDetails.Load()}
 	if index := currentBlockedResponseHeaders.Load(); index != nil {
 		snapshot.BlockedResponseHeaders = append([]string(nil), index.headers...)
+	}
+	if index := currentErrorResponseReplacementRules.Load(); index != nil {
+		snapshot.ResponseReplacementRules = append([]ErrorResponseReplacementRule(nil), index.rules...)
 	}
 	return snapshot
 }
@@ -64,6 +85,22 @@ func ShouldBlockUpstreamResponseHeader(header string) bool {
 	}
 	_, blocked := index.names[strings.ToLower(strings.TrimSpace(header))]
 	return blocked
+}
+
+func MatchErrorResponseReplacement(statusCode int, message string) (string, bool) {
+	index := currentErrorResponseReplacementRules.Load()
+	if index == nil || message == "" {
+		return "", false
+	}
+	replaced := message
+	matched := false
+	for _, rule := range index.rules {
+		if rule.StatusCode == statusCode && strings.Contains(replaced, rule.Match) {
+			replaced = strings.ReplaceAll(replaced, rule.Match, rule.Replacement)
+			matched = true
+		}
+	}
+	return replaced, matched
 }
 
 func ValidateBlockedResponseHeadersJSON(value string) ([]string, error) {
@@ -103,22 +140,66 @@ func UpdateBlockedResponseHeaders(headers []string) error {
 	return nil
 }
 
+func ValidateErrorResponseReplacementRulesJSON(value string) ([]ErrorResponseReplacementRule, error) {
+	var rules []ErrorResponseReplacementRule
+	if err := common.Unmarshal([]byte(value), &rules); err != nil {
+		return nil, fmt.Errorf("invalid error response replacement rules: %w", err)
+	}
+	if rules == nil {
+		return nil, fmt.Errorf("error response replacement rules must be a JSON array")
+	}
+	return normalizeErrorResponseReplacementRules(rules)
+}
+
+func UpdateErrorResponseReplacementRulesFromJSON(value string) error {
+	rules, err := ValidateErrorResponseReplacementRulesJSON(value)
+	if err != nil {
+		return err
+	}
+	return UpdateErrorResponseReplacementRules(rules)
+}
+
+func UpdateErrorResponseReplacementRules(rules []ErrorResponseReplacementRule) error {
+	normalized, err := normalizeErrorResponseReplacementRules(rules)
+	if err != nil {
+		return err
+	}
+	errorSetting.ResponseReplacementRules = append([]ErrorResponseReplacementRule(nil), normalized...)
+	currentErrorResponseReplacementRules.Store(&errorResponseReplacementRuleIndex{
+		rules: append([]ErrorResponseReplacementRule(nil), normalized...),
+	})
+	return nil
+}
+
 func UpdateHideErrorDetails(hide bool) {
 	errorSetting.HideErrorDetails = hide
 	currentHideErrorDetails.Store(hide)
 }
 
 func (setting *ErrorSetting) AfterConfigUpdate() error {
-	normalized, err := normalizeBlockedResponseHeaders(setting.BlockedResponseHeaders)
+	previous := GetErrorSetting()
+	normalizedHeaders, err := normalizeBlockedResponseHeaders(setting.BlockedResponseHeaders)
 	if err != nil {
-		setting.HideErrorDetails = currentHideErrorDetails.Load()
-		if index := currentBlockedResponseHeaders.Load(); index != nil {
-			setting.BlockedResponseHeaders = append([]string(nil), index.headers...)
-		}
+		*setting = *previous
+		return err
+	}
+	normalizedRules, err := normalizeErrorResponseReplacementRules(setting.ResponseReplacementRules)
+	if err != nil {
+		*setting = *previous
 		return err
 	}
 	UpdateHideErrorDetails(setting.HideErrorDetails)
-	return UpdateBlockedResponseHeaders(normalized)
+	if err := UpdateBlockedResponseHeaders(normalizedHeaders); err != nil {
+		*setting = *previous
+		return err
+	}
+	if err := UpdateErrorResponseReplacementRules(normalizedRules); err != nil {
+		UpdateHideErrorDetails(previous.HideErrorDetails)
+		_ = UpdateBlockedResponseHeaders(previous.BlockedResponseHeaders)
+		*setting = *previous
+		return err
+	}
+	return nil
 }
 
 func normalizeBlockedResponseHeaders(headers []string) ([]string, error) {
@@ -146,6 +227,32 @@ func normalizeBlockedResponseHeaders(headers []string) ([]string, error) {
 		}
 		seen[lookupKey] = struct{}{}
 		normalized = append(normalized, canonicalHeader)
+	}
+	return normalized, nil
+}
+
+func normalizeErrorResponseReplacementRules(rules []ErrorResponseReplacementRule) ([]ErrorResponseReplacementRule, error) {
+	if len(rules) > MaxErrorResponseReplacementRuleCount {
+		return nil, fmt.Errorf("error response replacement rules cannot exceed %d entries", MaxErrorResponseReplacementRuleCount)
+	}
+
+	normalized := make([]ErrorResponseReplacementRule, 0, len(rules))
+	for index, rule := range rules {
+		if rule.StatusCode < http.StatusBadRequest || rule.StatusCode > 599 {
+			return nil, fmt.Errorf("error response replacement rule %d status_code must be between 400 and 599", index+1)
+		}
+		rule.Match = strings.TrimSpace(rule.Match)
+		rule.Replacement = strings.TrimSpace(rule.Replacement)
+		if rule.Match == "" {
+			return nil, fmt.Errorf("error response replacement rule %d match cannot be empty", index+1)
+		}
+		if len(rule.Match) > MaxErrorResponseReplacementTextLength {
+			return nil, fmt.Errorf("error response replacement rule %d match cannot exceed %d bytes", index+1, MaxErrorResponseReplacementTextLength)
+		}
+		if len(rule.Replacement) > MaxErrorResponseReplacementTextLength {
+			return nil, fmt.Errorf("error response replacement rule %d replacement cannot exceed %d bytes", index+1, MaxErrorResponseReplacementTextLength)
+		}
+		normalized = append(normalized, rule)
 	}
 	return normalized, nil
 }

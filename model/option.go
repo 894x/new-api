@@ -316,6 +316,10 @@ func validateOptionValue(key string, value string) error {
 		_, err := operation_setting.ValidateBlockedResponseHeadersJSON(value)
 		return err
 	}
+	if key == "error_setting.response_replacement_rules" {
+		_, err := operation_setting.ValidateErrorResponseReplacementRulesJSON(value)
+		return err
+	}
 	return nil
 }
 
@@ -484,6 +488,21 @@ func updateOptionMap(key string, value string) (err error) {
 			return updateErr
 		}
 		normalized, marshalErr := common.Marshal(headers)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		common.OptionMap[key] = string(normalized)
+		return nil
+	}
+	if key == "error_setting.response_replacement_rules" {
+		rules, validateErr := operation_setting.ValidateErrorResponseReplacementRulesJSON(value)
+		if validateErr != nil {
+			return validateErr
+		}
+		if updateErr := operation_setting.UpdateErrorResponseReplacementRules(rules); updateErr != nil {
+			return updateErr
+		}
+		normalized, marshalErr := common.Marshal(rules)
 		if marshalErr != nil {
 			return marshalErr
 		}

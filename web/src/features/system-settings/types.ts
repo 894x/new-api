@@ -446,6 +446,12 @@ export type OperationsSettings = {
   'perf_metrics_setting.retention_days': number
 }
 
+export type ErrorResponseReplacementRule = {
+  status_code: number
+  match: string
+  replacement: string
+}
+
 export type SecuritySettings = {
   ModelRequestRateLimitEnabled: boolean
   ModelRequestRateLimitCount: number
@@ -458,6 +464,7 @@ export type SecuritySettings = {
   SensitiveWords: string
   'error_setting.hide_error_details': boolean
   'error_setting.blocked_response_headers': string[]
+  'error_setting.response_replacement_rules': ErrorResponseReplacementRule[]
   'fetch_setting.enable_ssrf_protection': boolean
   'fetch_setting.allow_private_ip': boolean
   'fetch_setting.domain_filter_mode': boolean

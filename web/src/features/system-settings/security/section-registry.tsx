@@ -53,6 +53,8 @@ const SECURITY_SECTIONS = [
             settings['error_setting.hide_error_details'],
           'error_setting.blocked_response_headers':
             settings['error_setting.blocked_response_headers'] ?? [],
+          'error_setting.response_replacement_rules':
+            settings['error_setting.response_replacement_rules'] ?? [],
         }}
       />
     ),
