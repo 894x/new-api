@@ -12,7 +12,7 @@ type PerfMetricsSetting struct {
 var perfMetricsSetting = PerfMetricsSetting{
 	Enabled:       true,
 	FlushInterval: 5,
-	BucketTime:    "hour",
+	BucketTime:    "5min",
 	RetentionDays: 0,
 }
 
@@ -33,7 +33,7 @@ func GetBucketSeconds() int64 {
 	case "hour":
 		return 3600
 	default:
-		return 3600
+		return 300
 	}
 }
 

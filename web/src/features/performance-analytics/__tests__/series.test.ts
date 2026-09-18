@@ -22,6 +22,12 @@ import { describe, test } from 'node:test'
 import * as analyticsLib from '../lib'
 
 describe('performance analytics chart series', () => {
+  test('formats TTFT in seconds with one decimal place', () => {
+    assert.equal(analyticsLib.formatTtftSeconds(50), '0.1 s')
+    assert.equal(analyticsLib.formatTtftSeconds(1_240), '1.2 s')
+    assert.equal(analyticsLib.formatTtftSeconds(0), '—')
+  })
+
   test('does not force Unix timestamp axes to start at zero', () => {
     const buildPerformanceTimeAxis = (analyticsLib as Record<string, unknown>)
       .buildPerformanceTimeAxis as

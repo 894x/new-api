@@ -52,6 +52,11 @@ export function formatPerformanceTimestamp(
   }).format(new Date(timestamp * 1000))
 }
 
+export function formatTtftSeconds(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '—'
+  return `${(ms / 1_000).toFixed(1)} s`
+}
+
 export function buildPerformanceTimeAxis(
   formatTime: (ts: number) => string,
   textColor: string

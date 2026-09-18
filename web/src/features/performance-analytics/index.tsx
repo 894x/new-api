@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { VChart } from '@visactor/react-vchart'
 import { Activity, ChartNoAxesCombined, Clock3, RefreshCw } from 'lucide-react'
 import {
@@ -67,6 +67,7 @@ import {
   buildPerformanceSeries,
   buildPerformanceTimeAxis,
   formatPerformanceTimestamp,
+  formatTtftSeconds,
   getPerformanceFilterLabel,
 } from './lib'
 import type {
@@ -78,9 +79,10 @@ import type {
 
 const ALL_VALUE = '__all__'
 const RANGE_OPTIONS = [
-  { days: 1, label: '1 Day' },
-  { days: 7, label: '7 Days' },
-  { days: 29, label: '29 Days' },
+  { seconds: 60 * 60, label: '1 Hour' },
+  { seconds: 24 * 60 * 60, label: '1 Day' },
+  { seconds: 7 * 24 * 60 * 60, label: '7 Days' },
+  { seconds: 29 * 24 * 60 * 60, label: '29 Days' },
 ] as const
 
 type PerformanceAnalyticsProps = {
@@ -92,7 +94,7 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
   const [modelName, setModelName] = useState('')
   const [userId, setUserId] = useState<number>()
   const [tokenId, setTokenId] = useState<number>()
-  const [rangeDays, setRangeDays] = useState(1)
+  const [rangeSeconds, setRangeSeconds] = useState(24 * 60 * 60)
   const [rangeEnd, setRangeEnd] = useState(() => Math.floor(Date.now() / 1000))
 
   const optionsQuery = useQuery({
@@ -104,6 +106,7 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
     ],
     queryFn: () => getPerformanceAnalyticsOptions(isAdmin, userId),
     select: (response) => response.data,
+    placeholderData: keepPreviousData,
     staleTime: 60_000,
     retry: false,
   })
@@ -134,14 +137,14 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
       buildPerformanceAnalyticsParams(
         {
           model: modelName,
-          startTimestamp: rangeEnd - rangeDays * 24 * 60 * 60,
+          startTimestamp: rangeEnd - rangeSeconds,
           endTimestamp: rangeEnd,
           userId,
           tokenId,
         },
         isAdmin
       ),
-    [isAdmin, modelName, rangeDays, rangeEnd, tokenId, userId]
+    [isAdmin, modelName, rangeEnd, rangeSeconds, tokenId, userId]
   )
 
   const analyticsQuery = useQuery({
@@ -158,8 +161,8 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
     retry: false,
   })
 
-  const handleRangeChange = useCallback((days: number) => {
-    setRangeDays(days)
+  const handleRangeChange = useCallback((seconds: number) => {
+    setRangeSeconds(seconds)
     setRangeEnd(Math.floor(Date.now() / 1000))
   }, [])
 
@@ -347,14 +350,14 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
               {t('Time range')}
             </span>
             <Tabs
-              value={String(rangeDays)}
+              value={String(rangeSeconds)}
               onValueChange={(value) => handleRangeChange(Number(value))}
             >
               <TabsList>
                 {RANGE_OPTIONS.map((option) => (
                   <TabsTrigger
-                    key={option.days}
-                    value={String(option.days)}
+                    key={option.seconds}
+                    value={String(option.seconds)}
                     className='px-2.5 text-xs'
                   >
                     {t(option.label)}
@@ -495,6 +498,8 @@ function LatencyChart(props: {
     () => buildPerformanceSeries(props.points, props.metric, formatTime),
     [formatTime, props.metric, props.points]
   )
+  const formatValue =
+    props.metric === 'ttft' ? formatTtftSeconds : formatLatency
   const spec = useMemo(
     () => ({
       type: 'line' as const,
@@ -514,7 +519,7 @@ function LatencyChart(props: {
           orient: 'left',
           label: {
             formatMethod: (value: number | string) =>
-              formatLatency(Number(value)),
+              formatValue(Number(value)),
             style: { fill: chartTextColor, fontSize: 10 },
           },
           grid: {
@@ -534,14 +539,21 @@ function LatencyChart(props: {
               key: (datum: Record<string, unknown>) =>
                 String(datum?.percentile ?? ''),
               value: (datum: Record<string, unknown>) =>
-                formatLatency(Number(datum?.value)),
+                formatValue(Number(datum?.value)),
             },
           ],
         },
       },
       animationAppear: { duration: 400 },
     }),
-    [chartGridColor, chartTextColor, formatTime, props.metric, series]
+    [
+      chartGridColor,
+      chartTextColor,
+      formatTime,
+      formatValue,
+      props.metric,
+      series,
+    ]
   )
 
   return (
@@ -560,7 +572,7 @@ function LatencyChart(props: {
             <div key={String(label)} className='bg-muted/50 rounded-lg p-2'>
               <div className='text-muted-foreground text-xs'>{label}</div>
               <div className='font-mono text-sm font-semibold tabular-nums'>
-                {formatLatency(Number(value))}
+                {formatValue(Number(value))}
               </div>
             </div>
           ))}
