@@ -20,10 +20,19 @@ import type { PerformanceAnalyticsQueryParams } from '@/features/dashboard/lib/f
 import { api } from '@/lib/api'
 
 import type {
+  ChannelAnalyticsData,
+  HTTPTransportMetric,
   PerformanceAnalyticsData,
   PerformanceAnalyticsOptions,
   PerformanceAnalyticsResponse,
 } from './types'
+
+export type ChannelAnalyticsQueryParams = {
+  channel_id?: number
+  start_timestamp: number
+  end_timestamp: number
+  bucket_seconds: number
+}
 
 function performanceAnalyticsPath(isAdmin: boolean, suffix = ''): string {
   return `/api/perf-analytics/${isAdmin ? 'admin' : 'self'}${suffix}`
@@ -46,6 +55,25 @@ export async function getPerformanceAnalyticsOptions(
     {
       params: isAdmin && userId ? { user_id: userId } : undefined,
     }
+  )
+  return response.data
+}
+
+export async function getChannelPerformanceAnalytics(
+  params: ChannelAnalyticsQueryParams
+): Promise<PerformanceAnalyticsResponse<ChannelAnalyticsData>> {
+  const response = await api.get(
+    '/api/perf-analytics/admin/channel',
+    { params }
+  )
+  return response.data
+}
+
+export async function getHTTPTransportMetrics(): Promise<
+  PerformanceAnalyticsResponse<HTTPTransportMetric[]>
+> {
+  const response = await api.get(
+    '/api/perf-analytics/admin/transport'
   )
   return response.data
 }

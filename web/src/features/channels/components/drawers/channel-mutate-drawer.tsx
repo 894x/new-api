@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { LargeBodyRoutingFields } from './large-body-routing-fields'
 import {
   ArrowRight,
   AlertCircle,
@@ -302,6 +303,8 @@ const SENSITIVE_FORM_FIELDS = [
   'proxy',
   'http_protocol',
   'http2_connection_shards',
+  'http1_large_body_enabled',
+  'http1_large_body_threshold_kib',
   'pass_through_body_enabled',
   'system_prompt',
   'system_prompt_override',
@@ -359,6 +362,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
+    values.http1_large_body_enabled ||
     (values.http_protocol && values.http_protocol !== 'auto') ||
     (values.http2_connection_shards != null &&
       values.http2_connection_shards > 1) ||
@@ -4535,6 +4539,11 @@ export function ChannelMutateDrawer({
                                       field.onChange(nextProtocol)
                                       if (nextProtocol === 'http1') {
                                         form.setValue(
+                                          'http1_large_body_enabled',
+                                          false,
+                                          { shouldDirty: true, shouldValidate: true }
+                                        )
+                                        form.setValue(
                                           'http2_connection_shards',
                                           1,
                                           {
@@ -4631,6 +4640,8 @@ export function ChannelMutateDrawer({
                                 )
                               }}
                             />
+
+                            <LargeBodyRoutingFields control={form.control} />
 
                             <FormField
                               control={form.control}

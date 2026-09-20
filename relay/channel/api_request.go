@@ -582,6 +582,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 			policy.String(),
 		))
 	}
+	req = service.WithHTTPTransportChannelID(req, info.ChannelId)
 
 	var pinger *pingKeepAlive
 	if info.IsStream {
@@ -616,8 +617,10 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 
 	info.MarkAttemptUpstreamStarted()
+	req, finishTransport := service.TraceUpstreamTransport(req, info.RequestTiming, info.ChannelId, info.ChannelSetting)
 	finishCapture := service.CaptureUpstreamExchange(c, req, info.ChannelId, info.UpstreamModelName)
 	resp, err := relayClient.Do(req)
+	finishTransport(resp, err)
 	finishCapture(resp, err)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())

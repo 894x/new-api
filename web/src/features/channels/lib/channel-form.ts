@@ -272,6 +272,8 @@ export const channelFormSchema = z
       .refine(isOptionalProxyURL, ERROR_MESSAGES.INVALID_PROXY),
     http_protocol: z.enum(['auto', 'http1']).optional(),
     http2_connection_shards: z.number().int().optional(),
+    http1_large_body_enabled: z.boolean().optional(),
+    http1_large_body_threshold_kib: z.number().optional(),
     pass_through_body_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
@@ -414,6 +416,28 @@ export const channelFormSchema = z
     }
 
     const protocol = normalizeHttpProtocol(data.http_protocol)
+    if (data.http1_large_body_enabled) {
+      const threshold = data.http1_large_body_threshold_kib
+      if (
+        threshold == null ||
+        !Number.isInteger(threshold) ||
+        threshold < 1 ||
+        threshold > 1048576
+      ) {
+        addRequiredIssue(
+          ctx,
+          'http1_large_body_threshold_kib',
+          'Body size threshold must be an integer between 1 and 1048576 KiB'
+        )
+      }
+      if (protocol === HTTP_PROTOCOL_HTTP1) {
+        addRequiredIssue(
+          ctx,
+          'http1_large_body_enabled',
+          'Large-body routing requires automatic HTTP protocol selection'
+        )
+      }
+    }
     const shards = data.http2_connection_shards ?? 1
     if (shards < 1 || shards > MAX_HTTP2_CONNECTION_SHARDS) {
       addRequiredIssue(
@@ -472,6 +496,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   proxy: '',
   http_protocol: HTTP_PROTOCOL_AUTO,
   http2_connection_shards: 1,
+  http1_large_body_enabled: false,
+  http1_large_body_threshold_kib: 1024,
   pass_through_body_enabled: false,
   system_prompt: '',
   system_prompt_override: false,
@@ -515,6 +541,8 @@ export function transformChannelToFormDefaults(
     proxy: '',
     http_protocol: HTTP_PROTOCOL_AUTO as 'auto' | 'http1',
     http2_connection_shards: 1,
+    http1_large_body_enabled: false,
+    http1_large_body_threshold_kib: 1024,
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
@@ -533,6 +561,13 @@ export function transformChannelToFormDefaults(
         proxy: parsed.proxy || '',
         http_protocol: protocol,
         http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
+        http1_large_body_enabled:
+          parsed.http1_large_body_enabled === true &&
+          protocol !== HTTP_PROTOCOL_HTTP1,
+        http1_large_body_threshold_kib:
+          parsed.http1_large_body_threshold_bytes > 0
+            ? parsed.http1_large_body_threshold_bytes / 1024
+            : 1024,
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
@@ -692,6 +727,12 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     settingObj.http_protocol = HTTP_PROTOCOL_HTTP1
   } else if (shards > 1) {
     settingObj.http2_connection_shards = shards
+  }
+
+  if (protocol !== HTTP_PROTOCOL_HTTP1 && formData.http1_large_body_enabled) {
+    settingObj.http1_large_body_enabled = true
+    settingObj.http1_large_body_threshold_bytes =
+      (formData.http1_large_body_threshold_kib ?? 1024) * 1024
   }
 
   return JSON.stringify(settingObj)

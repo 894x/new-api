@@ -20,10 +20,14 @@ func TestPerformanceAnalyticsRoutesExposeSeparateSelfAndAdminScopes(t *testing.T
 
 	_, hasSelfRoute := routes[http.MethodGet+" /api/perf-analytics/self"]
 	_, hasAdminRoute := routes[http.MethodGet+" /api/perf-analytics/admin"]
+	_, hasAdminChannelRoute := routes[http.MethodGet+" /api/perf-analytics/admin/channel"]
+	_, hasAdminTransportRoute := routes[http.MethodGet+" /api/perf-analytics/admin/transport"]
 	_, hasSelfOptionsRoute := routes[http.MethodGet+" /api/perf-analytics/self/options"]
 	_, hasAdminOptionsRoute := routes[http.MethodGet+" /api/perf-analytics/admin/options"]
 	assert.True(t, hasSelfRoute)
 	assert.True(t, hasAdminRoute)
+	assert.True(t, hasAdminChannelRoute)
+	assert.True(t, hasAdminTransportRoute)
 	assert.True(t, hasSelfOptionsRoute)
 	assert.True(t, hasAdminOptionsRoute)
 }

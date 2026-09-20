@@ -62,6 +62,7 @@ import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
 import { getPerformanceAnalytics, getPerformanceAnalyticsOptions } from './api'
+import { ChannelPerformanceDiagnostics } from './channel-diagnostics'
 import {
   buildPerformanceMetricSeries,
   buildPerformanceSeries,
@@ -379,6 +380,7 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
       </Card>
 
       {analyticsContent}
+      {isAdmin && <ChannelPerformanceDiagnostics formatTime={formatTime} />}
     </div>
   )
 }

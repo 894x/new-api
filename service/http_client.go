@@ -324,7 +324,8 @@ func newHTTPClientFromTransportFactory(policy HTTPTransportPolicy, factory func(
 	if policy.Protocol == dto.HTTPProtocolHTTP1 || policy.Shards == 1 {
 		transport := factory()
 		applyHTTPTransportPolicy(transport, policy)
-		return newRelayHTTPClient(transport)
+		tracker := configureHTTPTransportTracker(transport, policy.Protocol, 0, 1)
+		return newRelayHTTPClient(&trackedRoundTripper{inner: transport, tracker: tracker})
 	}
 	shardedFactory := func() *http.Transport {
 		transport := factory()
@@ -365,6 +366,29 @@ func GetHttpClientWithProxy(rawProxyURL string) (*http.Client, error) {
 // GetHttpClientWithProxy / GetHttpClient for the empty-proxy case.
 func GetHttpClientWithProxySettings(rawProxyURL string, settings dto.ChannelSettings) (*http.Client, error) {
 	policy := NormalizeHTTPTransportPolicy(settings)
+	client, err := getHTTPClientWithProxyPolicy(rawProxyURL, policy)
+	if err != nil {
+		return nil, err
+	}
+	threshold := settings.HTTP1LargeBodyThresholdBytes
+	if !settings.HTTP1LargeBodyEnabled || policy.Protocol == dto.HTTPProtocolHTTP1 ||
+		threshold <= 0 || threshold > dto.MaxHTTP1LargeBodyThresholdBytes {
+		return client, nil
+	}
+	largeClient, err := getHTTPClientWithProxyPolicy(rawProxyURL, HTTPTransportPolicy{Protocol: dto.HTTPProtocolHTTP1, Shards: 1})
+	if err != nil {
+		return nil, err
+	}
+	// Only the lightweight selector is per-call. Both underlying pools are
+	// cached by proxy/protocol, never by threshold or request size.
+	selected := *client
+	selected.Transport = &bodySizeRoundTripper{
+		normal: client.Transport, large: largeClient.Transport, threshold: threshold,
+	}
+	return &selected, nil
+}
+
+func getHTTPClientWithProxyPolicy(rawProxyURL string, policy HTTPTransportPolicy) (*http.Client, error) {
 	trimmedProxyURL := strings.TrimSpace(rawProxyURL)
 
 	if trimmedProxyURL == "" {

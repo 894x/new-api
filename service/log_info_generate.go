@@ -132,6 +132,9 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	if relayInfo.RequestTiming != nil {
 		relayInfo.RequestTiming.Mark(common.RequestTimingCompleted, time.Now())
 		adminInfo["request_timing"] = relayInfo.RequestTiming.Snapshot()
+		if attempts := relayInfo.RequestTiming.UpstreamTransports(); len(attempts) > 0 {
+			adminInfo["upstream_transport"] = attempts
+		}
 	}
 
 	other["admin_info"] = adminInfo

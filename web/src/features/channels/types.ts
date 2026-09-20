@@ -121,6 +121,8 @@ export interface ChannelSettings {
   system_prompt_override?: boolean
   http_protocol?: 'auto' | 'http1' | string
   http2_connection_shards?: number
+  http1_large_body_enabled?: boolean
+  http1_large_body_threshold_bytes?: number
 }
 
 export interface ChannelOtherSettings {

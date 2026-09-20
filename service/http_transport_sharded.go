@@ -32,7 +32,8 @@ func newShardedRoundTripper(policy HTTPTransportPolicy, factory func() *http.Tra
 		transport := factory()
 		transport.MaxIdleConns = max(1, transport.MaxIdleConns/n)
 		transport.MaxIdleConnsPerHost = max(1, transport.MaxIdleConnsPerHost/n)
-		shards[i] = transport
+		tracker := configureHTTPTransportTracker(transport, policy.Protocol, i, n)
+		shards[i] = &trackedRoundTripper{inner: transport, tracker: tracker}
 	}
 	return &shardedRoundTripper{
 		shards: shards,

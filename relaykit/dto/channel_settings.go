@@ -23,12 +23,17 @@ type ChannelSettings struct {
 	// HTTP2ConnectionShards spreads HTTP/2 traffic across N independent transports
 	// (1-8). Zero/unset means 1. Ignored when HTTPProtocol is "http1".
 	HTTP2ConnectionShards int `json:"http2_connection_shards,omitempty"`
+	// HTTP1LargeBodyEnabled routes known-size large bodies through an HTTP/1.1
+	// keep-alive pool. Unknown lengths retain the channel's normal policy.
+	HTTP1LargeBodyEnabled        bool  `json:"http1_large_body_enabled,omitempty"`
+	HTTP1LargeBodyThresholdBytes int64 `json:"http1_large_body_threshold_bytes,omitempty"`
 }
 
 const (
-	HTTPProtocolAuto         = "auto"
-	HTTPProtocolHTTP1        = "http1"
-	MaxHTTP2ConnectionShards = 8
+	HTTPProtocolAuto                      = "auto"
+	HTTPProtocolHTTP1                     = "http1"
+	MaxHTTP2ConnectionShards              = 8
+	MaxHTTP1LargeBodyThresholdBytes int64 = 1 << 30
 )
 
 // ValidateHTTPTransport validates save-time HTTP transport channel settings.
@@ -47,6 +52,17 @@ func (s *ChannelSettings) ValidateHTTPTransport() error {
 	}
 	if protocol == HTTPProtocolHTTP1 && s.HTTP2ConnectionShards > 1 {
 		return fmt.Errorf("http2_connection_shards must be 1 when http_protocol is http1")
+	}
+	if s.HTTP1LargeBodyThresholdBytes < 0 || s.HTTP1LargeBodyThresholdBytes > MaxHTTP1LargeBodyThresholdBytes {
+		return fmt.Errorf("http1_large_body_threshold_bytes must be between 0 and %d", MaxHTTP1LargeBodyThresholdBytes)
+	}
+	if s.HTTP1LargeBodyEnabled {
+		if protocol == HTTPProtocolHTTP1 {
+			return fmt.Errorf("http1_large_body_enabled requires automatic HTTP protocol selection")
+		}
+		if s.HTTP1LargeBodyThresholdBytes == 0 {
+			return fmt.Errorf("http1_large_body_threshold_bytes must be positive when enabled")
+		}
 	}
 	return nil
 }

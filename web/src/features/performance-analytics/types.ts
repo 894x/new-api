@@ -84,3 +84,72 @@ export type PerformanceMetricChartDatum = {
   label: string
   value: number
 }
+
+export type ChannelAnalyticsPercentiles = {
+  p50_ms: number
+  p95_ms: number
+  p99_ms: number
+  sample_count: number
+}
+
+export type ChannelAnalyticsLatency = {
+  acquire_ms: ChannelAnalyticsPercentiles
+  write_ms: ChannelAnalyticsPercentiles
+  total_ms: ChannelAnalyticsPercentiles
+  body_read_ms: ChannelAnalyticsPercentiles
+  upstream_queue_ms: ChannelAnalyticsPercentiles
+  upload_ms: ChannelAnalyticsPercentiles
+  provider_wait_ms: ChannelAnalyticsPercentiles
+  headers_to_first_response_ms: ChannelAnalyticsPercentiles
+  downstream_ms: ChannelAnalyticsPercentiles
+}
+
+export type ChannelAnalyticsConcurrency = {
+  average: number
+  maximum: number
+}
+
+export type ChannelAnalyticsPoint = {
+  ts: number
+  request_count: number
+  success_rate: number
+  active_concurrency: ChannelAnalyticsConcurrency
+  latency: ChannelAnalyticsLatency
+}
+
+export type ChannelAnalyticsData = {
+  scanned_logs: number
+  truncated: boolean
+  transport_groups: ChannelTransportGroup[]
+  channel_id: number
+  effective_start_timestamp: number
+  effective_end_timestamp: number
+  summary: ChannelAnalyticsPoint
+  series: ChannelAnalyticsPoint[]
+}
+
+export type ChannelTransportGroup = {
+  channel_id: number
+  protocol: string
+  body_class: string
+  reason: string
+  threshold_bytes: number
+  count: number
+  errors: number
+  canceled: number
+  timeouts: number
+  reused: number
+  acquire_ms: ChannelAnalyticsPercentiles
+  write_ms: ChannelAnalyticsPercentiles
+}
+
+export type HTTPTransportMetric = {
+  pool_id: number
+  protocol: string
+  shard: number
+  shards: number
+  active_requests: number
+  connections: number
+  last_protocol?: string
+  active_by_channel?: Record<string, number>
+}

@@ -147,6 +147,7 @@ export interface LogOtherData {
     upstream_response_id?: string
     upstream_request_ids?: Record<string, string>
     request_timing?: RequestTimingInfo
+    upstream_transport?: UpstreamTransportInfo[]
     asset_timing?: AssetLibraryTiming
     // Quota saturation marker: set when a quota conversion clamped at the
     // int32 bound (overflow/underflow) or hit a NaN fallback while computing
@@ -162,7 +163,20 @@ export interface LogOtherData {
   // Frontend renders localized content from action + params via i18n templates.
   op?: {
     action?: string
-    params?: Record<string, string | number | boolean | string[]>
+    params?: Record<
+      string,
+      | string
+      | number
+      | boolean
+      | string[]
+      | Record<
+          string,
+          {
+            before: string | number | boolean
+            after: string | number | boolean
+          }
+        >
+    >
   }
   // Operation audit details written by the admin-audit fallback in authHelper (type=3, admin only)
   audit_info?: {
@@ -260,6 +274,27 @@ export interface LogOtherData {
   subscription_consumed?: number
   subscription_remain?: number
   subscription_total?: number
+}
+
+export interface UpstreamTransportInfo {
+  attempt: number
+  channel_id: number
+  body_bytes: number
+  threshold_bytes?: number
+  reason: string
+  policy: string
+  protocol?: string
+  reused: boolean
+  connection_acquisitions: number
+  write_callbacks: number
+  acquire_ms?: number
+  dns_ms?: number
+  tcp_ms?: number
+  tls_ms?: number
+  write_ms?: number
+  first_byte_ms?: number
+  outcome: string
+  status_code?: number
 }
 
 export interface TaskUsage {

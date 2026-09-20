@@ -87,6 +87,7 @@ import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
 import { AssetLibraryTimeline } from '../asset-library-timeline'
 import { RequestCapture } from '../request-capture'
 import { RequestTimingTimeline } from '../request-timing-timeline'
+import { UpstreamTransportDetails } from '../upstream-transport-details'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -971,6 +972,16 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 value={changedFieldsText}
               />
             )}
+            {other?.op?.params?.transport_changes && (
+              <div className='space-y-1'>
+                <p className='text-muted-foreground text-xs'>
+                  {t('Transport setting changes')}
+                </p>
+                <pre className='overflow-x-auto text-xs'>
+                  {JSON.stringify(other.op.params.transport_changes, null, 2)}
+                </pre>
+              </div>
+            )}
             {auditRoute?.method && auditRoute?.route && (
               <DetailRow
                 label={t('Request')}
@@ -1303,6 +1314,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
 
         {props.isAdmin && other?.admin_info?.request_timing && (
           <RequestTimingTimeline timing={other.admin_info.request_timing} />
+        )}
+        {props.isAdmin && other?.admin_info?.upstream_transport && (
+          <UpstreamTransportDetails
+            attempts={other.admin_info.upstream_transport}
+          />
         )}
       </div>
     </Dialog>

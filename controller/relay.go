@@ -607,6 +607,9 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, upstre
 			snapshot := timing.Snapshot()
 			snapshot.RequestCompletedAtMs = time.Now().UnixMilli()
 			adminInfo["request_timing"] = snapshot
+			if attempts := common.GetRequestTiming(c).UpstreamTransports(); len(attempts) > 0 {
+				adminInfo["upstream_transport"] = attempts
+			}
 		}
 		other["admin_info"] = adminInfo
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)

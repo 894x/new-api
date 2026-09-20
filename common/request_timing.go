@@ -32,8 +32,39 @@ type RequestTimingSnapshot struct {
 }
 
 type RequestTiming struct {
-	mu         sync.RWMutex
-	milestones map[RequestTimingMilestone]time.Time
+	mu                sync.RWMutex
+	milestones        map[RequestTimingMilestone]time.Time
+	transports        []*UpstreamTransportAttempt
+	transportAttempts int
+}
+
+// AddUpstreamTransport bounds diagnostic storage independently of retry count.
+func (timing *RequestTiming) AddUpstreamTransport(attempt *UpstreamTransportAttempt) {
+	if timing == nil {
+		return
+	}
+	timing.mu.Lock()
+	defer timing.mu.Unlock()
+	timing.transportAttempts++
+	attempt.Update(func(s *UpstreamTransportSnapshot) { s.Attempt = timing.transportAttempts })
+	if len(timing.transports) == 8 {
+		copy(timing.transports, timing.transports[1:])
+		timing.transports = timing.transports[:7]
+	}
+	timing.transports = append(timing.transports, attempt)
+}
+
+func (timing *RequestTiming) UpstreamTransports() []UpstreamTransportSnapshot {
+	if timing == nil {
+		return nil
+	}
+	timing.mu.RLock()
+	defer timing.mu.RUnlock()
+	var result []UpstreamTransportSnapshot
+	for _, attempt := range timing.transports {
+		result = append(result, attempt.Snapshot())
+	}
+	return result
 }
 
 func NewRequestTiming(receivedAt time.Time) *RequestTiming {

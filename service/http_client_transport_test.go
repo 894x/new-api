@@ -198,7 +198,9 @@ func TestForcedHTTP1AgainstHTTP2Server(t *testing.T) {
 	drainClose(t, resp)
 	assert.Equal(t, uint32(0), nonHTTP1Count.Load())
 
-	transport, ok := client.Transport.(*http.Transport)
+	tracked, ok := client.Transport.(*trackedRoundTripper)
+	require.True(t, ok)
+	transport, ok := tracked.inner.(*http.Transport)
 	require.True(t, ok)
 	assert.False(t, transport.DisableKeepAlives)
 	assert.False(t, transport.ForceAttemptHTTP2)

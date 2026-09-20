@@ -1249,11 +1249,19 @@ func UpdateChannel(c *gin.Context) {
 	if channel.Key != "" && channel.Key != originChannel.Key {
 		changedFields = append(changedFields, "key")
 	}
-	recordManageAudit(c, "channel.update", map[string]interface{}{
+	transportChanges := map[string]any{}
+	if _, provided := requestData["setting"]; provided {
+		transportChanges = channelTransportChanges(originChannel.GetSetting(), channel.GetSetting())
+	}
+	auditParams := map[string]interface{}{
 		"id":             channel.Id,
 		"name":           channel.Name,
 		"changed_fields": changedFields,
-	})
+	}
+	if len(transportChanges) > 0 {
+		auditParams["transport_changes"] = transportChanges
+	}
+	recordManageAudit(c, "channel.update", auditParams)
 	channel.Key = ""
 	clearChannelInfo(&channel.Channel)
 	c.JSON(http.StatusOK, gin.H{

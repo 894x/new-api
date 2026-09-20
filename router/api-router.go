@@ -44,6 +44,8 @@ func SetApiRouter(router *gin.Engine) {
 		}
 		perfAnalyticsRoute := apiRouter.Group("/perf-analytics")
 		{
+			perfAnalyticsRoute.GET("/admin/channel", middleware.AdminAuth(), controller.GetPerfChannelAnalyticsAdmin)
+			perfAnalyticsRoute.GET("/admin/transport", middleware.AdminAuth(), controller.GetPerfTransportMetricsAdmin)
 			perfAnalyticsRoute.GET("/self", middleware.UserAuth(), controller.GetPerfAnalyticsSelf)
 			perfAnalyticsRoute.GET("/admin", middleware.AdminAuth(), controller.GetPerfAnalyticsAdmin)
 			perfAnalyticsRoute.GET("/self/options", middleware.UserAuth(), controller.GetPerfAnalyticsSelfOptions)
