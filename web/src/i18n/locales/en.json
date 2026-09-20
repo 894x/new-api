@@ -4751,7 +4751,7 @@
     "Rule name": "Rule name",
     "rules": "rules",
     "Rules": "Rules",
-    "Rules are applied from top to bottom. For matching HTTP statuses, every occurrence of match in the extracted error message is replaced with replacement. The status code and administrator diagnostics stay unchanged.": "Rules are applied from top to bottom. For matching HTTP statuses, every occurrence of match in the extracted error message is replaced with replacement. The status code and administrator diagnostics stay unchanged.",
+    "Rules are applied from top to bottom. For matching HTTP statuses, match is evaluated as a Go-compatible regular expression and replacement is inserted literally. The status code and administrator diagnostics stay unchanged.": "Rules are applied from top to bottom. For matching HTTP statuses, match is evaluated as a Go-compatible regular expression and replacement is inserted literally. The status code and administrator diagnostics stay unchanged.",
     "Rules JSON": "Rules JSON",
     "Rules JSON must be an array": "Rules JSON must be an array",
     "Rules match the original model value from the client request body.": "Rules match the original model value from the client request body.",

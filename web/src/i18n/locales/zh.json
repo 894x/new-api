@@ -4751,7 +4751,7 @@
     "Rule name": "规则名称",
     "rules": "规则",
     "Rules": "规则",
-    "Rules are applied from top to bottom. For matching HTTP statuses, every occurrence of match in the extracted error message is replaced with replacement. The status code and administrator diagnostics stay unchanged.": "规则会从上到下依次应用。HTTP 状态码匹配时，提取出的错误消息中每一处 match 都会替换为 replacement。状态码和管理员诊断信息保持不变。",
+    "Rules are applied from top to bottom. For matching HTTP statuses, match is evaluated as a Go-compatible regular expression and replacement is inserted literally. The status code and administrator diagnostics stay unchanged.": "规则会从上到下依次应用。HTTP 状态码匹配时，match 将按 Go 兼容的正则表达式求值，replacement 会按固定字符串原样写入。状态码和管理员诊断信息保持不变。",
     "Rules JSON": "规则 JSON",
     "Rules JSON must be an array": "规则 JSON 必须是数组",
     "Rules match the original model value from the client request body.": "规则匹配客户端请求体里的原始 model 值。",

@@ -130,12 +130,33 @@ func TestErrorResponseReplacementRulesApplyInOrder(t *testing.T) {
 	assert.Equal(t, "请联系 rhzs support。", replacement)
 }
 
+func TestErrorResponseReplacementRulesUseRegexWithLiteralReplacement(t *testing.T) {
+	original := append([]ErrorResponseReplacementRule(nil), GetErrorSetting().ResponseReplacementRules...)
+	t.Cleanup(func() {
+		require.NoError(t, UpdateErrorResponseReplacementRules(original))
+	})
+
+	require.NoError(t, UpdateErrorResponseReplacementRules([]ErrorResponseReplacementRule{{
+		StatusCode:  http.StatusTooManyRequests,
+		Match:       `(?i)(moonshot|tencent) cloud`,
+		Replacement: `${1} {{provider}} $1`,
+	}}))
+
+	replacement, matched := MatchErrorResponseReplacement(
+		http.StatusTooManyRequests,
+		"Contact Moonshot Cloud or TENCENT CLOUD support.",
+	)
+	require.True(t, matched)
+	assert.Equal(t, "Contact ${1} {{provider}} $1 or ${1} {{provider}} $1 support.", replacement)
+}
+
 func TestValidateErrorResponseReplacementRulesRejectsInvalidRules(t *testing.T) {
 	tests := []string{
 		`not-json`,
 		`null`,
 		`[{"status_code":200,"match":"error","replacement":"retry"}]`,
 		`[{"status_code":500,"match":"","replacement":"retry"}]`,
+		`[{"status_code":500,"match":"(","replacement":"retry"}]`,
 		`[{"status_code":500,"match":"` + strings.Repeat("a", MaxErrorResponseReplacementTextLength+1) + `","replacement":"retry"}]`,
 	}
 	for _, input := range tests {
@@ -150,7 +171,7 @@ func TestRegisteredConfigUpdateRollsBackInvalidReplacementRules(t *testing.T) {
 
 	err := config.UpdateConfigFromMap(registered, map[string]string{
 		"hide_error_details":         "false",
-		"response_replacement_rules": `[{"status_code":200,"match":"error","replacement":"retry"}]`,
+		"response_replacement_rules": `[{"status_code":500,"match":"(","replacement":"retry"}]`,
 	})
 	require.Error(t, err)
 	assert.Equal(t, original, GetErrorSetting())

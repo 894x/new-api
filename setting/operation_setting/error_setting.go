@@ -3,6 +3,7 @@ package operation_setting
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync/atomic"
 
@@ -49,7 +50,14 @@ type blockedResponseHeaderIndex struct {
 }
 
 type errorResponseReplacementRuleIndex struct {
-	rules []ErrorResponseReplacementRule
+	rules         []ErrorResponseReplacementRule
+	compiledRules []compiledErrorResponseReplacementRule
+}
+
+type compiledErrorResponseReplacementRule struct {
+	statusCode  int
+	pattern     *regexp.Regexp
+	replacement string
 }
 
 var currentBlockedResponseHeaders atomic.Pointer[blockedResponseHeaderIndex]
@@ -94,9 +102,9 @@ func MatchErrorResponseReplacement(statusCode int, message string) (string, bool
 	}
 	replaced := message
 	matched := false
-	for _, rule := range index.rules {
-		if rule.StatusCode == statusCode && strings.Contains(replaced, rule.Match) {
-			replaced = strings.ReplaceAll(replaced, rule.Match, rule.Replacement)
+	for _, rule := range index.compiledRules {
+		if rule.statusCode == statusCode && rule.pattern.MatchString(replaced) {
+			replaced = rule.pattern.ReplaceAllLiteralString(replaced, rule.replacement)
 			matched = true
 		}
 	}
@@ -148,7 +156,8 @@ func ValidateErrorResponseReplacementRulesJSON(value string) ([]ErrorResponseRep
 	if rules == nil {
 		return nil, fmt.Errorf("error response replacement rules must be a JSON array")
 	}
-	return normalizeErrorResponseReplacementRules(rules)
+	normalized, _, err := prepareErrorResponseReplacementRules(rules)
+	return normalized, err
 }
 
 func UpdateErrorResponseReplacementRulesFromJSON(value string) error {
@@ -160,15 +169,21 @@ func UpdateErrorResponseReplacementRulesFromJSON(value string) error {
 }
 
 func UpdateErrorResponseReplacementRules(rules []ErrorResponseReplacementRule) error {
-	normalized, err := normalizeErrorResponseReplacementRules(rules)
+	normalized, compiled, err := prepareErrorResponseReplacementRules(rules)
 	if err != nil {
 		return err
 	}
+	publishErrorResponseReplacementRules(normalized, compiled)
+	return nil
+}
+
+func publishErrorResponseReplacementRules(rules []ErrorResponseReplacementRule, compiled []compiledErrorResponseReplacementRule) {
+	normalized := append([]ErrorResponseReplacementRule(nil), rules...)
 	errorSetting.ResponseReplacementRules = append([]ErrorResponseReplacementRule(nil), normalized...)
 	currentErrorResponseReplacementRules.Store(&errorResponseReplacementRuleIndex{
-		rules: append([]ErrorResponseReplacementRule(nil), normalized...),
+		rules:         normalized,
+		compiledRules: append([]compiledErrorResponseReplacementRule(nil), compiled...),
 	})
-	return nil
 }
 
 func UpdateHideErrorDetails(hide bool) {
@@ -183,7 +198,7 @@ func (setting *ErrorSetting) AfterConfigUpdate() error {
 		*setting = *previous
 		return err
 	}
-	normalizedRules, err := normalizeErrorResponseReplacementRules(setting.ResponseReplacementRules)
+	normalizedRules, compiledRules, err := prepareErrorResponseReplacementRules(setting.ResponseReplacementRules)
 	if err != nil {
 		*setting = *previous
 		return err
@@ -193,12 +208,7 @@ func (setting *ErrorSetting) AfterConfigUpdate() error {
 		*setting = *previous
 		return err
 	}
-	if err := UpdateErrorResponseReplacementRules(normalizedRules); err != nil {
-		UpdateHideErrorDetails(previous.HideErrorDetails)
-		_ = UpdateBlockedResponseHeaders(previous.BlockedResponseHeaders)
-		*setting = *previous
-		return err
-	}
+	publishErrorResponseReplacementRules(normalizedRules, compiledRules)
 	return nil
 }
 
@@ -231,28 +241,38 @@ func normalizeBlockedResponseHeaders(headers []string) ([]string, error) {
 	return normalized, nil
 }
 
-func normalizeErrorResponseReplacementRules(rules []ErrorResponseReplacementRule) ([]ErrorResponseReplacementRule, error) {
+func prepareErrorResponseReplacementRules(rules []ErrorResponseReplacementRule) ([]ErrorResponseReplacementRule, []compiledErrorResponseReplacementRule, error) {
 	if len(rules) > MaxErrorResponseReplacementRuleCount {
-		return nil, fmt.Errorf("error response replacement rules cannot exceed %d entries", MaxErrorResponseReplacementRuleCount)
+		return nil, nil, fmt.Errorf("error response replacement rules cannot exceed %d entries", MaxErrorResponseReplacementRuleCount)
 	}
 
 	normalized := make([]ErrorResponseReplacementRule, 0, len(rules))
+	compiled := make([]compiledErrorResponseReplacementRule, 0, len(rules))
 	for index, rule := range rules {
 		if rule.StatusCode < http.StatusBadRequest || rule.StatusCode > 599 {
-			return nil, fmt.Errorf("error response replacement rule %d status_code must be between 400 and 599", index+1)
+			return nil, nil, fmt.Errorf("error response replacement rule %d status_code must be between 400 and 599", index+1)
 		}
 		rule.Match = strings.TrimSpace(rule.Match)
 		rule.Replacement = strings.TrimSpace(rule.Replacement)
 		if rule.Match == "" {
-			return nil, fmt.Errorf("error response replacement rule %d match cannot be empty", index+1)
+			return nil, nil, fmt.Errorf("error response replacement rule %d match cannot be empty", index+1)
 		}
 		if len(rule.Match) > MaxErrorResponseReplacementTextLength {
-			return nil, fmt.Errorf("error response replacement rule %d match cannot exceed %d bytes", index+1, MaxErrorResponseReplacementTextLength)
+			return nil, nil, fmt.Errorf("error response replacement rule %d match cannot exceed %d bytes", index+1, MaxErrorResponseReplacementTextLength)
 		}
 		if len(rule.Replacement) > MaxErrorResponseReplacementTextLength {
-			return nil, fmt.Errorf("error response replacement rule %d replacement cannot exceed %d bytes", index+1, MaxErrorResponseReplacementTextLength)
+			return nil, nil, fmt.Errorf("error response replacement rule %d replacement cannot exceed %d bytes", index+1, MaxErrorResponseReplacementTextLength)
+		}
+		pattern, err := regexp.Compile(rule.Match)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error response replacement rule %d match must be a valid Go regular expression: %w", index+1, err)
 		}
 		normalized = append(normalized, rule)
+		compiled = append(compiled, compiledErrorResponseReplacementRule{
+			statusCode:  rule.StatusCode,
+			pattern:     pattern,
+			replacement: rule.Replacement,
+		})
 	}
-	return normalized, nil
+	return normalized, compiled, nil
 }

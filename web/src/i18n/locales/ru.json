@@ -4751,7 +4751,7 @@
     "Rule name": "Название правила",
     "rules": "правила",
     "Rules": "Правила",
-    "Rules are applied from top to bottom. For matching HTTP statuses, every occurrence of match in the extracted error message is replaced with replacement. The status code and administrator diagnostics stay unchanged.": "Правила применяются сверху вниз. При совпадении HTTP-статуса каждое вхождение match в извлечённом сообщении об ошибке заменяется на replacement. Код статуса и диагностические данные администратора не изменяются.",
+    "Rules are applied from top to bottom. For matching HTTP statuses, match is evaluated as a Go-compatible regular expression and replacement is inserted literally. The status code and administrator diagnostics stay unchanged.": "Правила применяются сверху вниз. При совпадении HTTP-статуса match вычисляется как совместимое с Go регулярное выражение, а replacement вставляется буквально как фиксированная строка. Код статуса и диагностические данные администратора не изменяются.",
     "Rules JSON": "Правила JSON",
     "Rules JSON must be an array": "JSON правил должен быть массивом",
     "Rules match the original model value from the client request body.": "Правила сопоставляются с исходным значением model из тела клиентского запроса.",

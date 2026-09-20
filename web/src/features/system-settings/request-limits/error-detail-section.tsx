@@ -181,7 +181,7 @@ export function ErrorDetailSection({ defaultValues }: ErrorDetailSectionProps) {
                     placeholder={`[
   {
     "status_code": 500,
-    "match": "upstream error text",
+    "match": "Moonshot AI|Tencent Cloud",
     "replacement": "Service temporarily unavailable."
   }
 ]`}
@@ -190,7 +190,7 @@ export function ErrorDetailSection({ defaultValues }: ErrorDetailSectionProps) {
                 </FormControl>
                 <FormDescription>
                   {t(
-                    'Rules are applied from top to bottom. For matching HTTP statuses, every occurrence of match in the extracted error message is replaced with replacement. The status code and administrator diagnostics stay unchanged.'
+                    'Rules are applied from top to bottom. For matching HTTP statuses, match is evaluated as a Go-compatible regular expression and replacement is inserted literally. The status code and administrator diagnostics stay unchanged.'
                   )}
                 </FormDescription>
                 <FormMessage />

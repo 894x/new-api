@@ -33,6 +33,7 @@ func TestUpdateOptionValidatesErrorResponseReplacementRulesBeforePersistence(t *
 
 	const key = "error_setting.response_replacement_rules"
 	require.Error(t, UpdateOption(key, `[{"status_code":200,"match":"error","replacement":"retry"}]`))
+	require.Error(t, UpdateOption(key, `[{"status_code":500,"match":"(","replacement":"retry"}]`))
 	var count int64
 	require.NoError(t, db.Model(&Option{}).Where("key = ?", key).Count(&count).Error)
 	assert.Zero(t, count)

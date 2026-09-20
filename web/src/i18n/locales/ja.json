@@ -4751,7 +4751,7 @@
     "Rule name": "ルール名",
     "rules": "ルール",
     "Rules": "ルール",
-    "Rules are applied from top to bottom. For matching HTTP statuses, every occurrence of match in the extracted error message is replaced with replacement. The status code and administrator diagnostics stay unchanged.": "ルールは上から順に適用されます。HTTP ステータスが一致すると、抽出されたエラーメッセージ内の match がすべて replacement に置き換えられます。ステータスコードと管理者向け診断情報は変更されません。",
+    "Rules are applied from top to bottom. For matching HTTP statuses, match is evaluated as a Go-compatible regular expression and replacement is inserted literally. The status code and administrator diagnostics stay unchanged.": "ルールは上から順に適用されます。HTTP ステータスが一致すると、match は Go 互換の正規表現として評価され、replacement は固定文字列としてそのまま挿入されます。ステータスコードと管理者向け診断情報は変更されません。",
     "Rules JSON": "ルール JSON",
     "Rules JSON must be an array": "ルール JSON は配列である必要があります",
     "Rules match the original model value from the client request body.": "ルールはクライアントリクエスト本文の元の model 値に一致します。",

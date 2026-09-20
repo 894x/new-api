@@ -4751,7 +4751,7 @@
     "Rule name": "Tên quy tắc",
     "rules": "quy tắc",
     "Rules": "Quy tắc",
-    "Rules are applied from top to bottom. For matching HTTP statuses, every occurrence of match in the extracted error message is replaced with replacement. The status code and administrator diagnostics stay unchanged.": "Các quy tắc được áp dụng từ trên xuống. Khi mã trạng thái HTTP khớp, mọi lần xuất hiện của match trong thông báo lỗi đã trích xuất sẽ được thay bằng replacement. Mã trạng thái và thông tin chẩn đoán dành cho quản trị viên không thay đổi.",
+    "Rules are applied from top to bottom. For matching HTTP statuses, match is evaluated as a Go-compatible regular expression and replacement is inserted literally. The status code and administrator diagnostics stay unchanged.": "Các quy tắc được áp dụng từ trên xuống. Khi mã trạng thái HTTP khớp, match được đánh giá như một biểu thức chính quy tương thích với Go và replacement được chèn nguyên văn dưới dạng chuỗi cố định. Mã trạng thái và thông tin chẩn đoán dành cho quản trị viên không thay đổi.",
     "Rules JSON": "JSON quy tắc",
     "Rules JSON must be an array": "JSON quy tắc phải là một mảng",
     "Rules match the original model value from the client request body.": "Quy tắc khớp với giá trị model gốc trong thân yêu cầu của client.",

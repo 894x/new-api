@@ -91,6 +91,27 @@ func TestOpenAIErrorForClientUsesConfiguredReplacementForRegularUsers(t *testing
 	assert.Equal(t, http.StatusInternalServerError, err.StatusCode)
 }
 
+func TestOpenAIErrorForClientUsesRegexWithLiteralReplacement(t *testing.T) {
+	setHideErrorDetails(t, true)
+	setErrorResponseReplacementRules(t, []operation_setting.ErrorResponseReplacementRule{{
+		StatusCode:  http.StatusTooManyRequests,
+		Match:       `(?i)tencent\s+cloud`,
+		Replacement: `$1 {{provider}}`,
+	}})
+	c := newErrorClientContext(common.RoleCommonUser, "request-regex-replaced")
+	err := types.NewOpenAIError(
+		errors.New("Contact Tencent   Cloud support."),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusTooManyRequests,
+	)
+
+	result := OpenAIErrorForClient(c, err)
+
+	assert.Contains(t, result.Message, "Contact $1 {{provider}} support.")
+	assert.Contains(t, result.Message, "request-regex-replaced")
+	assert.NotContains(t, result.Message, "Tencent")
+}
+
 func TestOpenAIErrorForClientPreservesErrorShapeWhenDetailsAreVisible(t *testing.T) {
 	setHideErrorDetails(t, false)
 	setErrorResponseReplacementRules(t, []operation_setting.ErrorResponseReplacementRule{{
