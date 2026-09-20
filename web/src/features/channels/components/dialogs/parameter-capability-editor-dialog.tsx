@@ -81,6 +81,7 @@ import type {
   ParameterCapabilityConfig,
 } from '../../types'
 import { ParameterCapabilityTemplatePanel } from './parameter-capability-template-panel'
+import { VideoMediaCapabilityFields } from './video-media-capability-fields'
 
 export interface ParameterCapabilityEditorDialogProps {
   open: boolean
@@ -1082,12 +1083,30 @@ function ParameterCapabilityRow(props: {
           </Select>
         </Field>
       </FieldGroup>
+      {/\.video_url(?:\.url)?$/.test(props.path) && (
+        <VideoMediaCapabilityFields
+          path={props.path}
+          value={capability.media}
+          effective={props.effective?.capability.media}
+          onChange={(media) =>
+            props.onChange({
+              ...capability,
+              media,
+              participate_in_selection:
+                capability.participate_in_selection ?? true,
+            })
+          }
+        />
+      )}
     </div>
   )
 }
 
 function CapabilitySummary(props: { capability: ParameterCapability }) {
   const { t } = useTranslation()
+  if (props.capability.media) {
+    return <Badge variant='outline'>{t('Video delivery')}</Badge>
+  }
   if (props.capability.transform && props.capability.transform !== 'none') {
     const labels = {
       image_url_to_base64: t('Image URL to Base64'),
@@ -1324,6 +1343,10 @@ function CapabilityEvaluationMessage(props: {
     case 'media_download_required':
       return t(
         'Media downloads run on the server; this preview does not fetch URLs.'
+      )
+    case 'media_validation_required':
+      return t(
+        'Video format and size are validated on the server. This preview does not fetch or upload media.'
       )
     case 'compatible':
       return t('Compatible')

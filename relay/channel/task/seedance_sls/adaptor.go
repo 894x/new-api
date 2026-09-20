@@ -339,7 +339,7 @@ func (a *TaskAdaptor) ValidateMappedRequest(c *gin.Context, info *relaycommon.Re
 	if err != nil {
 		return localTaskError(err, "invalid_request")
 	}
-	data, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(data, info, service.NewParameterMediaTransformer(c))
+	data, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(data, info, service.NewParameterMediaTransformer(c, info))
 	if err != nil {
 		return localTaskError(err, "invalid_request")
 	}

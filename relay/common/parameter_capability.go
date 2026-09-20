@@ -56,7 +56,14 @@ func ApplyRequestPoliciesWithRelayInfo(jsonData []byte, info *RelayInfo, transfo
 		if len(transformers) > 0 {
 			transform = transformers[0]
 		}
-		result, changes, err = relayparam.ApplyMediaTransforms(result, info.ChannelOtherSettings.ParameterCapabilities, model, transform)
+		result, changes, err = relayparam.ApplyMediaDelivery(result, info.ChannelOtherSettings.ParameterCapabilities, model, info.MediaProcessor)
+		if err != nil {
+			info.ParameterCapabilityAudit = changes
+			return nil, err
+		}
+		var legacyChanges []relayparam.CapabilityChange
+		result, legacyChanges, err = relayparam.ApplyMediaTransforms(result, info.ChannelOtherSettings.ParameterCapabilities, model, transform)
+		changes = append(changes, legacyChanges...)
 		if err != nil {
 			info.ParameterCapabilityAudit = changes
 			return nil, err
@@ -112,6 +119,9 @@ func AsParameterCapabilityViolation(err error) (*relayparam.CapabilityViolationE
 func NewAPIErrorFromParameterCapability(err *relayparam.CapabilityViolationError) *types.NewAPIError {
 	if err == nil {
 		return types.NewError(errors.New("parameter capability violation is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	if err.Retryable {
+		return types.WithOpenAIError(types.OpenAIError{Message: err.Error(), Type: "invalid_request_error", Param: err.Parameter, Code: types.ErrorCodeInvalidRequest}, http.StatusServiceUnavailable)
 	}
 	return types.WithOpenAIError(types.OpenAIError{
 		Message: err.Error(),

@@ -89,7 +89,23 @@ function CapabilityValue(props: {
 }) {
   const { t } = useTranslation()
   const parts: string[] = []
-  if (props.capability.transform) {
+  if (props.capability.media) {
+    parts.push(t('Video delivery'))
+    for (const format of ['url', 'base64'] as const) {
+      const mediaFormat = props.capability.media.formats?.[format]
+      const status = mediaFormat?.supported ? t('Supported') : t('Unsupported')
+      const limit = mediaFormat?.max_media_bytes
+      parts.push(
+        `${format.toUpperCase()}: ${status}${limit === undefined ? '' : ` (${limit} B)`}`
+      )
+    }
+    if (props.capability.media.conversions?.url_to_base64) {
+      parts.push(t('Video URL to Base64'))
+    }
+    if (props.capability.media.conversions?.base64_to_url) {
+      parts.push(t('Video Base64 to URL'))
+    }
+  } else if (props.capability.transform) {
     const labels = {
       none: t('No conversion'),
       image_url_to_base64: t('Image URL to Base64'),

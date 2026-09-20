@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import type { VideoMediaCapability } from '@/features/channels/types'
+
 // ============================================================================
 // Model Types
 // ============================================================================
@@ -28,6 +30,7 @@ export interface ModelChannelCapabilityGroup {
 }
 
 export interface ModelParameterCapability {
+  media?: VideoMediaCapability
   transform?:
     | 'none'
     | 'image_url_to_base64'

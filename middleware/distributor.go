@@ -127,7 +127,7 @@ func Distribute() func(c *gin.Context) {
 
 				preferredChannelID := 0
 				preferredChannelFound := false
-				if !dynamicRoutingEligible || !service.DynamicRoutingEnabled() {
+				if (!dynamicRoutingEligible || !service.DynamicRoutingEnabled()) && !service.RequestHasVideoMedia(modelRequest.RequestBody) {
 					preferredChannelID, preferredChannelFound = service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup)
 				}
 				if preferredChannelFound {

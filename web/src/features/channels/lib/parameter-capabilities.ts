@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ParameterCapability, ParameterCapabilityConfig } from '../types'
+import type {
+  ParameterCapability,
+  ParameterCapabilityConfig,
+  VideoMediaCapability,
+} from '../types'
 
 export const PARAMETER_CAPABILITY_CATALOG = [
   { path: 'duration', category: 'Multimodal', kind: 'number' },
@@ -95,6 +99,7 @@ export interface CapabilityEvaluation {
     | 'maximum'
     | 'allowed_values'
     | 'media_download_required'
+    | 'media_validation_required'
   constraint?: number | string
   from?: unknown
   to?: unknown
@@ -222,12 +227,14 @@ function isParameterCapability(value: unknown): value is ParameterCapability {
       'on_violation',
       'participate_in_selection',
       'transform',
+      'media',
     ])
   ) {
     return false
   }
 
   return (
+    (value.media === undefined || isVideoMediaCapability(value.media)) &&
     (value.transform === undefined ||
       [
         'none',
@@ -250,6 +257,101 @@ function isParameterCapability(value: unknown): value is ParameterCapability {
     (value.participate_in_selection === undefined ||
       typeof value.participate_in_selection === 'boolean')
   )
+}
+
+function isVideoMediaCapability(value: unknown): value is VideoMediaCapability {
+  if (
+    !isPlainRecord(value) ||
+    !hasOnlyKeys(value, ['kind', 'formats', 'conversions'])
+  ) {
+    return false
+  }
+  if (value.kind !== undefined && value.kind !== 'video') {
+    return false
+  }
+  if (value.formats !== undefined) {
+    if (
+      !isPlainRecord(value.formats) ||
+      !hasOnlyKeys(value.formats, ['url', 'base64'])
+    ) {
+      return false
+    }
+    for (const format of Object.values(value.formats)) {
+      if (
+        !isPlainRecord(format) ||
+        !hasOnlyKeys(format, ['supported', 'max_media_bytes'])
+      ) {
+        return false
+      }
+      if (
+        format.supported !== undefined &&
+        typeof format.supported !== 'boolean'
+      ) {
+        return false
+      }
+      if (
+        format.max_media_bytes !== undefined &&
+        (typeof format.max_media_bytes !== 'number' ||
+          !Number.isSafeInteger(format.max_media_bytes) ||
+          format.max_media_bytes <= 0 ||
+          format.max_media_bytes > 2 ** 40)
+      ) {
+        return false
+      }
+    }
+  }
+  if (value.conversions !== undefined) {
+    if (
+      !isPlainRecord(value.conversions) ||
+      !hasOnlyKeys(value.conversions, ['url_to_base64', 'base64_to_url'])
+    ) {
+      return false
+    }
+    if (
+      !Object.values(value.conversions).every(
+        (enabled) => typeof enabled === 'boolean' || enabled === undefined
+      )
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
+export function mergeVideoMediaCapability(
+  base?: VideoMediaCapability,
+  override?: VideoMediaCapability
+): VideoMediaCapability | undefined {
+  if (!base && !override) return undefined
+  return {
+    kind: override?.kind ?? base?.kind,
+    formats: {
+      url: {
+        ...base?.formats?.url,
+        ...Object.fromEntries(
+          Object.entries(override?.formats?.url ?? {}).filter(
+            ([, value]) => value !== undefined
+          )
+        ),
+      },
+      base64: {
+        ...base?.formats?.base64,
+        ...Object.fromEntries(
+          Object.entries(override?.formats?.base64 ?? {}).filter(
+            ([, value]) => value !== undefined
+          )
+        ),
+      },
+    },
+    conversions: {
+      url_to_base64:
+        override?.conversions?.url_to_base64 ??
+        base?.conversions?.url_to_base64,
+      base64_to_url:
+        override?.conversions?.base64_to_url ??
+        base?.conversions?.base64_to_url,
+    },
+  }
 }
 
 function isModelParameterCapabilityRule(value: unknown): value is {
@@ -367,6 +469,14 @@ export function evaluateParameterCapabilities(
     const currentValues = getPathValues(request, parameter)
     if (action === 'drop') currentValues.reverse()
     for (const current of currentValues) {
+      if (capability.media && capability.supported !== false) {
+        evaluations.push({
+          parameter: current.path,
+          status: 'pending',
+          reason: 'media_validation_required',
+        })
+        continue
+      }
       if (
         capability.transform &&
         capability.transform !== 'none' &&
@@ -485,6 +595,7 @@ function mergeCapabilities(
         ...current,
         ...definedOverride,
         transform: override.transform ?? current.transform,
+        media: mergeVideoMediaCapability(current.media, override.media),
         allowed_values: override.allowed_values?.length
           ? override.allowed_values
           : current.allowed_values,
@@ -514,8 +625,17 @@ function validateCapabilityMap(
 ): void {
   for (const [path, capability] of Object.entries(parameters)) {
     if (
-      capability.transform &&
-      capability.transform !== 'none' &&
+      capability.media &&
+      (!isVideoMediaCapability(capability.media) ||
+        !/\.video_url(?:\.url)?$/.test(path) ||
+        (capability.on_violation !== undefined &&
+          capability.on_violation !== 'reject'))
+    ) {
+      errors.push({ code: 'invalid_media_constraints', scope, path })
+    }
+    if (
+      (capability.media ||
+        (capability.transform && capability.transform !== 'none')) &&
       (isBillingSensitiveParameter(path) ||
         capability.min !== undefined ||
         capability.max !== undefined ||

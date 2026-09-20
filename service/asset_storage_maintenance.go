@@ -13,6 +13,9 @@ func StartAssetStorageMaintenance() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
+			if err := DeleteExpiredRelayMedia(context.Background()); err != nil {
+				common.SysError("temporary relay media cleanup failed: " + err.Error())
+			}
 			if err := model.RecoverAssetStorageReservations(); err != nil {
 				common.SysError("asset storage reservation recovery failed: " + err.Error())
 			}
