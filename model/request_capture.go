@@ -6,6 +6,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const requestCaptureCleanupLockPrefix = "request_capture_cleanup:"
+
 // RequestCapturePolicy is administrator-owned; it is deliberately separate
 // from user-editable settings and defaults to disabled when no row exists.
 type RequestCapturePolicy struct {
@@ -19,9 +21,9 @@ type RequestCapture struct {
 	ID          string `json:"id" gorm:"primaryKey;type:varchar(32)"`
 	RequestID   string `json:"request_id" gorm:"type:varchar(64);index"`
 	UserID      int    `json:"user_id" gorm:"index"`
-	StoreID     string `json:"-" gorm:"type:varchar(32);index:idx_capture_store_time,priority:1"`
+	StoreID     string `json:"-" gorm:"type:varchar(32);index:idx_capture_store_time,priority:1;index:idx_capture_store_expiry,priority:1"`
 	CreatedAt   int64  `json:"created_at" gorm:"index:idx_capture_store_time,priority:2"`
-	ExpiresAt   int64  `json:"expires_at" gorm:"index"`
+	ExpiresAt   int64  `json:"expires_at" gorm:"index;index:idx_capture_store_expiry,priority:2"`
 	Status      string `json:"status" gorm:"type:varchar(32)"`
 	Reason      string `json:"reason,omitempty" gorm:"type:varchar(64)"`
 	StatusCode  int    `json:"status_code"`
@@ -58,6 +60,27 @@ func ListStoredRequestCaptures(ctx context.Context, storeID string) ([]RequestCa
 	return captures, err
 }
 
+func ListExpiredRequestCaptures(ctx context.Context, storeID string, now int64, pruneBefore int64, limit int) ([]RequestCapture, error) {
+	var captures []RequestCapture
+	err := DB.WithContext(ctx).
+		Where("store_id = ? AND expires_at <= ?", storeID, now).
+		Where("expires_at < ? OR stored_bytes > 0 OR status <> ?", pruneBefore, "expired").
+		Order("created_at ASC").
+		Limit(limit).
+		Find(&captures).Error
+	return captures, err
+}
+
+func ListRequestCapturesForEviction(ctx context.Context, storeID string, limit int) ([]RequestCapture, error) {
+	var captures []RequestCapture
+	err := DB.WithContext(ctx).
+		Where("store_id = ? AND stored_bytes > 0", storeID).
+		Order("created_at ASC").
+		Limit(limit).
+		Find(&captures).Error
+	return captures, err
+}
+
 func DeleteRequestCapture(ctx context.Context, id string) error {
 	return DB.WithContext(ctx).Where("id = ?", id).Delete(&RequestCapture{}).Error
 }
@@ -67,4 +90,35 @@ func RequestCaptureStoredBytes(ctx context.Context, storeID string) (int64, erro
 	err := DB.WithContext(ctx).Model(&RequestCapture{}).Where("store_id = ?", storeID).
 		Select("COALESCE(SUM(stored_bytes), 0)").Scan(&total).Error
 	return total, err
+}
+
+func AcquireRequestCaptureCleanupLease(ctx context.Context, storeID string, owner string, now int64, lockedUntil int64) (bool, error) {
+	lockType := requestCaptureCleanupLockPrefix + storeID
+	result := DB.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&SystemTaskLock{
+		Type:        lockType,
+		TaskID:      storeID,
+		LockedBy:    owner,
+		LockedUntil: lockedUntil,
+		UpdatedAt:   now,
+	})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 1 {
+		return true, nil
+	}
+	result = DB.WithContext(ctx).Model(&SystemTaskLock{}).
+		Where("type = ? AND locked_until < ?", lockType, now).
+		Updates(map[string]any{
+			"task_id":      storeID,
+			"locked_by":    owner,
+			"locked_until": lockedUntil,
+			"updated_at":   now,
+		})
+	return result.RowsAffected == 1, result.Error
+}
+
+func ReleaseRequestCaptureCleanupLease(ctx context.Context, storeID string, owner string) error {
+	return DB.WithContext(ctx).Where("type = ? AND task_id = ? AND locked_by = ?", requestCaptureCleanupLockPrefix+storeID, storeID, owner).
+		Delete(&SystemTaskLock{}).Error
 }

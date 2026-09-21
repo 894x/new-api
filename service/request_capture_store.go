@@ -20,15 +20,20 @@ import (
 
 var requestCaptureStore *RequestCaptureStore
 var captureIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+var errRequestCaptureCleanupBusy = errors.New("request capture cleanup already running")
+
+const requestCaptureCleanupBatchSize = 1000
+const requestCaptureCleanupLeaseDuration = 45 * time.Second
 
 type RequestCaptureStore struct {
-	root     string
-	id       string
-	slots    chan struct{}
-	queue    chan *RequestCaptureSession
-	stop     chan struct{}
-	done     chan struct{}
-	stopOnce sync.Once
+	root         string
+	id           string
+	cleanupOwner string
+	slots        chan struct{}
+	queue        chan *RequestCaptureSession
+	stop         chan struct{}
+	done         chan struct{}
+	stopOnce     sync.Once
 }
 
 // StartRequestCaptureStorage uses a persistent volume. An installation marker
@@ -122,7 +127,7 @@ func newRequestCaptureStore(root string) (*RequestCaptureStore, error) {
 	if err != nil || !captureIDPattern.Match(id) {
 		return nil, errors.New("invalid capture store identity")
 	}
-	return &RequestCaptureStore{root: abs, id: string(id),
+	return &RequestCaptureStore{root: abs, id: string(id), cleanupOwner: strings.ReplaceAll(common.GetUUID(), "-", ""),
 		slots: make(chan struct{}, 8), queue: make(chan *RequestCaptureSession, 8), stop: make(chan struct{}), done: make(chan struct{})}, nil
 }
 
@@ -131,7 +136,7 @@ func (store *RequestCaptureStore) run() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	lastCapacity := model.GetRequestCaptureStorageSettings().MaxGiB
-	if err := store.cleanup(0); err != nil {
+	if err := store.cleanup(0); err != nil && !errors.Is(err, errRequestCaptureCleanupBusy) {
 		common.SysError("request capture cleanup failed")
 	}
 	lastCleanup := time.Now()
@@ -149,11 +154,10 @@ func (store *RequestCaptureStore) run() {
 		case <-ticker.C:
 			capacity := model.GetRequestCaptureStorageSettings().MaxGiB
 			if capacity != lastCapacity || time.Since(lastCleanup) >= time.Hour {
-				if err := store.cleanup(0); err != nil {
-					common.SysError("request capture cleanup failed")
-					continue
-				}
 				lastCapacity, lastCleanup = capacity, time.Now()
+				if err := store.cleanup(0); err != nil && !errors.Is(err, errRequestCaptureCleanupBusy) {
+					common.SysError("request capture cleanup failed")
+				}
 			}
 		}
 	}
@@ -288,46 +292,89 @@ func (store *RequestCaptureStore) cleanup(incoming int64) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	records, err := model.ListStoredRequestCaptures(ctx, store.id)
+	leaseStartedAt := time.Now()
+	acquired, err := model.AcquireRequestCaptureCleanupLease(
+		ctx,
+		store.id,
+		store.cleanupOwner,
+		leaseStartedAt.Unix(),
+		leaseStartedAt.Add(requestCaptureCleanupLeaseDuration).Unix(),
+	)
 	if err != nil {
 		return err
 	}
-	var total int64
-	for _, record := range records {
-		total += record.StoredBytes
+	if !acquired {
+		return errRequestCaptureCleanupBusy
+	}
+	defer func() {
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer releaseCancel()
+		if err := model.ReleaseRequestCaptureCleanupLease(releaseCtx, store.id, store.cleanupOwner); err != nil {
+			common.SysError("request capture cleanup lease release failed")
+		}
+	}()
+	total, err := model.RequestCaptureStoredBytes(ctx, store.id)
+	if err != nil {
+		return err
 	}
 	now := time.Now().Unix()
-	for i := range records {
-		record := &records[i]
-		expired := record.ExpiresAt <= now
-		if !expired && (total+incoming <= maxBytes || record.StoredBytes == 0) {
-			continue
-		}
-		path, err := store.path(record)
+	pruneBefore := now - int64(7*24*time.Hour/time.Second)
+	for {
+		records, err := model.ListExpiredRequestCaptures(ctx, store.id, now, pruneBefore, requestCaptureCleanupBatchSize)
 		if err != nil {
 			return err
 		}
-		if err = os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		total -= record.StoredBytes
-		record.StoredBytes = 0
-		record.Status, record.Reason = "expired", "retention_expired"
-		if !expired {
-			record.Reason = "storage_limit"
-		}
-		if record.ExpiresAt < now-int64(7*24*time.Hour/time.Second) {
-			if err := model.DeleteRequestCapture(ctx, record.ID); err != nil {
+		for i := range records {
+			released, err := store.expireCapture(ctx, &records[i], "retention_expired", records[i].ExpiresAt < pruneBefore)
+			if err != nil {
 				return err
 			}
-		} else if err := model.SaveRequestCapture(ctx, record); err != nil {
+			total -= released
+		}
+		if len(records) < requestCaptureCleanupBatchSize {
+			break
+		}
+	}
+	for total+incoming > maxBytes {
+		records, err := model.ListRequestCapturesForEviction(ctx, store.id, requestCaptureCleanupBatchSize)
+		if err != nil {
 			return err
+		}
+		if len(records) == 0 {
+			break
+		}
+		for i := range records {
+			released, err := store.expireCapture(ctx, &records[i], "storage_limit", false)
+			if err != nil {
+				return err
+			}
+			total -= released
+			if total+incoming <= maxBytes {
+				break
+			}
 		}
 	}
 	if total+incoming > maxBytes {
 		return errors.New("capture storage full")
 	}
 	return nil
+}
+
+func (store *RequestCaptureStore) expireCapture(ctx context.Context, record *model.RequestCapture, reason string, deleteIndex bool) (int64, error) {
+	path, err := store.path(record)
+	if err != nil {
+		return 0, err
+	}
+	if err = os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, err
+	}
+	released := record.StoredBytes
+	record.StoredBytes = 0
+	record.Status, record.Reason = "expired", reason
+	if deleteIndex {
+		return released, model.DeleteRequestCapture(ctx, record.ID)
+	}
+	return released, model.SaveRequestCapture(ctx, record)
 }
 
 func RequestCaptureStorageAvailable() bool { return requestCaptureStore != nil }

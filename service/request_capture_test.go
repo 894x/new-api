@@ -28,7 +28,7 @@ func captureFixture(t *testing.T) (*RequestCaptureStore, *gin.Context, *httptest
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, db.AutoMigrate(&model.RequestCapturePolicy{}, &model.RequestCapture{}, &model.Option{}))
+	require.NoError(t, db.AutoMigrate(&model.RequestCapturePolicy{}, &model.RequestCapture{}, &model.Option{}, &model.SystemTaskLock{}))
 	common.OptionMapRWMutex.Lock()
 	previousOptions := common.OptionMap
 	common.OptionMap = map[string]string{}
@@ -193,6 +193,98 @@ func TestRequestCaptureStorageFailureAndRetention(t *testing.T) {
 	malicious.ID = "../../outside"
 	_, err = store.path(&malicious)
 	assert.Error(t, err)
+}
+
+func TestRequestCaptureCleanupDoesNotRewriteSettledExpiredRows(t *testing.T) {
+	store, _, _ := captureFixture(t)
+	now := time.Now()
+	record := &model.RequestCapture{
+		ID:          strings.Repeat("a", 32),
+		RequestID:   "already-expired",
+		StoreID:     store.id,
+		CreatedAt:   now.Add(-2 * time.Hour).Unix(),
+		ExpiresAt:   now.Add(-time.Hour).Unix(),
+		Status:      "expired",
+		Reason:      "retention_expired",
+		StoredBytes: 0,
+	}
+	require.NoError(t, model.SaveRequestCapture(context.Background(), record))
+	require.NoError(t, model.DB.Exec("CREATE TABLE request_capture_update_audit (updates integer NOT NULL)").Error)
+	require.NoError(t, model.DB.Exec("INSERT INTO request_capture_update_audit (updates) VALUES (0)").Error)
+	require.NoError(t, model.DB.Exec(`CREATE TRIGGER audit_request_capture_update
+		AFTER UPDATE ON request_captures
+		BEGIN
+			UPDATE request_capture_update_audit SET updates = updates + 1;
+		END`).Error)
+
+	require.NoError(t, store.cleanup(0))
+
+	var updates int
+	require.NoError(t, model.DB.Raw("SELECT updates FROM request_capture_update_audit").Scan(&updates).Error)
+	assert.Zero(t, updates)
+}
+
+func TestRequestCaptureCleanupSchemaIncludesStoreExpiryIndex(t *testing.T) {
+	_, _, _ = captureFixture(t)
+	assert.True(t, model.DB.Migrator().HasIndex(&model.RequestCapture{}, "idx_capture_store_expiry"))
+}
+
+func TestRequestCaptureCleanupHonorsAnotherInstanceLease(t *testing.T) {
+	store, _, _ := captureFixture(t)
+	now := time.Now()
+	record := &model.RequestCapture{
+		ID:        strings.Repeat("b", 32),
+		RequestID: "lease-protected",
+		StoreID:   store.id,
+		CreatedAt: now.Add(-2 * time.Hour).Unix(),
+		ExpiresAt: now.Add(-time.Hour).Unix(),
+		Status:    "ready",
+	}
+	require.NoError(t, model.SaveRequestCapture(context.Background(), record))
+	require.NoError(t, model.DB.Create(&model.SystemTaskLock{
+		Type:        "request_capture_cleanup:" + store.id,
+		TaskID:      store.id,
+		LockedBy:    "another-instance",
+		LockedUntil: now.Add(time.Minute).Unix(),
+		UpdatedAt:   now.Unix(),
+	}).Error)
+
+	err := store.cleanup(0)
+
+	require.ErrorIs(t, err, errRequestCaptureCleanupBusy)
+	actual, findErr := model.FindRequestCapture(context.Background(), record.RequestID)
+	require.NoError(t, findErr)
+	assert.Equal(t, "ready", actual.Status)
+}
+
+func TestRequestCaptureCleanupTakesOverExpiredLease(t *testing.T) {
+	store, _, _ := captureFixture(t)
+	now := time.Now()
+	record := &model.RequestCapture{
+		ID:        strings.Repeat("c", 32),
+		RequestID: "expired-lease",
+		StoreID:   store.id,
+		CreatedAt: now.Add(-2 * time.Hour).Unix(),
+		ExpiresAt: now.Add(-time.Hour).Unix(),
+		Status:    "ready",
+	}
+	require.NoError(t, model.SaveRequestCapture(context.Background(), record))
+	require.NoError(t, model.DB.Create(&model.SystemTaskLock{
+		Type:        "request_capture_cleanup:" + store.id,
+		TaskID:      store.id,
+		LockedBy:    "stopped-instance",
+		LockedUntil: now.Add(-time.Minute).Unix(),
+		UpdatedAt:   now.Add(-2 * time.Minute).Unix(),
+	}).Error)
+
+	require.NoError(t, store.cleanup(0))
+
+	actual, err := model.FindRequestCapture(context.Background(), record.RequestID)
+	require.NoError(t, err)
+	assert.Equal(t, "expired", actual.Status)
+	var leases int64
+	require.NoError(t, model.DB.Model(&model.SystemTaskLock{}).Count(&leases).Error)
+	assert.Zero(t, leases)
 }
 
 func TestRequestCaptureRedactionAndInvalidBodies(t *testing.T) {
