@@ -41,8 +41,9 @@ func TestDynamicRoutingRequestEligibleOnlyForStreamingTextGeneration(t *testing.
 }
 
 func TestGetModelRequestPreservesStreamFlagForEligibility(t *testing.T) {
+	body := `{"model":"chat-model","stream":true}`
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"chat-model","stream":true}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	request, shouldSelect, err := getModelRequest(ctx)
@@ -51,4 +52,32 @@ func TestGetModelRequestPreservesStreamFlagForEligibility(t *testing.T) {
 	assert.True(t, shouldSelect)
 	assert.Equal(t, "chat-model", request.Model)
 	assert.True(t, request.Stream)
+	require.NotNil(t, request.RequestBodySize)
+	assert.Equal(t, int64(len(body)), *request.RequestBodySize)
+}
+
+func TestGetModelRequestRecordsEmptyRequestBodySize(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/realtime?model=realtime-model", nil)
+
+	request, shouldSelect, err := getModelRequest(ctx)
+
+	require.NoError(t, err)
+	assert.True(t, shouldSelect)
+	require.NotNil(t, request.RequestBodySize)
+	assert.Zero(t, *request.RequestBodySize)
+}
+
+func TestGetModelRequestRecordsBodySizeWhenChannelSelectionIsDisabled(t *testing.T) {
+	body := `{"prompt":"remix this"}`
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos/video-1/remix", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	request, shouldSelect, err := getModelRequest(ctx)
+
+	require.NoError(t, err)
+	assert.False(t, shouldSelect)
+	require.NotNil(t, request.RequestBodySize)
+	assert.Equal(t, int64(len(body)), *request.RequestBodySize)
 }

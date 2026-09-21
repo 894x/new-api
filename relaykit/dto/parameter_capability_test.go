@@ -141,3 +141,34 @@ func TestParameterCapabilityConfigHasSelectionConstraintsOnlyForEnabledEntries(t
 	}}
 	assert.True(t, config.HasSelectionConstraints())
 }
+
+func TestParameterCapabilityConfigValidatesRequestBodySizeConstraint(t *testing.T) {
+	max := 1024.0
+	negative := -1.0
+	fractional := 1.5
+	participates := true
+	disabled := false
+
+	valid := ParameterCapabilityConfig{Defaults: map[string]ParameterCapability{
+		ParameterCapabilityRequestBodySizeBytes: {
+			Max:                    &max,
+			OnViolation:            ParameterCapabilityActionReject,
+			ParticipateInSelection: &participates,
+		},
+	}}
+	require.NoError(t, valid.Validate())
+
+	tests := []ParameterCapability{
+		{Min: &negative},
+		{Max: &fractional},
+		{Supported: &disabled},
+		{Max: &max, OnViolation: ParameterCapabilityActionClamp},
+		{Transform: ParameterTransformImage},
+	}
+	for _, capability := range tests {
+		config := ParameterCapabilityConfig{Defaults: map[string]ParameterCapability{
+			ParameterCapabilityRequestBodySizeBytes: capability,
+		}}
+		assert.Error(t, config.Validate())
+	}
+}

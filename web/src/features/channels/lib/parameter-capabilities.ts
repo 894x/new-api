@@ -18,7 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { ParameterCapability, ParameterCapabilityConfig } from '../types'
 
+export const REQUEST_BODY_SIZE_CAPABILITY = '$request.body_size_bytes'
+
 export const PARAMETER_CAPABILITY_CATALOG = [
+  { path: REQUEST_BODY_SIZE_CAPABILITY, category: 'Request', kind: 'number' },
   { path: 'duration', category: 'Multimodal', kind: 'number' },
   { path: 'resolution', category: 'Multimodal', kind: 'enum' },
   { path: 'ratio', category: 'Multimodal', kind: 'enum' },
@@ -114,6 +117,7 @@ export interface ParameterCapabilityConfigError {
     | 'clamp_without_boundary'
     | 'unsafe_billing_action'
     | 'invalid_media_constraints'
+    | 'invalid_request_body_size'
   scope: string
   path?: string
 }
@@ -355,7 +359,8 @@ export function validateParameterCapabilityConfig(
 export function evaluateParameterCapabilities(
   config: ParameterCapabilityConfig,
   model: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  requestBodySize = new TextEncoder().encode(JSON.stringify(input)).byteLength
 ): CapabilityEvaluationResult {
   const request = structuredClone(input)
   const evaluations: CapabilityEvaluation[] = []
@@ -363,8 +368,17 @@ export function evaluateParameterCapabilities(
 
   for (const parameter of Object.keys(resolved).sort()) {
     const capability = resolved[parameter].capability
+    if (
+      parameter === REQUEST_BODY_SIZE_CAPABILITY &&
+      capability.participate_in_selection !== true
+    ) {
+      continue
+    }
     const action = capability.on_violation || 'reject'
-    const currentValues = getPathValues(request, parameter)
+    const currentValues =
+      parameter === REQUEST_BODY_SIZE_CAPABILITY
+        ? [{ path: parameter, value: requestBodySize }]
+        : getPathValues(request, parameter)
     if (action === 'drop') currentValues.reverse()
     for (const current of currentValues) {
       if (
@@ -513,6 +527,31 @@ function validateCapabilityMap(
   errors: ParameterCapabilityConfigError[]
 ): void {
   for (const [path, capability] of Object.entries(parameters)) {
+    if (path === REQUEST_BODY_SIZE_CAPABILITY) {
+      const invalidByteRange = [capability.min, capability.max].some(
+        (value) =>
+          value !== undefined &&
+          (!Number.isSafeInteger(value) || value < 0)
+      )
+      if (
+        capability.transform !== undefined ||
+        capability.supported !== undefined ||
+        Boolean(capability.allowed_values?.length) ||
+        (capability.on_violation !== undefined &&
+          capability.on_violation !== 'reject') ||
+        invalidByteRange
+      ) {
+        errors.push({ code: 'invalid_request_body_size', scope, path })
+      }
+      if (
+        capability.min !== undefined &&
+        capability.max !== undefined &&
+        capability.min > capability.max
+      ) {
+        errors.push({ code: 'inverted_range', scope, path })
+      }
+      continue
+    }
     if (
       capability.transform &&
       capability.transform !== 'none' &&

@@ -207,7 +207,7 @@ func listDBChannelCandidates(group, model string, filters ChannelSelectionFilter
 // applies request path and parameter constraints before
 // priority and weight selection.
 func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelectionFilters, model string) ([]Ability, int, int, error, error) {
-	if (filters.RequestPath == "" && len(filters.RequestBody) == 0) || len(abilities) == 0 {
+	if (filters.RequestPath == "" && len(filters.RequestBody) == 0 && filters.RequestBodySize == nil) || len(abilities) == 0 {
 		return abilities, len(abilities), len(abilities), nil, nil
 	}
 
@@ -255,7 +255,7 @@ func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelec
 			filtered = append(filtered, ability)
 			continue
 		}
-		supported, checkErr := supportsSelectionParameters(channel, parameterConfigs[ability.ChannelId], model, filters.RequestBody)
+		supported, checkErr := supportsSelectionParameters(channel, parameterConfigs[ability.ChannelId], model, filters.RequestBody, filters.RequestBodySize)
 		if checkErr != nil {
 			var violation *relayparam.CapabilityViolationError
 			if !errors.As(checkErr, &violation) {

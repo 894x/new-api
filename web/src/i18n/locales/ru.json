@@ -85,6 +85,7 @@
     "{{scope}}: {{path}} minimum cannot exceed maximum": "{{scope}}: минимум {{path}} не может превышать максимум",
     "{{scope}}: invalid parameter path {{path}}": "{{scope}}: недопустимый путь параметра {{path}}",
     "{{scope}}: model selector is required": "{{scope}}: требуется селектор модели",
+    "{{scope}}: request body size only supports non-negative integer byte bounds, rejection, and channel selection": "{{scope}}: для размера тела запроса поддерживаются только неотрицательные целочисленные границы в байтах, отклонение и выбор канала",
     "{{success}} succeeded, {{failed}} failed": "{{success}} успешно, {{failed}} с ошибкой",
     "{{target}} test failed": "Тест {{target}} не выполнен",
     "{{target}} test succeeded": "Тест {{target}} успешно выполнен",

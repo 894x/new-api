@@ -26,10 +26,11 @@ import (
 )
 
 type ModelRequest struct {
-	Model       string `json:"model"`
-	Group       string `json:"group,omitempty"`
-	RequestBody []byte `json:"-"`
-	Stream      bool   `json:"stream,omitempty"`
+	Model           string `json:"model"`
+	Group           string `json:"group,omitempty"`
+	RequestBody     []byte `json:"-"`
+	RequestBodySize *int64 `json:"-"`
+	Stream          bool   `json:"stream,omitempty"`
 }
 
 func Distribute() func(c *gin.Context) {
@@ -44,6 +45,9 @@ func Distribute() func(c *gin.Context) {
 		}
 		if len(modelRequest.RequestBody) > 0 {
 			common.SetContextKey(c, constant.ContextKeySelectionRequestBody, modelRequest.RequestBody)
+		}
+		if modelRequest.RequestBodySize != nil {
+			common.SetContextKey(c, constant.ContextKeySelectionBodySize, *modelRequest.RequestBodySize)
 		}
 		dynamicRoutingEligible := shouldSelectChannel && isDynamicRoutingRequestEligible(c.Request.URL.Path, modelRequest.Stream)
 		common.SetContextKey(c, constant.ContextKeyDynamicRoutingEligible, dynamicRoutingEligible)
@@ -62,7 +66,7 @@ func Distribute() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
-			parametersSupported, capabilityErr := channel.SupportsSelectionParameters(modelRequest.Model, modelRequest.RequestBody)
+			parametersSupported, capabilityErr := channel.SupportsSelectionRequest(modelRequest.Model, modelRequest.RequestBody, modelRequest.RequestBodySize)
 			if capabilityErr != nil || !parametersSupported {
 				capabilityMessage := model.ErrParameterCapabilityUnsupported.Error()
 				if capabilityErr != nil {
@@ -135,7 +139,7 @@ func Distribute() func(c *gin.Context) {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					parametersSupported := false
 					if err == nil && preferred != nil {
-						parametersSupported, err = preferred.SupportsSelectionParameters(modelRequest.Model, modelRequest.RequestBody)
+						parametersSupported, err = preferred.SupportsSelectionRequest(modelRequest.Model, modelRequest.RequestBody, modelRequest.RequestBodySize)
 					}
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
 						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) &&
@@ -174,6 +178,7 @@ func Distribute() func(c *gin.Context) {
 						TokenGroup:             usingGroup,
 						RequestPath:            c.Request.URL.Path,
 						RequestBody:            modelRequest.RequestBody,
+						RequestBodySize:        modelRequest.RequestBodySize,
 						AllowedChannelIds:      allowedChannelIds,
 						Retry:                  common.GetPointer(0),
 						DynamicRoutingEligible: dynamicRoutingEligible,
@@ -292,10 +297,11 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 	c.Request.Body = io.NopCloser(storage)
 
 	return &ModelRequest{
-		Model:       model,
-		Group:       group,
-		RequestBody: requestBody,
-		Stream:      values[2].Type == gjson.True,
+		Model:           model,
+		Group:           group,
+		RequestBody:     requestBody,
+		RequestBodySize: common.GetPointer(storage.Size()),
+		Stream:          values[2].Type == gjson.True,
 	}, nil
 }
 
@@ -494,15 +500,30 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		common.SetContextKey(c, constant.ContextKeyTokenGroup, modelRequest.Group)
 	}
 
-	if shouldSelectChannel && len(modelRequest.RequestBody) == 0 && strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json") {
+	if c.Request.Body == nil || c.Request.Body == http.NoBody {
+		emptyBodySize := int64(0)
+		modelRequest.RequestBodySize = &emptyBodySize
+	}
+	if c.Request.Body != nil && c.Request.Body != http.NoBody {
 		storage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			return nil, false, bodyErr
 		}
-		modelRequest.RequestBody, bodyErr = storage.Bytes()
-		if bodyErr != nil {
+		bodySize := storage.Size()
+		modelRequest.RequestBodySize = &bodySize
+		if originalSize, recorded := common.GetContextKeyType[int64](c, constant.ContextKeySelectionBodySize); recorded {
+			modelRequest.RequestBodySize = &originalSize
+		}
+		if shouldSelectChannel && len(modelRequest.RequestBody) == 0 && strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json") {
+			modelRequest.RequestBody, bodyErr = storage.Bytes()
+			if bodyErr != nil {
+				return nil, false, bodyErr
+			}
+		}
+		if _, bodyErr = storage.Seek(0, io.SeekStart); bodyErr != nil {
 			return nil, false, bodyErr
 		}
+		c.Request.Body = io.NopCloser(storage)
 	}
 	return &modelRequest, shouldSelectChannel, nil
 }

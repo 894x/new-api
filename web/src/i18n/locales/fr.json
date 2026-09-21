@@ -85,6 +85,7 @@
     "{{scope}}: {{path}} minimum cannot exceed maximum": "{{scope}} : le minimum de {{path}} ne peut pas dépasser le maximum",
     "{{scope}}: invalid parameter path {{path}}": "{{scope}} : chemin de paramètre {{path}} invalide",
     "{{scope}}: model selector is required": "{{scope}} : le sélecteur de modèle est requis",
+    "{{scope}}: request body size only supports non-negative integer byte bounds, rejection, and channel selection": "{{scope}} : la taille du corps de requête accepte uniquement des limites entières positives ou nulles en octets, le rejet et la sélection de canal",
     "{{success}} succeeded, {{failed}} failed": "{{success}} réussi(s), {{failed}} échoué(s)",
     "{{target}} test failed": "Échec du test de {{target}}",
     "{{target}} test succeeded": "Test de {{target}} réussi",

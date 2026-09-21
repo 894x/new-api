@@ -2,6 +2,7 @@ package dto
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 )
@@ -18,6 +19,11 @@ const (
 	ParameterTransformImage = "image_url_to_base64"
 	ParameterTransformAudio = "audio_url_to_base64"
 	ParameterTransformVideo = "video_url_to_base64"
+
+	// ParameterCapabilityRequestBodySizeBytes is a virtual parameter populated
+	// from the original client request body. It is available only to channel
+	// selection and never reads or mutates a JSON field with this name.
+	ParameterCapabilityRequestBodySizeBytes = "$request.body_size_bytes"
 
 	maxParameterCapabilityRules      = 256
 	maxParameterCapabilitiesPerScope = 128
@@ -164,6 +170,32 @@ func validateParameterCapabilityMap(parameters map[string]ParameterCapability) e
 		return fmt.Errorf("too many parameters in one scope: %d", len(parameters))
 	}
 	for path, capability := range parameters {
+		if path == ParameterCapabilityRequestBodySizeBytes {
+			if capability.Transform != "" || capability.Supported != nil || len(capability.AllowedValues) > 0 {
+				return fmt.Errorf("parameter %s only supports min, max, reject, and channel selection", path)
+			}
+			if capability.OnViolation != "" && capability.OnViolation != ParameterCapabilityActionReject {
+				return fmt.Errorf("parameter %s only supports reject on violation", path)
+			}
+			if capability.Min != nil {
+				minValue := *capability.Min
+				if math.IsNaN(minValue) || math.IsInf(minValue, 0) || minValue < 0 ||
+					minValue > float64(1<<53-1) || math.Trunc(minValue) != minValue {
+					return fmt.Errorf("parameter %s minimum must be a non-negative integer byte count", path)
+				}
+			}
+			if capability.Max != nil {
+				maxValue := *capability.Max
+				if math.IsNaN(maxValue) || math.IsInf(maxValue, 0) || maxValue < 0 ||
+					maxValue > float64(1<<53-1) || math.Trunc(maxValue) != maxValue {
+					return fmt.Errorf("parameter %s maximum must be a non-negative integer byte count", path)
+				}
+			}
+			if capability.Min != nil && capability.Max != nil && *capability.Min > *capability.Max {
+				return fmt.Errorf("parameter %s minimum cannot exceed maximum", path)
+			}
+			continue
+		}
 		switch capability.Transform {
 		case "", ParameterTransformNone, ParameterTransformImage, ParameterTransformAudio, ParameterTransformVideo:
 		default:

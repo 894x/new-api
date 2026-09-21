@@ -13,6 +13,7 @@ var ErrParameterCapabilityUnsupported = errors.New("request parameters are not s
 type ChannelSelectionFilters struct {
 	RequestPath       string
 	RequestBody       []byte
+	RequestBodySize   *int64
 	AllowedChannelIds map[int]struct{}
 }
 
@@ -36,22 +37,34 @@ func (e *parameterCapabilityUnsupportedError) Unwrap() []error {
 }
 
 func (channel *Channel) SupportsSelectionParameters(requestModel string, requestBody []byte) (bool, error) {
-	if channel == nil || len(requestBody) == 0 {
+	if len(requestBody) == 0 {
+		return channel.SupportsSelectionRequest(requestModel, requestBody, nil)
+	}
+	requestBodySize := int64(len(requestBody))
+	return channel.SupportsSelectionRequest(requestModel, requestBody, &requestBodySize)
+}
+
+func (channel *Channel) SupportsSelectionRequest(requestModel string, requestBody []byte, requestBodySize *int64) (bool, error) {
+	if channel == nil {
 		return true, nil
 	}
 	config := channel.GetOtherSettings().ParameterCapabilities
-	return supportsSelectionParameters(channel, config, requestModel, requestBody)
+	return supportsSelectionParameters(channel, config, requestModel, requestBody, requestBodySize)
 }
 
-func supportsSelectionParameters(channel *Channel, config *dto.ParameterCapabilityConfig, requestModel string, requestBody []byte) (bool, error) {
-	if channel == nil || config == nil || !config.HasSelectionConstraints() || len(requestBody) == 0 {
+func supportsSelectionParameters(channel *Channel, config *dto.ParameterCapabilityConfig, requestModel string, requestBody []byte, requestBodySize *int64) (bool, error) {
+	if channel == nil || config == nil || !config.HasSelectionConstraints() {
 		return true, nil
+	}
+	if requestBodySize == nil && len(requestBody) > 0 {
+		inferredSize := int64(len(requestBody))
+		requestBodySize = &inferredSize
 	}
 	upstreamModel, _, err := channel.ResolveUpstreamModelName(requestModel)
 	if err != nil {
 		return false, err
 	}
-	err = relayparam.CheckSelectionCapabilities(requestBody, config, upstreamModel)
+	err = relayparam.CheckSelectionCapabilitiesWithBodySize(requestBody, requestBodySize, config, upstreamModel)
 	if err == nil {
 		return true, nil
 	}

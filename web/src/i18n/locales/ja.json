@@ -85,6 +85,7 @@
     "{{scope}}: {{path}} minimum cannot exceed maximum": "{{scope}}: {{path}} の最小値は最大値を超えられません",
     "{{scope}}: invalid parameter path {{path}}": "{{scope}}: パラメーターパス {{path}} が無効です",
     "{{scope}}: model selector is required": "{{scope}}: モデルセレクターが必要です",
+    "{{scope}}: request body size only supports non-negative integer byte bounds, rejection, and channel selection": "{{scope}}：リクエスト本文サイズでは、0 以上の整数バイト境界、拒否、チャネル選択のみを使用できます",
     "{{success}} succeeded, {{failed}} failed": "{{success}} 件成功、{{failed}} 件失敗",
     "{{target}} test failed": "{{target}} のテストに失敗しました",
     "{{target}} test succeeded": "{{target}} のテストに成功しました",

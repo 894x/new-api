@@ -11,6 +11,7 @@ const (
 	ContextKeyOriginalModel        ContextKey = "original_model"
 	ContextKeyRequestStartTime     ContextKey = "request_start_time"
 	ContextKeySelectionRequestBody ContextKey = "selection_request_body"
+	ContextKeySelectionBodySize    ContextKey = "selection_request_body_size"
 	ContextKeyResponseId           ContextKey = "response_id"
 
 	/* token related keys */

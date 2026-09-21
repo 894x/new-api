@@ -16,6 +16,7 @@ type RetryParam struct {
 	ModelName              string
 	RequestPath            string
 	RequestBody            []byte
+	RequestBodySize        *int64
 	Capacity               *ChannelCapacityState
 	DynamicRoutingEligible bool
 

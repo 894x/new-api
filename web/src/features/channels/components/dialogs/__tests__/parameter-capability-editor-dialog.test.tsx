@@ -218,4 +218,38 @@ describe('ParameterCapabilityEditorDialog JSON editing', () => {
       JSON.parse(saved[0]).defaults['messages.*.content.*.image_url'].transform
     ).toBe('image_url_to_base64')
   })
+
+  test('shows request body size as an integer selection-only constraint', async () => {
+    const saved: string[] = []
+    rendered = await renderDialog((value) => saved.push(value))
+    await enterJsonDraft(
+      '{"defaults":{"$request.body_size_bytes":{"max":1024,"on_violation":"reject","participate_in_selection":true}}}'
+    )
+    await act(async () => findButton('Capabilities')?.click())
+    const { getByLabelText, getByRole, queryByLabelText } =
+      await import('@testing-library/dom')
+
+    assert.equal(queryByLabelText(document.body, 'Input conversion'), null)
+    assert.equal(queryByLabelText(document.body, 'Support status'), null)
+    assert.equal(queryByLabelText(document.body, 'Allowed values'), null)
+    assert.equal(
+      getByLabelText<HTMLInputElement>(document.body, 'Maximum').step,
+      '1'
+    )
+
+    const action = getByLabelText(document.body, 'On violation')
+    await act(async () => action.click())
+    assert.equal(
+      getByRole(document.body, 'option', {
+        name: 'Drop parameter',
+      }).getAttribute('aria-disabled'),
+      'true'
+    )
+    assert.equal(
+      getByRole(document.body, 'option', {
+        name: 'Clamp to range',
+      }).getAttribute('aria-disabled'),
+      'true'
+    )
+  })
 })

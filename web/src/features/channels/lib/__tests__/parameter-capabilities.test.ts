@@ -22,6 +22,7 @@ import type { ParameterCapabilityConfig } from '../../types'
 import {
   evaluateParameterCapabilities,
   parseParameterCapabilityConfigStrict,
+  REQUEST_BODY_SIZE_CAPABILITY,
   resolveParameterCapabilities,
   stringifyParameterCapabilityConfig,
   validateParameterCapabilityConfig,
@@ -213,6 +214,41 @@ describe('parameter capability resolution', () => {
     expect(result.request).toEqual({ tools: [] })
     expect(result.evaluations).toHaveLength(3)
   })
+
+  it('evaluates the exact request body byte size only when it participates in selection', () => {
+    const config: ParameterCapabilityConfig = {
+      defaults: {
+        [REQUEST_BODY_SIZE_CAPABILITY]: {
+          max: 1024,
+          on_violation: 'reject',
+          participate_in_selection: true,
+        },
+      },
+    }
+
+    const accepted = evaluateParameterCapabilities(config, 'model-a', {}, 1024)
+    const rejected = evaluateParameterCapabilities(config, 'model-a', {}, 1025)
+
+    expect(accepted.compatible).toBe(true)
+    expect(rejected.compatible).toBe(false)
+    expect(rejected.evaluations).toEqual([
+      expect.objectContaining({
+        parameter: REQUEST_BODY_SIZE_CAPABILITY,
+        status: 'rejected',
+        from: 1025,
+      }),
+    ])
+
+    const bodySizeCapability = config.defaults?.[REQUEST_BODY_SIZE_CAPABILITY]
+    expect(bodySizeCapability).toBeDefined()
+    if (!bodySizeCapability) {
+      throw new Error('request body size capability missing')
+    }
+    bodySizeCapability.participate_in_selection = false
+    expect(
+      evaluateParameterCapabilities(config, 'model-a', {}, 2048).evaluations
+    ).toEqual([])
+  })
 })
 
 describe('parameter capability configuration validation', () => {
@@ -352,6 +388,37 @@ describe('parameter capability configuration validation', () => {
     })
 
     expect(errors).toHaveLength(2)
+  })
+
+  it('accepts integer request body byte bounds and rejects unsupported actions', () => {
+    expect(
+      validateParameterCapabilityConfig({
+        defaults: {
+          [REQUEST_BODY_SIZE_CAPABILITY]: {
+            min: 1024,
+            max: 2048,
+            on_violation: 'reject',
+            participate_in_selection: true,
+          },
+        },
+      })
+    ).toEqual([])
+
+    expect(
+      validateParameterCapabilityConfig({
+        defaults: {
+          [REQUEST_BODY_SIZE_CAPABILITY]: {
+            max: 1.5,
+            on_violation: 'clamp',
+          },
+        },
+      })
+    ).toEqual([
+      expect.objectContaining({
+        code: 'invalid_request_body_size',
+        path: REQUEST_BODY_SIZE_CAPABILITY,
+      }),
+    ])
   })
 
   it('requires billing-sensitive quantities to reject incompatible values', () => {

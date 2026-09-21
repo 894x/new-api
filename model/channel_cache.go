@@ -253,12 +253,12 @@ func filterCachedChannelSelectionCandidates(routings []cachedChannelRouting, fil
 	routings = filterChannelsByRequestPathAndModel(routings, filters.RequestPath, requestModel)
 	routings = filterChannelRoutingsByAllowedIds(routings, filters.AllowedChannelIds)
 	parameterCandidateCount := len(routings)
-	filtered, firstViolation, err := filterChannelRoutingsBySelectionParameters(routings, channel2parameterCapabilityConfig, channelsIDM, requestModel, filters.RequestBody)
+	filtered, firstViolation, err := filterChannelRoutingsBySelectionParameters(routings, channel2parameterCapabilityConfig, channelsIDM, requestModel, filters.RequestBody, filters.RequestBodySize)
 	return filtered, parameterCandidateCount, firstViolation, err
 }
 
-func filterChannelRoutingsBySelectionParameters(routings []cachedChannelRouting, configs map[int]*dto.ParameterCapabilityConfig, channels map[int]*Channel, requestModel string, requestBody []byte) ([]cachedChannelRouting, error, error) {
-	if len(requestBody) == 0 || len(routings) == 0 {
+func filterChannelRoutingsBySelectionParameters(routings []cachedChannelRouting, configs map[int]*dto.ParameterCapabilityConfig, channels map[int]*Channel, requestModel string, requestBody []byte, requestBodySize *int64) ([]cachedChannelRouting, error, error) {
+	if len(routings) == 0 {
 		return routings, nil, nil
 	}
 	filtered := make([]cachedChannelRouting, 0, len(routings))
@@ -270,7 +270,7 @@ func filterChannelRoutingsBySelectionParameters(routings []cachedChannelRouting,
 			filtered = append(filtered, routing)
 			continue
 		}
-		supported, err := supportsSelectionParameters(channel, configs[routing.ChannelId], requestModel, requestBody)
+		supported, err := supportsSelectionParameters(channel, configs[routing.ChannelId], requestModel, requestBody, requestBodySize)
 		if err != nil {
 			var violation *relayparam.CapabilityViolationError
 			if !errors.As(err, &violation) {

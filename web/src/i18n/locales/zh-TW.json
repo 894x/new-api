@@ -85,6 +85,7 @@
     "{{scope}}: {{path}} minimum cannot exceed maximum": "{{scope}}：{{path}} 的最小值不能大於最大值",
     "{{scope}}: invalid parameter path {{path}}": "{{scope}}：參數路徑 {{path}} 無效",
     "{{scope}}: model selector is required": "{{scope}}：必須填寫模型選擇器",
+    "{{scope}}: request body size only supports non-negative integer byte bounds, rejection, and channel selection": "{{scope}}：請求本文大小僅支援非負整數位元組界限、拒絕操作與渠道選擇",
     "{{success}} succeeded, {{failed}} failed": "{{success}} 個成功，{{failed}} 個失敗",
     "{{target}} test failed": "{{target}} 測試失敗",
     "{{target}} test succeeded": "{{target}} 測試成功",

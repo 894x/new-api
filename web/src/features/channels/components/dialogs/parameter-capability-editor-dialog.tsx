@@ -66,6 +66,7 @@ import {
   evaluateParameterCapabilities,
   isBillingSensitiveParameter,
   PARAMETER_CAPABILITY_CATALOG,
+  REQUEST_BODY_SIZE_CAPABILITY,
   parseParameterCapabilityConfig,
   parseParameterCapabilityConfigStrict,
   resolveParameterCapabilities,
@@ -322,7 +323,12 @@ function ParameterCapabilityEditorSession(
   function addCustomParameter(): void {
     const path = customParameter.trim()
     if (!path || selectedParameters[path]) return
-    updateCapability(path, { on_violation: 'reject' })
+    updateCapability(
+      path,
+      path === REQUEST_BODY_SIZE_CAPABILITY
+        ? { on_violation: 'reject', participate_in_selection: true }
+        : { on_violation: 'reject' }
+    )
     setCustomParameter('')
   }
 
@@ -798,6 +804,7 @@ function ParameterCapabilityRow(props: {
 }) {
   const { t } = useTranslation()
   const capability = props.configured
+  const isRequestBodySize = props.path === REQUEST_BODY_SIZE_CAPABILITY
   if (!capability) {
     return (
       <div className='flex items-center gap-3 rounded-lg border px-4 py-3'>
@@ -821,7 +828,13 @@ function ParameterCapabilityRow(props: {
           type='button'
           variant='outline'
           size='sm'
-          onClick={() => props.onChange({ on_violation: 'reject' })}
+          onClick={() =>
+            props.onChange(
+              isRequestBodySize
+                ? { on_violation: 'reject', participate_in_selection: true }
+                : { on_violation: 'reject' }
+            )
+          }
         >
           {t('Override')}
         </Button>
@@ -885,86 +898,90 @@ function ParameterCapabilityRow(props: {
         </Button>
       </div>
       <FieldGroup className='grid grid-cols-2 gap-3 lg:grid-cols-3'>
-        <Field className='col-span-2 lg:col-span-3'>
-          <FieldLabel htmlFor={`${props.path}-transform`}>
-            {t('Input conversion')}
-          </FieldLabel>
-          <Select
-            items={transformItems}
-            value={capability.transform ?? 'inherit'}
-            onValueChange={(value) =>
-              props.onChange({
-                ...capability,
-                transform:
-                  value === 'inherit'
-                    ? undefined
-                    : (value as ParameterCapability['transform']),
-              })
-            }
-          >
-            <SelectTrigger id={`${props.path}-transform`} className='w-full'>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false}>
-              <SelectGroup>
-                {transformItems.map((item) => (
-                  <SelectItem
-                    key={item.value}
-                    value={item.value}
-                    disabled={
-                      isBillingSensitiveParameter(props.path) &&
-                      item.value !== 'inherit' &&
-                      item.value !== 'none'
-                    }
-                  >
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          <FieldDescription>
-            {t(
-              'Downloads HTTP(S) media locally before validation. Requires body pass-through off. URL fields use data URLs; input_audio uses MP3/WAV Base64.'
-            )}
-          </FieldDescription>
-        </Field>
-        <Field>
-          <FieldLabel htmlFor={`${props.path}-support`}>
-            {t('Support status')}
-          </FieldLabel>
-          <Select
-            items={supportItems}
-            value={supportValue}
-            onValueChange={(value) => {
-              props.onChange({
-                ...capability,
-                supported:
-                  value === 'inherit' ? undefined : value === 'supported',
-              })
-            }}
-          >
-            <SelectTrigger id={`${props.path}-support`} className='w-full'>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false}>
-              <SelectGroup>
-                {supportItems.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
+        {!isRequestBodySize && (
+          <Field className='col-span-2 lg:col-span-3'>
+            <FieldLabel htmlFor={`${props.path}-transform`}>
+              {t('Input conversion')}
+            </FieldLabel>
+            <Select
+              items={transformItems}
+              value={capability.transform ?? 'inherit'}
+              onValueChange={(value) =>
+                props.onChange({
+                  ...capability,
+                  transform:
+                    value === 'inherit'
+                      ? undefined
+                      : (value as ParameterCapability['transform']),
+                })
+              }
+            >
+              <SelectTrigger id={`${props.path}-transform`} className='w-full'>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  {transformItems.map((item) => (
+                    <SelectItem
+                      key={item.value}
+                      value={item.value}
+                      disabled={
+                        isBillingSensitiveParameter(props.path) &&
+                        item.value !== 'inherit' &&
+                        item.value !== 'none'
+                      }
+                    >
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              {t(
+                'Downloads HTTP(S) media locally before validation. Requires body pass-through off. URL fields use data URLs; input_audio uses MP3/WAV Base64.'
+              )}
+            </FieldDescription>
+          </Field>
+        )}
+        {!isRequestBodySize && (
+          <Field>
+            <FieldLabel htmlFor={`${props.path}-support`}>
+              {t('Support status')}
+            </FieldLabel>
+            <Select
+              items={supportItems}
+              value={supportValue}
+              onValueChange={(value) => {
+                props.onChange({
+                  ...capability,
+                  supported:
+                    value === 'inherit' ? undefined : value === 'supported',
+                })
+              }}
+            >
+              <SelectTrigger id={`${props.path}-support`} className='w-full'>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  {supportItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+        )}
         <Field>
           <FieldLabel htmlFor={`${props.path}-min`}>{t('Minimum')}</FieldLabel>
           <Input
             id={`${props.path}-min`}
             type='number'
             inputMode='decimal'
-            step='any'
+            step={isRequestBodySize ? 1 : 'any'}
             value={capability.min ?? ''}
             onChange={(event) =>
               props.onChange({
@@ -984,7 +1001,7 @@ function ParameterCapabilityRow(props: {
             id={`${props.path}-max`}
             type='number'
             inputMode='decimal'
-            step='any'
+            step={isRequestBodySize ? 1 : 'any'}
             value={capability.max ?? ''}
             onChange={(event) =>
               props.onChange({
@@ -998,25 +1015,27 @@ function ParameterCapabilityRow(props: {
             className='[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
           />
         </Field>
-        <Field>
-          <FieldLabel htmlFor={`${props.path}-allowed`}>
-            {t('Allowed values')}
-          </FieldLabel>
-          <Input
-            id={`${props.path}-allowed`}
-            value={capability.allowed_values?.join(', ') || ''}
-            onChange={(event) =>
-              props.onChange({
-                ...capability,
-                allowed_values: event.target.value
-                  .split(',')
-                  .map((value) => value.trim())
-                  .filter(Boolean),
-              })
-            }
-            placeholder={t('Comma separated')}
-          />
-        </Field>
+        {!isRequestBodySize && (
+          <Field>
+            <FieldLabel htmlFor={`${props.path}-allowed`}>
+              {t('Allowed values')}
+            </FieldLabel>
+            <Input
+              id={`${props.path}-allowed`}
+              value={capability.allowed_values?.join(', ') || ''}
+              onChange={(event) =>
+                props.onChange({
+                  ...capability,
+                  allowed_values: event.target.value
+                    .split(',')
+                    .map((value) => value.trim())
+                    .filter(Boolean),
+                })
+              }
+              placeholder={t('Comma separated')}
+            />
+          </Field>
+        )}
         <Field>
           <FieldLabel htmlFor={`${props.path}-action`}>
             {t('On violation')}
@@ -1041,7 +1060,8 @@ function ParameterCapabilityRow(props: {
                     key={item.value}
                     value={item.value}
                     disabled={
-                      isBillingSensitiveParameter(props.path) &&
+                      (isBillingSensitiveParameter(props.path) ||
+                        isRequestBodySize) &&
                       item.value !== 'reject'
                     }
                   >
@@ -1135,8 +1155,16 @@ function CapabilityValidationPanel(props: {
     temperature: 1.5,
     max_tokens: 4096,
   })
+  const [requestBodySize, setRequestBodySize] = useState(
+    new TextEncoder().encode(requestText).byteLength
+  )
 
-  const evaluation = evaluateParameterCapabilities(props.config, model, request)
+  const evaluation = evaluateParameterCapabilities(
+    props.config,
+    model,
+    request,
+    requestBodySize
+  )
   let evaluationLabel = t('Compatible')
   if (!evaluation.compatible) evaluationLabel = t('Rejected')
   else if (evaluation.evaluations.some((item) => item.status === 'pending')) {
@@ -1155,6 +1183,7 @@ function CapabilityValidationPanel(props: {
         return
       }
       setRequest(parsed as Record<string, unknown>)
+      setRequestBodySize(new TextEncoder().encode(requestText).byteLength)
       setParseError('')
     } catch {
       setParseError(t('Request JSON is invalid.'))
@@ -1373,6 +1402,11 @@ function CapabilityConfigErrorMessage(props: {
     case 'invalid_media_constraints':
       return t(
         'Media conversion cannot use numeric, allowed-value, or billing constraints.'
+      )
+    case 'invalid_request_body_size':
+      return t(
+        '{{scope}}: request body size only supports non-negative integer byte bounds, rejection, and channel selection',
+        { scope: props.error.scope }
       )
     case 'unsafe_billing_action':
       return t(

@@ -85,6 +85,7 @@
     "{{scope}}: {{path}} minimum cannot exceed maximum": "{{scope}}: {{path}} minimum cannot exceed maximum",
     "{{scope}}: invalid parameter path {{path}}": "{{scope}}: invalid parameter path {{path}}",
     "{{scope}}: model selector is required": "{{scope}}: model selector is required",
+    "{{scope}}: request body size only supports non-negative integer byte bounds, rejection, and channel selection": "{{scope}}: request body size only supports non-negative integer byte bounds, rejection, and channel selection",
     "{{success}} succeeded, {{failed}} failed": "{{success}} succeeded, {{failed}} failed",
     "{{target}} test failed": "{{target}} test failed",
     "{{target}} test succeeded": "{{target}} test succeeded",

@@ -164,6 +164,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	publicModelName := relayInfo.OriginModelName
 	selectionRequestBody, _ := common.GetContextKeyType[[]byte](c, constant.ContextKeySelectionRequestBody)
+	selectionRequestBodySize, selectionRequestBodySizeRecorded := common.GetContextKeyType[int64](c, constant.ContextKeySelectionBodySize)
+	var selectionRequestBodySizePointer *int64
+	if selectionRequestBodySizeRecorded {
+		selectionRequestBodySizePointer = &selectionRequestBodySize
+	}
 	retryParam := &service.RetryParam{
 		Ctx:                    c,
 		TokenGroup:             relayInfo.TokenGroup,
@@ -171,6 +176,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		DynamicRoutingEligible: common.GetContextKeyBool(c, constant.ContextKeyDynamicRoutingEligible),
 		RequestPath:            c.Request.URL.Path,
 		RequestBody:            selectionRequestBody,
+		RequestBodySize:        selectionRequestBodySizePointer,
 		AllowedChannelIds:      assetAllowedChannelIds(c),
 		Retry:                  common.GetPointer(0),
 	}
@@ -733,12 +739,18 @@ func RelayTask(c *gin.Context) {
 	}()
 
 	selectionRequestBody, _ := common.GetContextKeyType[[]byte](c, constant.ContextKeySelectionRequestBody)
+	selectionRequestBodySize, selectionRequestBodySizeRecorded := common.GetContextKeyType[int64](c, constant.ContextKeySelectionBodySize)
+	var selectionRequestBodySizePointer *int64
+	if selectionRequestBodySizeRecorded {
+		selectionRequestBodySizePointer = &selectionRequestBodySize
+	}
 	retryParam := &service.RetryParam{
 		Ctx:               c,
 		TokenGroup:        relayInfo.TokenGroup,
 		ModelName:         relayInfo.OriginModelName,
 		RequestPath:       c.Request.URL.Path,
 		RequestBody:       selectionRequestBody,
+		RequestBodySize:   selectionRequestBodySizePointer,
 		AllowedChannelIds: assetAllowedChannelIds(c),
 		Retry:             common.GetPointer(0),
 	}

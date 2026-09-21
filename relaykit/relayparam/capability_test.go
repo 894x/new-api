@@ -160,3 +160,31 @@ func TestApplyCapabilitiesDropsEveryArrayEntryMatchedByWildcard(t *testing.T) {
 	assert.JSONEq(t, `{"tools":[]}`, string(result))
 	assert.Len(t, changes, 3)
 }
+
+func TestRequestBodySizeCapabilityFiltersSelectionWithoutMutatingPayload(t *testing.T) {
+	max := 1024.0
+	participates := true
+	config := &dto.ParameterCapabilityConfig{Defaults: map[string]dto.ParameterCapability{
+		dto.ParameterCapabilityRequestBodySizeBytes: {
+			Max:                    &max,
+			ParticipateInSelection: &participates,
+		},
+		"tools.*": {ParticipateInSelection: &participates},
+	}}
+	payload := []byte(`{"model":"model-a"}`)
+	maxBoundarySize := int64(1024)
+	oversizedBody := int64(1025)
+
+	require.NoError(t, CheckSelectionCapabilitiesWithBodySize(nil, &maxBoundarySize, config, "model-a"))
+	require.NoError(t, CheckSelectionCapabilitiesWithBodySize(nil, nil, config, "model-a"))
+	err := CheckSelectionCapabilitiesWithBodySize(nil, &oversizedBody, config, "model-a")
+	var violation *CapabilityViolationError
+	require.ErrorAs(t, err, &violation)
+	assert.Equal(t, dto.ParameterCapabilityRequestBodySizeBytes, violation.Parameter)
+	assert.Equal(t, "1025", violation.Value)
+
+	result, changes, err := ApplyCapabilities(payload, config, "model-a")
+	require.NoError(t, err)
+	assert.Equal(t, payload, result)
+	assert.Empty(t, changes)
+}

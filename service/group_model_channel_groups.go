@@ -48,7 +48,7 @@ func (p *RetryParam) SelectionFilters() (model.ChannelSelectionFilters, error) {
 			}
 		}
 	}
-	return model.ChannelSelectionFilters{RequestPath: p.RequestPath, RequestBody: p.RequestBody, AllowedChannelIds: allowed}, nil
+	return model.ChannelSelectionFilters{RequestPath: p.RequestPath, RequestBody: p.RequestBody, RequestBodySize: p.RequestBodySize, AllowedChannelIds: allowed}, nil
 }
 
 // ValidateSelectedChannelGroupPolicy protects affinity hits, pinned channels

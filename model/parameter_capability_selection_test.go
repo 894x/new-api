@@ -136,6 +136,39 @@ func TestGetChannelFiltersParameterCapabilitiesBeforePriorityWithoutMemoryCache(
 	assert.Equal(t, 742, selected.Id)
 }
 
+func TestGetChannelFiltersRequestBodySizeWithoutMemoryCache(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+	common.MemoryCacheEnabled = false
+	max := 32.0
+	participates := true
+	priorityHigh := int64(100)
+	priorityLow := int64(10)
+	channels := []*Channel{
+		{Id: 743, Name: "small-body-only", Key: "key-743", Status: common.ChannelStatusEnabled, Group: "default", Models: "body-model", Priority: &priorityHigh},
+		{Id: 744, Name: "large-body-compatible", Key: "key-744", Status: common.ChannelStatusEnabled, Group: "default", Models: "body-model", Priority: &priorityLow},
+	}
+	channels[0].SetOtherSettings(dto.ChannelOtherSettings{ParameterCapabilities: &dto.ParameterCapabilityConfig{
+		Defaults: map[string]dto.ParameterCapability{
+			dto.ParameterCapabilityRequestBodySizeBytes: {
+				Max:                    &max,
+				ParticipateInSelection: &participates,
+			},
+		},
+	}})
+	for _, channel := range channels {
+		require.NoError(t, DB.Create(channel).Error)
+		require.NoError(t, channel.AddAbilities(nil))
+	}
+
+	selected, err := GetChannelWithSelectionFilters("default", "body-model", 0, ChannelSelectionFilters{
+		RequestBodySize: common.GetPointer(int64(33)),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, 744, selected.Id)
+}
+
 func TestChannelSelectionParametersResolveCapabilitiesAgainstMappedUpstreamModel(t *testing.T) {
 	disabled := false
 	participates := true
@@ -155,6 +188,15 @@ func TestChannelSelectionParametersResolveCapabilitiesAgainstMappedUpstreamModel
 
 	assert.False(t, supported)
 	assert.Error(t, err)
+}
+
+func TestNilChannelSupportsUnknownSelectionRequest(t *testing.T) {
+	var channel *Channel
+
+	supported, err := channel.SupportsSelectionRequest("model-a", nil, nil)
+
+	require.NoError(t, err)
+	assert.True(t, supported)
 }
 
 func TestCacheUpdateChannelRefreshesParameterCapabilities(t *testing.T) {
@@ -191,10 +233,71 @@ func TestCachedParameterFilteringKeepsValidCandidatesWhenAnotherChannelIsMisconf
 		map[int]*Channel{761: misconfigured, 762: valid},
 		"model-a",
 		[]byte(`{"tools":[]}`),
+		nil,
 	)
 
 	require.Len(t, filtered, 1)
 	assert.Equal(t, 762, filtered[0].ChannelId)
 	assert.NoError(t, violation)
 	assert.Error(t, configurationErr)
+}
+
+func TestGetRandomSatisfiedChannelFiltersRequestBodySizeBeforePriority(t *testing.T) {
+	originalMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	max := 32.0
+	participates := true
+
+	highPriority := &Channel{Id: 771, Status: common.ChannelStatusEnabled}
+	highPriority.SetOtherSettings(dto.ChannelOtherSettings{ParameterCapabilities: &dto.ParameterCapabilityConfig{
+		Defaults: map[string]dto.ParameterCapability{
+			dto.ParameterCapabilityRequestBodySizeBytes: {
+				Max:                    &max,
+				ParticipateInSelection: &participates,
+			},
+		},
+	}})
+	lowPriority := &Channel{Id: 772, Status: common.ChannelStatusEnabled}
+
+	channelSyncLock.Lock()
+	originalGroups := group2model2channels
+	originalChannels := channelsIDM
+	originalAdvanced := channel2advancedCustomConfig
+	originalParameter := channel2parameterCapabilityConfig
+	group2model2channels = map[string]map[string][]cachedChannelRouting{
+		"default": {"body-model": {
+			{ChannelId: 771, Priority: 100},
+			{ChannelId: 772, Priority: 10},
+		}},
+	}
+	channelsIDM = map[int]*Channel{771: highPriority, 772: lowPriority}
+	channel2advancedCustomConfig = map[int]*dto.AdvancedCustomConfig{}
+	channel2parameterCapabilityConfig = map[int]*dto.ParameterCapabilityConfig{
+		771: highPriority.GetOtherSettings().ParameterCapabilities,
+	}
+	channelSyncLock.Unlock()
+	t.Cleanup(func() {
+		channelSyncLock.Lock()
+		group2model2channels = originalGroups
+		channelsIDM = originalChannels
+		channel2advancedCustomConfig = originalAdvanced
+		channel2parameterCapabilityConfig = originalParameter
+		channelSyncLock.Unlock()
+		common.MemoryCacheEnabled = originalMemoryCacheEnabled
+	})
+
+	selected, err := GetRandomSatisfiedChannelWithSelectionFilters("default", "body-model", 0, ChannelSelectionFilters{})
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, 771, selected.Id)
+
+	request := []byte(`{"model":"body-model"}`)
+	selected, err = GetRandomSatisfiedChannelWithSelectionFilters("default", "body-model", 0, ChannelSelectionFilters{
+		RequestBody:     request,
+		RequestBodySize: common.GetPointer(int64(33)),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, 772, selected.Id)
 }

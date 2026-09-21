@@ -37,6 +37,9 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	// 首先检查是否有 BodyStorage 缓存
 	if storage, exists := c.Get(KeyBodyStorage); exists && storage != nil {
 		if bs, ok := storage.(BodyStorage); ok {
+			if _, sizeRecorded := c.Get(string(constant.ContextKeySelectionBodySize)); !sizeRecorded {
+				SetContextKey(c, constant.ContextKeySelectionBodySize, bs.Size())
+			}
 			if _, err := bs.Seek(0, io.SeekStart); err != nil {
 				return nil, fmt.Errorf("failed to seek body storage: %w", err)
 			}
@@ -54,6 +57,9 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 				return nil, err
 			}
 			c.Set(KeyBodyStorage, bs)
+			if _, sizeRecorded := c.Get(string(constant.ContextKeySelectionBodySize)); !sizeRecorded {
+				SetContextKey(c, constant.ContextKeySelectionBodySize, bs.Size())
+			}
 			MarkRequestTiming(c, RequestTimingBodyRead)
 			return bs, nil
 		}
@@ -80,6 +86,9 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 
 	// 缓存存储对象
 	c.Set(KeyBodyStorage, storage)
+	if _, sizeRecorded := c.Get(string(constant.ContextKeySelectionBodySize)); !sizeRecorded {
+		SetContextKey(c, constant.ContextKeySelectionBodySize, storage.Size())
+	}
 	MarkRequestTiming(c, RequestTimingBodyRead)
 
 	return storage, nil

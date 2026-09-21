@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -36,6 +37,14 @@ type CapabilityChange struct {
 // channel selection. It never applies drop or clamp actions and therefore does
 // not mutate the client request used by later routing candidates.
 func CheckSelectionCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model string) error {
+	bodySize := int64(len(data))
+	return CheckSelectionCapabilitiesWithBodySize(data, &bodySize, config, model)
+}
+
+// CheckSelectionCapabilitiesWithBodySize checks selection-only constraints
+// using the exact original client body size. data remains the JSON payload used
+// by ordinary parameter paths and may be empty for non-JSON requests.
+func CheckSelectionCapabilitiesWithBodySize(data []byte, bodySize *int64, config *dto.ParameterCapabilityConfig, model string) error {
 	if !config.HasSelectionConstraints() {
 		return nil
 	}
@@ -54,6 +63,23 @@ func CheckSelectionCapabilities(data []byte, config *dto.ParameterCapabilityConf
 
 	for _, path := range paths {
 		capability := capabilities[path]
+		if path == dto.ParameterCapabilityRequestBodySizeBytes {
+			if bodySize == nil {
+				continue
+			}
+			value := float64(*bodySize)
+			rawValue := strconv.FormatInt(*bodySize, 10)
+			if capability.Min != nil && value < *capability.Min {
+				return newCapabilityViolation(model, path, rawValue, fmt.Sprintf("request body size must be greater than or equal to %v bytes", *capability.Min))
+			}
+			if capability.Max != nil && value > *capability.Max {
+				return newCapabilityViolation(model, path, rawValue, fmt.Sprintf("request body size must be less than or equal to %v bytes", *capability.Max))
+			}
+			continue
+		}
+		if len(data) == 0 {
+			continue
+		}
 		resolvedPaths, err := ResolveJSONPaths(data, path, false)
 		if err != nil {
 			return err
@@ -108,6 +134,9 @@ func ApplyCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model
 	result := data
 	changes := make([]CapabilityChange, 0)
 	for _, path := range paths {
+		if path == dto.ParameterCapabilityRequestBodySizeBytes {
+			continue
+		}
 		capability := capabilities[path]
 		action := capability.OnViolation
 		if action == "" {

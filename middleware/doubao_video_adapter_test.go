@@ -51,4 +51,7 @@ func TestDoubaoVideoRequestConvertPreservesNativeBillingInputs(t *testing.T) {
 	content, ok := request.Metadata["content"].([]any)
 	require.True(t, ok)
 	assert.Len(t, content, 2)
+	originalBodySize, recorded := common.GetContextKeyType[int64](ctx, constant.ContextKeySelectionBodySize)
+	require.True(t, recorded)
+	assert.Equal(t, int64(len(body)), originalBodySize)
 }

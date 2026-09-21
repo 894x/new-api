@@ -85,6 +85,7 @@
     "{{scope}}: {{path}} minimum cannot exceed maximum": "{{scope}}: giá trị tối thiểu của {{path}} không thể lớn hơn tối đa",
     "{{scope}}: invalid parameter path {{path}}": "{{scope}}: đường dẫn tham số {{path}} không hợp lệ",
     "{{scope}}: model selector is required": "{{scope}}: bắt buộc có bộ chọn mô hình",
+    "{{scope}}: request body size only supports non-negative integer byte bounds, rejection, and channel selection": "{{scope}}: kích thước nội dung yêu cầu chỉ hỗ trợ giới hạn byte là số nguyên không âm, từ chối và chọn kênh",
     "{{success}} succeeded, {{failed}} failed": "{{success}} thành công, {{failed}} thất bại",
     "{{target}} test failed": "Kiểm tra {{target}} thất bại",
     "{{target}} test succeeded": "Kiểm tra {{target}} thành công",

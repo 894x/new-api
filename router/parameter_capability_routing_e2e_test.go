@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -110,6 +111,88 @@ func TestImageURLParameterCapabilityRoutesToSupportingChannelE2E(t *testing.T) {
 	assert.Equal(t, int32(1), unsupportedRequests.Load())
 	assert.Equal(t, int32(1), supportedRequests.Load())
 	assert.Contains(t, <-supportedBodies, `"image_url"`)
+}
+
+func TestRequestBodySizeParameterCapabilityRoutesToCompatibleChannelE2E(t *testing.T) {
+	setupRelayRouterTestDB(t)
+	require.NoError(t, model.DB.AutoMigrate(
+		&model.Channel{},
+		&model.ChannelModelOverride{},
+		&model.Log{},
+		&model.UserSubscription{},
+	))
+	ratio_setting.InitRatioSettings()
+	originalMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() { common.MemoryCacheEnabled = originalMemoryCacheEnabled })
+
+	var smallBodyChannelRequests atomic.Int32
+	smallBodyUpstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		smallBodyChannelRequests.Add(1)
+		writeOpenAIChatE2EResponse(writer)
+	}))
+	t.Cleanup(smallBodyUpstream.Close)
+
+	var largeBodyChannelRequests atomic.Int32
+	largeBodyUpstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		largeBodyChannelRequests.Add(1)
+		writeOpenAIChatE2EResponse(writer)
+	}))
+	t.Cleanup(largeBodyUpstream.Close)
+
+	user := model.User{Username: "request-body-size-capability-e2e", Status: common.UserStatusEnabled, Group: "default", Quota: 1_000_000}
+	require.NoError(t, model.DB.Create(&user).Error)
+	require.NoError(t, model.DB.Create(&model.Token{
+		UserId:         user.Id,
+		Key:            "parametercapabilitye2ekey",
+		Status:         common.TokenStatusEnabled,
+		ExpiredTime:    -1,
+		UnlimitedQuota: true,
+	}).Error)
+
+	smallBody := []byte(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"small"}]}`)
+	maxSmallBodyBytes := float64(len(smallBody))
+	participates := true
+	highPriority := int64(100)
+	lowPriority := int64(10)
+	channels := []*model.Channel{
+		{
+			Type: constant.ChannelTypeOpenAI, Name: "small-body-only", Key: "test-key",
+			Status: common.ChannelStatusEnabled, BaseURL: common.GetPointer(smallBodyUpstream.URL),
+			Models: "gpt-4o-mini", Group: "default", Priority: &highPriority,
+		},
+		{
+			Type: constant.ChannelTypeOpenAI, Name: "large-body-compatible", Key: "test-key",
+			Status: common.ChannelStatusEnabled, BaseURL: common.GetPointer(largeBodyUpstream.URL),
+			Models: "gpt-4o-mini", Group: "default", Priority: &lowPriority,
+		},
+	}
+	channels[0].SetOtherSettings(dto.ChannelOtherSettings{ParameterCapabilities: &dto.ParameterCapabilityConfig{
+		Defaults: map[string]dto.ParameterCapability{
+			dto.ParameterCapabilityRequestBodySizeBytes: {
+				Max:                    &maxSmallBodyBytes,
+				OnViolation:            dto.ParameterCapabilityActionReject,
+				ParticipateInSelection: &participates,
+			},
+		},
+	}})
+	for _, channel := range channels {
+		require.NoError(t, model.DB.Create(channel).Error)
+		require.NoError(t, channel.AddAbilities(nil))
+	}
+	model.InitChannelCache()
+
+	engine := gin.New()
+	SetRelayRouter(engine)
+	smallRecorder := serveParameterCapabilityE2ERequest(engine, smallBody)
+	require.Equal(t, http.StatusOK, smallRecorder.Code, smallRecorder.Body.String())
+
+	largeBody := []byte(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"` + strings.Repeat("x", 256) + `"}]}`)
+	largeRecorder := serveParameterCapabilityE2ERequest(engine, largeBody)
+	require.Equal(t, http.StatusOK, largeRecorder.Code, largeRecorder.Body.String())
+
+	assert.Equal(t, int32(1), smallBodyChannelRequests.Load())
+	assert.Equal(t, int32(1), largeBodyChannelRequests.Load())
 }
 
 func TestKimiK3VideoURLParameterCapabilityRoutesToSupportingChannelE2E(t *testing.T) {
