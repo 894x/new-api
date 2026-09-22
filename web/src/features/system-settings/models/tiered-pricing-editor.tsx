@@ -22,7 +22,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ChangeEvent,
   type FocusEvent,
@@ -346,9 +345,57 @@ function formatTokenHint(n: number | string | null | undefined): string {
 
 function formatNumberDraft(value: number | string): string {
   if (value === '') return ''
-  if (typeof value === 'number')
+  if (typeof value === 'number') {
     return Number.isFinite(value) ? String(value) : '0'
+  }
   return value
+}
+
+// Private, editor-only identity survives immutable row edits but is omitted
+// by JSON serialization and never participates in billing expressions.
+const EDITOR_ROW_KEY = Symbol('pricing-editor-row')
+let nextEditorRowKey = 0
+
+function editorRowKey(row: object): string | undefined {
+  return (row as { [EDITOR_ROW_KEY]?: string })[EDITOR_ROW_KEY]
+}
+
+function withEditorRowKey<T extends object>(row: T, previous?: object): T {
+  return {
+    ...row,
+    [EDITOR_ROW_KEY]:
+      editorRowKey(row) ??
+      (previous && editorRowKey(previous)) ??
+      `pricing-row-${nextEditorRowKey++}`,
+  }
+}
+
+function withVisualEditorKeys(
+  config: VisualConfig | null
+): VisualConfig | null {
+  if (!config) return null
+  return {
+    ...config,
+    tiers: config.tiers.map((tier) =>
+      withEditorRowKey({
+        ...tier,
+        conditions: tier.conditions.map((condition) =>
+          withEditorRowKey(condition)
+        ),
+      })
+    ),
+  }
+}
+
+function withRuleEditorKeys(groups: RequestRuleGroup[]): RequestRuleGroup[] {
+  return groups.map((group) =>
+    withEditorRowKey({
+      ...group,
+      conditions: group.conditions.map((condition) =>
+        withEditorRowKey(condition)
+      ),
+    })
+  )
 }
 
 function parseNumberDraft(value: string): number {
@@ -450,12 +497,10 @@ function ConditionRow({ condition, onChange, onRemove }: ConditionRowProps) {
   return (
     <div className='flex items-center gap-2'>
       <Select
-        items={[
-          ...CONDITION_INPUT_OPTIONS.map((option) => ({
-            value: option.value,
-            label: t(option.labelKey),
-          })),
-        ]}
+        items={CONDITION_INPUT_OPTIONS.map((option) => ({
+          value: option.value,
+          label: t(option.labelKey),
+        }))}
         value={condition.var}
         onValueChange={(value) =>
           onChange({ ...condition, var: value as TierConditionInput['var'] })
@@ -699,7 +744,7 @@ function VisualTierCard({
         ) : (
           tier.conditions.map((condition, conditionIndex) => (
             <ConditionRow
-              key={conditionIndex}
+              key={editorRowKey(condition)}
               condition={condition}
               onChange={(next) => handleConditionChange(conditionIndex, next)}
               onRemove={() => handleConditionRemove(conditionIndex)}
@@ -783,6 +828,7 @@ function VisualTierCard({
           variant='ghost'
           size='sm'
           className='h-7 px-2 text-xs'
+          aria-expanded={mediaOpen}
           onClick={() => setMediaOpen((prev) => !prev)}
         >
           <ChevronDown
@@ -894,7 +940,7 @@ function VisualEditor({
       </p>
       {config.tiers.map((tier, index) => (
         <VisualTierCard
-          key={index}
+          key={editorRowKey(tier)}
           tier={tier}
           index={index}
           total={config.tiers.length}
@@ -993,7 +1039,7 @@ function RuleConditionRow({
       case MATCH_LTE:
         return t('Less than or equal')
       case MATCH_RANGE:
-        return t('Overnight range')
+        return t('Time range')
       default:
         return mode
     }
@@ -1014,12 +1060,12 @@ function RuleConditionRow({
         return timeFunc
     }
   }
-  const sourceLabel =
-    condition.source === SOURCE_PARAM
-      ? t('Body param')
-      : condition.source === SOURCE_HEADER
-        ? t('Header')
-        : t('Time')
+  let sourceLabel = t('Time')
+  if (condition.source === SOURCE_PARAM) {
+    sourceLabel = t('Body param')
+  } else if (condition.source === SOURCE_HEADER) {
+    sourceLabel = t('Header')
+  }
 
   const handleSourceChange = (source: string) => {
     if (source === SOURCE_TIME) {
@@ -1039,12 +1085,10 @@ function RuleConditionRow({
   const renderTimeCondition = (timeCond: TimeCondition) => (
     <>
       <Select
-        items={[
-          ...TIME_FUNCS.map((fn) => ({
-            value: fn,
-            label: getTimeFuncLabel(fn),
-          })),
-        ]}
+        items={TIME_FUNCS.map((fn) => ({
+          value: fn,
+          label: getTimeFuncLabel(fn),
+        }))}
         value={timeCond.timeFunc}
         onValueChange={(value) =>
           onChange({ ...timeCond, timeFunc: value as TimeFunc })
@@ -1064,12 +1108,10 @@ function RuleConditionRow({
         </SelectContent>
       </Select>
       <Select
-        items={[
-          ...COMMON_TIMEZONES.map((tz) => ({
-            value: tz.value,
-            label: tz.label,
-          })),
-        ]}
+        items={COMMON_TIMEZONES.map((tz) => ({
+          value: tz.value,
+          label: tz.label,
+        }))}
         value={timeCond.timezone}
         onValueChange={(value) =>
           value !== null && onChange({ ...timeCond, timezone: value })
@@ -1092,12 +1134,10 @@ function RuleConditionRow({
         </SelectContent>
       </Select>
       <Select
-        items={[
-          ...matchOptions.map((option) => ({
-            value: option.value,
-            label: getMatchLabel(option.value),
-          })),
-        ]}
+        items={matchOptions.map((option) => ({
+          value: option.value,
+          label: getMatchLabel(option.value),
+        }))}
         value={timeCond.mode}
         onValueChange={(v) => v !== null && handleModeChange(v)}
       >
@@ -1158,12 +1198,10 @@ function RuleConditionRow({
         className='w-44'
       />
       <Select
-        items={[
-          ...matchOptions.map((option) => ({
-            value: option.value,
-            label: getMatchLabel(option.value),
-          })),
-        ]}
+        items={matchOptions.map((option) => ({
+          value: option.value,
+          label: getMatchLabel(option.value),
+        }))}
         value={phCond.mode}
         onValueChange={(v) => v !== null && handleModeChange(v)}
       >
@@ -1227,6 +1265,13 @@ function RuleConditionRow({
       >
         <Trash2 className='text-destructive h-4 w-4' />
       </Button>
+      {condition.source === SOURCE_TIME &&
+        condition.timeFunc === 'hour' &&
+        condition.mode === MATCH_RANGE && (
+          <p className='text-muted-foreground w-full text-xs'>
+            {t('Start ≤ end: within the day; start > end: across midnight')}
+          </p>
+        )}
     </div>
   )
 }
@@ -1255,7 +1300,10 @@ function RuleGroupCard({
     next: RequestCondition
   ) => {
     const conditions = [...group.conditions]
-    conditions[conditionIndex] = next
+    conditions[conditionIndex] = withEditorRowKey(
+      next,
+      group.conditions[conditionIndex]
+    )
     onChange({ ...group, conditions })
   }
 
@@ -1288,7 +1336,7 @@ function RuleGroupCard({
       <div className='space-y-2'>
         {group.conditions.map((condition, conditionIndex) => (
           <RuleConditionRow
-            key={conditionIndex}
+            key={editorRowKey(condition)}
             condition={condition}
             onChange={(next) => handleConditionChange(conditionIndex, next)}
             onRemove={() =>
@@ -1694,39 +1742,45 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
     currencyLabel === 'USD' ? '$/1M tokens' : `${currencyLabel}/1M tokens`
   const [editorMode, setEditorMode] = useState<EditorMode>('visual')
   const [visualConfig, setVisualConfig] = useState<VisualConfig | null>(() =>
-    tryParseVisualConfig(currentExpr)
+    withVisualEditorKeys(
+      tryParseVisualConfig(currentExpr) ?? createDefaultVisualConfig()
+    )
   )
   const [rawExpr, setRawExpr] = useState(() =>
     combineBillingExpr(currentExpr || '', currentRequestRuleExpr || '')
   )
   const [requestRuleGroups, setRequestRuleGroups] = useState<
     RequestRuleGroup[]
-  >(() => tryParseRequestRuleExpr(currentRequestRuleExpr) || [])
-  const initRef = useRef(false)
+  >(() =>
+    withRuleEditorKeys(tryParseRequestRuleExpr(currentRequestRuleExpr) || [])
+  )
+  const [initializedModel, setInitializedModel] = useState<{
+    modelName: string | undefined
+  } | null>(null)
+  const initializingModel =
+    initializedModel === null || initializedModel.modelName !== modelName
 
   useEffect(() => {
-    if (initRef.current) return
-    initRef.current = true
+    if (!initializingModel) return
+    setInitializedModel({ modelName })
     const parsedConfig = tryParseVisualConfig(currentExpr)
     if (parsedConfig) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setVisualConfig(parsedConfig)
+      setVisualConfig(withVisualEditorKeys(parsedConfig))
       setEditorMode('visual')
     } else if (currentExpr) {
       setVisualConfig(null)
       setEditorMode('raw')
     } else {
-      setVisualConfig(createDefaultVisualConfig())
+      setVisualConfig(withVisualEditorKeys(createDefaultVisualConfig()))
     }
     setRawExpr(
       combineBillingExpr(currentExpr || '', currentRequestRuleExpr || '')
     )
-    setRequestRuleGroups(tryParseRequestRuleExpr(currentRequestRuleExpr) || [])
-  }, [currentExpr, currentRequestRuleExpr])
-
-  useEffect(() => {
-    initRef.current = false
-  }, [modelName])
+    setRequestRuleGroups(
+      withRuleEditorKeys(tryParseRequestRuleExpr(currentRequestRuleExpr) || [])
+    )
+  }, [currentExpr, currentRequestRuleExpr, initializingModel, modelName])
 
   const canUseVisualRules = useMemo(() => {
     if (!currentRequestRuleExpr) return true
@@ -1742,26 +1796,28 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
   }, [editorMode, visualConfig, rawExpr])
 
   useEffect(() => {
+    if (initializingModel) return
     if (effectiveExpr !== currentExpr) {
       onBillingExprChange(effectiveExpr)
     }
-  }, [effectiveExpr, currentExpr, onBillingExprChange])
+  }, [effectiveExpr, currentExpr, initializingModel, onBillingExprChange])
 
   useEffect(() => {
-    if (editorMode !== 'visual') return
+    if (initializingModel || editorMode !== 'visual') return
     const ruleExpr = buildRequestRuleExpr(requestRuleGroups)
     if (ruleExpr !== currentRequestRuleExpr) {
       onRequestRuleExprChange(ruleExpr)
     }
   }, [
     editorMode,
+    initializingModel,
     requestRuleGroups,
     currentRequestRuleExpr,
     onRequestRuleExprChange,
   ])
 
   const handleVisualChange = useCallback((next: VisualConfig) => {
-    setVisualConfig(next)
+    setVisualConfig(withVisualEditorKeys(next))
   }, [])
 
   const handleRawChange = useCallback(
@@ -1781,12 +1837,12 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
           splitBillingExprAndRequestRules(rawExpr)
         const parsed = tryParseVisualConfig(billingExpr)
         if (parsed) {
-          setVisualConfig(parsed)
+          setVisualConfig(withVisualEditorKeys(parsed))
         } else {
-          setVisualConfig(createDefaultVisualConfig())
+          setVisualConfig(withVisualEditorKeys(createDefaultVisualConfig()))
         }
         const parsedGroups = tryParseRequestRuleExpr(ruleStr)
-        setRequestRuleGroups(parsedGroups || [])
+        setRequestRuleGroups(withRuleEditorKeys(parsedGroups || []))
         onRequestRuleExprChange(ruleStr)
       } else {
         const expr = generateExprFromVisualConfig(visualConfig)
@@ -1806,20 +1862,20 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
       setRawExpr(combined)
       const parsed = tryParseVisualConfig(preset.expr)
       if (parsed) {
-        setVisualConfig(parsed)
+        setVisualConfig(withVisualEditorKeys(parsed))
         setEditorMode('visual')
       } else {
         setEditorMode('raw')
         setVisualConfig(null)
       }
-      setRequestRuleGroups(presetGroups)
+      setRequestRuleGroups(withRuleEditorKeys(presetGroups))
       onRequestRuleExprChange(ruleExpr)
     },
     [onRequestRuleExprChange]
   )
 
   const handleRuleGroupsChange = useCallback((next: RequestRuleGroup[]) => {
-    setRequestRuleGroups(next)
+    setRequestRuleGroups(withRuleEditorKeys(next))
   }, [])
 
   return (
@@ -1901,7 +1957,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
               <>
                 {requestRuleGroups.map((group, groupIndex) => (
                   <RuleGroupCard
-                    key={groupIndex}
+                    key={editorRowKey(group)}
                     group={group}
                     index={groupIndex}
                     onChange={(next) => {
