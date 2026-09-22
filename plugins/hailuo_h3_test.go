@@ -116,6 +116,20 @@ func TestLegacyHailuoPluginPreservesMetadataOverridesAndExplicitFalse(t *testing
 	}
 }
 
+func TestHailuoDirectorPreservesDefaultResolution(t *testing.T) {
+	plugin := h3Plugin(t)
+	for _, size := range []string{"", "unknown-size"} {
+		value, err := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{
+			"model": "T2V-01-Director", "upstreamModel": "T2V-01-Director", "baseUrl": "https://provider.example",
+			"requestBody": map[string]any{"prompt": "animate", "size": size},
+		})
+		require.NoError(t, err)
+		encoded, err := common.Marshal(value.(map[string]any)["body"])
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"model":"T2V-01-Director","prompt":"animate","duration":6,"resolution":"768P"}`, string(encoded))
+	}
+}
+
 func TestH3PluginStrictNativeBoundsAndSharedValidation(t *testing.T) {
 	plugin := h3Plugin(t)
 	for _, tc := range []struct {

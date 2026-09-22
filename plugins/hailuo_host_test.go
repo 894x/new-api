@@ -126,4 +126,30 @@ func TestHailuoArtifactContentProxy(t *testing.T) {
 	assert.Equal(t, http.MethodHead, descriptor.Method)
 	assert.Equal(t, map[string]string{"Accept": "video/*", "Authorization": "Bearer test-ak"}, descriptor.Headers)
 	assert.False(t, descriptor.Credentialless)
+
+	// Existing provider data stays authoritative even when an older stored URL
+	// is available; use the private fallback only when neither data shape exists.
+	task.PrivateData.ResultURL = "https://legacy.example/video.mp4"
+	descriptor, err = adaptor.BuildContentRequest(task, "video", channel.TaskArtifactClientRequest{Method: http.MethodGet})
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.minimax.example/v1/files/download?file_id=file%2Fwith%20space", descriptor.URL)
+	task.Data = []byte(`{"task":{"content":{"url":"https://cdn.example/current.mp4"}}}`)
+	descriptor, err = adaptor.BuildContentRequest(task, "video", channel.TaskArtifactClientRequest{Method: http.MethodGet})
+	require.NoError(t, err)
+	assert.Equal(t, "https://cdn.example/current.mp4", descriptor.URL)
+	assert.True(t, descriptor.Credentialless)
+	assert.Empty(t, descriptor.Headers)
+	task.Data = nil
+	descriptor, err = adaptor.BuildContentRequest(task, "video", channel.TaskArtifactClientRequest{Method: http.MethodHead})
+	require.NoError(t, err)
+	assert.Equal(t, "https://legacy.example/video.mp4", descriptor.URL)
+	assert.Equal(t, http.MethodHead, descriptor.Method)
+	assert.True(t, descriptor.Credentialless)
+	assert.Empty(t, descriptor.Headers)
+	for _, status := range []model.TaskStatus{model.TaskStatusInProgress, model.TaskStatusFailure} {
+		task.Status = status
+		artifacts, err := adaptor.ListArtifacts(task)
+		require.NoError(t, err)
+		assert.Empty(t, artifacts)
+	}
 }

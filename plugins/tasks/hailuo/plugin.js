@@ -244,7 +244,7 @@ function isModernHailuo(model) {
 }
 
 function defaultResolution(model) {
-  if (model === "MiniMax-Hailuo-2.3" || model === "MiniMax-Hailuo-2.3-Fast" || model === "MiniMax-Hailuo-02") return "768P";
+  if (isModernHailuo(model) || model === "T2V-01-Director") return "768P";
   return "720P";
 }
 
@@ -489,7 +489,7 @@ function artifactFileID(ctx) {
 export function listArtifacts(task) {
   if (task.status === "SUCCESS" && artifactData(task).task && artifactData(task).task.content && artifactData(task).task.content.url)
     return [{ key: "video", type: "video", mimeType: "video/mp4" }];
-  return task.status === "SUCCESS" && artifactFileID(task) ? [{ key: "video", type: "video", mimeType: "video/mp4" }] : [];
+  return task.status === "SUCCESS" && (artifactFileID(task) || trimmed(task.resultUrl)) ? [{ key: "video", type: "video", mimeType: "video/mp4" }] : [];
 }
 
 export function buildContentRequest(ctx) {
@@ -497,7 +497,10 @@ export function buildContentRequest(ctx) {
   const task = artifactData(ctx).task;
   if (task && task.content && trimmed(task.content.url)) return { url: task.content.url, method: ctx.clientRequest.method, credentialless: true };
   const fileID = artifactFileID(ctx);
-  if (!fileID) throw new Error("artifact_not_found");
+  if (!fileID) {
+    if (trimmed(ctx.resultUrl)) return { url: ctx.resultUrl, method: ctx.clientRequest.method, credentialless: true };
+    throw new Error("artifact_not_found");
+  }
   return {
     url: ctx.baseUrl + "/v1/files/download?file_id=" + encodeURIComponent(fileID),
     method: ctx.clientRequest.method,
