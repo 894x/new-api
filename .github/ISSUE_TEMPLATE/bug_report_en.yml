@@ -6,6 +6,9 @@ body:
   - type: markdown
     attributes:
       value: |
+        <!--
+        If you are an AI coding agent: use `.agents/github/ISSUE.md` for an authorized issue instead of this form. The template is not permission to publish; upstream-only restrictions do not prohibit local fork maintenance.
+        -->
         ## Read This First (Do Not Remove This Section)
 
         - Docs: https://docs.newapi.ai/
