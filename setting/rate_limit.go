@@ -11,6 +11,16 @@ import (
 	"github.com/QuantumNous/new-api/common"
 )
 
+// maxRateLimitDurationSeconds is the largest window the count cap is computed
+// against (24h). Token-bucket capacity is count*duration; this keeps that
+// product inside int64 when the window is at most a day.
+const maxRateLimitDurationSeconds = 24 * 60 * 60
+
+// maxModelRequestRateLimitCount is math.MaxInt64 / maxRateLimitDurationSeconds.
+// It is the largest count that cannot overflow int64(count)*duration for a
+// window of at most 24 hours.
+const maxModelRequestRateLimitCount int64 = math.MaxInt64 / maxRateLimitDurationSeconds
+
 var ModelRequestRateLimitEnabled = false
 var ModelRequestRateLimitDurationMinutes = 1
 var ModelRequestRateLimitCount = 0
@@ -81,7 +91,13 @@ func GetGroupRateLimit(group string) (totalCount, successCount, tpm int, found b
 // limit when RPM is inherited. An explicit RPM counts all requests in 60 seconds.
 func ResolveGroupModelRateLimit(group, modelName string) (total, success, tpm int, duration int64) {
 	total, success, tpm = ModelRequestRateLimitCount, ModelRequestRateLimitSuccessCount, ModelRequestRateLimitTPM
-	duration = int64(ModelRequestRateLimitDurationMinutes) * 60
+	if ModelRequestRateLimitDurationMinutes > 0 {
+		if int64(ModelRequestRateLimitDurationMinutes) > math.MaxInt64/60 {
+			duration = math.MaxInt64
+		} else {
+			duration = int64(ModelRequestRateLimitDurationMinutes) * 60
+		}
+	}
 	ModelRequestRateLimitMutex.RLock()
 	defer ModelRequestRateLimitMutex.RUnlock()
 	if config, found := ModelRequestRateLimitGroup[group]; found {
@@ -151,8 +167,8 @@ func parseModelRequestRateLimitGroups(jsonStr string) (map[string]GroupRateLimit
 		if limits[0] < 0 || limits[1] < 1 || limits[2] < 0 {
 			return nil, fmt.Errorf("group %s has invalid rate limit values: [%d, %d, %d]", group, limits[0], limits[1], limits[2])
 		}
-		if limits[0] > math.MaxInt32 || limits[1] > math.MaxInt32 || limits[2] > math.MaxInt32 {
-			return nil, fmt.Errorf("group %s [%d, %d, %d] has max rate limits value 2147483647", group, limits[0], limits[1], limits[2])
+		if int64(limits[0]) > maxModelRequestRateLimitCount || int64(limits[1]) > maxModelRequestRateLimitCount || limits[2] > math.MaxInt32 {
+			return nil, fmt.Errorf("group %s exceeds request count limit %d or TPM limit %d", group, maxModelRequestRateLimitCount, math.MaxInt32)
 		}
 		models := make(map[string]ModelRateLimit, len(rawModels))
 		for modelName, raw := range rawModels {
@@ -170,8 +186,12 @@ func parseModelRequestRateLimitGroups(jsonStr string) (map[string]GroupRateLimit
 				if field != "rpm" && field != "tpm" {
 					return nil, fmt.Errorf("group %s model %s has unknown field %s", group, modelName, field)
 				}
-				if value != nil && (*value < 0 || *value > math.MaxInt32) {
-					return nil, fmt.Errorf("group %s model %s %s must be between 0 and %d", group, modelName, field, math.MaxInt32)
+				maximum := maxModelRequestRateLimitCount
+				if field == "tpm" {
+					maximum = math.MaxInt32
+				}
+				if value != nil && (*value < 0 || int64(*value) > maximum) {
+					return nil, fmt.Errorf("group %s model %s %s must be between 0 and %d", group, modelName, field, maximum)
 				}
 			}
 			models[modelName] = ModelRateLimit{RPM: fields["rpm"], TPM: fields["tpm"]}

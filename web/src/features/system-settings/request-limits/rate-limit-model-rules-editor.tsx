@@ -30,6 +30,7 @@ import {
 import { Input } from '@/components/ui/input'
 
 import type { RateLimitDialogFormValues } from './rate-limit-dialog'
+import { MAX_REQUEST_RATE_LIMIT } from './rate-limit-validation'
 
 export function RateLimitModelRulesEditor() {
   const { t } = useTranslation()
@@ -90,7 +91,7 @@ export function RateLimitModelRulesEditor() {
                       {...field}
                       type='number'
                       min={0}
-                      max={2147483647}
+                      max={MAX_REQUEST_RATE_LIMIT}
                       step={1}
                       placeholder={t('Inherit group')}
                       value={field.value ?? ''}

@@ -115,10 +115,14 @@ export function applyParameterCapabilityTemplate(
     }
   }
   const rules = [...(config.rules || [])]
-  const index = rules.findLastIndex(
-    (rule) =>
-      rule.selector.type === 'exact' && rule.selector.value === targetModel
-  )
+  let index = -1
+  for (let candidate = rules.length - 1; candidate >= 0; candidate--) {
+    const selector = rules[candidate].selector
+    if (selector.type === 'exact' && selector.value === targetModel) {
+      index = candidate
+      break
+    }
+  }
   const rule = {
     name: `${template.name} (${PARAMETER_CAPABILITY_TEMPLATE_VERSION})`,
     selector: { type: 'exact' as const, value: targetModel },

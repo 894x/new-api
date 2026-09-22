@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { t } from 'i18next'
 import { useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -36,17 +37,22 @@ import {
 import { Input } from '@/components/ui/input'
 
 import { RateLimitModelRulesEditor } from './rate-limit-model-rules-editor'
+import { MAX_REQUEST_RATE_LIMIT } from './rate-limit-validation'
 
 const rateLimitDialogSchema = z.object({
   groupName: z.string().min(1, 'Group name is required'),
   maxRequests: z
     .number()
     .min(0, 'Must be ≥ 0')
-    .max(2147483647, 'Must be ≤ 2,147,483,647'),
+    .max(MAX_REQUEST_RATE_LIMIT, {
+      error: () => t('Invalid JSON format or values out of allowed range'),
+    }),
   maxSuccess: z
     .number()
     .min(1, 'Must be ≥ 1')
-    .max(2147483647, 'Must be ≤ 2,147,483,647'),
+    .max(MAX_REQUEST_RATE_LIMIT, {
+      error: () => t('Invalid JSON format or values out of allowed range'),
+    }),
   maxTPM: z
     .number()
     .min(0, 'Must be ≥ 0')
@@ -61,7 +67,10 @@ const rateLimitDialogSchema = z.object({
           .number()
           .int('Must be an integer')
           .min(0, 'Must be ≥ 0')
-          .max(2147483647, 'Must be ≤ 2,147,483,647')
+          .max(MAX_REQUEST_RATE_LIMIT, {
+            error: () =>
+              t('Invalid JSON format or values out of allowed range'),
+          })
           .nullish(),
         tpm: z
           .number()
@@ -207,7 +216,7 @@ export function RateLimitDialog({
                     <Input
                       type='number'
                       min={0}
-                      max={2147483647}
+                      max={MAX_REQUEST_RATE_LIMIT}
                       step={1}
                       {...field}
                       onChange={(e) =>
@@ -238,7 +247,7 @@ export function RateLimitDialog({
                     <Input
                       type='number'
                       min={1}
-                      max={2147483647}
+                      max={MAX_REQUEST_RATE_LIMIT}
                       step={1}
                       {...field}
                       onChange={(e) =>

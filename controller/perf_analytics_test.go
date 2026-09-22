@@ -8,6 +8,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -64,6 +66,11 @@ type perfAnalyticsOptionsResponse struct {
 
 func setupPerfAnalyticsControllerTestDB(t *testing.T) {
 	t.Helper()
+	previousBucketTime := perf_metrics_setting.GetSetting().BucketTime
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{"perf_metrics_setting.bucket_time": "5min"}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{"perf_metrics_setting.bucket_time": previousBucketTime}))
+	})
 
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
@@ -187,19 +194,19 @@ func TestGetPerfAnalyticsSelfIgnoresRequestedUserAndScopesToAuthenticatedUser(t 
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	assert.True(t, response.Success)
-	assert.Equal(t, int64(0), response.Data.EffectiveStartTs)
-	assert.Equal(t, int64(3599), response.Data.EffectiveEndTs)
+	assert.Equal(t, int64(900), response.Data.EffectiveStartTs)
+	assert.Equal(t, int64(2099), response.Data.EffectiveEndTs)
 	assert.Equal(t, int64(10), response.Data.Summary.RequestCount)
 	assert.InDelta(t, 90, response.Data.Summary.SuccessRate, 0.001)
-	assert.Equal(t, 0.17, response.Data.Summary.Rpm)
-	assert.Equal(t, 250.0, response.Data.Summary.Tpm)
+	assert.Equal(t, 0.5, response.Data.Summary.Rpm)
+	assert.Equal(t, 750.0, response.Data.Summary.Tpm)
 	assert.Equal(t, 25.0, response.Data.Summary.CacheHitRate)
 	assert.Equal(t, perfAnalyticsMetricResponse{P50Ms: 100, P90Ms: 1000, P99Ms: 1000, SampleCount: 9}, response.Data.Summary.Ttft)
 	assert.Equal(t, perfAnalyticsMetricResponse{P50Ms: 20, P90Ms: 80, P99Ms: 80, SampleCount: 8}, response.Data.Summary.Tpot)
 	require.Len(t, response.Data.Series, 1)
 	assert.Equal(t, int64(10), response.Data.Series[0].RequestCount)
-	assert.Equal(t, 0.17, response.Data.Series[0].Rpm)
-	assert.Equal(t, 250.0, response.Data.Series[0].Tpm)
+	assert.Equal(t, 2.0, response.Data.Series[0].Rpm)
+	assert.Equal(t, 3000.0, response.Data.Series[0].Tpm)
 	assert.Equal(t, 25.0, response.Data.Series[0].CacheHitRate)
 }
 
@@ -232,8 +239,8 @@ func TestGetPerfAnalyticsAdminCanAggregateEveryUser(t *testing.T) {
 	assert.Equal(t, int64(14), response.Data.Summary.RequestCount)
 	assert.Equal(t, int64(13), response.Data.Summary.Ttft.SampleCount)
 	assert.Equal(t, int64(12), response.Data.Summary.Tpot.SampleCount)
-	assert.Equal(t, 0.23, response.Data.Summary.Rpm)
-	assert.Equal(t, 350.0, response.Data.Summary.Tpm)
+	assert.Equal(t, 0.7, response.Data.Summary.Rpm)
+	assert.Equal(t, 1050.0, response.Data.Summary.Tpm)
 	assert.Equal(t, 25.0, response.Data.Summary.CacheHitRate)
 }
 

@@ -45,15 +45,21 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
-import { isValidRateLimitJSON } from './rate-limit-validation'
+import {
+  isValidRateLimitJSON,
+  MAX_REQUEST_RATE_LIMIT,
+} from './rate-limit-validation'
 import { RateLimitVisualEditor } from './rate-limit-visual-editor'
 
 const createRateLimitSchema = (t: (key: string) => string) =>
   z.object({
     ModelRequestRateLimitEnabled: z.boolean(),
     ModelRequestRateLimitDurationMinutes: z.number().min(0),
-    ModelRequestRateLimitCount: z.number().min(0).max(100000000),
-    ModelRequestRateLimitSuccessCount: z.number().min(1).max(100000000),
+    ModelRequestRateLimitCount: z.number().min(0).max(MAX_REQUEST_RATE_LIMIT),
+    ModelRequestRateLimitSuccessCount: z
+      .number()
+      .min(1)
+      .max(MAX_REQUEST_RATE_LIMIT),
     ModelRequestRateLimitTPM: z.number().int().min(0).max(2147483647),
     ModelRequestRateLimitGroup: z
       .string()
@@ -171,7 +177,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                       <Input
                         type='number'
                         min={0}
-                        max={100000000}
+                        max={MAX_REQUEST_RATE_LIMIT}
                         step={1}
                         {...field}
                         onChange={(e) =>
@@ -202,7 +208,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                       <Input
                         type='number'
                         min={1}
-                        max={100000000}
+                        max={MAX_REQUEST_RATE_LIMIT}
                         step={1}
                         {...field}
                         onChange={(e) =>

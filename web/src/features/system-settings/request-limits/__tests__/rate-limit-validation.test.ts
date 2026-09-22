@@ -23,6 +23,23 @@ import { describe, expect, test } from 'vitest'
 import { isValidRateLimitJSON } from '../rate-limit-validation'
 
 describe('group rate limit JSON validation', () => {
+  test('accepts 64-bit request limits while retaining the TPM ceiling', () => {
+    expect(
+      isValidRateLimitJSON(
+        '{"vip":{"limits":[2147483648,2147483648,60000],"models":{"large":{"rpm":2147483648,"tpm":0}}}}'
+      )
+    ).toBe(true)
+    expect(isValidRateLimitJSON('{"vip":[106751991167300,1]}')).toBe(true)
+    expect(isValidRateLimitJSON('{"vip":[106751991167301,1]}')).toBe(false)
+    expect(
+      isValidRateLimitJSON(
+        '{"vip":{"limits":[1,1],"models":{"large":{"rpm":106751991167301}}}}'
+      )
+    ).toBe(false)
+    expect(isValidRateLimitJSON('{"vip":[2147483648,1,2147483648]}')).toBe(
+      false
+    )
+  })
   test('accepts model RPM and TPM overrides with independent inheritance and explicit unlimited', () => {
     expect(
       isValidRateLimitJSON(

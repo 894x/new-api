@@ -76,3 +76,37 @@ func TestRechargeWechatPayRejectsForeignProvider(t *testing.T) {
 	assert.Equal(t, 0, getUserQuotaForPaymentGuardTest(t, user.Id))
 	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, order.TradeNo))
 }
+
+func TestRechargeWechatPayCreditsLargeSnapshotOnceAndEnforcesWalletCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		balance int
+		wantErr bool
+	}{
+		{"exact ceiling", common.MaxWalletQuota - 4_294_500_000, false},
+		{"over ceiling", common.MaxWalletQuota - 4_294_500_000 + 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncateTables(t)
+			user := insertUserForPaymentGuardTest(t, 603, tc.balance)
+			order := createWechatPayTestOrder(t, user.Id, "WXLARGEQUOTA", 10, PaymentProviderWechatPay)
+			require.NoError(t, DB.Model(order).Update("credited_quota", 4_294_500_000).Error)
+			_, err := RechargeWechatPay(order.TradeNo, 1000, "wx-large", "127.0.0.1")
+			if tc.wantErr {
+				require.ErrorIs(t, err, ErrTopUpQuotaLimitExceeded)
+				assert.Equal(t, tc.balance, getUserQuotaForPaymentGuardTest(t, user.Id))
+				assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, order.TradeNo))
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, common.MaxWalletQuota, getUserQuotaForPaymentGuardTest(t, user.Id))
+			alreadyDone, err := RechargeWechatPay(order.TradeNo, 1000, "wx-large", "127.0.0.1")
+			require.NoError(t, err)
+			assert.True(t, alreadyDone)
+			var reloaded User
+			require.NoError(t, DB.First(&reloaded, user.Id).Error)
+			assert.Equal(t, common.MaxWalletQuota, reloaded.Quota)
+			assert.EqualValues(t, 1, reloaded.QuotaVersion)
+		})
+	}
+}

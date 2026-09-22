@@ -16,6 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+// Match the backend count cap: floor(MaxInt64 / 86400).
+export const MAX_REQUEST_RATE_LIMIT = 106_751_991_167_300
+
 export type ModelRateLimit = { rpm?: number | null; tpm?: number | null }
 export type GroupRateLimit = {
   limits: [number, number, number]
@@ -40,7 +43,10 @@ export function parseGroupRateLimit(value: unknown): GroupRateLimit | null {
   }
   if (
     !limits.every(
-      (limit) => Number.isInteger(limit) && limit >= 0 && limit <= 2147483647
+      (limit, index) =>
+        Number.isInteger(limit) &&
+        limit >= 0 &&
+        limit <= (index === 2 ? 2147483647 : MAX_REQUEST_RATE_LIMIT)
     )
   ) {
     return null
@@ -65,7 +71,7 @@ export function parseGroupRateLimit(value: unknown): GroupRateLimit | null {
         (!Number.isInteger(limit) ||
           typeof limit !== 'number' ||
           limit < 0 ||
-          limit > 2147483647)
+          limit > (key === 'tpm' ? 2147483647 : MAX_REQUEST_RATE_LIMIT))
       ) {
         return null
       }

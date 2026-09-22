@@ -1,11 +1,53 @@
 package setting
 
 import (
+	"fmt"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGroupRateLimitsPreserveModelRulesWithLargeCounts(t *testing.T) {
+	previous := ModelRequestRateLimitGroup2JSONString()
+	t.Cleanup(func() { require.NoError(t, UpdateModelRequestRateLimitGroupByJSONString(previous)) })
+	config := `{"vip":{"limits":[2147483648,2147483648,60000],"models":{"large":{"rpm":2147483648},"free":{"rpm":0,"tpm":0}}}}`
+	require.NoError(t, UpdateModelRequestRateLimitGroupByJSONString(config))
+	assert.JSONEq(t, config, ModelRequestRateLimitGroup2JSONString())
+	total, success, tpm, duration := ResolveGroupModelRateLimit("vip", "large")
+	assert.Equal(t, 2147483648, total)
+	assert.Zero(t, success)
+	assert.Equal(t, 60000, tpm)
+	assert.EqualValues(t, 60, duration)
+	total, success, tpm, _ = ResolveGroupModelRateLimit("vip", "free")
+	assert.Zero(t, total)
+	assert.Zero(t, success)
+	assert.Zero(t, tpm)
+	assert.NoError(t, CheckModelRequestRateLimitGroup(`{"vip":[106751991167300,1]}`))
+	for _, invalid := range []string{
+		`{"vip":[106751991167301,1]}`,
+		`{"vip":[1,1,2147483648]}`,
+		`{"vip":{"limits":[1,1],"models":{"large":{"rpm":106751991167301}}}}`,
+	} {
+		assert.Error(t, CheckModelRequestRateLimitGroup(invalid))
+	}
+}
+
+func TestGroupRateLimitDurationDoesNotWrap(t *testing.T) {
+	previous := ModelRequestRateLimitDurationMinutes
+	t.Cleanup(func() { ModelRequestRateLimitDurationMinutes = previous })
+	for _, tc := range []struct {
+		minutes int
+		want    int64
+	}{{-1, 0}, {0, 0}, {1, 60}, {math.MaxInt, math.MaxInt64}} {
+		t.Run(fmt.Sprint(tc.minutes), func(t *testing.T) {
+			ModelRequestRateLimitDurationMinutes = tc.minutes
+			_, _, _, duration := ResolveGroupModelRateLimit("", "")
+			assert.Equal(t, tc.want, duration)
+		})
+	}
+}
 
 func TestCheckModelRequestRateLimitGroupAcceptsOptionalTPM(t *testing.T) {
 	tests := []struct {

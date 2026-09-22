@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -109,7 +110,7 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 			allowed, err = tb.Allow(
 				ctx,
 				totalKey,
-				limiter.WithCapacity(int64(totalMaxCount)*duration),
+				limiter.WithCapacity(rateLimitCapacity(totalMaxCount, duration)),
 				limiter.WithRate(int64(totalMaxCount)),
 				limiter.WithRequested(duration),
 			)
@@ -207,4 +208,15 @@ func ModelRequestRateLimit() func(c *gin.Context) {
 			memoryRateLimitHandler(duration, totalMaxCount, successMaxCount)(c)
 		}
 	}
+}
+
+func rateLimitCapacity(count int, durationSeconds int64) int64 {
+	if count <= 0 || durationSeconds <= 0 {
+		return 0
+	}
+	c := int64(count)
+	if c > math.MaxInt64/durationSeconds {
+		return math.MaxInt64
+	}
+	return c * durationSeconds
 }
