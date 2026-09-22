@@ -20,7 +20,7 @@ import (
 )
 
 func TestAllowedToolsChatToKimiGatewayE2E(t *testing.T) {
-	setupRelayRouterTestDB(t)
+	waitForRefunds := setupRelayRouterTestDB(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.ChannelModelOverride{}, &model.Log{}, &model.UserSubscription{}))
 	ratio_setting.InitRatioSettings()
 	oldRatios := ratio_setting.ModelRatio2JSONString()
@@ -51,7 +51,8 @@ func TestAllowedToolsChatToKimiGatewayE2E(t *testing.T) {
 	t.Cleanup(upstream.Close)
 	user := model.User{Username: "allowed-tools-e2e", Status: common.UserStatusEnabled, Group: "default", Quota: 1_000_000}
 	require.NoError(t, model.DB.Create(&user).Error)
-	require.NoError(t, model.DB.Create(&model.Token{UserId: user.Id, Key: "parametercapabilitye2ekey", Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true}).Error)
+	token := model.Token{UserId: user.Id, Key: "parametercapabilitye2ekey", Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true}
+	require.NoError(t, model.DB.Create(&token).Error)
 	config, err := os.ReadFile("../docs/examples/kimi-k3-allowed-tools.json")
 	require.NoError(t, err)
 	configText := string(config)
@@ -85,10 +86,34 @@ func TestAllowedToolsChatToKimiGatewayE2E(t *testing.T) {
 			request["tool_choice"] = map[string]interface{}{"type": "allowed_tools", "allowed_tools": map[string]interface{}{"mode": tc.mode, "tools": []interface{}{map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": allowedName}}}}}
 			input, err := common.Marshal(request)
 			require.NoError(t, err)
+			var beforeUser model.User
+			var beforeToken model.Token
+			if tc.invalid {
+				require.NoError(t, model.DB.First(&beforeUser, user.Id).Error)
+				require.NoError(t, model.DB.First(&beforeToken, token.Id).Error)
+			}
 			response := serveParameterCapabilityE2ERequest(engine, input)
 			if tc.invalid {
 				assert.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
 				assert.Empty(t, bodies, "invalid whitelist must not reach upstream")
+				// A 400 is returned before the asynchronous refund finishes.
+				waitForRefunds(t)
+				var refunds []model.BillingRefundOperation
+				require.NoError(t, model.DB.Where("user_id = ? AND token_id = ?", user.Id, token.Id).Find(&refunds).Error)
+				require.Len(t, refunds, 1)
+				assert.Equal(t, model.BillingRefundStatusApplied, refunds[0].Status)
+				assert.Positive(t, refunds[0].FundingQuota)
+				assert.Equal(t, refunds[0].FundingQuota, refunds[0].FundingRefundedQuota)
+				assert.Equal(t, refunds[0].TokenQuota, refunds[0].TokenRefundedQuota)
+				var afterUser model.User
+				var afterToken model.Token
+				require.NoError(t, model.DB.First(&afterUser, user.Id).Error)
+				require.NoError(t, model.DB.First(&afterToken, token.Id).Error)
+				assert.Equal(t, beforeUser.Quota, afterUser.Quota)
+				assert.Equal(t, beforeUser.UsedQuota, afterUser.UsedQuota)
+				assert.Equal(t, beforeUser.RequestCount, afterUser.RequestCount)
+				assert.Equal(t, beforeToken.RemainQuota, afterToken.RemainQuota)
+				assert.Equal(t, beforeToken.UsedQuota, afterToken.UsedQuota)
 				return
 			}
 			require.Equal(t, http.StatusOK, response.Code, response.Body.String())

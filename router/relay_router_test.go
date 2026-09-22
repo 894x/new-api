@@ -6,13 +6,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestListModelsSupportsOpenAIAndGeminiAuthentication(t *testing.T) {
@@ -89,7 +92,7 @@ func TestListModelsSupportsOpenAIAndGeminiAuthentication(t *testing.T) {
 	}
 }
 
-func setupRelayRouterTestDB(t *testing.T) {
+func setupRelayRouterTestDB(t *testing.T) func(*testing.T) {
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
@@ -114,9 +117,36 @@ func setupRelayRouterTestDB(t *testing.T) {
 		&model.BillingAdmissionReserveOperation{},
 		&model.BillingRefundOperation{},
 	))
+	testDB := model.DB
+	var completedRefundReads sync.Map
+	const refundCallback = "test:relay_refund_final_read"
+	// Status persistence precedes the reconciler's final read. Observe that
+	// read so cleanup cannot close the database while it is still needed.
+	require.NoError(t, testDB.Callback().Query().After("gorm:query").Register(refundCallback, func(tx *gorm.DB) {
+		operation, ok := tx.Statement.Dest.(*model.BillingRefundOperation)
+		if tx.Error == nil && ok && operation.Status == model.BillingRefundStatusApplied {
+			completedRefundReads.Store(operation.OperationID, true)
+		}
+	}))
+	waitForRefunds := func(t *testing.T) {
+		t.Helper()
+		require.EventuallyWithT(t, func(collect *assert.CollectT) {
+			var refunds []model.BillingRefundOperation
+			if !assert.NoError(collect, testDB.Find(&refunds).Error) {
+				return
+			}
+			for _, refund := range refunds {
+				assert.Equal(collect, model.BillingRefundStatusApplied, refund.Status, "refund %s", refund.OperationID)
+				_, observed := completedRefundReads.Load(refund.OperationID)
+				assert.True(collect, observed, "refund %s has not finished its database work", refund.OperationID)
+			}
+		}, 3*time.Second, 5*time.Millisecond)
+	}
 
 	t.Cleanup(func() {
-		if sqlDB, err := model.DB.DB(); err == nil {
+		waitForRefunds(t)
+		require.NoError(t, testDB.Callback().Query().Remove(refundCallback))
+		if sqlDB, err := testDB.DB(); err == nil {
 			_ = sqlDB.Close()
 		}
 		common.IsMasterNode = originalIsMasterNode
@@ -129,4 +159,5 @@ func setupRelayRouterTestDB(t *testing.T) {
 			require.NoError(t, os.Unsetenv("SQL_DSN"))
 		}
 	})
+	return waitForRefunds
 }
