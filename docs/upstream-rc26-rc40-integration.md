@@ -3,7 +3,7 @@
 ## Scope and preservation rules
 
 - Start: fork commit `317081814da2c7c8096758ecdc0f76b330745e28`, based on upstream rc25.
-- Integrate each upstream RC in order, verify it, and commit once before the next RC.
+- Integrate each upstream RC in order and verify it before advancing to the next RC. The owner additionally approved splitting the rc27 migration into shared-foundation commits and one verified migration commit per channel; do not batch all channel migrations into one large commit.
 - Preserve fork functionality; ask the owner before resolving duplicated features.
 - Work on `codex/rc26-to-rc40` in an isolated worktree. Original checkout changes remain untouched; reconcile its pending request-body/copy optimization separately before final handoff, with ownership and regression checks.
 - Do not push, deploy, or migrate production databases as part of local integration.
@@ -29,6 +29,16 @@ Verification: root `go test -p 2 ./...` and `go build -p 2 ./...`; independent r
 
 Deployment prerequisite: inspect and explicitly migrate existing MySQL/PostgreSQL `users.quota`, `used_quota`, `aff_quota`, and `aff_history` to BIGINT before startup. The upstream startup guard intentionally rejects legacy 32-bit columns. Do not bypass the guard as a migration substitute.
 
-### rc27 through rc40 — pending
+### rc27 — shared runtime foundation, channel migration pending
+
+- Add the upstream Sobek runtime, plugin registry, immutable routing generations, metadata/usage validation, bounded hook execution, and fixture/CLI library support with their regression tests.
+- Reserve custom channel type 105 for task plugins; keep existing custom channel IDs 100–104 and all existing task adaptors unchanged.
+- This foundation does not activate the plugin router, register built-in providers, change billing, or delete a channel implementation. Host integration and each channel migration remain separate follow-up commits.
+- Preserve the existing rc27 merge resolutions and untracked migration tests while splitting commits. Record the upstream rc27 parent (`eb48396d5fe97d27772d0cd5e3ca8aa5caa4f3e9`) for the final integration merge; intermediate commits do not imply rc27 is fully integrated.
+- Each channel commit must include its custom-feature port, compatibility fixes, and request/query/ownership/billing regressions. Do not declare a migration complete solely because the old source was removed.
+
+Verification: performed against a detached rc26 checkout containing only this foundation, not the unfinished rc27 working tree. `go test -p 2 ./...`, `go build -p 2 ./...`, and independent relaykit `GOWORK=off go build ./...` passed. Existing frontend build output is reused solely for Go embedding; no frontend changes or browser acceptance are included.
+
+### rc28 through rc40 — pending
 
 For each RC, record merged changes, custom-feature mapping, confirmed duplication decisions, test evidence, and remaining deployment limitations here before committing.
