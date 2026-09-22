@@ -93,6 +93,9 @@ func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, params TokenP
 		},
 		"param": func(path string) interface{} {
 			path = strings.TrimSpace(path)
+			if value, exists := request.Params[path]; exists {
+				return value
+			}
 			if path == "" || len(request.Body) == 0 {
 				return nil
 			}
@@ -102,17 +105,23 @@ func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, params TokenP
 			}
 			return result.Value()
 		},
+		"u": func(name string) interface{} {
+			if request.Usage == nil {
+				return nil
+			}
+			return request.Usage[strings.TrimSpace(name)]
+		},
 		"has": func(source interface{}, substr string) bool {
 			if source == nil || substr == "" {
 				return false
 			}
 			return strings.Contains(fmt.Sprint(source), substr)
 		},
-		"hour":    func(tz string) int { return timeInZone(tz).Hour() },
-		"minute":  func(tz string) int { return timeInZone(tz).Minute() },
-		"weekday": func(tz string) int { return int(timeInZone(tz).Weekday()) },
-		"month":   func(tz string) int { return int(timeInZone(tz).Month()) },
-		"day":     func(tz string) int { return timeInZone(tz).Day() },
+		"hour":    func(tz string) int { return timeInZoneAt(tz, request.At).Hour() },
+		"minute":  func(tz string) int { return timeInZoneAt(tz, request.At).Minute() },
+		"weekday": func(tz string) int { return int(timeInZoneAt(tz, request.At).Weekday()) },
+		"month":   func(tz string) int { return int(timeInZoneAt(tz, request.At).Month()) },
+		"day":     func(tz string) int { return timeInZoneAt(tz, request.At).Day() },
 		"max":     math.Max,
 		"min":     math.Min,
 		"abs":     math.Abs,
@@ -132,15 +141,23 @@ func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, params TokenP
 }
 
 func timeInZone(tz string) time.Time {
+	return timeInZoneAt(tz, nil)
+}
+
+func timeInZoneAt(tz string, frozen *time.Time) time.Time {
+	now := time.Now()
+	if frozen != nil {
+		now = *frozen
+	}
 	tz = strings.TrimSpace(tz)
 	if tz == "" {
-		return time.Now().UTC()
+		return now.UTC()
 	}
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
-		return time.Now().UTC()
+		return now.UTC()
 	}
-	return time.Now().In(loc)
+	return now.In(loc)
 }
 
 func normalizeHeaders(headers map[string]string) map[string]string {
