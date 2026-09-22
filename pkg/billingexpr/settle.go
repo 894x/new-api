@@ -1,6 +1,31 @@
 package billingexpr
 
-import "github.com/QuantumNous/new-api/common"
+import (
+	"fmt"
+	"math"
+
+	"github.com/QuantumNous/new-api/common"
+)
+
+// ComputeTaskUsageQuota overlays measured facts without discarding estimates
+// omitted by the provider. Only a successful evaluation updates the snapshot.
+func ComputeTaskUsageQuota(snap *BillingSnapshot, measured map[string]any) (TieredResult, error) {
+	facts := make(map[string]any, len(snap.UsageFacts)+len(measured))
+	for key, value := range snap.UsageFacts {
+		facts[key] = value
+	}
+	for key, value := range measured {
+		facts[key] = value
+	}
+	result, err := ComputeTieredQuotaWithRequest(snap, TokenParams{}, RequestInput{Usage: facts})
+	if err != nil {
+		return TieredResult{}, err
+	}
+	snap.UsageFacts = facts
+	snap.EstimatedTier = result.MatchedTier
+	snap.RequestRules = result.RequestRules
+	return result, nil
+}
 
 // quotaConversion converts raw expression output to quota based on the
 // expression version. This is the central dispatch point for future versions
@@ -30,6 +55,9 @@ func ComputeTieredQuotaWithRequest(snap *BillingSnapshot, params TokenParams, re
 	cost, trace, err := RunExprByHashWithRequest(snap.ExprString, snap.ExprHash, params, request)
 	if err != nil {
 		return TieredResult{}, err
+	}
+	if snap.TaskUsageBilling && (cost < 0 || math.IsNaN(cost) || math.IsInf(cost, 0)) {
+		return TieredResult{}, fmt.Errorf("task expression result must be finite and non-negative")
 	}
 
 	quotaBeforeGroup := quotaConversion(cost, snap)
