@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayparam"
 )
@@ -11,6 +12,7 @@ import (
 var ErrParameterCapabilityUnsupported = errors.New("request parameters are not supported by any eligible channel")
 
 type ChannelSelectionFilters struct {
+	Constraints       []hostdto.ChannelFilter
 	RequestPath       string
 	RequestBody       []byte
 	RequestBodySize   *int64

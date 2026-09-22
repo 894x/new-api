@@ -71,7 +71,7 @@ func TestLogTaskConsumptionLinksTheConsumeLogToItsTask(t *testing.T) {
 		},
 	}
 
-	LogTaskConsumption(c, info)
+	LogTaskConsumption(c, info, nil)
 
 	var log model.Log
 	require.NoError(t, model.LOG_DB.Order("id DESC").First(&log).Error)

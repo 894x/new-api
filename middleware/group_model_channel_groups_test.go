@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -72,7 +74,11 @@ func TestDistributeChannelPoolIntersectionRechecksAffinityAndPinnedChannels(t *t
 		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, "vip")
 		if forced := c.Query("channel"); forced != "" {
-			common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, forced)
+			id, err := strconv.Atoi(forced)
+			require.NoError(t, err)
+			service.GetChannelConstraints(c).AddPin(dto.ChannelPin{
+				ChannelId: id, Source: dto.PinSourceToken, Rank: dto.PinRankToken, RetryMode: dto.PinRetrySingleAttempt,
+			})
 		}
 		c.Next()
 	}, Distribute(), func(c *gin.Context) {

@@ -17,13 +17,14 @@ func TestGetTaskAdaptorMapsSeedanceSLSChannel(t *testing.T) {
 	adaptor := GetTaskAdaptor(platform)
 
 	require.NotNil(t, adaptor)
-	assert.Equal(t, "seedance-sls", adaptor.GetChannelName())
+	assert.Equal(t, "Seedance SLS", adaptor.GetChannelName())
 }
 
 func TestSeedanceSLSChannelCapabilities(t *testing.T) {
 	adaptor := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeSeedanceSLS)))
-	_, supportsDoubaoV3 := adaptor.(channel.NativeVideoConverter)
-	assert.True(t, supportsDoubaoV3)
+	native, supportsDoubaoV3 := adaptor.(channel.NativeTaskProtocol)
+	require.True(t, supportsDoubaoV3)
+	assert.True(t, native.SupportsNativeTaskFormat(constant.TaskResponseFormatDoubaoVideo))
 
 	_, hasSynchronousAPI := common.ChannelType2APIType(constant.ChannelTypeSeedanceSLS)
 	assert.False(t, hasSynchronousAPI)

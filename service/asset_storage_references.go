@@ -185,11 +185,11 @@ func walkVideoAssetReferences(value any, mediaType string, resolve func(string, 
 
 func videoReferenceMediaType(field string) string {
 	switch field {
-	case "image", "images", "image_url", "image_urls", "img_url", "image_tail", "first_frame_image", "last_frame_image", "first_frame_url", "last_frame_url", "start_image_url", "end_image_url", "input_reference", "reference_image", "reference_images":
+	case "image", "images", "image_url", "image_urls", "img_url", "image_tail", "first_frame", "last_frame", "first_frame_image", "last_frame_image", "first_frame_url", "last_frame_url", "start_image_url", "end_image_url", "input_reference", "reference_image", "reference_images":
 		return "Image"
 	case "video", "videos", "video_url", "video_urls", "reference_video", "reference_videos":
 		return "Video"
-	case "audio", "audio_url", "audio_urls", "reference_audio":
+	case "audio", "audio_url", "audio_urls", "reference_audio", "driving_audio":
 		return "Audio"
 	default:
 		return ""

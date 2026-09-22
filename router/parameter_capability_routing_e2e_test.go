@@ -320,6 +320,7 @@ func TestVideoResolutionParameterCapabilitiesIgnoreRemovedLegacyConfigE2E(t *tes
 	setupRelayRouterTestDB(t)
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.Channel{},
+		&model.ChannelAssetConfig{},
 		&model.ChannelModelOverride{},
 		&model.Log{},
 		&model.Task{},
@@ -421,7 +422,10 @@ func TestVideoResolutionParameterCapabilitiesIgnoreRemovedLegacyConfigE2E(t *tes
 	assert.Zero(t, highPriorityRequests.Load())
 	assert.Equal(t, int32(3), compatibleRequests.Load())
 	for range requests {
-		assert.NotEmpty(t, <-compatibleBodies)
+		var payload map[string]any
+		require.NoError(t, common.UnmarshalJsonStr(<-compatibleBodies, &payload))
+		assert.Equal(t, "1080p", payload["resolution"])
+		assert.Equal(t, "doubao-seedance-2-0-260128", payload["model"])
 	}
 }
 

@@ -24,6 +24,12 @@ import (
 )
 
 func TestMiniMaxH3OfficialV2LifecycleEndToEnd(t *testing.T) {
+	t.Run("plugin task", func(t *testing.T) { testMiniMaxH3OfficialV2Lifecycle(t, false) })
+	t.Run("historical numeric platform", func(t *testing.T) { testMiniMaxH3OfficialV2Lifecycle(t, true) })
+}
+
+func testMiniMaxH3OfficialV2Lifecycle(t *testing.T, historical bool) {
+	t.Helper()
 	setupRelayRouterTestDB(t)
 	require.NoError(t, projecti18n.Init())
 	require.NoError(t, model.DB.AutoMigrate(
@@ -128,6 +134,7 @@ func TestMiniMaxH3OfficialV2LifecycleEndToEnd(t *testing.T) {
 
 	engine := gin.New()
 	SetVideoRouter(engine)
+	SetTaskPluginProtocolRouter(engine)
 	gateway := httptest.NewServer(engine)
 	t.Cleanup(gateway.Close)
 
@@ -194,6 +201,15 @@ func TestMiniMaxH3OfficialV2LifecycleEndToEnd(t *testing.T) {
 		}
 	}`, string(propertiesJSON))
 	assert.NotContains(t, string(persistedTask.Data), "h3-upstream-task")
+	if historical {
+		// Pre-plugin tasks have no execution snapshot and use the channel's
+		// numeric platform, but must still complete with their frozen prices.
+		persistedTask.Platform = "35"
+		persistedTask.PrivateData.Execution = nil
+		persistedTask.PrivateData.BillingContext.OtherRatios["resolution"] = persistedTask.PrivateData.BillingContext.OtherRatios["resolution_multiplier"]
+		delete(persistedTask.PrivateData.BillingContext.OtherRatios, "resolution_multiplier")
+		require.NoError(t, model.DB.Save(&persistedTask).Error)
+	}
 
 	previousTaskAdaptorFactory := service.GetTaskAdaptorFunc
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {

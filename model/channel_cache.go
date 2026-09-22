@@ -252,6 +252,15 @@ func listCachedChannelCandidates(group, model string, filters ChannelSelectionFi
 func filterCachedChannelSelectionCandidates(routings []cachedChannelRouting, filters ChannelSelectionFilters, requestModel string) ([]cachedChannelRouting, int, error, error) {
 	routings = filterChannelsByRequestPathAndModel(routings, filters.RequestPath, requestModel)
 	routings = filterChannelRoutingsByAllowedIds(routings, filters.AllowedChannelIds)
+	if len(filters.Constraints) > 0 {
+		eligible := make([]cachedChannelRouting, 0, len(routings))
+		for _, routing := range routings {
+			if ok, _ := ChannelSatisfiesFilters(channelsIDM[routing.ChannelId], requestModel, filters.Constraints); ok {
+				eligible = append(eligible, routing)
+			}
+		}
+		routings = eligible
+	}
 	parameterCandidateCount := len(routings)
 	filtered, firstViolation, err := filterChannelRoutingsBySelectionParameters(routings, channel2parameterCapabilityConfig, channelsIDM, requestModel, filters.RequestBody, filters.RequestBodySize)
 	return filtered, parameterCandidateCount, firstViolation, err

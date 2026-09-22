@@ -1350,6 +1350,14 @@ func (info *RelayInfo) setAttemptNowForTest(now func() time.Time) {
 	info.attemptMu.Unlock()
 }
 
+type OriginTaskRef struct {
+	TaskID         string
+	UpstreamTaskID string
+	Action         string
+	Status         string
+	Data           []byte
+}
+
 type TaskRelayInfo struct {
 	Action       string
 	OriginTaskID string
@@ -1358,6 +1366,10 @@ type TaskRelayInfo struct {
 	PublicTaskID string
 
 	ConsumeQuota bool
+
+	// OriginTasks are plugin-declared public-task dependencies resolved by the
+	// host. Driver hooks receive these as ctx.originTasks; presenters do not.
+	OriginTasks []OriginTaskRef
 
 	// LockedChannel holds the full channel object when the request is bound to
 	// a specific channel (e.g., remix on origin task's channel). Stored as any
@@ -1458,6 +1470,8 @@ type TaskInfo struct {
 	CompletionTokens int                  `json:"completion_tokens,omitempty"` // 用于按倍率计费
 	TotalTokens      int                  `json:"total_tokens,omitempty"`      // 用于按倍率计费
 	Usage            *hosttypes.TaskUsage `json:"usage,omitempty"`
+	UsageFacts       map[string]any       `json:"usage_facts,omitempty"`
+	QuotaClamp       *common.QuotaClamp   `json:"-"`
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

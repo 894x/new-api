@@ -118,6 +118,18 @@ func TestTaskModel2DtoReplacesUpstreamRequestIDs(t *testing.T) {
 	assert.NotContains(t, string(result.Data), "upstream-data-id")
 }
 
+func TestTaskModel2DtoPreservesMeasuredUsageForCustomers(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("role", common.RoleCommonUser)
+	usage := &types.TaskUsage{Kind: types.TaskUsageKindVideoDuration, Unit: types.TaskUsageUnitSecond, Input: 2, Output: 4, Total: 6, InputImages: common.GetPointer(0)}
+	result := TaskModel2Dto(c, &model.Task{TaskID: "task_public", Usage: usage})
+	encoded, err := common.Marshal(result)
+	require.NoError(t, err)
+	var body map[string]any
+	require.NoError(t, common.Unmarshal(encoded, &body))
+	assert.Equal(t, map[string]any{"kind": "video_duration", "unit": "second", "input": 2.0, "output": 4.0, "total": 6.0, "input_images": 0.0}, body["usage"])
+}
+
 func TestRelayTaskFetchReplacesUpstreamRequestIDInResponse(t *testing.T) {
 	const testRelayMode = 987654
 	originalBuilder, existed := fetchRespBuilders[testRelayMode]
@@ -600,4 +612,13 @@ func TestRelayTaskSubmitRetryRejectsMonthlyOriginalBeforeUpstream(t *testing.T) 
 	var token model.Token
 	require.NoError(t, db.First(&token, tokenID).Error)
 	assert.Equal(t, 50, token.RemainQuota)
+}
+
+func TestTaskModel2DtoNormalizesLegacyAction(t *testing.T) {
+	task := &model.Task{Action: "firstTailGenerate"}
+
+	dtoTask := TaskModel2Dto(nil, task)
+
+	assert.Equal(t, constant.TaskActionFirstTailToVideo, dtoTask.Action)
+	assert.Equal(t, "firstTailGenerate", task.Action)
 }

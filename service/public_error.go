@@ -173,6 +173,25 @@ func TaskErrorForClientWithSeparateRequestID(c *gin.Context, taskErr *dto.TaskEr
 	return &result
 }
 
+// TaskPluginErrorForClient applies gateway policy before an error crosses the
+// plugin boundary. The caller supplies a host-classified fallback: raw 5xx
+// details remain private even for administrators, while configured customer
+// replacements and role-aware 4xx messages retain their existing behavior.
+func TaskPluginErrorForClient(c *gin.Context, fallback dto.TaskPluginError, detail string) dto.TaskPluginError {
+	if detail == "" {
+		detail = fallback.Message
+	}
+	clientError := TaskErrorForClientWithSeparateRequestID(c, &dto.TaskError{
+		Code: fallback.Code, Message: detail, StatusCode: fallback.HTTPStatus,
+	})
+	_, replaced := errorResponseReplacementForClient(c, fallback.HTTPStatus, detail)
+	if ShouldHideErrorDetails(c) || replaced || fallback.HTTPStatus < 500 {
+		fallback.Code = clientError.Code
+		fallback.Message = clientError.Message
+	}
+	return fallback
+}
+
 func TaskFailReasonForClient(c *gin.Context, failReason string) string {
 	if failReason == "" {
 		return failReason

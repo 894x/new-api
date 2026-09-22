@@ -12,6 +12,7 @@ import (
 func TestAliTaskAdaptorSupportsNativeDashScopeVideoResponses(t *testing.T) {
 	adaptor := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeAli)))
 	require.NotNil(t, adaptor)
-	_, ok := adaptor.(channel.AliNativeVideoConverter)
+	native, ok := adaptor.(channel.NativeTaskProtocol)
 	require.True(t, ok)
+	require.True(t, native.SupportsNativeTaskFormat(constant.TaskResponseFormatAliVideo))
 }

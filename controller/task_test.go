@@ -34,15 +34,16 @@ func TestTasksToDtoRestrictsVideoRawDataToAdmins(t *testing.T) {
 
 	adminContext, _ := gin.CreateTestContext(httptest.NewRecorder())
 	adminContext.Set("role", common.RoleAdminUser)
-	adminTasks := tasksToDto(adminContext, tasks, false)
+	adminTasks := tasksToDto(tasks, false, common.RoleAdminUser, adminContext)
 	require.Len(t, adminTasks, 2)
 	assert.JSONEq(t, string(videoData), string(adminTasks[0].Data))
 	assert.JSONEq(t, string(audioData), string(adminTasks[1].Data))
 
 	userContext, _ := gin.CreateTestContext(httptest.NewRecorder())
 	userContext.Set("role", common.RoleCommonUser)
-	userTasks := tasksToDto(userContext, tasks, false)
+	userTasks := tasksToDto(tasks, false, common.RoleCommonUser, userContext)
 	require.Len(t, userTasks, 2)
 	assert.Empty(t, userTasks[0].Data)
-	assert.JSONEq(t, string(audioData), string(userTasks[1].Data))
+	// Audio playback now uses authenticated artifacts, not provider raw JSON.
+	assert.Empty(t, userTasks[1].Data)
 }

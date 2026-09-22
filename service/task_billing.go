@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -16,23 +17,28 @@ import (
 
 // LogTaskConsumption 记录任务消费日志和统计信息（仅记录，不涉及实际扣费）。
 // 实际扣费已由 BillingSession（PreConsumeBilling + SettleBilling）完成。
-func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, decisions ...GroupModelDiscountDecision) {
+func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model.Task, decisions ...GroupModelDiscountDecision) {
 	tokenName := c.GetString("token_name")
 	logContent := fmt.Sprintf("操作 %s", info.Action)
 	// 支持任务仅按次计费
 	if common.StringsContains(constant.TaskPricePatches, info.OriginModelName) {
 		logContent = fmt.Sprintf("%s，按次计费", logContent)
 	} else {
+		var contents []string
 		if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
-			var contents []string
 			for key, ra := range otherRatios {
 				if 1.0 != ra {
 					contents = append(contents, fmt.Sprintf("%s: %.2f", key, ra))
 				}
 			}
-			if len(contents) > 0 {
-				logContent = fmt.Sprintf("%s, 计算参数：%s", logContent, strings.Join(contents, ", "))
+		}
+		if snap := info.TieredBillingSnapshot; snap != nil {
+			for key, value := range snap.UsageFacts {
+				contents = append(contents, fmt.Sprintf("%s: %v", key, value))
 			}
+		}
+		if len(contents) > 0 {
+			logContent = fmt.Sprintf("%s, 计算参数：%s", logContent, strings.Join(contents, ", "))
 		}
 	}
 	other := make(map[string]interface{})
@@ -56,6 +62,18 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, decisions .
 	if len(decisions) > 0 {
 		InjectGroupModelDiscountInfo(other, decisions[0])
 	}
+	if snap := info.TieredBillingSnapshot; snap != nil {
+		other["billing_mode"] = "tiered_expr"
+		other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
+		other["matched_tier"] = snap.EstimatedTier
+		if len(snap.RequestRules) > 0 {
+			other["request_rules"] = snap.RequestRules
+		}
+		if len(snap.UsageFacts) > 0 {
+			other["usage_facts"] = snap.UsageFacts
+		}
+	}
+	appendTaskLogInfo(task, other)
 	attachQuotaSaturation(c, info, other)
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 		ChannelId: info.ChannelId,
@@ -141,13 +159,51 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 				other[k] = v
 			}
 		}
+		if snap := bc.TieredSnapshot; snap != nil {
+			other["billing_mode"] = "tiered_expr"
+			other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
+			other["matched_tier"] = snap.EstimatedTier
+			if len(snap.RequestRules) > 0 {
+				other["request_rules"] = snap.RequestRules
+			}
+			if len(snap.UsageFacts) > 0 {
+				other["usage_facts"] = snap.UsageFacts
+			}
+		}
 	}
 	props := task.Properties
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = props.UpstreamModelName
 	}
+	appendTaskLogInfo(task, other)
 	return other
+}
+
+func appendTaskLogInfo(task *model.Task, other map[string]interface{}) {
+	if task == nil || other == nil {
+		return
+	}
+	if task.TaskID != "" {
+		other["task_id"] = task.TaskID
+	}
+	if task.PrivateData.Execution != nil {
+		AppendTaskPluginAuditInfo(other, task.PrivateData.Execution.TaskPlugin)
+	}
+	if task.PrivateData.UpstreamTaskID == "" && task.PrivateData.NodeName == "" {
+		return
+	}
+	rootInfo, ok := other["root_info"].(map[string]interface{})
+	if !ok || rootInfo == nil {
+		rootInfo = map[string]interface{}{}
+		other["root_info"] = rootInfo
+	}
+	if task.PrivateData.UpstreamTaskID != "" {
+		rootInfo["upstream_task_id"] = task.PrivateData.UpstreamTaskID
+	}
+	if task.PrivateData.NodeName != "" {
+		rootInfo["node_name"] = task.PrivateData.NodeName
+	}
 }
 
 func taskBillingContextPriceData(bc *model.TaskBillingContext) *types.PriceData {
@@ -419,7 +475,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		return
 	}
 	recoverTaskInitialGroupModelSettlement(task)
-	if actualQuota <= 0 {
+	if actualQuota < 0 {
 		return
 	}
 	if billingContext := task.PrivateData.BillingContext; billingContext != nil &&
@@ -773,9 +829,9 @@ func taskTokenQuotaFromFrozenRatios(
 // RecalculateTaskQuotaByTokens 根据实际 token 消耗重新计费（异步差额结算）。
 // 当任务成功且返回了 totalTokens 时，根据模型倍率和分组倍率重新计算实际扣费额度，
 // 与预扣费的差额进行补扣或退还。支持钱包和订阅计费来源。
-func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTokens int) {
+func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTokens int, inputClamps ...*common.QuotaClamp) bool {
 	if totalTokens <= 0 {
-		return
+		return false
 	}
 
 	// Async completion must use the immutable submit-time pricing snapshot.
@@ -783,14 +839,14 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	// in-flight task after an administrator changes configuration.
 	billingContext := task.PrivateData.BillingContext
 	if billingContext == nil || billingContext.ModelRatio <= 0 || billingContext.GroupRatio < 0 {
-		return
+		return false
 	}
 	resumableAdjustment := billingContext.ChargeState == model.TaskChargeStatePendingReconcile &&
 		billingContext.DiscountSettlementID != "" &&
 		billingContext.DiscountAdjustmentID == billingContext.DiscountSettlementID+":complete"
 	if billingContext.ChargeState != "" && billingContext.ChargeState != model.TaskChargeStateCharged && !resumableAdjustment {
 		logger.LogWarn(ctx, fmt.Sprintf("任务 %s 计费状态为 %s，跳过 token 重算", task.TaskID, billingContext.ChargeState))
-		return
+		return false
 	}
 	modelRatio := billingContext.ModelRatio
 	groupRatio := billingContext.GroupRatio
@@ -810,11 +866,23 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		groupRatio,
 		otherMultiplier,
 	)
+	for _, clamp := range inputClamps {
+		if clamp != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("任务 %s 结算用量发生饱和: %v", task.TaskID, clamp))
+		}
+		if originalClamp == nil {
+			originalClamp = clamp
+		}
+		if netClamp == nil {
+			netClamp = clamp
+		}
+	}
 
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, groupRatio, otherMultiplier)
 	if billingContext.DiscountSettlementID != "" {
 		adjustTaskMonthlyModelCharge(ctx, task, originalQuota, actualQuota, reason, originalClamp, netClamp)
-		return
+		return true
 	}
 	RecalculateTaskQuota(ctx, task, actualQuota, reason, netClamp)
+	return true
 }

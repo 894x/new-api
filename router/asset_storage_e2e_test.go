@@ -30,6 +30,8 @@ import (
 	projecti18n "github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+	builtinplugins "github.com/QuantumNous/new-api/plugins"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -278,9 +280,20 @@ func setupAssetStorageE2E(t *testing.T) *assetE2EFixture {
 	engine.Use(gin.Recovery(), middleware.BodyStorageCleanup())
 	SetApiRouter(engine)
 	SetVideoRouter(engine)
+	SetTaskPluginProtocolRouter(engine)
+	previousRegistry := pluginruntime.DefaultRegistry
+	pluginruntime.DefaultRegistry = pluginruntime.NewRegistry()
+	t.Cleanup(func() { pluginruntime.DefaultRegistry = previousRegistry })
+	for _, key := range []string{"doubao", "sora"} {
+		source, err := builtinplugins.Source(key)
+		require.NoError(t, err)
+		_, err = pluginruntime.DefaultRegistry.RegisterFactory(source, pluginruntime.Options{Key: key})
+		require.NoError(t, err)
+	}
+	pluginDispatcher := SetPluginRouter(engine)
 	// Serve the already built dashboard for the optional browser acceptance run.
 	static := http.FileServer(http.Dir(filepath.Join("..", "web", "dist")))
-	engine.NoRoute(func(c *gin.Context) {
+	engine.NoRoute(pluginDispatcher, func(c *gin.Context) {
 		if filepath.Ext(c.Request.URL.Path) != "" {
 			static.ServeHTTP(c.Writer, c.Request)
 			return
@@ -320,6 +333,58 @@ func (f *assetE2EFixture) submit(t *testing.T, source, token string, expected in
 	status, headers, body := f.request(t, "POST", "/api/v3/contents/generations/tasks", token, map[string]any{"model": "doubao-seedance-2-0-260128", "content": []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": source}}, map[string]any{"type": "text", "text": "Animate retained original"}}, "duration": 4, "resolution": "480p", "ratio": "16:9"})
 	require.Equal(t, expected, status, string(body))
 	return headers.Get("X-New-Api-Asset-Ids"), body
+}
+
+func TestDoubaoPluginManagedAssetRoutesEndToEnd(t *testing.T) {
+	for _, path := range []string{"/doubao/api/v3/contents/generations/tasks", "/v1/videos"} {
+		t.Run(path, func(t *testing.T) {
+			f := setupAssetStorageE2E(t)
+			payload := map[string]any{
+				"model": "doubao-seedance-2-0-260128", "duration": 4, "resolution": "480p",
+				"content": []any{
+					map[string]any{"type": "image_url", "image_url": map[string]any{"url": f.source.URL}},
+					map[string]any{"type": "text", "text": "Animate retained original"},
+				},
+			}
+			status, headers, body := f.request(t, "POST", path, "assete2euserkey", payload)
+			require.Equal(t, http.StatusOK, status, string(body))
+			require.Contains(t, headers.Get("Content-Type"), "application/json")
+			assetID := headers.Get("X-New-Api-Asset-Ids")
+			require.NotEmpty(t, assetID)
+			var response struct {
+				ID string `json:"id"`
+			}
+			require.NoError(t, common.Unmarshal(body, &response))
+			var task model.Task
+			require.NoError(t, model.DB.Where("task_id = ?", response.ID).First(&task).Error)
+			assert.Equal(t, constant.TaskPlatform("doubao"), task.Platform)
+			require.NotNil(t, task.PrivateData.AssetReferences)
+			require.Len(t, task.PrivateData.AssetReferences.Items, 1)
+			assert.Equal(t, assetID, task.PrivateData.AssetReferences.Items[0].AssetID)
+			asset, err := model.GetUserAsset(f.user.Id, assetID)
+			require.NoError(t, err)
+			object, err := model.GetAssetStoredObject(f.user.Id, asset.StoredObjectId)
+			require.NoError(t, err)
+			f.state.mu.Lock()
+			requests := append([]assetE2ERequest(nil), f.state.requests...)
+			f.state.sourceOffline = true
+			f.state.mu.Unlock()
+			require.Len(t, requests, 1)
+			assert.Equal(t, object.SHA256, requests[0].digest)
+			assert.Equal(t, "/api/v3/contents/generations/tasks", requests[0].path)
+
+			payload["content"].([]any)[0].(map[string]any)["image_url"].(map[string]any)["url"] = "asset://" + assetID
+			status, headers, body = f.request(t, "POST", path, "assete2euserkey", payload)
+			require.Equal(t, http.StatusOK, status, string(body))
+			assert.Equal(t, assetID, headers.Get("X-New-Api-Asset-Ids"))
+			status, _, body = f.request(t, "POST", path, "assete2eotherkey", payload)
+			assert.Equal(t, http.StatusForbidden, status, string(body))
+			f.state.mu.Lock()
+			assert.Len(t, f.state.requests, 2)
+			assert.Equal(t, 1, f.state.puts)
+			f.state.mu.Unlock()
+		})
+	}
 }
 
 func TestAssetStorageUnifiedCustodyEndToEnd(t *testing.T) {
@@ -607,6 +672,7 @@ func TestAssetStorageVideoMultipartEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 200, response.StatusCode, string(body))
 	assetID := response.Header.Get("X-New-Api-Asset-Ids")
+	assert.Contains(t, response.Header.Get("Content-Type"), "application/json")
 	require.NotEmpty(t, assetID)
 	asset, err := model.GetUserAsset(f.user.Id, assetID)
 	require.NoError(t, err)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayparam"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -95,8 +96,8 @@ func GetAllEnableAbilities() []Ability {
 	return abilities
 }
 
-func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
-	return GetChannelWithSelectionFilters(group, model, retry, ChannelSelectionFilters{RequestPath: requestPath})
+func GetChannel(group string, model string, retry int, filters []hostdto.ChannelFilter) (*Channel, error) {
+	return GetChannelWithSelectionFilters(group, model, retry, ChannelSelectionFilters{Constraints: filters})
 }
 
 // GetChannelWithFilter selects a DB-backed channel from the supplied allowed
@@ -207,7 +208,7 @@ func listDBChannelCandidates(group, model string, filters ChannelSelectionFilter
 // applies request path and parameter constraints before
 // priority and weight selection.
 func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelectionFilters, model string) ([]Ability, int, int, error, error) {
-	if (filters.RequestPath == "" && len(filters.RequestBody) == 0 && filters.RequestBodySize == nil) || len(abilities) == 0 {
+	if (len(filters.Constraints) == 0 && filters.RequestPath == "" && len(filters.RequestBody) == 0 && filters.RequestBodySize == nil) || len(abilities) == 0 {
 		return abilities, len(abilities), len(abilities), nil, nil
 	}
 
@@ -247,6 +248,11 @@ func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelec
 		advancedConfig, isAdvancedCustom := advancedConfigs[ability.ChannelId]
 		if filters.RequestPath != "" && isAdvancedCustom && (advancedConfig == nil || !advancedConfig.SupportsPathForModel(filters.RequestPath, model)) {
 			continue
+		}
+		if len(filters.Constraints) > 0 {
+			if ok, _ := ChannelSatisfiesFilters(channelsByID[ability.ChannelId], model, filters.Constraints); !ok {
+				continue
+			}
 		}
 		pathEligibleCount++
 		parameterCandidateCount++

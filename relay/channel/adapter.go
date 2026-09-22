@@ -9,6 +9,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -73,7 +74,7 @@ type TaskAdaptor interface {
 	EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64
 
 	// AdjustBillingOnSubmit returns adjusted OtherRatios from the upstream
-	// submit response. Called after a successful DoResponse.
+	// submit response. Called after a successful ParseResponse.
 	// If the upstream returned actual parameters that differ from the estimate
 	// (e.g. actual seconds), return updated ratios so the caller can recalculate
 	// the quota and settle the delta with the pre-charge.
@@ -94,7 +95,7 @@ type TaskAdaptor interface {
 	BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error)
 
 	DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error)
-	DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, err *taskdto.TaskError)
+	ParseResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*TaskSubmitResponse, *taskdto.TaskError)
 
 	GetModelList() []string
 	GetChannelName() string
@@ -112,6 +113,15 @@ type MappedTaskRequestValidator interface {
 	ValidateMappedRequest(c *gin.Context, info *relaycommon.RelayInfo) *taskdto.TaskError
 }
 
+// TaskSubmitResponse is the transport-independent result of parsing an
+// upstream task submission. Parsing must not write to the client response.
+type TaskSubmitResponse struct {
+	UpstreamTaskID string
+	TaskData       []byte
+	ClientResponse any
+	Immediate      *relaycommon.TaskInfo
+}
+
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
 }
@@ -123,11 +133,25 @@ type NativeVideoConverter interface {
 	ConvertToNativeVideo(originTask *model.Task) ([]byte, error)
 }
 
+// NativeTaskProtocol lets compatibility URLs use the same JS driver and native
+// presenter as declarative routes. Support is conditional on the loaded plugin,
+// not implied by every JS adaptor implementing the interface.
+type NativeTaskProtocol interface {
+	SupportsNativeTaskFormat(format string) bool
+	RenderNativeTask(c *gin.Context, format string, task *model.Task) ([]byte, error)
+}
+
 // MiniMaxVideoV2Converter renders a stored task using MiniMax's official
 // /v2 video generation response contract.
 type MiniMaxVideoV2Converter interface {
 	IsMiniMaxVideoV2Task(originTask *model.Task) bool
 	ConvertToMiniMaxVideoV2(originTask *model.Task) ([]byte, error)
+}
+
+// TaskSubmitErrorParser normalizes provider error bodies before the host applies
+// viewer privacy policy. The upstream HTTP status remains host-authoritative.
+type TaskSubmitErrorParser interface {
+	ParseSubmitError(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) *taskdto.TaskError
 }
 
 // AliNativeVideoConverter renders a stored task using the DashScope async
@@ -143,3 +167,42 @@ type FinalOutboundRequestPreparer interface {
 
 // CapacityAdmissionDeferrer admits a custom transport at its physical dispatch.
 type CapacityAdmissionDeferrer interface{ DeferChannelModelCapacityAdmission() bool }
+type TaskArtifact = hosttypes.TaskArtifact
+
+type TaskArtifactClientRequest struct {
+	Method  string            `json:"method"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+type TaskArtifactProvider interface {
+	ListArtifacts(task *model.Task) ([]TaskArtifact, error)
+}
+
+type TaskContentRequest struct {
+	URL            string
+	Method         string
+	Headers        map[string]string
+	Body           []byte
+	Credentialless bool
+}
+
+type TaskContentRequestProvider interface {
+	BuildContentRequest(task *model.Task, artifactKey string, clientRequest TaskArtifactClientRequest) (*TaskContentRequest, error)
+}
+
+type TaskUsageFactsProvider interface {
+	ExtractUsageFacts(c *gin.Context, info *relaycommon.RelayInfo) map[string]any
+}
+
+// TaskValidatedBillingProvider lets an adaptor reject invalid usage facts at
+// the existing estimate point, after model mapping and before quota
+// multiplication. Non-plugin task adaptors keep using EstimateBilling.
+type TaskValidatedBillingProvider interface {
+	EstimateBillingValidated(c *gin.Context, info *relaycommon.RelayInfo) (map[string]float64, error)
+}
+
+// TaskValidatedUsageFactsProvider is the tiered-billing counterpart to
+// TaskValidatedBillingProvider.
+type TaskValidatedUsageFactsProvider interface {
+	ExtractUsageFactsValidated(c *gin.Context, info *relaycommon.RelayInfo) (map[string]any, error)
+}

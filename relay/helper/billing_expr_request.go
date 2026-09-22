@@ -64,6 +64,12 @@ func readIncomingBillingExprBody(c *gin.Context) ([]byte, error) {
 func cloneRequestInput(src billingexpr.RequestInput) billingexpr.RequestInput {
 	input := billingexpr.RequestInput{
 		Headers: cloneStringMap(src.Headers),
+		Params:  src.Params,
+		Usage:   src.Usage,
+	}
+	if src.At != nil {
+		at := *src.At
+		input.At = &at
 	}
 	if len(src.Body) > 0 {
 		input.Body = append([]byte(nil), src.Body...)

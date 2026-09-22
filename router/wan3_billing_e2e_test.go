@@ -7,13 +7,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	taskali "github.com/QuantumNous/new-api/relay/channel/task/ali"
+	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+	builtinplugins "github.com/QuantumNous/new-api/plugins"
+	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -21,6 +25,22 @@ import (
 )
 
 func TestWan3ChannelBillingEndToEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name, prefix      string
+		historical, alias bool
+	}{
+		{name: "plugin platform"},
+		{name: "historical platform", historical: true},
+		{name: "prefixed historical", prefix: "/ali", historical: true},
+		{name: "bare model aliases", alias: true},
+		{name: "prefixed model aliases", prefix: "/ali", alias: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testWan3ChannelBillingLifecycle(t, tc.historical, tc.prefix, tc.alias) })
+	}
+}
+
+func testWan3ChannelBillingLifecycle(t *testing.T, historical bool, prefix string, alias bool) {
+	t.Helper()
 	setupRelayRouterTestDB(t)
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.Channel{},
@@ -30,6 +50,22 @@ func TestWan3ChannelBillingEndToEnd(t *testing.T) {
 		&model.UserSubscription{},
 	))
 	ratio_setting.InitRatioSettings()
+	previousHide := operation_setting.ShouldHideErrorDetails()
+	operation_setting.UpdateHideErrorDetails(false)
+	t.Cleanup(func() { operation_setting.UpdateHideErrorDetails(previousHide) })
+	previousRatios := ratio_setting.ModelRatio2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousRatios)) })
+	previousRegistry := pluginruntime.DefaultRegistry
+	pluginruntime.DefaultRegistry = pluginruntime.NewRegistry()
+	t.Cleanup(func() { pluginruntime.DefaultRegistry = previousRegistry })
+	source, err := builtinplugins.Source("alibaba")
+	require.NoError(t, err)
+	_, err = pluginruntime.DefaultRegistry.RegisterFactory(source, pluginruntime.Options{Key: "alibaba"})
+	require.NoError(t, err)
+	hailuoSource, err := builtinplugins.Source("hailuo")
+	require.NoError(t, err)
+	_, err = pluginruntime.DefaultRegistry.RegisterFactory(hailuoSource, pluginruntime.Options{Key: "hailuo"})
+	require.NoError(t, err)
 
 	originalQuotaPerUnit := common.QuotaPerUnit
 	originalLogConsumeEnabled := common.LogConsumeEnabled
@@ -48,10 +84,7 @@ func TestWan3ChannelBillingEndToEnd(t *testing.T) {
 	common.MemoryCacheEnabled = true
 	previousTaskAdaptorFactory := service.GetTaskAdaptorFunc
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
-		if platform == constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeAli)) {
-			return &taskali.TaskAdaptor{}
-		}
-		return nil
+		return relay.GetTaskAdaptor(platform)
 	}
 	t.Cleanup(func() { service.GetTaskAdaptorFunc = previousTaskAdaptorFactory })
 
@@ -90,7 +123,7 @@ func TestWan3ChannelBillingEndToEnd(t *testing.T) {
 				http.Error(writer, "unknown test prompt", http.StatusBadRequest)
 				return
 			}
-			_, _ = io.WriteString(writer, `{"output":{"task_id":"`+taskID+`","task_status":"PENDING"},"request_id":"submit-e2e"}`)
+			_, _ = io.WriteString(writer, `{"output":{"task_id":"`+taskID+`","task_status":"PENDING","queue_position":0},"request_id":"submit-e2e","future_field":false}`)
 			return
 		}
 
@@ -117,6 +150,10 @@ func TestWan3ChannelBillingEndToEnd(t *testing.T) {
 		Status: common.TokenStatusEnabled, ExpiredTime: -1, RemainQuota: initialQuota,
 	}
 	require.NoError(t, model.DB.Create(&token).Error)
+	otherUser := model.User{Username: "wan3-other-user", AffCode: "wan3-other", Status: common.UserStatusEnabled, Group: "default", Quota: initialQuota}
+	require.NoError(t, model.DB.Create(&otherUser).Error)
+	otherToken := model.Token{UserId: otherUser.Id, Key: "wan3foreignkey", Name: "foreign-token", Status: common.TokenStatusEnabled, ExpiredTime: -1, RemainQuota: initialQuota}
+	require.NoError(t, model.DB.Create(&otherToken).Error)
 
 	priority := int64(100)
 	channel := model.Channel{
@@ -124,17 +161,63 @@ func TestWan3ChannelBillingEndToEnd(t *testing.T) {
 		Status: common.ChannelStatusEnabled, BaseURL: common.GetPointer(upstream.URL),
 		Models: "wan3.0-video,wan3.0-video-prime", Group: "default", Priority: &priority,
 	}
+	if alias {
+		channel.Models = "customer-wan,customer-prime,customer-unmapped,customer-foreign,customer-legacy,MiniMax-H3"
+		channel.ModelMapping = common.GetPointer(`{"customer-wan":"wan3.0-video","customer-prime":"wan3.0-video-prime","customer-foreign":"foreign-upstream","customer-legacy":"wan2.7-t2v","MiniMax-H3":"wan3.0-video"}`)
+		var ratios map[string]float64
+		require.NoError(t, common.UnmarshalJsonStr(previousRatios, &ratios))
+		ratios["customer-wan"] = ratios["wan3.0-video"]
+		ratios["customer-prime"] = ratios["wan3.0-video-prime"]
+		for _, name := range []string{"customer-unmapped", "customer-foreign", "customer-legacy", "MiniMax-H3"} {
+			ratios[name] = ratios["wan3.0-video"]
+		}
+		encoded, err := common.Marshal(ratios)
+		require.NoError(t, err)
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(encoded)))
+	}
 	require.NoError(t, model.DB.Create(&channel).Error)
 	require.NoError(t, channel.AddAbilities(nil))
 	model.InitChannelCache()
 
 	engine := gin.New()
 	SetVideoRouter(engine)
+	engine.NoRoute(SetPluginRouter(engine))
+	if alias {
+		invalid := []struct{ body, message string }{
+			{`{"model":"customer-wan","input":{"prompt":"reject"},"parameters":{"duration":31}}`, "between 2 and 30"},
+			{`{"model":"customer-legacy","input":{"prompt":"reject"},"parameters":{"duration":-1}}`, "between 1 and 3600"},
+		}
+		if prefix != "" {
+			invalid = append(invalid, []struct{ body, message string }{
+				{`{"model":"customer-unmapped","input":{"prompt":"reject"}}`, "must map to a model served by this plugin"},
+				{`{"model":"customer-foreign","input":{"prompt":"reject"}}`, "must map to a model served by this plugin"},
+				{`{"model":"MiniMax-H3","input":{"prompt":"reject"}}`, "not served by this plugin"},
+			}...)
+		}
+		for _, tc := range invalid {
+			request := httptest.NewRequest(http.MethodPost, prefix+"/api/v1/services/aigc/video-generation/video-synthesis", strings.NewReader(tc.body))
+			request.Header.Set("Authorization", "Bearer wan3billinge2ekey")
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			engine.ServeHTTP(recorder, request)
+			require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+			assert.Contains(t, recorder.Body.String(), tc.message)
+		}
+		assert.Empty(t, observedSubmits, "invalid mapped requests must never reach the provider")
+		assertWan3E2EBalances(t, user.Id, token.Id, initialQuota, 0, 0)
+		var taskCount int64
+		require.NoError(t, model.DB.Model(&model.Task{}).Count(&taskCount).Error)
+		assert.Zero(t, taskCount)
+	}
 
 	postTask := func(body string) model.Task {
+		if alias {
+			body = strings.ReplaceAll(body, `"wan3.0-video-prime"`, `"customer-prime"`)
+			body = strings.ReplaceAll(body, `"wan3.0-video"`, `"customer-wan"`)
+		}
 		request := httptest.NewRequest(
 			http.MethodPost,
-			"/api/v1/services/aigc/video-generation/video-synthesis",
+			prefix+"/api/v1/services/aigc/video-generation/video-synthesis",
 			bytes.NewReader([]byte(body)),
 		)
 		request.Header.Set("Authorization", "Bearer wan3billinge2ekey")
@@ -151,15 +234,25 @@ func TestWan3ChannelBillingEndToEnd(t *testing.T) {
 		}
 		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 		require.NotEmpty(t, response.Output.TaskID)
+		var completeResponse map[string]any
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &completeResponse))
+		assert.Equal(t, false, completeResponse["future_field"])
+		assert.Equal(t, float64(0), completeResponse["output"].(map[string]any)["queue_position"])
+		assert.NotContains(t, recorder.Body.String(), "-upstream")
 		var task model.Task
 		require.NoError(t, model.DB.Where("task_id = ?", response.Output.TaskID).First(&task).Error)
 		return task
 	}
 
 	pollTask := func(task *model.Task) {
+		if historical {
+			task.Platform = "17"
+			task.PrivateData.Execution = nil
+			require.NoError(t, model.DB.Save(task).Error)
+		}
 		require.NoError(t, service.UpdateVideoTasks(
 			context.Background(),
-			constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeAli)),
+			task.Platform,
 			map[int][]string{channel.Id: {task.PrivateData.UpstreamTaskID}},
 			map[string]*model.Task{task.PrivateData.UpstreamTaskID: task},
 		))
@@ -184,7 +277,7 @@ func TestWan3ChannelBillingEndToEnd(t *testing.T) {
 	standardTask := postTask(`{
 		"model":"wan3.0-video",
 		"input":{"prompt":"standard-success","media":[{"type":"reference_video","url":"https://example.com/reference.mp4"}]},
-		"parameters":{"resolution":"720P","duration":5}
+		"parameters":{"resolution":"720P","duration":null,"watermark":false,"seed":0}
 	}`)
 	standardSubmit := <-observedSubmits
 	assert.Equal(t, "wan3.0-video", standardSubmit.model)
@@ -199,6 +292,12 @@ func TestWan3ChannelBillingEndToEnd(t *testing.T) {
 	standardReference, ok := standardMedia[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "reference_video", standardReference["type"])
+	assert.Equal(t, "image_to_video", standardTask.Action)
+	assert.Equal(t, map[string]any{"resolution": "720P", "duration": nil, "watermark": false, "seed": float64(0)}, standardSubmit.body["parameters"])
+	if alias {
+		assert.Equal(t, "customer-wan", standardTask.Properties.OriginModelName)
+		assert.Equal(t, "wan3.0-video", standardTask.Properties.UpstreamModelName)
+	}
 	standardReserved := preConsumedQuota(standardModelRatio, 30, 2)
 	assert.Equal(t, standardReserved, standardTask.Quota)
 	require.NotNil(t, standardTask.PrivateData.BillingContext)
@@ -212,7 +311,27 @@ func TestWan3ChannelBillingEndToEnd(t *testing.T) {
 	assert.Equal(t, standardActual, standardTask.Quota)
 	assert.Equal(t, standardActual, standardTask.PrivateData.BillingContext.NetQuota)
 	assert.Equal(t, 1.0, standardTask.PrivateData.BillingContext.OtherRatios["seconds"])
+	require.NotNil(t, standardTask.Usage)
+	assert.Equal(t, 7.5, standardTask.Usage.Input)
+	assert.Equal(t, 5.0, standardTask.Usage.Output)
+	assert.Equal(t, 12.5, standardTask.Usage.Total)
+	assert.NotContains(t, string(standardTask.Data), "wan3-standard-upstream")
 	assertWan3E2EBalances(t, user.Id, token.Id, initialQuota-standardActual, standardActual, 1)
+	query := httptest.NewRequest(http.MethodGet, prefix+"/api/v1/tasks/"+standardTask.TaskID, nil)
+	query.Header.Set("Authorization", "Bearer wan3billinge2ekey")
+	queryRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(queryRecorder, query)
+	require.Equal(t, http.StatusOK, queryRecorder.Code, queryRecorder.Body.String())
+	var queryBody map[string]any
+	require.NoError(t, common.Unmarshal(queryRecorder.Body.Bytes(), &queryBody))
+	assert.Equal(t, map[string]any{"task_id": standardTask.TaskID, "task_status": "SUCCEEDED", "video_url": "https://example.com/standard.mp4"}, queryBody["output"])
+	assert.Equal(t, map[string]any{"duration": 5.0, "input_video_duration": 7.5, "output_video_duration": 5.0}, queryBody["usage"])
+	foreignQuery := httptest.NewRequest(http.MethodGet, prefix+"/api/v1/tasks/"+standardTask.TaskID, nil)
+	foreignQuery.Header.Set("Authorization", "Bearer wan3foreignkey")
+	foreignRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(foreignRecorder, foreignQuery)
+	assert.Contains(t, []int{http.StatusBadRequest, http.StatusNotFound}, foreignRecorder.Code, foreignRecorder.Body.String())
+	assert.NotContains(t, foreignRecorder.Body.String(), "standard.mp4")
 
 	primeTask := postTask(`{
 		"model":"wan3.0-video-prime",
