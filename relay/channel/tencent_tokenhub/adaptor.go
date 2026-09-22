@@ -323,3 +323,15 @@ func (a *Adaptor) GetChannelName() string {
 func IsImageModel(modelName string) bool {
 	return modelName == ModelHYImageLite || modelName == ModelHYImageV3
 }
+
+func IsVideoModel(modelName string) bool {
+	if IsImageModel(modelName) {
+		return false
+	}
+	for _, supportedModel := range ModelList {
+		if modelName == supportedModel {
+			return true
+		}
+	}
+	return false
+}

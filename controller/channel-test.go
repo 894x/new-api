@@ -20,7 +20,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/relay"
-	tasktencenttokenhub "github.com/QuantumNous/new-api/relay/channel/task/tencent_tokenhub"
 	tencenttokenhub "github.com/QuantumNous/new-api/relay/channel/tencent_tokenhub"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -118,7 +117,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
-	if channel.Type == constant.ChannelTypeTokenHub && tasktencenttokenhub.IsVideoModel(testModel) {
+	if channel.Type == constant.ChannelTypeTokenHub && tencenttokenhub.IsVideoModel(testModel) {
 		return testResult{
 			localErr: fmt.Errorf("%s video channel test is not supported", constant.GetChannelTypeName(channel.Type)),
 		}

@@ -169,6 +169,39 @@ func TestTokenHubPluginSubmitQueryAndRefundEndToEnd(t *testing.T) {
 		engine.ServeHTTP(download, httptest.NewRequest(http.MethodGet, parsed.RequestURI(), nil))
 		require.Equal(t, http.StatusOK, download.Code, download.Body.String())
 		assert.Equal(t, "video-bytes", download.Body.String())
+		// Pre-plugin tasks may only retain a result URL, including the oldest
+		// storage format that used FailReason for successful task URLs.
+		for _, storage := range []string{"private_result_url", "legacy_fail_reason"} {
+			t.Run(storage, func(t *testing.T) {
+				task.Platform = constant.TaskPlatform("100")
+				task.Data = nil
+				task.PrivateData.Execution = nil
+				if storage == "legacy_fail_reason" {
+					task.FailReason = task.PrivateData.ResultURL
+					task.PrivateData.ResultURL = ""
+				}
+				require.NoError(t, model.DB.Save(&task).Error)
+				query := httptest.NewRequest(http.MethodGet, "/v1/videos/"+task.TaskID, nil)
+				query.Header.Set("Authorization", "Bearer tokenhubplugine2e")
+				recorder := httptest.NewRecorder()
+				engine.ServeHTTP(recorder, query)
+				require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+				var historicalVideo struct {
+					Metadata map[string]any `json:"metadata"`
+				}
+				require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &historicalVideo))
+				assert.NotContains(t, recorder.Body.String(), media.URL)
+				contentURL, ok := historicalVideo.Metadata["url"].(string)
+				require.True(t, ok, "historical successful tasks must retain a downloadable video")
+				parsed, err := url.Parse(contentURL)
+				require.NoError(t, err)
+				assert.Equal(t, "gateway.example", parsed.Host)
+				download := httptest.NewRecorder()
+				engine.ServeHTTP(download, httptest.NewRequest(http.MethodGet, parsed.RequestURI(), nil))
+				require.Equal(t, http.StatusOK, download.Code, download.Body.String())
+				assert.Equal(t, "video-bytes", download.Body.String())
+			})
+		}
 	}
 	require.NoError(t, model.DB.First(&user, user.Id).Error)
 	require.NoError(t, model.DB.First(&token, token.Id).Error)

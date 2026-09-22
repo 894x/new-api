@@ -158,13 +158,27 @@ func TestTokenHubResponsesProtocol(t *testing.T) {
 }
 
 func TestTokenHubArtifactRequestIsCredentialless(t *testing.T) {
-	descriptor := tokenHubCall(t, tokenHubPlugin(t), "buildContentRequest", map[string]any{
-		"artifactKey": "video", "clientRequest": map[string]any{"method": "GET"},
-		"data": map[string]any{"data": map[string]any{"url": "https://cdn.example/video.mp4"}},
-	})
-	assert.Equal(t, "https://cdn.example/video.mp4", descriptor["url"])
-	assert.Equal(t, "GET", descriptor["method"])
-	assert.Equal(t, true, descriptor["credentialless"])
-	assert.Empty(t, descriptor["headers"], "credentialless artifact descriptors cannot contain provider headers")
-	assert.Empty(t, descriptor["body"])
+	plugin := tokenHubPlugin(t)
+	for _, tc := range []struct {
+		name      string
+		data      any
+		resultURL string
+		wantURL   string
+	}{
+		{"provider_data", map[string]any{"data": map[string]any{"url": "https://cdn.example/video.mp4"}}, "https://old.example/video.mp4", "https://cdn.example/video.mp4"},
+		{"legacy_result_url", nil, "https://old.example/video.mp4", "https://old.example/video.mp4"},
+		{"legacy_empty_data", map[string]any{}, "https://old.example/video.mp4", "https://old.example/video.mp4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			descriptor := tokenHubCall(t, plugin, "buildContentRequest", map[string]any{
+				"artifactKey": "video", "clientRequest": map[string]any{"method": "GET"},
+				"data": tc.data, "resultUrl": tc.resultURL,
+			})
+			assert.Equal(t, tc.wantURL, descriptor["url"])
+			assert.Equal(t, "GET", descriptor["method"])
+			assert.Equal(t, true, descriptor["credentialless"])
+			assert.Empty(t, descriptor["headers"], "credentialless artifact descriptors cannot contain provider headers")
+			assert.Empty(t, descriptor["body"])
+		})
+	}
 }

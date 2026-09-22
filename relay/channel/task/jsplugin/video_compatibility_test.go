@@ -59,3 +59,27 @@ func TestOpenAIVideoCompatibilityUsesHostArtifactAccess(t *testing.T) {
 	_, err = adaptor.ConvertToOpenAIVideo(&model.Task{TaskID: "public-task", Status: model.TaskStatusSuccess})
 	require.ErrorContains(t, err, "build video content URL")
 }
+
+func TestArtifactHooksReceiveLegacyResultURLOnlyOnSuccess(t *testing.T) {
+	source := strings.Replace(mockPlugin, `export function listArtifacts() { return []; }`, `export function listArtifacts(task) {
+  const expected = task.status === "SUCCESS" ? "https://legacy.example/video.mp4" : "";
+  if (task.resultUrl !== expected) throw new Error("unexpected legacy result URL");
+  return task.resultUrl ? [{key:"video",type:"video"}] : [];
+}`, 1)
+	plugin, err := pluginruntime.NewRegistry().Register(source, pluginruntime.Options{})
+	require.NoError(t, err)
+	for _, status := range []model.TaskStatus{model.TaskStatusInProgress, model.TaskStatusFailure, model.TaskStatusSuccess} {
+		t.Run(string(status), func(t *testing.T) {
+			artifacts, err := New(plugin).ListArtifacts(&model.Task{
+				TaskID: "public-task", Status: status, FailReason: "https://legacy.example/video.mp4",
+			})
+			require.NoError(t, err)
+			if status == model.TaskStatusSuccess {
+				require.Len(t, artifacts, 1)
+				assert.Equal(t, "video", artifacts[0].Key)
+			} else {
+				assert.Empty(t, artifacts)
+			}
+		})
+	}
+}

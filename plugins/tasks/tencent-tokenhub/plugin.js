@@ -238,7 +238,7 @@ export function parseTaskResult(_ctx, body) {
 function videoURL(task) {
   let data = task.data || {};
   if (data.data && data.data.task_id && Object.prototype.hasOwnProperty.call(data.data, "data")) data = data.data.data || {};
-  return (data.data && data.data.url) || "";
+  return (data.data && data.data.url) || task.resultUrl || "";
 }
 
 export function listArtifacts(task) {

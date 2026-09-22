@@ -1222,12 +1222,19 @@ func taskArtifactContext(task *model.Task) (map[string]any, error) {
 	if task.PrivateData.Execution != nil && task.PrivateData.Execution.TaskPlugin != nil {
 		producerVersion = task.PrivateData.Execution.TaskPlugin.Version
 	}
+	// Older drivers could persist only the result URL, without provider data.
+	// This fallback is private to artifact hooks, never a public download URL.
+	resultURL := ""
+	if task.Status == model.TaskStatusSuccess {
+		resultURL = task.GetResultURL()
+	}
 	return map[string]any{
 		"taskId":          task.TaskID,
 		"status":          string(task.Status),
 		"action":          task.Action,
 		"data":            data,
 		"producerVersion": producerVersion,
+		"resultUrl":       resultURL,
 	}, nil
 }
 
