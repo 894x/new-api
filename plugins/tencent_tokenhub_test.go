@@ -156,3 +156,15 @@ func TestTokenHubResponsesProtocol(t *testing.T) {
 		wantVendorName: "tencent-tokenhub",
 	})
 }
+
+func TestTokenHubArtifactRequestIsCredentialless(t *testing.T) {
+	descriptor := tokenHubCall(t, tokenHubPlugin(t), "buildContentRequest", map[string]any{
+		"artifactKey": "video", "clientRequest": map[string]any{"method": "GET"},
+		"data": map[string]any{"data": map[string]any{"url": "https://cdn.example/video.mp4"}},
+	})
+	assert.Equal(t, "https://cdn.example/video.mp4", descriptor["url"])
+	assert.Equal(t, "GET", descriptor["method"])
+	assert.Equal(t, true, descriptor["credentialless"])
+	assert.Empty(t, descriptor["headers"], "credentialless artifact descriptors cannot contain provider headers")
+	assert.Empty(t, descriptor["body"])
+}

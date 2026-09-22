@@ -248,7 +248,7 @@ export function listArtifacts(task) {
 export function buildContentRequest(ctx) {
   const url = videoURL(ctx);
   if (ctx.artifactKey !== "video" || !url) throw new Error("artifact_not_found");
-  return { url, method: ctx.clientRequest.method, headers: { Accept: "video/*" }, credentialless: true };
+  return { url, method: ctx.clientRequest.method, credentialless: true };
 }
 
 function decodeVideo(ctx) {
