@@ -35,6 +35,7 @@ const defaultSiteSettings: SiteSettings = {
   BusinessContactEmail: 'ruiheng@rhcontact.cn',
   BusinessContactQRCode: '/business-contact-wechat.jpg',
   ServerAddress: '',
+  TaskPublicAddress: '',
   'legal.user_agreement': '',
   'legal.privacy_policy': '',
   HeaderNavModules: '',

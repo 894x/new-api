@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 // @vitest-environment happy-dom
 import type { CellContext } from '@tanstack/react-table'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -37,7 +38,7 @@ vi.mock('@/features/usage-logs', () => ({ UsageLogs: () => null }))
 afterEach(cleanup)
 
 function LogCells(props: { log: UsageLog }) {
-  const columns = useCommonLogsColumns(false)
+  const columns = useCommonLogsColumns(false, false)
   return (
     <>
       {columns
@@ -104,7 +105,14 @@ it.each([
       content: 'raw fallback',
       other: JSON.stringify({ op: { action, params: {} } }),
     })
-    render(<LogCells log={log} />)
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { enabled: false } },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LogCells log={log} />
+      </QueryClientProvider>
+    )
     expect(screen.getByText(label)).toBeTruthy()
     expect(screen.getByText(summary)).toBeTruthy()
     expect(screen.queryByText('Manage')).toBeNull()

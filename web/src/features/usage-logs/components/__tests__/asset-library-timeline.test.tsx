@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 // @vitest-environment happy-dom
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -62,14 +63,36 @@ describe('asset library timeline', () => {
         },
       }),
     })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { enabled: false } },
+    })
     const result = render(
-      <DetailsDialog log={log} isAdmin open onOpenChange={() => {}} />
+      <DetailsDialog
+        log={log}
+        isAdmin
+        isRoot={false}
+        open
+        onOpenChange={() => {}}
+      />,
+      {
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={queryClient}>
+            {children}
+          </QueryClientProvider>
+        ),
+      }
     )
     expect(
       await screen.findByRole('region', { name: 'Request Timeline' })
     ).toBeTruthy()
     result.rerender(
-      <DetailsDialog log={log} isAdmin={false} open onOpenChange={() => {}} />
+      <DetailsDialog
+        log={log}
+        isAdmin={false}
+        isRoot={false}
+        open
+        onOpenChange={() => {}}
+      />
     )
     expect(
       screen.queryByRole('region', { name: 'Request Timeline' })

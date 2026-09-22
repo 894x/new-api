@@ -16,285 +16,161 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import assert from 'node:assert/strict'
+// @vitest-environment happy-dom
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { CellContext } from '@tanstack/react-table'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import type { ComponentType } from 'react'
+import { afterEach, expect, test, vi } from 'vitest'
 
-import type { CellContext, Row } from '@tanstack/react-table'
-import { Window } from 'happy-dom'
-import type React from 'react'
-import { afterAll, afterEach, describe, test } from 'vitest'
+import { api } from '@/lib/api'
 
 import type { TaskLog } from '../../../types'
+import { UsageLogsProvider } from '../../usage-logs-provider'
+import { useTaskLogsColumns } from '../task-logs-columns'
 
-const domWindow = new Window()
-const domGlobals = [
-  'window',
-  'document',
-  'navigator',
-  'HTMLElement',
-  'SVGElement',
-  'Node',
-  'Element',
-  'Event',
-  'CustomEvent',
-  'MutationObserver',
-  'requestAnimationFrame',
-  'cancelAnimationFrame',
-  'getComputedStyle',
-] as const
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}))
 
-for (const key of domGlobals) {
-  Object.defineProperty(globalThis, key, {
-    configurable: true,
-    value: domWindow[key],
-  })
-}
-
-const { act } = await import('react')
-const { createRoot } = await import('react-dom/client')
-const { createInstance } = await import('i18next')
-const { I18nextProvider, initReactI18next } = await import('react-i18next')
-const { useTaskLogsColumns } = await import('../task-logs-columns')
-
-const i18n = createInstance()
-await i18n.use(initReactI18next).init({
-  lng: 'en',
-  resources: {
-    en: {
-      translation: {
-        Details: 'Details',
-        'Click to preview video': 'Click to preview video',
-        'View details': 'View details',
-        Video: 'Video',
-        Preview: 'Preview',
-        'Raw JSON': 'Raw JSON',
-        'Loading...': 'Loading...',
-        'Request failed': 'Request failed',
-        'Open in new tab': 'Open in new tab',
-        Download: 'Download',
-      },
-    },
-  },
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
 })
 
-const reactTestGlobals = globalThis as typeof globalThis & {
-  IS_REACT_ACT_ENVIRONMENT?: boolean
+const log: TaskLog = {
+  id: 1,
+  user_id: 1,
+  platform: 'doubao',
+  task_id: 'task/id?source=1',
+  group: 'default',
+  quota: 100,
+  action: 'textGenerate',
+  channel_id: 1,
+  submit_time: 1,
+  status: 'SUCCESS',
+  fail_reason: '',
+  result_url: 'https://provider.example/private-video.mp4',
+  data: { status: 'succeeded', detail: { seed: 42 } },
 }
-reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
 
-function TaskDetailsCell(props: {
-  log: TaskLog
+function TaskCells(props: {
+  canViewRawData: boolean
   isAdminView?: boolean
-  canViewRawData?: boolean
+  task?: TaskLog
 }) {
+  const task = props.task ?? log
   const columns = useTaskLogsColumns(
     Boolean(props.isAdminView),
-    Boolean(props.canViewRawData)
+    false,
+    props.canViewRawData
   )
-  const detailsColumn = columns.find(
-    (column) => 'accessorKey' in column && column.accessorKey === 'fail_reason'
+  return (
+    <>
+      {columns
+        .filter(
+          (column) =>
+            column.id === 'artifacts' ||
+            ('accessorKey' in column && column.accessorKey === 'fail_reason')
+        )
+        .map((column) => {
+          const Cell = column.cell as ComponentType<
+            CellContext<TaskLog, unknown>
+          >
+          return (
+            <Cell
+              key={column.id ?? 'details'}
+              {...({
+                row: {
+                  original: task,
+                  getValue: (key: string) => task[key as keyof TaskLog],
+                },
+              } as CellContext<TaskLog, unknown>)}
+            />
+          )
+        })}
+    </>
   )
-
-  assert.ok(detailsColumn)
-  assert.equal(typeof detailsColumn.cell, 'function')
-  const Cell = detailsColumn.cell as React.ComponentType<
-    CellContext<TaskLog, unknown>
-  >
-  const row = {
-    original: props.log,
-    getValue: (key: string) => props.log[key as keyof TaskLog],
-  } as Row<TaskLog>
-  const context = { row } as CellContext<TaskLog, unknown>
-
-  return <Cell {...context} />
 }
 
-describe('task video preview', () => {
-  afterEach(() => {
-    document.body.replaceChildren()
+function renderTask(canViewRawData: boolean, isAdminView = false, task = log) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
   })
+  return render(
+    <QueryClientProvider client={client}>
+      <UsageLogsProvider>
+        <TaskCells
+          canViewRawData={canViewRawData}
+          isAdminView={isAdminView}
+          task={task}
+        />
+      </UsageLogsProvider>
+    </QueryClientProvider>
+  )
+}
 
-  afterAll(() => {
-    domWindow.close()
+test('previews an owned completed video through the authenticated artifact projection', async () => {
+  const contentUrl = `https://gateway.example/v1/tasks/task-public/artifacts/video/content?access=${'a'.repeat(43)}`
+  const get = vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        artifacts: [{ key: 'video', type: 'video', content_url: contentUrl }],
+      },
+    },
   })
-
-  test('previews a successful video task from the returned result URL', async () => {
-    const container = document.createElement('div')
-    document.body.append(container)
-    const root = createRoot(container)
-    const log: TaskLog = {
-      id: 1,
-      user_id: 1,
-      platform: 'doubao',
-      task_id: 'task/id?source=1',
-      action: 'textGenerate',
-      channel_id: 1,
-      submit_time: 1,
-      status: 'SUCCESS',
-      fail_reason: '',
-      result_url: 'https://example.com/video.mp4',
-      data: { status: 'succeeded', detail: { seed: 42 } },
-    }
-    await act(async () => {
-      root.render(
-        <I18nextProvider i18n={i18n}>
-          <TaskDetailsCell log={log} isAdminView canViewRawData />
-        </I18nextProvider>
-      )
-    })
-
-    const previewButton = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'View details'
-    )
-    assert.ok(previewButton)
-
-    await act(async () => {
-      previewButton.click()
-    })
-
-    const video = document.body.querySelector('video')
-    assert.ok(video)
-    assert.equal(video.getAttribute('src'), 'https://example.com/video.mp4')
-    assert.equal(
-      document.body.querySelectorAll('a[href="https://example.com/video.mp4"]')
-        .length,
-      1
-    )
-
-    const rawJsonTab = [...document.body.querySelectorAll('button')].find(
-      (button) => button.textContent === 'Raw JSON'
-    )
-    assert.ok(rawJsonTab)
-    await act(async () => rawJsonTab.click())
-    assert.match(
-      document.body.querySelector('pre')?.textContent || '',
-      /"seed": 42/
-    )
-
-    await act(async () => root.unmount())
-    container.remove()
-  })
-
-  test('keeps raw task JSON available when an admin views only their tasks', async () => {
-    const container = document.createElement('div')
-    document.body.append(container)
-    const root = createRoot(container)
-    const log: TaskLog = {
-      id: 4,
-      user_id: 1,
-      platform: 'doubao',
-      task_id: 'task_admin_self_view',
-      action: 'textGenerate',
-      channel_id: 1,
-      submit_time: 1,
-      status: 'SUCCESS',
-      fail_reason: '',
-      result_url: 'https://example.com/admin-self-view.mp4',
-      data: { status: 'succeeded', detail: { seed: 99 } },
-    }
-
-    await act(async () => {
-      root.render(
-        <I18nextProvider i18n={i18n}>
-          <TaskDetailsCell log={log} canViewRawData />
-        </I18nextProvider>
-      )
-    })
-
-    const previewButton = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'View details'
-    )
-    assert.ok(previewButton)
-    await act(async () => previewButton.click())
-
-    assert.ok(
-      [...document.body.querySelectorAll('button')].some(
-        (button) => button.textContent === 'Raw JSON'
-      )
-    )
-
-    await act(async () => root.unmount())
-    container.remove()
-  })
-
-  test('does not expose raw task JSON to non-admin users', async () => {
-    const container = document.createElement('div')
-    document.body.append(container)
-    const root = createRoot(container)
-    const log: TaskLog = {
-      id: 3,
-      user_id: 1,
-      platform: 'doubao',
-      task_id: 'task_non_admin',
-      action: 'textGenerate',
-      channel_id: 1,
-      submit_time: 1,
-      status: 'SUCCESS',
-      fail_reason: '',
-      result_url: 'https://example.com/non-admin-video.mp4',
-      data: { status: 'succeeded', internal: { seed: 7 } },
-    }
-
-    await act(async () => {
-      root.render(
-        <I18nextProvider i18n={i18n}>
-          <TaskDetailsCell log={log} />
-        </I18nextProvider>
-      )
-    })
-
-    const previewButton = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'Click to preview video'
-    )
-    assert.ok(previewButton)
-    await act(async () => previewButton.click())
-
-    assert.equal(
-      [...document.body.querySelectorAll('button')].some(
-        (button) => button.textContent === 'Raw JSON'
-      ),
-      false
-    )
-    assert.equal(document.body.textContent?.includes('"seed": 7'), false)
-
-    await act(async () => root.unmount())
-    container.remove()
-  })
-
-  test('keeps the empty placeholder for missing or unsafe result URLs', async () => {
-    for (const resultUrl of [
-      '   ',
-      'javascript:alert(1)',
-      'https://gateway.example.com/v1/videos/task_123/content',
-    ]) {
-      const container = document.createElement('div')
-      document.body.append(container)
-      const root = createRoot(container)
-      const log: TaskLog = {
-        id: 2,
-        user_id: 1,
-        platform: 'doubao',
-        task_id: 'task_without_result',
-        action: 'textGenerate',
-        channel_id: 1,
-        submit_time: 1,
-        status: 'SUCCESS',
-        fail_reason: '',
-        result_url: resultUrl,
-      }
-
-      await act(async () => {
-        root.render(
-          <I18nextProvider i18n={i18n}>
-            <TaskDetailsCell log={log} />
-          </I18nextProvider>
-        )
-      })
-
-      assert.equal(container.textContent, '-')
-      assert.equal(container.querySelector('button'), null)
-
-      await act(async () => root.unmount())
-      container.remove()
-    }
-  })
+  renderTask(true, true)
+  expect(get).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: 'Artifacts' }))
+  await waitFor(() =>
+    expect(document.querySelector('video')).toHaveAttribute('src', contentUrl)
+  )
+  expect(get).toHaveBeenCalledWith(
+    '/api/task/task%2Fid%3Fsource%3D1/artifacts',
+    expect.any(Object)
+  )
+  expect(screen.getByRole('button', { name: 'Download' })).toHaveAttribute(
+    'href',
+    contentUrl
+  )
+  expect(document.body.innerHTML).not.toContain('provider.example')
 })
+
+test.each([true, false])(
+  'keeps raw task JSON available to an authorized admin with all-users view=%s',
+  async (isAdminView) => {
+    renderTask(true, isAdminView)
+    await userEvent.click(screen.getByRole('button', { name: 'View details' }))
+    expect(await screen.findByLabelText('Raw JSON')).toHaveTextContent(
+      '"seed": 42'
+    )
+  }
+)
+
+test('does not expose raw task JSON to ordinary users', async () => {
+  renderTask(false)
+  await userEvent.click(screen.getByRole('button', { name: 'View details' }))
+  expect(await screen.findByText('Task Details')).toBeVisible()
+  expect(screen.queryByLabelText('Raw JSON')).toBeNull()
+  expect(document.body.textContent).not.toContain('"seed": 42')
+})
+
+test.each([
+  '',
+  'javascript:alert(1)',
+  'https://gateway.example.com/v1/videos/task_123/content',
+])(
+  'does not use an unprojected result URL as a media source: %s',
+  async (resultUrl) => {
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: { success: true, data: { artifacts: [] } },
+    })
+    renderTask(false, false, { ...log, result_url: resultUrl })
+    await userEvent.click(screen.getByRole('button', { name: 'Artifacts' }))
+    expect(await screen.findByText('None')).toBeVisible()
+    expect(document.querySelector('video')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull()
+  }
+)

@@ -188,6 +188,8 @@ const BUILT_IN_CHANNEL_EXTERNAL_APIS = {
   102: [],
   103: ['chat'],
   104: [],
+  // Plugin protocols depend on its metadata, not the generic channel type.
+  105: [],
 } as const satisfies Record<
   keyof typeof CHANNEL_TYPES,
   readonly ChannelExternalAPI[]

@@ -32,7 +32,7 @@ const BUILT_IN_EXPECTATIONS: ReadonlyArray<{
     apis: ['responses'],
   },
   {
-    types: [2, 5, 36, 38, 44, 50, 51, 52, 54, 55, 56, 100, 102, 104],
+    types: [2, 5, 36, 38, 44, 50, 51, 52, 54, 55, 56, 100, 102, 104, 105],
     apis: [],
   },
 ]

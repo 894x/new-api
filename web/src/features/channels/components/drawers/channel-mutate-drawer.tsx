@@ -18,7 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { LargeBodyRoutingFields } from './large-body-routing-fields'
 import {
   ArrowRight,
   AlertCircle,
@@ -138,6 +137,7 @@ import {
   getChannelKey,
   getGroups,
   getPrefillGroups,
+  getTaskPluginOptions,
   refreshCodexCredential,
 } from '../../api'
 import {
@@ -145,6 +145,8 @@ import {
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_STATUS_LABELS,
   CHANNEL_TYPE_OPTIONS,
+  CHANNEL_TYPE_TASK_PLUGIN,
+  channelTypeOptionsForTaskPluginBind,
   CHANNEL_TYPE_WARNINGS,
   ERROR_MESSAGES,
   FIELD_PASSTHROUGH_TYPES,
@@ -192,6 +194,7 @@ import { ParameterCapabilityEditorDialog } from '../dialogs/parameter-capability
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
 import { ModelRoutingOverridesEditor } from '../model-routing-overrides-editor'
+import { LargeBodyRoutingFields } from './large-body-routing-fields'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
@@ -639,6 +642,11 @@ export function ChannelMutateDrawer({
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
   )
+  const canBindTaskPlugin = hasPermission(
+    currentUser,
+    ADMIN_PERMISSION_RESOURCES.TASK_PLUGIN,
+    ADMIN_PERMISSION_ACTIONS.BIND
+  )
   const canRevealChannelKey = currentUser?.role === ROLE.SUPER_ADMIN
   const [fetchModelsDialogOpen, setFetchModelsDialogOpen] = useState(false)
   const [channelKey, setChannelKey] = useState<string | null>(null)
@@ -978,13 +986,20 @@ export function ChannelMutateDrawer({
         ?.label || `#${currentType}`,
     [currentType]
   )
+  const taskPluginOptionsQuery = useQuery({
+    queryKey: ['task-plugin-options'],
+    queryFn: getTaskPluginOptions,
+    enabled: currentType === CHANNEL_TYPE_TASK_PLUGIN && canBindTaskPlugin,
+  })
 
   const channelTypeOptions = useMemo(() => {
-    const options = CHANNEL_TYPE_OPTIONS.map((option) => ({
-      value: String(option.value),
-      label: t(option.label),
-      icon: <ChannelTypeLogo type={option.value} size={16} />,
-    }))
+    const options = channelTypeOptionsForTaskPluginBind(canBindTaskPlugin).map(
+      (option) => ({
+        value: String(option.value),
+        label: t(option.label),
+        icon: <ChannelTypeLogo type={option.value} size={16} />,
+      })
+    )
     if (!options.some((option) => Number(option.value) === currentType)) {
       options.push({
         value: String(currentType),
@@ -993,7 +1008,7 @@ export function ChannelMutateDrawer({
       })
     }
     return options
-  }, [currentType, t])
+  }, [canBindTaskPlugin, currentType, t])
 
   const formErrors = form.formState.errors
   const identityHasErrors = Boolean(
@@ -2097,6 +2112,81 @@ export function ChannelMutateDrawer({
                             />
                           </fieldset>
 
+                          {currentType === CHANNEL_TYPE_TASK_PLUGIN && (
+                            <FormField
+                              control={form.control}
+                              name='task_plugin_key'
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('Task plugin *')}</FormLabel>
+                                  {canBindTaskPlugin ? (
+                                    <Select
+                                      value={field.value}
+                                      onValueChange={(value) => {
+                                        field.onChange(value)
+                                        const plugin =
+                                          taskPluginOptionsQuery.data?.find(
+                                            (item) => item.key === value
+                                          )
+                                        if (plugin?.models?.length) {
+                                          form.setValue(
+                                            'models',
+                                            formatModelsArray(plugin.models),
+                                            {
+                                              shouldDirty: true,
+                                            }
+                                          )
+                                        }
+                                      }}
+                                      items={(
+                                        taskPluginOptionsQuery.data ?? []
+                                      ).map((plugin) => ({
+                                        value: plugin.key,
+                                        label: `${plugin.name} (${plugin.key})`,
+                                      }))}
+                                    >
+                                      <FormControl>
+                                        <SelectTrigger>
+                                          <SelectValue
+                                            placeholder={t(
+                                              'Select task plugin'
+                                            )}
+                                          />
+                                        </SelectTrigger>
+                                      </FormControl>
+                                      <SelectContent>
+                                        {(
+                                          taskPluginOptionsQuery.data ?? []
+                                        ).map((plugin) => (
+                                          <SelectItem
+                                            key={plugin.key}
+                                            value={plugin.key}
+                                          >
+                                            {plugin.name} ({plugin.key})
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  ) : (
+                                    <FormControl>
+                                      <Input
+                                        readOnly
+                                        value={field.value ?? ''}
+                                        className='font-mono'
+                                      />
+                                    </FormControl>
+                                  )}
+                                  <FormDescription>
+                                    {t(
+                                      'Selecting a plugin fills its declared models.'
+                                    )}
+                                  </FormDescription>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          )}
+
                           <FormField
                             control={form.control}
                             name='name'
@@ -2847,7 +2937,11 @@ export function ChannelMutateDrawer({
                                 name='base_url'
                                 render={({ field }) => (
                                   <FormItem>
-                                    <FormLabel>{t('Base URL')}</FormLabel>
+                                    <FormLabel>
+                                      {currentType === CHANNEL_TYPE_TASK_PLUGIN
+                                        ? t('Base URL *')
+                                        : t('Base URL')}
+                                    </FormLabel>
                                     <FormControl>
                                       <Input
                                         placeholder={t(
@@ -4541,7 +4635,10 @@ export function ChannelMutateDrawer({
                                         form.setValue(
                                           'http1_large_body_enabled',
                                           false,
-                                          { shouldDirty: true, shouldValidate: true }
+                                          {
+                                            shouldDirty: true,
+                                            shouldValidate: true,
+                                          }
                                         )
                                         form.setValue(
                                           'http2_connection_shards',

@@ -155,6 +155,8 @@ export function TimingMetricsCell(props: TimingMetricsCellProps) {
 
 interface StreamTpsCellProps {
   isStream: boolean
+  /** Task logs are asynchronous jobs; stream vs non-stream does not apply. */
+  isTask?: boolean
   tokensPerSecond?: number | null
   completionTokens: number
   useTimeSec: number
@@ -183,7 +185,10 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
       ? `${Math.round(generationTokensPerSecond)} t/s`
       : '—'
   const showGenerationSpeed = generationTokensPerSecond != null
-  const streamLabel = props.isStream ? t('Stream') : t('Non-stream')
+  let streamLabel = props.isStream ? t('Stream') : t('Non-stream')
+  if (props.isTask) {
+    streamLabel = t('Async')
+  }
 
   return (
     <div

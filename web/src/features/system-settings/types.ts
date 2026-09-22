@@ -144,6 +144,7 @@ export type SiteSettings = {
   BusinessContactEmail: string
   BusinessContactQRCode: string
   ServerAddress: string
+  TaskPublicAddress: string
   'legal.user_agreement': string
   'legal.privacy_policy': string
   HeaderNavModules: string

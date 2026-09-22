@@ -17,12 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
 
 import { PerformanceAnalytics } from '../index'
 import type {
+  ChannelAnalyticsData,
   PerformanceAnalyticsData,
   PerformanceAnalyticsOptions,
   PerformanceAnalyticsResponse,
@@ -37,16 +38,23 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@visactor/react-vchart', () => ({ VChart: () => null }))
 
-const { getPerformanceAnalytics, getPerformanceAnalyticsOptions } = vi.hoisted(
-  () => ({
-    getPerformanceAnalytics: vi.fn(),
-    getPerformanceAnalyticsOptions: vi.fn(),
-  })
-)
+const {
+  getPerformanceAnalytics,
+  getPerformanceAnalyticsOptions,
+  getChannelPerformanceAnalytics,
+  getHTTPTransportMetrics,
+} = vi.hoisted(() => ({
+  getPerformanceAnalytics: vi.fn(),
+  getPerformanceAnalyticsOptions: vi.fn(),
+  getChannelPerformanceAnalytics: vi.fn(),
+  getHTTPTransportMetrics: vi.fn(),
+}))
 
 vi.mock('../api', () => ({
   getPerformanceAnalytics,
   getPerformanceAnalyticsOptions,
+  getChannelPerformanceAnalytics,
+  getHTTPTransportMetrics,
 }))
 
 const allOptions: PerformanceAnalyticsOptions = {
@@ -74,13 +82,41 @@ const emptyAnalytics: PerformanceAnalyticsData = {
   series: [],
 }
 
+const emptyLatency = { p50_ms: 0, p95_ms: 0, p99_ms: 0, sample_count: 0 }
+const emptyChannelAnalytics: ChannelAnalyticsData = {
+  channel_id: 0,
+  scanned_logs: 0,
+  truncated: false,
+  transport_groups: [],
+  effective_start_timestamp: 100,
+  effective_end_timestamp: 200,
+  summary: {
+    ts: 100,
+    request_count: 0,
+    success_rate: 0,
+    active_concurrency: { average: 0, maximum: 0 },
+    latency: {
+      acquire_ms: emptyLatency,
+      write_ms: emptyLatency,
+      total_ms: emptyLatency,
+      body_read_ms: emptyLatency,
+      upstream_queue_ms: emptyLatency,
+      upload_ms: emptyLatency,
+      provider_wait_ms: emptyLatency,
+      headers_to_first_response_ms: emptyLatency,
+      downstream_ms: emptyLatency,
+    },
+  },
+  series: [],
+}
+
 function response<T>(data: T): PerformanceAnalyticsResponse<T> {
   return { success: true, data }
 }
 
 function renderAnalytics() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
   })
   return render(
     <QueryClientProvider client={queryClient}>
@@ -91,6 +127,10 @@ function renderAnalytics() {
 
 beforeEach(() => {
   getPerformanceAnalytics.mockResolvedValue(response(emptyAnalytics))
+  getChannelPerformanceAnalytics.mockResolvedValue(
+    response(emptyChannelAnalytics)
+  )
+  getHTTPTransportMetrics.mockResolvedValue(response([]))
   getPerformanceAnalyticsOptions.mockImplementation(
     (_: boolean, userId?: number) => {
       if (!userId) return Promise.resolve(response(allOptions))
@@ -122,7 +162,12 @@ test('offers a one-hour range and sends an hour-wide query', async () => {
   const user = userEvent.setup()
   renderAnalytics()
 
-  await user.click(await screen.findByRole('tab', { name: '1 Hour' }))
+  const ranges = (await screen.findAllByRole('tablist')).find((list) =>
+    within(list).queryByRole('tab', { name: '29 Days' })
+  )
+  expect(ranges).toBeDefined()
+  if (!ranges) throw new Error('Performance percentile ranges are missing')
+  await user.click(within(ranges).getByRole('tab', { name: '1 Hour' }))
 
   await waitFor(() =>
     expect(getPerformanceAnalytics).toHaveBeenCalledWith(
