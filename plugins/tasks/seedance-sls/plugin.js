@@ -296,14 +296,14 @@ export function listArtifacts(task) {
   if (task.status !== "SUCCESS") return [];
   const data = taskData(task.data || {}, 0);
   const result = [];
-  if (data.result_url || task.result_url) result.push({ key: "video", type: "video" });
+  if (data.result_url || task.resultUrl) result.push({ key: "video", type: "video" });
   if (data.last_frame_url) result.push({ key: "last_frame", type: "image" });
   return result;
 }
 
 export function buildContentRequest(ctx) {
   const data = taskData(ctx.data || {}, 0);
-  const url = ctx.artifactKey === "video" ? data.result_url || ctx.result_url : ctx.artifactKey === "last_frame" ? data.last_frame_url : "";
+  const url = ctx.artifactKey === "video" ? data.result_url || ctx.resultUrl : ctx.artifactKey === "last_frame" ? data.last_frame_url : "";
   if (!url) throw new Error("artifact_not_found");
   return { url: url, method: ctx.clientRequest.method, credentialless: true };
 }

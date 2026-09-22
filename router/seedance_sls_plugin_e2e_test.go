@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +32,10 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 	previousQuota, previousLog, previousBatch, previousCache := common.QuotaPerUnit, common.LogConsumeEnabled, common.BatchUpdateEnabled, common.MemoryCacheEnabled
 	previousFactory := service.GetTaskAdaptorFunc
 	previousHide := operation_setting.ShouldHideErrorDetails()
+	previousSecret, previousAddress := common.CryptoSecret, system_setting.TaskPublicAddress
+	previousFetch := *system_setting.GetFetchSetting()
+	common.CryptoSecret, system_setting.TaskPublicAddress = "sls-artifact-test-secret", "https://gateway.example"
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
 	savedConfig := map[string]string{}
 	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error { savedConfig[key] = value; return nil }))
 	t.Cleanup(func() {
@@ -39,6 +45,9 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 		common.QuotaPerUnit, common.LogConsumeEnabled, common.BatchUpdateEnabled, common.MemoryCacheEnabled = previousQuota, previousLog, previousBatch, previousCache
 		service.GetTaskAdaptorFunc = previousFactory
 		operation_setting.UpdateHideErrorDetails(previousHide)
+		common.CryptoSecret, system_setting.TaskPublicAddress = previousSecret, previousAddress
+		*system_setting.GetFetchSetting() = previousFetch
+		service.InitHttpClient()
 	})
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
 	common.QuotaPerUnit, common.LogConsumeEnabled, common.BatchUpdateEnabled, common.MemoryCacheEnabled = 1000, true, false, true
@@ -48,6 +57,12 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 	t.Setenv("ASSET_STORAGE_ENABLED", "false")
 	var submits atomic.Int32
 	requests := make(chan map[string]any, 4)
+	media := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = io.WriteString(w, "sls-video-bytes")
+	}))
+	t.Cleanup(media.Close)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer sls-test-key", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
@@ -65,7 +80,7 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 			if strings.HasSuffix(r.URL.Path, "2") || strings.HasSuffix(r.URL.Path, "4") || strings.HasSuffix(r.URL.Path, "6") || strings.HasSuffix(r.URL.Path, "8") {
 				_, _ = io.WriteString(w, `{"code":"success","data":{"task_id":"gateway-id","status":"FAILURE","fail_reason":"generation failed","result_url":"provider safety detail"}}`)
 			} else {
-				_, _ = io.WriteString(w, `{"code":"success","data":{"task_id":"gateway-id","status":"SUCCESS","progress":100,"seed":0,"generate_audio":false,"data":{"code":"success","data":{"task_id":"nested-provider-id","upstream_task_id":"inner-id","total_tokens":1070,"result_url":"https://cdn.example/video.mp4","last_frame_url":"https://cdn.example/frame.png"}}}}`)
+				_, _ = fmt.Fprintf(w, `{"code":"success","data":{"task_id":"gateway-id","status":"SUCCESS","progress":100,"seed":0,"generate_audio":false,"data":{"code":"success","data":{"task_id":"nested-provider-id","upstream_task_id":"inner-id","total_tokens":1070,"result_url":%q,"last_frame_url":"https://cdn.example/frame.png"}}}}`, media.URL+"/video.mp4")
 			}
 			return
 		}
@@ -89,6 +104,7 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 	engine := gin.New()
 	SetVideoRouter(engine)
 	SetTaskPluginProtocolRouter(engine)
+	SetTaskRouter(engine)
 	engine.NoRoute(SetPluginRouter(engine))
 	for index, tc := range []struct {
 		path, model string
@@ -152,7 +168,13 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 			}
 			if tc.historical {
 				task.Platform = "104"
-				require.NoError(t, model.DB.Model(&task).Update("platform", "104").Error)
+				task.PrivateData.Execution = nil
+				if !tc.expression && tc.model == "doubao-seedance-2-5-260628" {
+					// Old tasks keep the old 2.5 price frozen at submit time,
+					// even though new tasks use the approved rc27 multiplier.
+					task.PrivateData.BillingContext.OtherRatios["video_input"] = 77.0 / 70.0
+				}
+				require.NoError(t, model.DB.Save(&task).Error)
 			}
 			// Completion must keep the submit-time model price and ratio.
 			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"doubao-seedance-2-5-260628":9,"sls-alias":9}`))
@@ -169,6 +191,8 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 					for _, rule := range task.PrivateData.BillingContext.TieredSnapshot.RequestRules {
 						assert.True(t, rule.Matched)
 					}
+				} else if tc.historical {
+					assert.Equal(t, 1177, task.Quota)
 				} else {
 					assert.Equal(t, 1170, task.Quota)
 				}
@@ -211,11 +235,37 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 				assert.Contains(t, []int{http.StatusBadRequest, http.StatusNotFound}, denied.Code, denied.Body.String())
 				assert.NotContains(t, denied.Body.String(), "cdn.example")
 			}
+			if index%2 == 0 {
+				if tc.historical {
+					// Some old successful rows no longer have provider payloads.
+					task.Data = nil
+					require.NoError(t, model.DB.Save(&task).Error)
+				}
+				query := httptest.NewRequest(http.MethodGet, "/v1/videos/"+task.TaskID, nil)
+				query.Header.Set("Authorization", "Bearer slsplugine2e")
+				response := httptest.NewRecorder()
+				engine.ServeHTTP(response, query)
+				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+				var video struct {
+					Metadata map[string]any `json:"metadata"`
+				}
+				require.NoError(t, common.Unmarshal(response.Body.Bytes(), &video))
+				assert.NotContains(t, response.Body.String(), media.URL)
+				contentURL, ok := video.Metadata["url"].(string)
+				require.True(t, ok, "historical SLS video must remain downloadable")
+				parsed, err := url.Parse(contentURL)
+				require.NoError(t, err)
+				assert.Equal(t, "gateway.example", parsed.Host)
+				download := httptest.NewRecorder()
+				engine.ServeHTTP(download, httptest.NewRequest(http.MethodGet, parsed.RequestURI(), nil))
+				require.Equal(t, http.StatusOK, download.Code, download.Body.String())
+				assert.Equal(t, "sls-video-bytes", download.Body.String())
+			}
 		})
 	}
 	require.NoError(t, model.DB.First(&user, user.Id).Error)
 	require.NoError(t, model.DB.First(&token, token.Id).Error)
-	assert.Equal(t, 10000000-15180, user.Quota)
-	assert.Equal(t, 10000000-15180, token.RemainQuota)
+	assert.Equal(t, 10000000-15187, user.Quota)
+	assert.Equal(t, 10000000-15187, token.RemainQuota)
 	assert.Equal(t, int32(8), submits.Load())
 }

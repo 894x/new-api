@@ -12,10 +12,13 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/channel"
 	taskplugin "github.com/QuantumNous/new-api/relay/channel/task/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -203,4 +206,103 @@ func TestSeedanceSLSPluginTransformsMediaBeforeValidation(t *testing.T) {
 	assert.Len(t, downloads, 1)
 	require.Len(t, info.ParameterCapabilityAudit, 1)
 	assert.Equal(t, "image_url_to_base64", info.ParameterCapabilityAudit[0].Action)
+}
+
+func TestSeedanceSLSPluginArtifactFallbackAndLastFrame(t *testing.T) {
+	adaptor := taskplugin.New(seedanceSLSPlugin(t))
+	adaptor.Init(&relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: "https://sls.example", ApiKey: "private-key"}})
+	for _, tc := range []struct {
+		name, data, key, wantURL string
+		wantArtifacts            int
+	}{
+		{"legacy stored URL", "", "video", "https://legacy.example/video.mp4", 1},
+		{"provider URL wins", `{"result_url":"https://cdn.example/video.mp4"}`, "video", "https://cdn.example/video.mp4", 1},
+		{"last frame", `{"code":"success","data":{"result_url":"https://cdn.example/video.mp4","last_frame_url":"https://cdn.example/frame.png"}}`, "last_frame", "https://cdn.example/frame.png", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &model.Task{TaskID: "task_public", Status: model.TaskStatusSuccess, Data: []byte(tc.data),
+				PrivateData: model.TaskPrivateData{ResultURL: "https://legacy.example/video.mp4"}}
+			artifacts, err := adaptor.ListArtifacts(task)
+			require.NoError(t, err)
+			require.Len(t, artifacts, tc.wantArtifacts)
+			descriptor, err := adaptor.BuildContentRequest(task, tc.key, channel.TaskArtifactClientRequest{Method: http.MethodHead})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantURL, descriptor.URL)
+			assert.Equal(t, http.MethodHead, descriptor.Method)
+			assert.True(t, descriptor.Credentialless)
+			assert.Empty(t, descriptor.Headers)
+			assert.Empty(t, descriptor.Body)
+			task.Status = model.TaskStatusFailure
+			artifacts, err = adaptor.ListArtifacts(task)
+			require.NoError(t, err)
+			assert.Empty(t, artifacts)
+		})
+	}
+}
+
+func TestSeedanceSLSPluginMappedCapabilitiesPreserveConfiguredRules(t *testing.T) {
+	for _, tc := range []struct {
+		name, duration string
+		override       map[string]any
+		allowed        []string
+		want           float64
+		wantError      bool
+	}{
+		{"automatic", "-1", nil, []string{"-1", "4", "15"}, -1, false},
+		{"automatic disabled", "-1", nil, []string{"4", "15"}, 0, true},
+		{"duration rejected", "16", nil, []string{"4", "15"}, 0, true},
+		{"override before validation", "16", map[string]any{"duration": 4}, []string{"4"}, 4, false},
+		{"override cannot bypass validation", "4", map[string]any{"duration": 16}, []string{"4"}, 0, true},
+		{"typed value validation", `"4"`, nil, []string{"4"}, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"public-model","content":[{"type":"text","text":"A cat"}],"duration":`+tc.duration+`,"seed":0,"generate_audio":false}`))
+			c.Request.Header.Set("Content-Type", gin.MIMEJSON)
+			t.Cleanup(func() { common.CleanupBodyStorage(c) })
+			minimum, maximum := -1.0, 15.0
+			info := &relaycommon.RelayInfo{OriginModelName: "public-model", TaskRelayInfo: &relaycommon.TaskRelayInfo{}, ChannelMeta: &relaycommon.ChannelMeta{
+				ChannelBaseUrl: "https://sls.example", UpstreamModelName: "upstream-model", ParamOverride: tc.override,
+				ChannelOtherSettings: kitdto.ChannelOtherSettings{ParameterCapabilities: &kitdto.ParameterCapabilityConfig{Rules: []kitdto.ModelParameterCapabilityRule{{
+					Selector:   kitdto.ParameterCapabilitySelector{Type: "exact", Value: "upstream-model"},
+					Parameters: map[string]kitdto.ParameterCapability{"duration": {Min: &minimum, Max: &maximum, AllowedValues: tc.allowed}},
+				}}}},
+			}}
+			adaptor := taskplugin.New(seedanceSLSPlugin(t))
+			adaptor.Init(info)
+			require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
+			taskErr := adaptor.ValidateMappedRequest(c, info)
+			if tc.wantError {
+				require.NotNil(t, taskErr)
+				assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+				assert.True(t, taskErr.LocalError)
+				assert.Contains(t, taskErr.Message, "duration")
+				return
+			}
+			require.Nil(t, taskErr)
+			reader, err := adaptor.BuildRequestBody(c, info)
+			require.NoError(t, err)
+			var body map[string]any
+			require.NoError(t, common.DecodeJson(reader, &body))
+			assert.Equal(t, tc.want, body["duration"])
+			assert.Equal(t, "upstream-model", body["model"])
+			assert.Equal(t, float64(0), body["seed"])
+			assert.Equal(t, false, body["generate_audio"])
+		})
+	}
+}
+
+func TestSeedanceSLSPluginRetainsPublicModelsAndDefaultPrices(t *testing.T) {
+	assert.Equal(t, []string{
+		"doubao-seedance-1-0-pro-250528", "doubao-seedance-1-0-lite-t2v", "doubao-seedance-1-0-lite-i2v", "doubao-seedance-1-5-pro-251215",
+		"doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128", "doubao-seedance-2-0-mini-260615", "doubao-seedance-2-5-260628",
+	}, taskplugin.New(seedanceSLSPlugin(t)).GetModelList())
+	defaults := ratio_setting.GetDefaultModelRatioMap()
+	for alias, versioned := range map[string]string{
+		"doubao-seedance-2-0": "doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast": "doubao-seedance-2-0-fast-260128", "doubao-seedance-2-0-mini": "doubao-seedance-2-0-mini-260615",
+	} {
+		assert.Positive(t, defaults[alias], alias)
+		assert.Equal(t, defaults[versioned], defaults[alias], alias)
+	}
+	assert.InDelta(t, 4.794520547945205, defaults["doubao-seedance-2-5-260628"], 1e-12)
 }

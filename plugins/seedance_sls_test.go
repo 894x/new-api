@@ -105,27 +105,67 @@ func TestSeedanceSLSPluginNestedPollingAndIdentityContract(t *testing.T) {
 	assert.Empty(t, value.(map[string]any)["url"])
 }
 
-func TestSeedanceSLSPluginApproved25Ratios(t *testing.T) {
+func TestSeedanceSLSPluginPreservesResolutionAndVideoRatios(t *testing.T) {
 	plugin := seedanceSLSPlugin(t)
 	for _, tc := range []struct {
+		model      string
 		resolution string
 		video      bool
 		want       float64
 	}{
-		{"1080p", false, 11.7 / 10.7}, {"1080p", true, 7 / 10.7}, {"720p", true, 42.0 / 70},
+		{"doubao-seedance-2-0-260128", "720p", false, 1},
+		{"doubao-seedance-2-0-260128", "720p", true, 28.0 / 46},
+		{"doubao-seedance-2-0-260128", "1080p", false, 51.0 / 46},
+		{"doubao-seedance-2-0-260128", "1080p", true, 31.0 / 46},
+		{"doubao-seedance-2-0-260128", "4K", false, 26.0 / 46},
+		{"doubao-seedance-2-0-260128", "4K", true, 16.0 / 46},
+		{"doubao-seedance-2-0-fast-260128", "720p", true, 22.0 / 37},
+		{"doubao-seedance-2-0-mini-260615", "720p", true, 14.0 / 23},
+		{"doubao-seedance-2-5-260628", "1080p", false, 11.7 / 10.7},
+		{"doubao-seedance-2-5-260628", "1080p", true, 7 / 10.7},
+		{"doubao-seedance-2-5-260628", "720p", true, 42.0 / 70},
+		{"doubao-seedance-2-5-260628", "720p", false, 1},
+		{"public-alias", "1080p", true, 1},
 	} {
 		content := []any{map[string]any{"type": "text", "text": "a fox"}}
 		if tc.video {
 			content = append(content, map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://cdn.example/ref.mp4"}})
 		}
 		value, err := plugin.Engine.Call(t.Context(), "extractUsage", map[string]any{
-			"model": "doubao-seedance-2-5-260628", "usagePurpose": "billing_ratios",
+			"model": tc.model, "usagePurpose": "billing_ratios",
 			"preparedRequestBody": map[string]any{"content": content, "resolution": tc.resolution},
 		})
 		require.NoError(t, err)
+		if tc.want == 1 {
+			assert.Nil(t, value, tc.model)
+			continue
+		}
 		ratios, ok := value.(map[string]any)
 		require.True(t, ok)
 		assert.InDelta(t, tc.want, ratios["video_input"], 1e-12)
+	}
+}
+
+func TestSeedanceSLSPluginCompatiblePromptImagesAndMetadata(t *testing.T) {
+	plugin := seedanceSLSPlugin(t)
+	metadata := map[string]any{"model": "must-not-replace-mapping", "duration": 4, "seed": 0, "generate_audio": false, "future": map[string]any{"enabled": false}}
+	encodedMetadata, err := common.Marshal(metadata)
+	require.NoError(t, err)
+	for _, metadataValue := range []any{metadata, string(encodedMetadata)} {
+		intent, err := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+			"model": "public-alias", "body": map[string]any{"kind": "json", "value": map[string]any{
+				"prompt": "Animate the frame", "images": []any{"https://cdn.example/frame.png"}, "seconds": 5, "metadata": metadataValue,
+			}},
+		})
+		require.NoError(t, err)
+		value, err := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{
+			"model": "public-alias", "upstreamModel": "mapped-model", "baseUrl": "https://sls.example",
+			"requestBody": intent.(map[string]any)["requestBody"],
+		})
+		require.NoError(t, err)
+		body, err := common.Marshal(value.(map[string]any)["body"])
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"model":"mapped-model","content":[{"type":"image_url","image_url":{"url":"https://cdn.example/frame.png"}},{"type":"text","text":"Animate the frame"}],"duration":5,"seed":0,"generate_audio":false,"future":{"enabled":false}}`, string(body))
 	}
 }
 

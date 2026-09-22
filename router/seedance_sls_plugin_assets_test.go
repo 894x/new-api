@@ -82,13 +82,17 @@ func TestSeedanceSLSPluginManagedAssetsEndToEnd(t *testing.T) {
 						return
 					}
 					content, ok := payload["content"].([]any)
-					if !ok || !assert.Len(t, content, 2) {
+					if !ok || !assert.Len(t, content, 3) {
 						http.Error(w, "missing reference", 400)
 						return
 					}
 					first := content[0].(map[string]any)
 					assert.Equal(t, "asset://lass_sls_image", first["image_url"].(map[string]any)["url"])
 					assert.Equal(t, "first_frame", first["role"])
+					last := content[1].(map[string]any)
+					assert.Equal(t, "asset://lass_sls_image", last["image_url"].(map[string]any)["url"])
+					assert.Equal(t, "last_frame", last["role"])
+					assert.Equal(t, f.source.URL, payload["webhook_url"], "only media references are rewritten")
 					assert.Equal(t, false, payload["generate_audio"])
 					_, _ = fmt.Fprintf(w, `{"task_id":"sls-asset-task-%d"}`, submits.Add(1))
 				default:
@@ -102,8 +106,10 @@ func TestSeedanceSLSPluginManagedAssetsEndToEnd(t *testing.T) {
 			require.NoError(t, model.DB.Create(&model.ChannelAssetConfig{ChannelId: channel.Id, Enabled: true, Backend: service.AssetLibraryBackendSeedanceSLS, BaseURL: provider.URL, AuthType: service.AssetLibraryAuthBearer, APIKey: "library-only-key"}).Error)
 			model.InitChannelCache()
 			imageURL := map[string]any{"url": f.source.URL}
-			payload := map[string]any{"model": "doubao-seedance-2-0-260128", "duration": 4, "resolution": "480p", "generate_audio": false, "content": []any{
-				map[string]any{"type": "image_url", "image_url": imageURL, "role": "first_frame"}, map[string]any{"type": "text", "text": "Animate retained image"},
+			payload := map[string]any{"model": "doubao-seedance-2-0-260128", "duration": 4, "resolution": "480p", "generate_audio": false, "webhook_url": f.source.URL, "content": []any{
+				map[string]any{"type": "image_url", "image_url": imageURL, "role": "first_frame"},
+				map[string]any{"type": "image_url", "image_url": imageURL, "role": "last_frame"},
+				map[string]any{"type": "text", "text": "Animate retained image"},
 			}}
 			status, headers, body := f.request(t, http.MethodPost, path, "assete2euserkey", payload)
 			require.Equal(t, http.StatusOK, status, string(body))
