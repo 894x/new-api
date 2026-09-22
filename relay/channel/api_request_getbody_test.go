@@ -362,7 +362,18 @@ func runResetOnFirstStreamServer(ln net.Listener, expectRetry bool) <-chan h2Ser
 			res.err = err
 			return
 		}
-		defer conn.Close()
+		defer func() {
+			// Deliver RST_STREAM (or the final response) before closing the
+			// connection. Unread SETTINGS acknowledgments otherwise turn a
+			// stream reset into a TCP reset on Windows.
+			if res.err == nil {
+				res.err = conn.(*net.TCPConn).CloseWrite()
+				if res.err == nil {
+					_, res.err = io.Copy(io.Discard, conn)
+				}
+			}
+			conn.Close()
+		}()
 
 	attempts:
 		for attempt := 0; ; attempt++ {
