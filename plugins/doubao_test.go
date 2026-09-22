@@ -96,22 +96,27 @@ func TestDoubaoPluginNativeDraftContract(t *testing.T) {
 	assert.JSONEq(t, raw, string(unchanged), "the canonical request must remain usable by another channel retry")
 }
 
-func TestDoubaoPluginApprovedPricingContract(t *testing.T) {
+func TestDoubaoPluginPreservesPricingAndApproved25Rates(t *testing.T) {
 	plugin := doubaoPlugin(t)
 	for _, tc := range []struct {
-		resolution string
-		video      bool
-		want       float64
+		model, resolution string
+		video             bool
+		want              float64
 	}{
-		{"1080p", false, 11.7 / 10.7}, {"1080p", true, 7.0 / 10.7},
-		{"720p", false, 1}, {"720p", true, 42.0 / 70.0},
+		{"doubao-seedance-2-5-260628", "1080p", false, 11.7 / 10.7}, {"doubao-seedance-2-5-260628", "1080p", true, 7.0 / 10.7},
+		{"doubao-seedance-2-5-260628", "720p", false, 1}, {"doubao-seedance-2-5-260628", "720p", true, 42.0 / 70.0},
+		{"doubao-seedance-2-0-260128", "720p", false, 1}, {"doubao-seedance-2-0-260128", "720p", true, 28.0 / 46.0},
+		{"doubao-seedance-2-0-260128", "1080p", false, 51.0 / 46.0}, {"doubao-seedance-2-0-260128", "1080p", true, 31.0 / 46.0},
+		{"doubao-seedance-2-0-260128", "4k", false, 26.0 / 46.0}, {"doubao-seedance-2-0-260128", "4k", true, 16.0 / 46.0},
+		{"doubao-seedance-2-0-fast-260128", "720p", true, 22.0 / 37.0}, {"doubao-seedance-2-0-mini-260615", "720p", true, 14.0 / 23.0},
+		{"public-model-alias", "1080p", true, 1},
 	} {
 		content := []any{map[string]any{"type": "text", "text": "fox"}}
 		if tc.video {
 			content = append(content, map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://example.com/input.mp4"}})
 		}
 		value, err := plugin.Engine.Call(t.Context(), "extractUsage", map[string]any{
-			"model": "doubao-seedance-2-5-260628", "usagePurpose": "billing_ratios",
+			"model": tc.model, "usagePurpose": "billing_ratios",
 			"requestBody": map[string]any{"metadata": map[string]any{"resolution": tc.resolution, "content": content}},
 		})
 		require.NoError(t, err)

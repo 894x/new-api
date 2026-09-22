@@ -41,7 +41,10 @@ func TestDoubaoPluginNativeHistoricalTaskQueries(t *testing.T) {
 				}
 				task.SetData(map[string]any{"id": "private-upstream-id", "model": "private-deployment", "status": "queued",
 					"seed": 0, "generate_audio": false, "content": map[string]any{"last_frame_url": "https://cdn.example.com/last.png"},
-					"usage": map[string]any{"completion_tokens": 321, "total_tokens": 321},
+					"resolution": "480p", "ratio": "16:9", "duration": 4, "framespersecond": 24,
+					"tools": []any{map[string]any{"type": "web_search"}}, "safety_identifier": "user-123",
+					"priority": 0, "draft": false, "draft_task_id": "task_draft", "service_tier": "default", "execution_expires_after": 172800,
+					"usage": map[string]any{"completion_tokens": 321, "total_tokens": 321, "tool_usage": map[string]any{"web_search": 1}},
 				})
 				if tc.state == model.TaskStatusFailure {
 					task.FailReason = "provider-private-diagnostic"
@@ -67,7 +70,14 @@ func TestDoubaoPluginNativeHistoricalTaskQueries(t *testing.T) {
 					} else {
 						assert.Equal(t, float64(0), response["seed"])
 						assert.Equal(t, false, response["generate_audio"])
-						assert.Equal(t, map[string]any{"completion_tokens": float64(321), "total_tokens": float64(321)}, response["usage"])
+						assert.Equal(t, map[string]any{"completion_tokens": float64(321), "total_tokens": float64(321), "tool_usage": map[string]any{"web_search": float64(1)}}, response["usage"])
+						for field, want := range map[string]any{
+							"resolution": "480p", "ratio": "16:9", "duration": float64(4), "framespersecond": float64(24),
+							"tools": []any{map[string]any{"type": "web_search"}}, "safety_identifier": "user-123",
+							"priority": float64(0), "draft": false, "draft_task_id": "task_draft", "service_tier": "default", "execution_expires_after": float64(172800),
+						} {
+							assert.Equal(t, want, response[field], field)
+						}
 						if tc.state == model.TaskStatusSuccess {
 							assert.Equal(t, map[string]any{"video_url": task.PrivateData.ResultURL, "last_frame_url": "https://cdn.example.com/last.png"}, response["content"])
 						}

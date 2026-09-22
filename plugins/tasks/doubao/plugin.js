@@ -395,14 +395,14 @@ export function listArtifacts(task) {
   if (task.status !== "SUCCESS") return [];
   const content = artifactData(task).content || {};
   const artifacts = [];
-  if (trimmed(content.video_url)) artifacts.push({ key: "video", type: "video" });
+  if (trimmed(content.video_url) || trimmed(task.resultUrl)) artifacts.push({ key: "video", type: "video" });
   if (trimmed(content.last_frame_url)) artifacts.push({ key: "last_frame", type: "image", mimeType: "image/png" });
   return artifacts;
 }
 
 export function buildContentRequest(ctx) {
   const content = artifactData(ctx).content || {};
-  const urls = { video: content.video_url, last_frame: content.last_frame_url };
+  const urls = { video: trimmed(content.video_url) || ctx.resultUrl, last_frame: content.last_frame_url };
   const url = trimmed(urls[ctx.artifactKey]);
   if (!url) throw new Error("artifact_not_found");
   return { url: url, method: ctx.clientRequest.method, credentialless: true };

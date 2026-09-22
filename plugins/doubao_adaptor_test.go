@@ -11,16 +11,59 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/channel"
 	taskplugin "github.com/QuantumNous/new-api/relay/channel/task/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestDoubaoPluginHistoricalArtifactsAndLastFrame(t *testing.T) {
+	adaptor := taskplugin.New(doubaoPlugin(t))
+	adaptor.Init(&relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: "https://provider.example", ApiKey: "private-key"}})
+	for _, tc := range []struct {
+		name, data, key, wantURL string
+		count                    int
+	}{
+		{"legacy URL", "", "video", "https://legacy.example/video.mp4", 1},
+		{"provider URL wins", `{"content":{"video_url":"https://cdn.example/current.mp4"}}`, "video", "https://cdn.example/current.mp4", 1},
+		{"last frame", `{"content":{"last_frame_url":"https://cdn.example/last.png"}}`, "last_frame", "https://cdn.example/last.png", 2},
+		{"wrapped provider data", `{"data":{"task_id":"public-task","data":{"content":{"video_url":"https://cdn.example/wrapped.mp4"}}}}`, "video", "https://cdn.example/wrapped.mp4", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &model.Task{TaskID: "public-task", Status: model.TaskStatusSuccess, Data: []byte(tc.data),
+				PrivateData: model.TaskPrivateData{ResultURL: "https://legacy.example/video.mp4"}}
+			artifacts, err := adaptor.ListArtifacts(task)
+			require.NoError(t, err)
+			require.Len(t, artifacts, tc.count)
+			descriptor, err := adaptor.BuildContentRequest(task, tc.key, channel.TaskArtifactClientRequest{Method: http.MethodHead})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantURL, descriptor.URL)
+			assert.Equal(t, http.MethodHead, descriptor.Method)
+			assert.True(t, descriptor.Credentialless)
+			assert.Empty(t, descriptor.Headers)
+			assert.Empty(t, descriptor.Body)
+			for _, status := range []model.TaskStatus{model.TaskStatusInProgress, model.TaskStatusFailure} {
+				task.Status = status
+				artifacts, err = adaptor.ListArtifacts(task)
+				require.NoError(t, err)
+				assert.Empty(t, artifacts)
+			}
+		})
+	}
+}
+
+func TestDoubaoPluginRetainsPublicModelsAndDefaultPrices(t *testing.T) {
+	assert.Equal(t, []string{"doubao-seedance-1-0-pro-250528", "doubao-seedance-1-0-lite-t2v", "doubao-seedance-1-0-lite-i2v", "doubao-seedance-1-5-pro-251215",
+		"doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128", "doubao-seedance-2-0-mini-260615", "doubao-seedance-2-5-260628"}, taskplugin.New(doubaoPlugin(t)).GetModelList())
+	assert.InDelta(t, 4.794520547945205, ratio_setting.GetDefaultModelRatioMap()["doubao-seedance-2-5-260628"], 1e-12)
+}
 
 func TestDoubaoPluginConfiguredTransportPaths(t *testing.T) {
 	for _, tc := range []struct {
