@@ -1,14 +1,60 @@
 package plugins_test
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/channel"
 	taskplugin "github.com/QuantumNous/new-api/relay/channel/task/jsplugin"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAlibabaPluginHistoricalArtifactsAndProviderPriority(t *testing.T) {
+	adaptor := taskplugin.New(alibabaPlugin(t))
+	adaptor.Init(&relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: "https://provider.example", ApiKey: "private-key"}})
+	for _, tc := range []struct{ name, data, wantURL string }{
+		{"private fallback", "", "https://legacy.example/video.mp4"},
+		{"provider URL wins", `{"output":{"video_url":"https://cdn.example/current.mp4"}}`, "https://cdn.example/current.mp4"},
+		{"wrapped provider data", `{"data":{"task_id":"public-task","data":{"output":{"video_url":"https://cdn.example/wrapped.mp4"}}}}`, "https://cdn.example/wrapped.mp4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &model.Task{TaskID: "public-task", Status: model.TaskStatusSuccess, Data: []byte(tc.data),
+				PrivateData: model.TaskPrivateData{ResultURL: "https://legacy.example/video.mp4"}}
+			artifacts, err := adaptor.ListArtifacts(task)
+			require.NoError(t, err)
+			assert.Equal(t, []channel.TaskArtifact{{Key: "video", Type: "video"}}, artifacts)
+			descriptor, err := adaptor.BuildContentRequest(task, "video", channel.TaskArtifactClientRequest{Method: http.MethodHead})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantURL, descriptor.URL)
+			assert.Equal(t, http.MethodHead, descriptor.Method)
+			assert.True(t, descriptor.Credentialless)
+			assert.Empty(t, descriptor.Headers)
+			assert.Empty(t, descriptor.Body)
+			_, err = adaptor.BuildContentRequest(task, "unknown", channel.TaskArtifactClientRequest{Method: http.MethodGet})
+			require.ErrorContains(t, err, "artifact_not_found")
+			for _, status := range []model.TaskStatus{model.TaskStatusInProgress, model.TaskStatusFailure} {
+				task.Status = status
+				artifacts, err = adaptor.ListArtifacts(task)
+				require.NoError(t, err)
+				assert.Empty(t, artifacts)
+			}
+		})
+	}
+}
+
+func TestAlibabaPluginRetainsPublicModelsAndDefaultPrices(t *testing.T) {
+	models := taskplugin.New(alibabaPlugin(t)).GetModelList()
+	assert.Subset(t, models, []string{"wan3.0-video-prime", "wan3.0-video", "wan2.7-i2v", "wan2.7-t2v", "wan2.5-i2v-preview",
+		"wan2.2-i2v-flash", "wan2.2-i2v-plus", "wanx2.1-i2v-plus", "wanx2.1-i2v-turbo"})
+	defaults := ratio_setting.GetDefaultModelRatioMap()
+	assert.InDelta(t, 2*0.3/ratio_setting.USD2RMB, defaults["wan3.0-video"], 1e-12)
+	assert.InDelta(t, 2*0.45/ratio_setting.USD2RMB, defaults["wan3.0-video-prime"], 1e-12)
+}
 
 func TestWan3PluginSettlesActualDurationWithFrozenResolution(t *testing.T) {
 	plugin := alibabaPlugin(t)

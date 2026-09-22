@@ -390,12 +390,12 @@ function artifactData(ctx) {
 
 export function listArtifacts(task) {
   const output = artifactData(task).output || {};
-  return task.status === "SUCCESS" && trimmed(output.video_url) ? [{ key: "video", type: "video" }] : [];
+  return task.status === "SUCCESS" && (trimmed(output.video_url) || trimmed(task.resultUrl)) ? [{ key: "video", type: "video" }] : [];
 }
 
 export function buildContentRequest(ctx) {
   if (ctx.artifactKey !== "video") throw new Error("artifact_not_found");
-  const url = trimmed((artifactData(ctx).output || {}).video_url);
+  const url = trimmed((artifactData(ctx).output || {}).video_url) || trimmed(ctx.resultUrl);
   if (!url) throw new Error("artifact_not_found");
   return { url: url, method: ctx.clientRequest.method, credentialless: true };
 }

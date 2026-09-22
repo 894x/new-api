@@ -131,3 +131,86 @@ func TestWanPluginSharedMediaDefaultsAndOptionalZeros(t *testing.T) {
 		})
 	}
 }
+
+func TestWan27PluginPreservesMediaSelection(t *testing.T) {
+	plugin := alibabaPlugin(t)
+	for _, tc := range []struct{ name, request, media string }{
+		{"direct image wins", `{"image":" direct.png ","images":["other.png"," last.png "],"input_reference":"ref.png"}`, `[{"type":"first_frame","url":"direct.png"},{"type":"last_frame","url":"last.png"}]`},
+		{"skip empty images", `{"image":" ","images":[" "," first.png "," last.png "],"input_reference":"ref.png"}`, `[{"type":"first_frame","url":"first.png"},{"type":"last_frame","url":"last.png"}]`},
+		{"input reference fallback", `{"image":" ","images":[" "],"input_reference":" ref.png "}`, `[{"type":"first_frame","url":"ref.png"}]`},
+		{"explicit media wins", `{"image":"direct.png","images":["first.png","last.png"],"metadata":{"input":{"media":[{"type":"first_clip","url":"clip.mp4"}]}}}`, `[{"type":"first_clip","url":"clip.mp4"}]`},
+		{"explicit frame fields", `{"image":"direct.png","metadata":{"input":{"first_frame_url":"first.png","last_frame_url":"last.png","audio_url":"voice.mp3"}}}`, `[{"type":"first_frame","url":"first.png"},{"type":"last_frame","url":"last.png"},{"type":"driving_audio","url":"voice.mp3"}]`},
+		{"image required", `{}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var req map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(tc.request, &req))
+			req["prompt"] = "animate"
+			req["size"], req["duration"] = "720p", 10
+			value, err := plugin.Engine.Call(context.Background(), "buildSubmitRequest", map[string]any{"model": "wan2.7-i2v", "upstreamModel": "wan2.7-i2v", "requestBody": req})
+			if tc.media == "" {
+				require.ErrorContains(t, err, "requires image")
+				return
+			}
+			require.NoError(t, err)
+			body, err := common.Marshal(value.(map[string]any)["body"])
+			require.NoError(t, err)
+			assert.JSONEq(t, `{"model":"wan2.7-i2v","input":{"prompt":"animate","media":`+tc.media+`},"parameters":{"duration":10,"resolution":"720P","prompt_extend":true,"watermark":false}}`, string(body))
+		})
+	}
+}
+
+func TestAlibabaPluginPreservesPollingStatusAndFailureDetails(t *testing.T) {
+	plugin := alibabaPlugin(t)
+	for _, tc := range []struct{ status, body, expected string }{
+		{"PENDING", `{}`, `{"status":"QUEUED"}`},
+		{"RUNNING", `{}`, `{"status":"IN_PROGRESS"}`},
+		{"unrecognized", `{}`, `{"status":"QUEUED"}`},
+		{"FAILED", `{"message":"top level failure","output":{"code":"InvalidInput","message":"nested failure"}}`, `{"status":"FAILURE","reason":"top level failure","usage":null}`},
+		{"CANCELED", `{"output":{"code":"Canceled","message":"cancelled by provider"}}`, `{"status":"FAILURE","reason":"task failed, code: Canceled , message: cancelled by provider","usage":null}`},
+		{"UNKNOWN", `{}`, `{"status":"FAILURE","reason":"task failed","usage":null}`},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			var body map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(tc.body, &body))
+			output, ok := body["output"].(map[string]any)
+			if !ok {
+				output = map[string]any{}
+				body["output"] = output
+			}
+			output["task_status"] = tc.status
+			value, err := plugin.Engine.Call(context.Background(), "parseTaskResult", map[string]any{}, body)
+			require.NoError(t, err)
+			encoded, err := common.Marshal(value)
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.expected, string(encoded))
+		})
+	}
+}
+
+func TestWanPluginRetainsResolutionPricing(t *testing.T) {
+	plugin := alibabaPlugin(t)
+	for _, tc := range []struct {
+		model, resolution string
+		ratio             float64
+	}{
+		{"wan3.0-video", "480P", 1}, {"wan3.0-video", "720P", 2}, {"wan3.0-video", "1080P", 4},
+		{"wan3.0-video-prime", "480P", 1}, {"wan3.0-video-prime", "720P", 2}, {"wan3.0-video-prime", "1080P", 4},
+		{"wan2.5-i2v-preview", "480P", 1}, {"wan2.5-i2v-preview", "720P", 2}, {"wan2.5-i2v-preview", "1080P", 1 / 0.3},
+		{"wan2.2-i2v-plus", "480P", 1}, {"wan2.2-i2v-plus", "1080P", 5},
+		{"wan2.2-i2v-flash", "480P", 1}, {"wan2.2-i2v-flash", "720P", 2},
+	} {
+		t.Run(tc.model+"/"+tc.resolution, func(t *testing.T) {
+			value, err := plugin.Engine.Call(context.Background(), "extractUsage", map[string]any{
+				"model": tc.model, "upstreamModel": tc.model, "usagePurpose": "billing_ratios",
+				"requestBody": map[string]any{"prompt": "animate", "duration": 5, "size": tc.resolution},
+			})
+			require.NoError(t, err)
+			encoded, err := common.Marshal(value)
+			require.NoError(t, err)
+			var ratios map[string]float64
+			require.NoError(t, common.Unmarshal(encoded, &ratios))
+			assert.Equal(t, map[string]float64{"seconds": 5, "resolution-" + tc.resolution: tc.ratio}, ratios)
+		})
+	}
+}
