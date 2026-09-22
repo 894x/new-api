@@ -14,10 +14,58 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel"
 	taskplugin "github.com/QuantumNous/new-api/relay/channel/task/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHailuoPluginPreservesModelsAndH3DefaultPrice(t *testing.T) {
+	assert.ElementsMatch(t, []string{"MiniMax-H3", "MiniMax-Hailuo-2.3", "MiniMax-Hailuo-2.3-Fast", "MiniMax-Hailuo-02", "T2V-01-Director", "T2V-01", "I2V-01-Director", "I2V-01-live", "I2V-01", "S2V-01"}, taskplugin.New(h3Plugin(t)).GetModelList())
+	assert.InDelta(t, 1/ratio_setting.USD2RMB, ratio_setting.GetDefaultModelRatioMap()["MiniMax-H3"], 1e-12)
+}
+
+func TestH3PluginPrechargeImageAllowance(t *testing.T) {
+	plugin := h3Plugin(t)
+	for _, tc := range []struct {
+		name, origin, upstream, resolution string
+		images, seconds                    int
+		units                              float64
+	}{
+		{"text only", "MiniMax-H3", "MiniMax-H3", "768P", 0, 5, 5},
+		{"five free images", "MiniMax-H3", "MiniMax-H3", "768P", 5, 5, 5},
+		{"sixth image charged", "MiniMax-H3", "MiniMax-H3", "768P", 6, 5, 5.4},
+		{"2K image surcharge", "MiniMax-H3", "vendor-h3", "2K", 7, 5, 8.8},
+		{"alias at maximum inputs", "customer-h3", "MiniMax-H3", "2K", 9, 15, 25.6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := []any{map[string]any{"type": "text", "text": "animate"}}
+			for range tc.images {
+				content = append(content, map[string]any{"type": "image_url", "role": "reference_image", "image_url": map[string]any{"url": "https://media.example/image.png"}})
+			}
+			info := &relaycommon.RelayInfo{OriginModelName: tc.origin, TaskRelayInfo: &relaycommon.TaskRelayInfo{}, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: tc.upstream, ChannelBaseUrl: "https://provider.example"}}
+			adaptor := taskplugin.New(plugin)
+			adaptor.Init(info)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+			ctx.Set("task_request", map[string]any{"model": tc.origin, "metadata": map[string]any{"duration": tc.seconds, "resolution": tc.resolution, "content": content}})
+			require.Nil(t, adaptor.ValidateRequestAndSetAction(ctx, info))
+			ratios, err := adaptor.EstimateBillingValidated(ctx, info)
+			require.NoError(t, err)
+			assert.Equal(t, float64(tc.seconds), ratios["seconds"])
+			resolution := 1.0
+			if tc.resolution == "2K" {
+				resolution = 1.6
+			}
+			assert.Equal(t, resolution, ratios["resolution_multiplier"])
+			assert.InDelta(t, tc.units, ratios["seconds"]*ratios["resolution_multiplier"]*ratios["image_surcharge"], 1e-12)
+			facts, err := adaptor.ExtractUsageFactsValidated(ctx, info)
+			require.NoError(t, err)
+			assert.Equal(t, tc.resolution, facts["resolution"])
+			assert.Equal(t, float64(tc.seconds), facts["seconds"])
+		})
+	}
+}
 
 func TestH3PluginActualUsageAndFrozenImageSurcharge(t *testing.T) {
 	plugin := h3Plugin(t)

@@ -191,3 +191,66 @@ func TestH3PluginQueryRoutesAndTransientFailures(t *testing.T) {
 		assert.Equal(t, "provider failed", result["reason"])
 	}
 }
+
+func TestH3PluginMediaCountsAndRoles(t *testing.T) {
+	plugin := h3Plugin(t)
+	for _, tc := range []struct {
+		name                   string
+		images, videos, audios int
+		first, last            int
+		want                   string
+	}{
+		{"maximum references", 9, 3, 3, 0, 0, ""},
+		{"two frame images", 0, 0, 0, 1, 1, ""},
+		{"too many images", 10, 0, 0, 0, 0, "at most 9 reference images"},
+		{"too many videos", 0, 4, 0, 0, 0, "at most 3 reference videos"},
+		{"too many audios", 0, 0, 4, 0, 0, "at most 3 reference videos and 3 reference audios"},
+		{"duplicate first frame", 0, 0, 0, 2, 0, "at most one first_frame"},
+		{"duplicate last frame", 0, 0, 0, 0, 2, "at most one first_frame"},
+		{"frame and image reference", 1, 0, 0, 1, 0, "cannot mix frame images"},
+		{"frame and video reference", 0, 1, 0, 0, 1, "cannot mix frame images"},
+		{"frame and audio reference", 0, 0, 1, 1, 0, "cannot mix frame images"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := []any{map[string]any{"type": "text", "text": "animate"}}
+			for _, media := range []struct {
+				kind, role string
+				count      int
+			}{{"image", "reference_image", tc.images}, {"video", "reference_video", tc.videos}, {"audio", "reference_audio", tc.audios}, {"image", "first_frame", tc.first}, {"image", "last_frame", tc.last}} {
+				for range media.count {
+					content = append(content, map[string]any{"type": media.kind + "_url", "role": media.role, media.kind + "_url": map[string]any{"url": "https://media.example/input"}})
+				}
+			}
+			request := map[string]any{"model": "MiniMax-H3", "duration": 5, "resolution": "768P", "content": content}
+			_, nativeErr := plugin.Engine.CallMember(t.Context(), "native", "createH3", map[string]any{"body": map[string]any{"kind": "json", "value": request}})
+			_, sharedErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{"model": "customer-h3", "upstreamModel": "MiniMax-H3", "baseUrl": "https://provider.example", "requestBody": request})
+			if tc.want != "" {
+				require.ErrorContains(t, nativeErr, tc.want)
+				require.ErrorContains(t, sharedErr, tc.want)
+				return
+			}
+			require.NoError(t, nativeErr)
+			require.NoError(t, sharedErr)
+		})
+	}
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{"shortcut frames", `{"images":["a","b","c"]}`, "at most 2 frame images"},
+		{"shortcut videos", `{"metadata":{"reference_video":["a","b","c","d"]}}`, "at most 3 reference videos"},
+		{"shortcut audios", `{"metadata":{"reference_audio":["a","b","c","d"]}}`, "at most 3 reference audios"},
+		{"numeric role", `{"content":[{"type":"image_url","role":1,"image_url":{"url":"image"}}]}`, "role must be a string"},
+		{"text role", `{"content":[{"type":"text","text":"prompt","role":"reference_image"}]}`, "without a role"},
+		{"wrong video role", `{"content":[{"type":"video_url","role":"reference_image","video_url":{"url":"video"}}]}`, "video_url role must be reference_video"},
+		{"wrong audio role", `{"content":[{"type":"audio_url","role":"reference_video","audio_url":{"url":"audio"}}]}`, "audio_url role must be reference_audio"},
+		{"wrong image role", `{"content":[{"type":"image_url","role":"reference_video","image_url":{"url":"image"}}]}`, "image_url role must be"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var request map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(tc.input, &request))
+			request["prompt"] = "animate"
+			_, err := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{"model": "MiniMax-H3", "upstreamModel": "MiniMax-H3", "baseUrl": "https://provider.example", "requestBody": request})
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
