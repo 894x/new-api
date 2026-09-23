@@ -103,6 +103,28 @@ func useGroupModelRateLimitSettings(t *testing.T, useRedis bool, groups string) 
 	require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(groups))
 }
 
+func TestModelModifiersShareRPMBucketAndKeepExplicitRules(t *testing.T) {
+	for _, useRedis := range []bool{false, true} {
+		t.Run(fmt.Sprint(useRedis), func(t *testing.T) {
+			useGroupModelRateLimitSettings(t, useRedis, `{"vip":{"limits":[0,100,0],"models":{"model-a":{"rpm":1},"model-a@thinking:on":{"rpm":1}}}}`)
+			router := groupModelRateLimitRouter()
+			for _, request := range []struct {
+				model string
+				want  int
+			}{
+				{"model-a@temperature:0.2", 204},
+				{"model-a@temperature:0.3", 429},
+				{"model-a", 429},
+				{"model-a@thinking:on@temperature:0.2", 204},
+				{"model-a@temperature:0.3@thinking:on", 429},
+			} {
+				response := performGroupModelRequest(router, "604", request.model)
+				assert.Equal(t, request.want, response.Code, request.model)
+			}
+		})
+	}
+}
+
 func groupModelRateLimitRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

@@ -1,12 +1,34 @@
 package model
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChannelCapacityExactAbilityKeepsDefaultsBeforeBaseOverride(t *testing.T) {
+	clearChannelModelRoutingTables(t)
+	const exact = "capacity-model@thinking:on"
+	channel := createChannelModelRoutingTestChannel(t, 5904, "capacity-model,"+exact, 0, 0, common.ChannelStatusEnabled)
+	channel.RPM = common.GetPointer(int64(20))
+	require.NoError(t, channel.Update())
+	require.NoError(t, PatchChannelModelOverrides([]ChannelModelOverridePatch{{ChannelId: channel.Id, Model: "capacity-model", RPM: common.GetPointer(int64(1))}}))
+	previousCache := common.MemoryCacheEnabled
+	t.Cleanup(func() { common.MemoryCacheEnabled = previousCache })
+	InitChannelCache()
+	for _, cache := range []bool{false, true} {
+		t.Run(fmt.Sprint(cache), func(t *testing.T) {
+			common.MemoryCacheEnabled = cache
+			identity, rpm, _, err := ResolveChannelModelRateLimits(channel, exact)
+			require.NoError(t, err)
+			assert.Equal(t, exact, identity)
+			assert.EqualValues(t, 20, rpm, "an explicitly exposed variant is its own capacity rule")
+		})
+	}
+}
 
 func TestChannelCapacityDefaultsOverridesAndReset(t *testing.T) {
 	clearChannelModelRoutingTables(t)

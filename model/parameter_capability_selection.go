@@ -7,6 +7,7 @@ import (
 	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayparam"
+	hostreasoning "github.com/QuantumNous/new-api/setting/reasoning"
 )
 
 var ErrParameterCapabilityUnsupported = errors.New("request parameters are not supported by any eligible channel")
@@ -66,7 +67,7 @@ func supportsSelectionParameters(channel *Channel, config *dto.ParameterCapabili
 	if err != nil {
 		return false, err
 	}
-	err = relayparam.CheckSelectionCapabilitiesWithBodySize(requestBody, requestBodySize, config, upstreamModel)
+	err = relayparam.CheckSelectionCapabilitiesWithBodySize(requestBody, requestBodySize, config, hostreasoning.BaseModelName(upstreamModel))
 	if err == nil {
 		return true, nil
 	}

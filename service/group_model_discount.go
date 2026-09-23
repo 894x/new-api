@@ -108,7 +108,7 @@ func SettleModelCharge(
 		RequestID:     requestID,
 		UserID:        relayInfo.UserId,
 		UsingGroup:    relayInfo.UsingGroup,
-		OriginModel:   relayInfo.OriginModelName,
+		OriginModel:   relayInfo.GetBillingModelName(),
 		Snapshot:      *relayInfo.GroupModelDiscountSnapshot,
 		OriginalQuota: originalQuota,
 	})
@@ -123,7 +123,7 @@ func SettleModelCharge(
 			return decision, reserveErr
 		}
 		if settlement.UserID != relayInfo.UserId || settlement.UsingGroup != relayInfo.UsingGroup ||
-			settlement.OriginModel != relayInfo.OriginModelName ||
+			settlement.OriginModel != relayInfo.GetBillingModelName() ||
 			settlement.PeriodStart != relayInfo.GroupModelDiscountSnapshot.PeriodStart ||
 			settlement.PolicyHash != relayInfo.GroupModelDiscountSnapshot.PolicyHash ||
 			settlement.OriginalQuota != int64(originalQuota) {

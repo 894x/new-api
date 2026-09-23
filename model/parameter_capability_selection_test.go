@@ -184,10 +184,11 @@ func TestChannelSelectionParametersResolveCapabilitiesAgainstMappedUpstreamModel
 	}})
 	request := []byte(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}]}`)
 
-	supported, err := channel.SupportsSelectionParameters("vision-model", request)
-
-	assert.False(t, supported)
-	assert.Error(t, err)
+	for _, requested := range []string{"vision-model", "vision-model@temperature:0.2"} {
+		supported, err := channel.SupportsSelectionParameters(requested, request)
+		assert.False(t, supported, requested)
+		assert.Error(t, err, requested)
+	}
 }
 
 func TestNilChannelSupportsUnknownSelectionRequest(t *testing.T) {

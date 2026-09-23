@@ -275,21 +275,22 @@ func (info *RelayInfo) ResolveGroupModelDiscount() (groupdiscount.Snapshot, bool
 	if info == nil {
 		return groupdiscount.Snapshot{}, false, nil
 	}
-	if info.GroupModelDiscountResolver == nil || info.GroupModelDiscountResolverOriginModel != info.OriginModelName {
+	if info.GroupModelDiscountResolver == nil || info.GroupModelDiscountResolverOriginModel != info.GetBillingModelName() {
 		info.BindGroupModelDiscountResolver()
 	}
 	return info.GroupModelDiscountResolver.Resolve(info.UsingGroup)
 }
 
 // BindGroupModelDiscountResolver freezes the current monthly policy set for
-// the now-known origin model. It is used when a task continuation restores its
-// client-visible model from the durable origin task after initial admission.
+// the effective pricing model, without changing the client-visible origin or
+// recapturing policies. It also supports restored task continuation identities.
 func (info *RelayInfo) BindGroupModelDiscountResolver() {
 	if info == nil {
 		return
 	}
+	billingModel := info.GetBillingModelName()
 	if info.GroupModelDiscountResolver != nil {
-		info.GroupModelDiscountResolver = info.GroupModelDiscountResolver.WithOriginModel(info.OriginModelName)
+		info.GroupModelDiscountResolver = info.GroupModelDiscountResolver.WithOriginModel(billingModel)
 	} else {
 		requestAt := info.StartTime
 		if requestAt.IsZero() {
@@ -297,11 +298,11 @@ func (info *RelayInfo) BindGroupModelDiscountResolver() {
 		}
 		info.GroupModelDiscountResolver = ratio_setting.CaptureModelTieredDiscountResolver(
 			info.UserGroup,
-			info.OriginModelName,
+			billingModel,
 			requestAt,
 		)
 	}
-	info.GroupModelDiscountResolverOriginModel = info.OriginModelName
+	info.GroupModelDiscountResolverOriginModel = billingModel
 	info.GroupModelDiscountSnapshot = nil
 }
 
@@ -639,6 +640,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		reqId = common.NewRequestId()
 	}
 	reasoningEffort := reasoningEffortFromRequest(request)
+	originModelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	info := &RelayInfo{
 		Request:         request,
 		ReasoningEffort: reasoningEffort,
@@ -651,7 +653,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		UserQuota:     common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
 		UserEmail:     common.GetContextKeyString(c, constant.ContextKeyUserEmail),
 
-		OriginModelName: common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
+		OriginModelName: originModelName,
 
 		TokenId:        common.GetContextKeyInt(c, constant.ContextKeyTokenId),
 		TokenKey:       common.GetContextKeyString(c, constant.ContextKeyTokenKey),

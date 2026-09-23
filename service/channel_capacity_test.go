@@ -142,3 +142,40 @@ func TestFinalChannelCapacityReservesOutputAndPreservesExplicitZero(t *testing.T
 		})
 	}
 }
+
+func TestChannelCapacityModifierVariantsShareBaseModelOverride(t *testing.T) {
+	for _, cache := range []bool{false, true} {
+		t.Run(fmt.Sprint(cache), func(t *testing.T) {
+			db := setupChannelSelectAutoGroupsTest(t)
+			createChannelSelectAutoGroupsChannel(t, db, 8302, "default", "capacity-model")
+			require.NoError(t, model.PatchChannelModelOverrides([]model.ChannelModelOverridePatch{{
+				ChannelId: 8302, Model: "capacity-model", RPM: common.GetPointer(int64(1)),
+			}}))
+			model.InitChannelCache()
+			common.MemoryCacheEnabled = cache
+			previousRedis, previousLimiter, previousClock := common.RedisEnabled, channelCapacityMemoryLimiter, channelCapacityNow
+			common.RedisEnabled = false
+			channelCapacityMemoryLimiter = channelcapacity.NewMemoryLimiter()
+			channelCapacityNow = func() time.Time { return time.Unix(120, 0) }
+			t.Cleanup(func() {
+				common.RedisEnabled, channelCapacityMemoryLimiter, channelCapacityNow = previousRedis, previousLimiter, previousClock
+			})
+			for index, requested := range []string{"capacity-model@temperature:0.2", "capacity-model@temperature:0.3"} {
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+				param := &RetryParam{Ctx: c, TokenGroup: "default", ModelName: requested, RequestPath: c.Request.URL.Path}
+				info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI, RelayMode: relayconstant.RelayModeChatCompletions, OriginModelName: requested, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 8302}}
+				_, err := ConfigureChannelModelCapacity(param, info)
+				require.NoError(t, err)
+				err = AdmitFinalChannelModelCapacity(c, info, strings.NewReader(`{}`))
+				if index == 0 {
+					require.NoError(t, err)
+				} else {
+					var denied *ChannelModelCapacityError
+					require.ErrorAs(t, err, &denied)
+					assert.Equal(t, requested, denied.Model)
+				}
+			}
+		})
+	}
+}

@@ -95,6 +95,7 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	if relayInfo != nil {
 		if billingModel := relayInfo.GetBillingModelName(); billingModel != "" && billingModel != relayInfo.OriginModelName {
 			other.SetAdmin("billing_model", billingModel)
+			other.SetAdmin("original_model", relayInfo.OriginModelName)
 		}
 		if diagnostics := relayInfo.ConversionDiagnostics(); len(diagnostics) > 0 {
 			other.SetAdmin("conversion_diagnostics", diagnostics)

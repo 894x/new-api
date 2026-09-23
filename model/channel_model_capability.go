@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	hostreasoning "github.com/QuantumNous/new-api/setting/reasoning"
 )
 
 type ModelChannelCapabilityGroup struct {
@@ -165,6 +166,9 @@ func (channel *Channel) ResolveUpstreamModelName(modelName string) (string, bool
 	visited := map[string]struct{}{currentModel: {}}
 	for {
 		nextModel, exists := mapping[currentModel]
+		if base := hostreasoning.BaseModelName(currentModel); (!exists || nextModel == "") && base != currentModel {
+			nextModel, exists = mapping[base]
+		}
 		if !exists || nextModel == "" {
 			return currentModel, mapped, nil
 		}

@@ -152,6 +152,36 @@ func TestModelTPMReservationsAreIndependentByUserAndModel(t *testing.T) {
 	}
 }
 
+func TestModelModifiersShareTPMReservationAndSettlement(t *testing.T) {
+	for _, useRedis := range []bool{false, true} {
+		t.Run(fmt.Sprint(useRedis), func(t *testing.T) {
+			useModelRequestTPMSettings(t, true, 0, `{"vip":{"limits":[0,100,0],"models":{"model-a":{"tpm":100}}}}`)
+			if useRedis {
+				useModelRequestTPMRedis(t)
+			} else {
+				useModelRequestTPMMemory(t)
+			}
+			first := newModelRequestTPMTestContext()
+			common.SetContextKey(first, constant.ContextKeyTokenGroup, "vip")
+			common.SetContextKey(first, constant.ContextKeyOriginalModel, "model-a@temperature:0.2")
+			require.Equal(t, 100, ResolveModelRequestTPMLimit(first))
+			allowed, _, err := ReserveModelRequestTPM(first, 503, 100, 60)
+			require.NoError(t, err)
+			require.True(t, allowed)
+			second := newModelRequestTPMTestContext()
+			common.SetContextKey(second, constant.ContextKeyTokenGroup, "vip")
+			common.SetContextKey(second, constant.ContextKeyOriginalModel, "model-a@temperature:0.3")
+			allowed, _, err = ReserveModelRequestTPM(second, 503, 100, 50)
+			require.NoError(t, err)
+			assert.False(t, allowed, "changing temperature must not reset the TPM window")
+			require.NoError(t, SettleModelRequestTPM(first, 20, 10))
+			allowed, _, err = ReserveModelRequestTPM(second, 503, 100, 50)
+			require.NoError(t, err)
+			assert.True(t, allowed, "actual usage releases the unused estimate in the shared window")
+		})
+	}
+}
+
 func TestRedisModelRequestTPMSettlementReplacesEstimateWithActualUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	useModelRequestTPMRedis(t)

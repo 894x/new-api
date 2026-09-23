@@ -84,6 +84,11 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 	return func(c *gin.Context) {
 		userId := strconv.Itoa(c.GetInt("id"))
 		if modelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel); modelName != "" {
+			group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
+			if group == "" {
+				group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+			}
+			modelName = setting.ResolveGroupModelRateLimitIdentity(group, modelName)
 			userId += fmt.Sprintf(":model:%x", sha256.Sum256([]byte(modelName)))
 		}
 		ctx := context.Background()
@@ -145,6 +150,11 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 	return func(c *gin.Context) {
 		userId := strconv.Itoa(c.GetInt("id"))
 		if modelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel); modelName != "" {
+			group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
+			if group == "" {
+				group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+			}
+			modelName = setting.ResolveGroupModelRateLimitIdentity(group, modelName)
 			userId += fmt.Sprintf(":model:%x", sha256.Sum256([]byte(modelName)))
 		}
 		totalKey := ModelRequestRateLimitCountMark + userId

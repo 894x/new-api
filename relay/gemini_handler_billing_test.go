@@ -59,6 +59,13 @@ func (b *geminiThinkingAdapterBillingRecorder) ReserveForAdmission(targetQuota i
 }
 
 func TestGeminiThinkingAdapterKeepsOriginPricingAndFrozenMonthlyPolicy(t *testing.T) {
+	for _, origin := range []string{"gemini-priced-base", "gemini-priced-base@temperature:0.2"} {
+		t.Run(origin, func(t *testing.T) { verifyGeminiMonthlyBillingWithOrigin(t, origin) })
+	}
+}
+
+func verifyGeminiMonthlyBillingWithOrigin(t *testing.T, origin string) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	previousDB, previousLogDB := model.DB, model.LOG_DB
@@ -158,7 +165,7 @@ func TestGeminiThinkingAdapterKeepsOriginPricingAndFrozenMonthlyPolicy(t *testin
 	common.SetContextKey(c, constant.ContextKeyChannelId, channelID)
 	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, upstream.URL)
 	common.SetContextKey(c, constant.ContextKeyChannelKey, "test-gemini-key")
-	common.SetContextKey(c, constant.ContextKeyOriginalModel, baseModel)
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, origin)
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
 	common.SetContextKey(c, constant.ContextKeyUserGroup, usingGroup)
 
@@ -168,7 +175,7 @@ func TestGeminiThinkingAdapterKeepsOriginPricingAndFrozenMonthlyPolicy(t *testin
 		RelayMode:       relayconstant.RelayModeGemini,
 		RequestURLPath:  c.Request.URL.Path,
 		Request:         request,
-		OriginModelName: baseModel,
+		OriginModelName: origin,
 		UserId:          userID,
 		UserQuota:       1_000_000,
 		UserGroup:       usingGroup,
@@ -202,7 +209,8 @@ func TestGeminiThinkingAdapterKeepsOriginPricingAndFrozenMonthlyPolicy(t *testin
 	newAPIError := GeminiHelper(c, info)
 
 	require.Nil(t, newAPIError)
-	require.Equal(t, baseModel, info.OriginModelName)
+	require.Equal(t, origin, info.OriginModelName)
+	assert.Equal(t, baseModel, info.GetBillingModelName())
 	require.NotNil(t, info.GroupModelDiscountSnapshot)
 	assert.Equal(t, baseModel, info.GroupModelDiscountSnapshot.OriginModel)
 	assert.Equal(t, 0.95, info.GroupModelDiscountSnapshot.Tiers[0].Ratio)

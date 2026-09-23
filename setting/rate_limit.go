@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	hostreasoning "github.com/QuantumNous/new-api/setting/reasoning"
 )
 
 // maxRateLimitDurationSeconds is the largest window the count cap is computed
@@ -90,6 +91,7 @@ func GetGroupRateLimit(group string) (totalCount, successCount, tpm int, found b
 // ResolveGroupModelRateLimit preserves the legacy request window and success
 // limit when RPM is inherited. An explicit RPM counts all requests in 60 seconds.
 func ResolveGroupModelRateLimit(group, modelName string) (total, success, tpm int, duration int64) {
+	modelName = ResolveGroupModelRateLimitIdentity(group, modelName)
 	total, success, tpm = ModelRequestRateLimitCount, ModelRequestRateLimitSuccessCount, ModelRequestRateLimitTPM
 	if ModelRequestRateLimitDurationMinutes > 0 {
 		if int64(ModelRequestRateLimitDurationMinutes) > math.MaxInt64/60 {
@@ -112,6 +114,25 @@ func ResolveGroupModelRateLimit(group, modelName string) (total, success, tpm in
 		}
 	}
 	return
+}
+
+// ResolveGroupModelRateLimitIdentity shares a window across modifier variants.
+// Explicit administrator model rules retain priority; otherwise use a canonical
+// thinking rule or the base model. Opaque, exempt model names stay unchanged.
+func ResolveGroupModelRateLimitIdentity(group, modelName string) string {
+	candidates := append([]string{modelName}, hostreasoning.CanonicalBillingModelNames(modelName)...)
+	base := hostreasoning.BaseModelName(modelName)
+	candidates = append(candidates, base)
+	ModelRequestRateLimitMutex.RLock()
+	defer ModelRequestRateLimitMutex.RUnlock()
+	if config, found := ModelRequestRateLimitGroup[group]; found {
+		for _, candidate := range candidates {
+			if _, configured := config.Models[candidate]; configured {
+				return candidate
+			}
+		}
+	}
+	return base
 }
 
 func CheckModelRequestRateLimitGroup(jsonStr string) error {

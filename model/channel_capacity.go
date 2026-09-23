@@ -5,6 +5,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/channelcapacity"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"slices"
+	"strings"
 )
 
 // Keep counters exactly representable by both Go integers and Redis Lua numbers.
@@ -32,9 +34,11 @@ func ListChannelSelectionCandidates(group, model string, filters ChannelSelectio
 	return result, nil
 }
 
-func ResolveChannelModelRateLimits(channel *Channel, publicModel string) (int64, int64, error) {
+// ResolveChannelModelRateLimits returns the selected ability's identity with
+// its limits so aliases cannot create independent windows for the same rule.
+func ResolveChannelModelRateLimits(channel *Channel, publicModel string) (string, int64, int64, error) {
 	models := []string{publicModel}
-	if normalized := ratio_setting.FormatMatchingModelName(publicModel); normalized != "" && normalized != publicModel {
+	if normalized := ratio_setting.RoutingMatchModelName(publicModel); normalized != "" && normalized != publicModel {
 		models = append(models, normalized)
 	}
 	if common.MemoryCacheEnabled {
@@ -44,7 +48,7 @@ func ResolveChannelModelRateLimits(channel *Channel, publicModel string) (int64,
 			for _, group := range group2model2channels {
 				for _, route := range group[name] {
 					if route.ChannelId == channel.Id {
-						return route.RPM, route.TPM, nil
+						return name, route.RPM, route.TPM, nil
 					}
 				}
 			}
@@ -52,18 +56,25 @@ func ResolveChannelModelRateLimits(channel *Channel, publicModel string) (int64,
 	} else {
 		var overrides []ChannelModelOverride
 		if err := DB.Where("channel_id = ? AND model IN ?", channel.Id, models).Find(&overrides).Error; err != nil {
-			return 0, 0, err
+			return "", 0, 0, err
 		}
 		for _, name := range models {
 			for _, override := range overrides {
 				if override.Model == name {
 					routing := effectiveChannelModelRouting(channel, name, &override)
-					return routing.EffectiveRPM, routing.EffectiveTPM, nil
+					return name, routing.EffectiveRPM, routing.EffectiveTPM, nil
 				}
+			}
+			if slices.Contains(strings.Split(channel.Models, ","), name) {
+				return name, channel.GetRPM(), channel.GetTPM(), nil
 			}
 		}
 	}
-	return channel.GetRPM(), channel.GetTPM(), nil
+	identity := models[len(models)-1]
+	if slices.Contains(strings.Split(channel.Models, ","), publicModel) {
+		identity = publicModel
+	}
+	return identity, channel.GetRPM(), channel.GetTPM(), nil
 }
 
 func ValidateChannelModelRateLimit(limit *int64) error {

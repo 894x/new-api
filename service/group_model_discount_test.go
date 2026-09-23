@@ -176,6 +176,37 @@ func TestSettleModelChargeCommitsMonthlyDecisionFromOriginalQuota(t *testing.T) 
 	assert.EqualValues(t, 530, usage.ChargedQuota)
 }
 
+func TestMonthlyDiscountModifierVariantsShareBillingModelProgress(t *testing.T) {
+	prepareGroupModelDiscountServiceTest(t)
+	for index, request := range []struct {
+		id, origin string
+		charge     int
+	}{
+		{"modifier-monthly-first", "gpt-tiered@temperature:0.2", 530},
+		{"modifier-monthly-second", "gpt-tiered@temperature:0.3", 480},
+	} {
+		billing := &groupDiscountBillingRecorder{preConsumed: 600}
+		info := newGroupModelDiscountRelayInfo(request.id, billing)
+		info.OriginModelName = request.origin
+		info.BillingModelName = "gpt-tiered"
+		ctx := newGroupModelDiscountTestContext()
+		decision, err := SettleModelCharge(ctx, info, request.id, 600, 300)
+		require.NoError(t, err)
+		assert.Equal(t, request.charge, decision.ChargedQuota)
+		assert.Equal(t, []int{request.charge}, billing.settleCalls)
+		assert.Equal(t, "gpt-tiered", decision.Settlement.OriginModel)
+		assert.EqualValues(t, index*600, decision.Settlement.MonthlyOriginalBefore)
+		assert.Equal(t, request.origin, info.OriginModelName)
+		other := model.NewLogOther()
+		AppendRelayLogAdminInfo(ctx, info, other)
+		assert.Equal(t, request.origin, other.Snapshot()["admin_info"].(map[string]any)["original_model"])
+	}
+	usage, err := model.GetUserGroupModelMonthlyUsage(7101, "vip", "gpt-tiered", testGroupModelDiscountSnapshot().PeriodStart)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1200, usage.OriginalQuota)
+	assert.EqualValues(t, 1010, usage.ChargedQuota)
+}
+
 func TestSettleModelChargeFundingErrorStaysUnknownWithoutAutomaticCompensation(t *testing.T) {
 	prepareGroupModelDiscountServiceTest(t)
 	settleErr := errors.New("wallet write failed")

@@ -220,7 +220,7 @@ func listCachedChannelCandidates(group, model string, filters ChannelSelectionFi
 		group2model2channels[group][model], filters, model,
 	)
 	if len(routings) == 0 {
-		normalizedModel := ratio_setting.FormatMatchingModelName(model)
+		normalizedModel := ratio_setting.RoutingMatchModelName(model)
 		if normalizedModel != "" && normalizedModel != model {
 			var normalizedParameterCandidateCount int
 			var normalizedViolation error

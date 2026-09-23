@@ -166,7 +166,7 @@ func listDBChannelCandidates(group, model string, filters ChannelSelectionFilter
 	}
 	abilities, pathEligibleCount, parameterCandidateCount, firstParameterViolation, selectionErr := filterAbilitiesBySelectionFilters(abilities, filters, model)
 	if len(abilities) == 0 {
-		normalizedModel := ratio_setting.FormatMatchingModelName(model)
+		normalizedModel := ratio_setting.RoutingMatchModelName(model)
 		if normalizedModel != "" && normalizedModel != model {
 			query = DB.Where(map[string]any{"group": group, "model": normalizedModel, "enabled": true})
 			if filters.AllowedChannelIds != nil {

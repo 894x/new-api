@@ -52,7 +52,7 @@ func ConfigureChannelModelCapacity(param *RetryParam, info *relaycommon.RelayInf
 		if err != nil {
 			return false, err
 		}
-		rpm, tpm, err := model.ResolveChannelModelRateLimits(channel, param.ModelName)
+		_, rpm, tpm, err := model.ResolveChannelModelRateLimits(channel, param.ModelName)
 		if err != nil {
 			return false, err
 		}
@@ -200,7 +200,7 @@ func AdmitFinalChannelModelCapacity(c *gin.Context, info *relaycommon.RelayInfo,
 	if err != nil {
 		return err
 	}
-	rpm, tpm, err := model.ResolveChannelModelRateLimits(channel, param.ModelName)
+	capacityModel, rpm, tpm, err := model.ResolveChannelModelRateLimits(channel, param.ModelName)
 	if err != nil {
 		return err
 	}
@@ -221,7 +221,7 @@ func AdmitFinalChannelModelCapacity(c *gin.Context, info *relaycommon.RelayInfo,
 	if common.RedisEnabled {
 		limiter = channelcapacity.NewRedisLimiter(common.RDB)
 	}
-	decision, err := limiter.Acquire(c.Request.Context(), channelcapacity.Key{ChannelID: channel.Id, Model: param.ModelName}, channelcapacity.Limits{RPM: rpm, TPM: tpm}, tokens, channelCapacityNow())
+	decision, err := limiter.Acquire(c.Request.Context(), channelcapacity.Key{ChannelID: channel.Id, Model: capacityModel}, channelcapacity.Limits{RPM: rpm, TPM: tpm}, tokens, channelCapacityNow())
 	if err != nil {
 		return err
 	}

@@ -18,6 +18,7 @@ func setupAssetChannelSelectTest(t *testing.T) *gorm.DB {
 	t.Helper()
 	originalDB := DB
 	originalMemoryCacheEnabled := common.MemoryCacheEnabled
+	originalDatabaseType := common.MainDatabaseType()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
@@ -59,6 +60,8 @@ func setupAssetChannelSelectTest(t *testing.T) *gorm.DB {
 
 	t.Cleanup(func() {
 		DB = originalDB
+		common.SetMainDatabaseType(originalDatabaseType)
+		initCol()
 		common.MemoryCacheEnabled = originalMemoryCacheEnabled
 		if originalMemoryCacheEnabled && originalDB != nil &&
 			originalDB.Migrator().HasTable(&Channel{}) && originalDB.Migrator().HasTable(&Ability{}) {
@@ -95,6 +98,27 @@ func TestAssetAllowedChannelsFilterBeforePrioritySelection(t *testing.T) {
 			selected, err = GetRandomSatisfiedChannelWithFilter("default", "asset-video-model", 0, "/api/v3/contents/generations/tasks", map[int]struct{}{})
 			require.NoError(t, err)
 			assert.Nil(t, selected)
+		})
+	}
+}
+
+func TestModelModifiersKeepAssetChannelRestrictions(t *testing.T) {
+	setupAssetChannelSelectTest(t)
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memory_cache_%t", memoryCacheEnabled), func(t *testing.T) {
+			common.MemoryCacheEnabled = memoryCacheEnabled
+			if memoryCacheEnabled {
+				InitChannelCache()
+			}
+			const requested = "asset-video-model@temperature:0.2"
+			selected, err := GetRandomSatisfiedChannelWithFilter("default", requested, 0, "/v1/chat/completions", map[int]struct{}{4102: {}})
+			require.NoError(t, err)
+			require.NotNil(t, selected, "modifiers should route through the base-model ability")
+			assert.Equal(t, 4102, selected.Id, "the higher-priority channel is outside the asset's allowed set")
+
+			selected, err = GetRandomSatisfiedChannelWithFilter("default", requested, 0, "/v1/chat/completions", map[int]struct{}{})
+			require.NoError(t, err)
+			assert.Nil(t, selected, "normalizing the model must not bypass an empty asset allowlist")
 		})
 	}
 }

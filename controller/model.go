@@ -255,7 +255,7 @@ func ListModels(c *gin.Context, modelType int) {
 	}
 	for _, modelName := range models {
 		if modelLimitEnable {
-			matchingName := ratio_setting.FormatMatchingModelName(modelName)
+			matchingName := ratio_setting.RoutingMatchModelName(modelName)
 			if !tokenModelLimit[modelName] && !tokenModelLimit[matchingName] {
 				continue
 			}
