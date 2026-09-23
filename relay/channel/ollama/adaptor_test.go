@@ -94,6 +94,24 @@ func TestOllamaClaudeModeResponseDispatch(t *testing.T) {
 	}
 }
 
+func TestOllamaClaudeConversionUsesOpenAIChatWhenEnabled(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude, RelayMode: relayconstant.RelayModeChatCompletions,
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOllama, ChannelBaseUrl: "https://ollama.example",
+			ChannelOtherSettings: dto.ChannelOtherSettings{OllamaOpenAIChat: true}}}
+	var request dto.ClaudeRequest
+	require.NoError(t, common.UnmarshalJsonStr(`{"model":"llama3","max_tokens":128,"messages":[{"role":"user","content":"hello"}]}`, &request))
+	converted, err := (&Adaptor{}).ConvertClaudeRequest(c, info, &request)
+	require.NoError(t, err)
+	chat, ok := converted.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok, "OpenAI endpoint must receive an OpenAI request, not Ollama options")
+	assert.Equal(t, "llama3", chat.Model)
+	url, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	assert.Equal(t, "https://ollama.example/v1/chat/completions", url)
+}
+
 func TestOllamaOpenAIEndpointsRemainIndependentOfClaudeMode(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		for _, tc := range []struct {

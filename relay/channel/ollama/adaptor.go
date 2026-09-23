@@ -33,6 +33,9 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	}
 	chatRequest := openaiRequest.(*dto.GeneralOpenAIRequest)
 	chatRequest.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
+	if info.ChannelOtherSettings.OllamaOpenAIChat {
+		return (&openai.Adaptor{}).ConvertOpenAIRequest(c, info, chatRequest)
+	}
 	return openAIChatToOllamaChat(c, chatRequest)
 }
 
@@ -45,6 +48,9 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
+	// OpenAI-compatible chat responses are handled by the OpenAI adaptor, which
+	// relies on the thinking-to-content state initialized here.
+	(&openai.Adaptor{}).Init(info)
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -61,6 +67,9 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	case relayconstant.RelayModeCompletions:
 		return info.ChannelBaseUrl + "/api/generate", nil
 	default:
+		if info.ChannelOtherSettings.OllamaOpenAIChat {
+			return info.ChannelBaseUrl + "/v1/chat/completions", nil
+		}
 		return info.ChannelBaseUrl + "/api/chat", nil
 	}
 }
@@ -87,6 +96,9 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	case relayconstant.RelayModeCompletions:
 		return openAIToGenerate(c, request)
 	default:
+		if info.ChannelOtherSettings.OllamaOpenAIChat {
+			return (&openai.Adaptor{}).ConvertOpenAIRequest(c, info, request)
+		}
 		return openAIChatToOllamaChat(c, request)
 	}
 }
@@ -118,6 +130,9 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
 		return (&openai.Adaptor{}).DoResponse(c, resp, info)
 	default:
+		if info.RelayMode != relayconstant.RelayModeCompletions && info.ChannelOtherSettings.OllamaOpenAIChat {
+			return (&openai.Adaptor{}).DoResponse(c, resp, info)
+		}
 		if info.IsStream {
 			return ollamaStreamHandler(c, info, resp)
 		}

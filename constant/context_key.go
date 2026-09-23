@@ -78,7 +78,8 @@ const (
 	ContextKeyDynamicRoutingEligible ContextKey = "dynamic_routing_eligible"
 	// ContextKeyTaskResponseFormat identifies provider-native task protocol
 	// entrypoints that share the common asynchronous task relay.
-	ContextKeyTaskResponseFormat ContextKey = "task_response_format"
+	ContextKeyTaskResponseFormat   ContextKey = "task_response_format"
+	ContextKeyResponseStreamStatus ContextKey = "response_stream_status"
 
 	// ContextKeyAuditLogged marks that the current request has already recorded
 	// a manage/operation audit log inside the handler. When set, the admin-audit

@@ -55,6 +55,8 @@ export function getChannelTypeIcon(type: number): string {
     59: 'Sub2API', // Sub2API
     60: 'NewAPI', // New API
     102: 'OpenAI', // AstraFlow Image
+    106: 'Vllm', // vLLM
+    107: 'SGLang', // SGLang
     3: 'Azure', // Azure
 
     // Anthropic
@@ -190,6 +192,8 @@ const BUILT_IN_CHANNEL_EXTERNAL_APIS = {
   104: [],
   // Plugin protocols depend on its metadata, not the generic channel type.
   105: [],
+  106: ALL_EXTERNAL_APIS,
+  107: ALL_EXTERNAL_APIS,
 } as const satisfies Record<
   keyof typeof CHANNEL_TYPES,
   readonly ChannelExternalAPI[]

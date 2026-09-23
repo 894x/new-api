@@ -27,6 +27,7 @@ export {
   type DataTableDensityToggleProps,
 } from './toolbar/density-toggle'
 export { DataTableToolbar } from './toolbar/toolbar'
+export { DataTableMobileFilterPanel } from './toolbar/mobile-filter-panel'
 export { DataTableBulkActions } from './toolbar/bulk-actions'
 export {
   StaticDataTable,

@@ -21,6 +21,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
   ArrowLeft,
+  ArrowRightLeft,
+  PanelLeftOpen,
   AlertCircle,
   ChevronDown,
   ClipboardPaste,
@@ -127,6 +129,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import {
   getAllModels,
   getChannel,
+  getChannelDefaultBaseURLs,
   getGroups,
   getPrefillGroups,
   getTaskPluginOptions,
@@ -136,8 +139,11 @@ import {
   ADD_MODE_OPTIONS,
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_STATUS_LABELS,
+  CHANNEL_TYPE_OLLAMA,
   CHANNEL_TYPE_OPTIONS,
   CHANNEL_TYPE_TASK_PLUGIN,
+  CHANNEL_TYPE_VLLM,
+  CHANNEL_TYPE_SGLANG,
   CHANNEL_TYPE_WARNINGS,
   ERROR_MESSAGES,
   FIELD_PASSTHROUGH_TYPES,
@@ -153,6 +159,10 @@ import {
 } from '../../hooks/use-channel-model-discovery'
 import { useChannelMutateForm } from '../../hooks/use-channel-mutate-form'
 import {
+  REDIRECT_PANEL_MIN_VIEWPORT,
+  useRedirectPanelPlacement,
+} from '../../hooks/use-redirect-panel-placement'
+import {
   CHANNEL_FORM_DEFAULT_VALUES,
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   channelFormSchema,
@@ -164,6 +174,12 @@ import {
   getKeyPromptForType,
   parseModelsString,
   formatModelsArray,
+  mergeModelMappingPairs,
+  deriveModelMappingPairs,
+  detectModelNamingPatterns,
+  findVerifiedAlias,
+  type ModelMappingPair,
+  type ModelNamingSuggestion,
   extractRedirectModels,
   extractMappingSourceModels,
   hasModelConfigChanged,
@@ -181,6 +197,7 @@ import {
   getChannelPluginExtensions,
   supportsChannelPluginExtensions,
 } from '../../lib/channel-plugin-extensions'
+import { getChannelTypeConfig } from '../../lib/channel-type-config'
 import { parseParameterCapabilityConfig } from '../../lib/parameter-capabilities'
 import {
   collectInvalidStatusCodeEntries,
@@ -192,6 +209,7 @@ import {
 } from '../../lib/task-plugin-base-url'
 import type { Channel } from '../../types'
 import { ChannelPluginExtensions } from '../channel-plugin-extensions'
+import { ChannelQuickOptions } from '../channel-quick-options'
 import { ChannelTypeLogo } from '../channel-type-badge'
 import { useChannels } from '../channels-provider'
 import { AdvancedCustomEditorDialog } from '../dialogs/advanced-custom-editor-dialog'
@@ -202,9 +220,23 @@ import {
 } from '../dialogs/missing-models-confirmation-dialog'
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { ParameterCapabilityEditorDialog } from '../dialogs/parameter-capability-editor-dialog'
+import {
+  PassthroughWarningDialog,
+  type PassthroughKind,
+} from '../dialogs/passthrough-warning-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
-import { ModelMappingEditor } from '../model-mapping-editor'
+import {
+  ModelMappingBatchDialog,
+  type ModelMappingBatchResult,
+  type ModelMappingBatchSource,
+} from '../model-mapping-batch-dialog'
+import {
+  ModelMappingEditor,
+  type ModelMappingDraftRequest,
+} from '../model-mapping-editor'
+import { ModelRedirectPanel } from '../model-redirect-panel'
 import { ModelRoutingOverridesEditor } from '../model-routing-overrides-editor'
+import { ResponsesWebSocketSetting } from '../responses-websocket-setting'
 import { UpstreamModelSelection } from '../upstream-model-selection'
 import {
   ChannelConfiguration,
@@ -282,6 +314,7 @@ const SENSITIVE_FORM_FIELDS = [
   'http1_large_body_enabled',
   'http1_large_body_threshold_kib',
   'pass_through_body_enabled',
+  'responses_websocket_enabled',
   'system_prompt',
   'system_prompt_override',
   'allow_service_tier',
@@ -291,6 +324,7 @@ const SENSITIVE_FORM_FIELDS = [
   'allow_inference_geo',
   'allow_speed',
   'claude_beta_query',
+  'ollama_openai_chat',
   'disable_task_polling_sleep',
   'upstream_model_update_check_enabled',
   'upstream_model_update_auto_sync_enabled',
@@ -376,6 +410,9 @@ function SubHeading(props: {
   )
 }
 
+/** Stable empty list so memoized consumers do not re-run on every render. */
+const NO_UPSTREAM_MODELS: string[] = []
+
 export function ChannelMutateDrawer({
   open,
   onOpenChange,
@@ -413,6 +450,11 @@ export function ChannelMutateDrawer({
   const statusCodeRiskResolveRef = useRef<
     ((confirmed: boolean) => void) | null
   >(null)
+  const [passthroughWarningKind, setPassthroughWarningKind] =
+    useState<PassthroughKind | null>(null)
+  const passthroughWarningResolveRef = useRef<
+    ((confirmed: boolean) => void) | null
+  >(null)
   const [missingModelsDialogOpen, setMissingModelsDialogOpen] = useState(false)
   const [missingModelsList, setMissingModelsList] = useState<string[]>([])
   const missingModelsResolveRef = useRef<
@@ -448,6 +490,34 @@ export function ChannelMutateDrawer({
   const [pendingErrorFocus, setPendingErrorFocus] = useState<string | null>(
     null
   )
+  const [mappingDraftRequest, setMappingDraftRequest] =
+    useState<ModelMappingDraftRequest | null>(null)
+  const mappingDraftTokenRef = useRef(0)
+  const [batchMapping, setBatchMapping] = useState<{
+    source: ModelMappingBatchSource
+    selected: string[]
+  } | null>(null)
+  const [redirectPanelOpen, setRedirectPanelOpen] = useState(false)
+  const [redirectSyncModels, setRedirectSyncModels] = useState(true)
+  const syncedAliasesRef = useRef(new Set<string>())
+  const syncedTargetsRef = useRef(new Set<string>())
+  const [viewportWide, setViewportWide] = useState(
+    () => window.innerWidth >= REDIRECT_PANEL_MIN_VIEWPORT
+  )
+  useEffect(() => {
+    const update = () =>
+      setViewportWide(window.innerWidth >= REDIRECT_PANEL_MIN_VIEWPORT)
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+  const redirectPanelPlacement = useRedirectPanelPlacement(
+    channelFormRef,
+    redirectPanelOpen && viewportWide,
+    drawerSide
+  )
+  const redirectPanelActive =
+    redirectPanelOpen && viewportWide && redirectPanelPlacement !== null
   const showProviderPicker =
     choosingProvider && (!isEditing || Boolean(providerTarget))
   const providerControlRef = useRef<HTMLButtonElement>(null)
@@ -461,6 +531,14 @@ export function ChannelMutateDrawer({
   const loadedForm = useRef<{ channelId: number; snapshot: string } | null>(
     null
   )
+
+  const { data: defaultBaseURLs } = useQuery({
+    queryKey: channelsQueryKeys.defaultBaseURLs(),
+    // Optional hints must not trigger the global error-page redirect.
+    queryFn: () => getChannelDefaultBaseURLs().catch(() => null),
+    enabled: open,
+    staleTime: 5 * 60 * 1000,
+  })
 
   // Fetch channel details if editing
   const {
@@ -513,31 +591,37 @@ export function ChannelMutateDrawer({
   })
 
   const formValues = form.watch()
-  // Watch form values for conditional rendering
-  const multiKeyMode = form.watch('multi_key_mode')
-  const multiKeyType = form.watch('multi_key_type')
-  const keyMode = form.watch('key_mode')
-  const currentGroups = form.watch('group')
-  const currentType = form.watch('type')
-  const currentStatus = form.watch('status')
-  const currentBaseUrl = form.watch('base_url')
-  const currentTaskPluginKey = form.watch('task_plugin_key')
-  const currentKey = form.watch('key')
-  const currentModels = form.watch('models')
-  const currentModelMapping = form.watch('model_mapping')
-  const awsKeyType = form.watch('aws_key_type')
-  const vertexKeyType = form.watch('vertex_key_type')
-  const doubaoVideoAPIMode = form.watch('doubao_video_api_mode')
-  const upstreamModelUpdateCheckEnabled = form.watch(
-    'upstream_model_update_check_enabled'
+  const multiKeyMode = formValues.multi_key_mode
+  const multiKeyType = formValues.multi_key_type
+  const keyMode = formValues.key_mode
+  const currentGroups = formValues.group
+  const currentType = formValues.type
+  const baseUrlPlaceholder = [CHANNEL_TYPE_VLLM, CHANNEL_TYPE_SGLANG].includes(
+    currentType
   )
-  const currentSettings = form.watch('settings')
-  const currentAdvancedCustom = form.watch('advanced_custom')
-  const currentParamOverride = form.watch('param_override')
-  const currentParameterCapabilities = form.watch('parameter_capabilities')
-  const currentHeaderOverride = form.watch('header_override')
-  const currentProxy = form.watch('proxy')
-  const currentHttpProtocol = form.watch('http_protocol')
+    ? t(
+        getChannelTypeConfig(currentType).hints?.baseUrl ||
+          FIELD_PLACEHOLDERS.BASE_URL
+      )
+    : defaultBaseURLs?.[currentType] || t(FIELD_PLACEHOLDERS.BASE_URL)
+  const currentStatus = formValues.status
+  const currentBaseUrl = formValues.base_url
+  const currentTaskPluginKey = formValues.task_plugin_key
+  const currentKey = formValues.key
+  const currentModels = formValues.models
+  const currentModelMapping = formValues.model_mapping
+  const awsKeyType = formValues.aws_key_type
+  const vertexKeyType = formValues.vertex_key_type
+  const upstreamModelUpdateCheckEnabled =
+    formValues.upstream_model_update_check_enabled
+  const currentSettings = formValues.settings
+  const currentAdvancedCustom = formValues.advanced_custom
+  const currentHeaderOverride = formValues.header_override
+  const currentProxy = formValues.proxy
+  const currentHttpProtocol = formValues.http_protocol
+  const doubaoVideoAPIMode = formValues.doubao_video_api_mode
+  const currentParamOverride = formValues.param_override
+  const currentParameterCapabilities = formValues.parameter_capabilities
   const {
     unlocked: doubaoApiEditUnlocked,
     handleClick: handleApiConfigSecretClick,
@@ -844,19 +928,6 @@ export function ChannelMutateDrawer({
     [currentModelsArray, redirectModelList]
   )
 
-  // Transform models to multi-select options
-  const modelOptions = useMemo(() => {
-    const allModels = new Set([
-      ...allModelsList,
-      ...currentModelsArray,
-      ...pluginExtensions.flatMap((plugin) => plugin.models),
-    ])
-    return [...allModels].map((model) => ({
-      value: model,
-      label: model,
-    }))
-  }, [allModelsList, currentModelsArray, pluginExtensions])
-
   const modelMappingGuardrail = useMemo<ModelMappingGuardrail>(() => {
     if (!currentModelMapping?.trim()) {
       return createEmptyModelMappingGuardrail()
@@ -925,6 +996,43 @@ export function ChannelMutateDrawer({
     modelMappingGuardrail.entries.length > 3
       ? modelMappingGuardrail.entries.length - 3
       : 0
+  const mappingCount = modelMappingGuardrail.entries.length
+  const upstreamAliases = useMemo(() => {
+    const aliases: Record<string, string> = {}
+    for (const entry of modelMappingGuardrail.entries) {
+      aliases[entry.target] ??= entry.source
+    }
+    return aliases
+  }, [modelMappingGuardrail.entries])
+
+  // Transform models to multi-select options. Redirected models carry their
+  // upstream target as a hint so the picker shows which names are aliases.
+  const modelOptions = useMemo(() => {
+    const targetBySource = new Map(
+      modelMappingGuardrail.entries.map((entry) => [entry.source, entry.target])
+    )
+    const allModels = new Set([
+      ...allModelsList,
+      ...currentModelsArray,
+      ...pluginExtensions.flatMap((plugin) => plugin.models),
+    ])
+    return [...allModels].map((model) => {
+      const target = targetBySource.get(model)
+      return {
+        value: model,
+        label: model,
+        hint: target
+          ? t('Redirects to {{model}}', { model: target })
+          : undefined,
+      }
+    })
+  }, [
+    allModelsList,
+    currentModelsArray,
+    pluginExtensions,
+    modelMappingGuardrail.entries,
+    t,
+  ])
 
   const upstreamUpdateMeta = useMemo(() => {
     const settings = parseSettingsRecord(currentSettings)
@@ -1163,6 +1271,16 @@ export function ChannelMutateDrawer({
       (!isEditing || Boolean(channelData?.data)),
     request: previewModels ? previewRequest : savedRequest,
   })
+  const upstreamModelList =
+    discovery.status === 'success' ? discovery.models : NO_UPSTREAM_MODELS
+  const batchMappingSource: ModelMappingBatchSource =
+    upstreamModelList.length > 0 ? 'upstream' : 'channel'
+  const canBatchMap =
+    currentModelsArray.length > 0 || upstreamModelList.length > 0
+  const namingSuggestions = useMemo(
+    () => detectModelNamingPatterns(upstreamModelList, allModelsList),
+    [upstreamModelList, allModelsList]
+  )
   const fetchDiscoveredModels = discovery.fetch
   const handleFetchModels = useCallback(async () => {
     const type = form.getValues('type')
@@ -1250,6 +1368,165 @@ export function ChannelMutateDrawer({
     [form]
   )
 
+  const raiseMappingDraft = useCallback(
+    (from: string, to: string, focus?: 'from' | 'to') => {
+      mappingDraftTokenRef.current += 1
+      setMappingDraftRequest({
+        from,
+        to,
+        focus,
+        token: mappingDraftTokenRef.current,
+      })
+    },
+    []
+  )
+
+  // Open a mapping row for a model the user picked elsewhere and hand focus to
+  // the editor on the routing tab. Drafts are saved once both names are set.
+  const requestMappingDraft = useCallback(
+    (from: string, to: string) => {
+      setConfigurationSection('routing')
+      raiseMappingDraft(from, to)
+    },
+    [raiseMappingDraft]
+  )
+
+  // Keep the model list in step with mappings edited from the redirect panel:
+  // complete pairs publish the request name and hide the raw upstream name,
+  // deleting a pair reverses that. The refs remember what this sync changed so
+  // only its own additions and removals are undone.
+  const syncModelsWithMapping = useCallback(
+    (mapping: string) => {
+      const aliasSet = new Set<string>()
+      const targetSet = new Set<string>()
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(mapping.trim() || '{}')
+      } catch {
+        return
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+      for (const [from, to] of Object.entries(parsed)) {
+        if (typeof to !== 'string' || !from.trim() || !to.trim()) continue
+        aliasSet.add(from.trim())
+        targetSet.add(to.trim())
+      }
+      let models = parseModelsString(form.getValues('models') || '')
+      models = models.filter(
+        (model) =>
+          !(syncedAliasesRef.current.has(model) && !aliasSet.has(model))
+      )
+      for (const target of syncedTargetsRef.current) {
+        if (!targetSet.has(target) && !models.includes(target)) {
+          models.push(target)
+        }
+      }
+      models = models.filter((model) => !targetSet.has(model))
+      for (const alias of aliasSet) {
+        if (!models.includes(alias)) models.push(alias)
+      }
+      syncedAliasesRef.current = aliasSet
+      syncedTargetsRef.current = targetSet
+      form.setValue('models', formatModelsArray(models))
+    },
+    [form]
+  )
+
+  const applyMappingPairs = useCallback(
+    (pairs: ModelMappingPair[], sync: boolean) => {
+      const merged = mergeModelMappingPairs(
+        form.getValues('model_mapping') || '',
+        pairs
+      )
+      if (merged === null) return
+      form.setValue('model_mapping', merged, { shouldDirty: true })
+      if (sync) syncModelsWithMapping(merged)
+    },
+    [form, syncModelsWithMapping]
+  )
+
+  const handleBatchMappingApply = useCallback(
+    (result: ModelMappingBatchResult) =>
+      applyMappingPairs(result.pairs, result.syncModels),
+    [applyMappingPairs]
+  )
+
+  const handlePanelMappingChange = useCallback(
+    (value: string) => {
+      form.setValue('model_mapping', value, { shouldDirty: true })
+    },
+    [form]
+  )
+
+  const handlePanelMappingCommit = useCallback(
+    (value: string) => {
+      if (redirectSyncModels) syncModelsWithMapping(value)
+    },
+    [redirectSyncModels, syncModelsWithMapping]
+  )
+
+  const openRedirectPanel = useCallback(() => {
+    // Pre-existing mappings count as already synced, so opening the panel
+    // never rewrites the model list on its own.
+    const models = new Set(parseModelsString(form.getValues('models') || ''))
+    syncedAliasesRef.current = new Set(
+      modelMappingGuardrail.entries
+        .filter((entry) => models.has(entry.source))
+        .map((entry) => entry.source)
+    )
+    syncedTargetsRef.current = new Set(
+      modelMappingGuardrail.entries
+        .filter((entry) => !models.has(entry.target))
+        .map((entry) => entry.target)
+    )
+    setRedirectPanelOpen(true)
+  }, [form, modelMappingGuardrail.entries])
+
+  const closeRedirectPanel = useCallback(() => {
+    setRedirectPanelOpen(false)
+  }, [])
+
+  // Redirect one fetched upstream model. On wide screens the floating panel
+  // stays beside the list; a name the platform already knows is applied at
+  // once, anything else becomes a draft row awaiting the request name.
+  const handleFetchedRedirect = useCallback(
+    (model: string) => {
+      if (window.innerWidth < REDIRECT_PANEL_MIN_VIEWPORT) {
+        requestMappingDraft('', model)
+        return
+      }
+      openRedirectPanel()
+      const alias = findVerifiedAlias(model, namingSuggestions, allModelsList)
+      if (alias) {
+        applyMappingPairs([alias], redirectSyncModels)
+        raiseMappingDraft(alias.from, alias.to, 'from')
+        return
+      }
+      raiseMappingDraft('', model, 'from')
+    },
+    [
+      requestMappingDraft,
+      openRedirectPanel,
+      namingSuggestions,
+      allModelsList,
+      applyMappingPairs,
+      redirectSyncModels,
+      raiseMappingDraft,
+    ]
+  )
+
+  const handleApplySuggestion = useCallback(
+    (suggestion: ModelNamingSuggestion) => {
+      const derivation = deriveModelMappingPairs(
+        suggestion.models,
+        'upstream',
+        suggestion.rule
+      )
+      applyMappingPairs(derivation.pairs, redirectSyncModels)
+    },
+    [applyMappingPairs, redirectSyncModels]
+  )
+
   // Handle successful submission
   const handleSuccess = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
@@ -1302,6 +1579,34 @@ export function ChannelMutateDrawer({
     if (statusCodeRiskResolveRef.current) {
       statusCodeRiskResolveRef.current(confirmed)
       statusCodeRiskResolveRef.current = null
+    }
+  }, [])
+
+  // Passthrough bypasses model redirect, overrides and conversion, so every
+  // control that enables it (quick options, request section, header template)
+  // routes through this single confirmation before the value changes.
+  const confirmEnablePassthrough = useCallback(
+    (kind: PassthroughKind): Promise<boolean> =>
+      new Promise((resolve) => {
+        passthroughWarningResolveRef.current?.(false)
+        passthroughWarningResolveRef.current = resolve
+        setPassthroughWarningKind(kind)
+      }),
+    []
+  )
+
+  const handlePassthroughWarningAction = useCallback((confirmed: boolean) => {
+    setPassthroughWarningKind(null)
+    if (passthroughWarningResolveRef.current) {
+      passthroughWarningResolveRef.current(confirmed)
+      passthroughWarningResolveRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      passthroughWarningResolveRef.current?.(false)
+      passthroughWarningResolveRef.current = null
     }
   }, [])
 
@@ -1596,14 +1901,24 @@ export function ChannelMutateDrawer({
           <div className='space-y-0.5'>
             <FormLabel>{t('Pass Through Body')}</FormLabel>
             <FormDescription>
-              {t('Pass request body directly to upstream')}
+              {t(
+                'Preserve upstream-specific fields when API formats match; bypasses model redirect, parameter override and format conversion'
+              )}
             </FormDescription>
           </div>
           <FormControl>
             <Switch
               disabled={sensitiveLocked}
               checked={field.value}
-              onCheckedChange={field.onChange}
+              onCheckedChange={(value) => {
+                if (!value) {
+                  field.onChange(false)
+                  return
+                }
+                void confirmEnablePassthrough('body').then((confirmed) => {
+                  if (confirmed) field.onChange(true)
+                })
+              }}
             />
           </FormControl>
         </FormItem>
@@ -1679,6 +1994,32 @@ export function ChannelMutateDrawer({
             <Switch
               disabled={sensitiveLocked}
               checked={field.value}
+              onCheckedChange={field.onChange}
+            />
+          </FormControl>
+        </FormItem>
+      )}
+    />
+  )
+
+  const ollamaOpenAIChatFields = currentType === CHANNEL_TYPE_OLLAMA && (
+    <FormField
+      control={form.control}
+      name='ollama_openai_chat'
+      render={({ field }) => (
+        <FormItem className='flex items-center justify-between px-4 py-3'>
+          <div className='space-y-0.5'>
+            <FormLabel>{t('Use OpenAI-compatible Ollama chat API')}</FormLabel>
+            <FormDescription>
+              {t(
+                'Send chat completions to the OpenAI-compatible /v1/chat/completions instead of the native Ollama /api/chat'
+              )}
+            </FormDescription>
+          </div>
+          <FormControl>
+            <Switch
+              disabled={sensitiveLocked}
+              checked={field.value === true}
               onCheckedChange={field.onChange}
             />
           </FormControl>
@@ -2185,6 +2526,17 @@ export function ChannelMutateDrawer({
                 disabled={isSubmitting}
                 sourceModelOptions={currentModelsArray}
                 targetModelOptions={modelOptions.map((option) => option.value)}
+                onBatchAdd={
+                  canBatchMap
+                    ? () =>
+                        setBatchMapping({
+                          source: batchMappingSource,
+                          selected: [],
+                        })
+                    : undefined
+                }
+                draftRequest={redirectPanelActive ? null : mappingDraftRequest}
+                onDraftRequestHandled={() => setMappingDraftRequest(null)}
               />
             </FormControl>
             {modelMappingGuardrail.invalidJson && (
@@ -2208,19 +2560,29 @@ export function ChannelMutateDrawer({
                       'to the Models list so users can use them before the mapping sends traffic upstream.'
                     )}
                   </span>
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    onClick={() => {
-                      updateModels([
-                        ...currentModelsArray,
-                        ...modelMappingGuardrail.missingSourceModels,
-                      ])
-                    }}
-                  >
-                    {t('Add missing models')}
-                  </Button>
+                  <div className='flex shrink-0 flex-wrap gap-2'>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      onClick={() => {
+                        updateModels([
+                          ...currentModelsArray,
+                          ...modelMappingGuardrail.missingSourceModels,
+                        ])
+                      }}
+                    >
+                      {t('Add missing models')}
+                    </Button>
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='sm'
+                      onClick={() => setConfigurationSection('connection')}
+                    >
+                      {t('View models')}
+                    </Button>
+                  </div>
                 </AlertDescription>
               </Alert>
             )}
@@ -2229,6 +2591,24 @@ export function ChannelMutateDrawer({
         )}
       />
     </div>
+  )
+
+  const redirectPanelNotice = (
+    <Alert>
+      <AlertDescription className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+        <span>
+          {t('Model mappings are being edited in the floating panel.')}
+        </span>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          onClick={closeRedirectPanel}
+        >
+          {t('Close the panel to edit here')}
+        </Button>
+      </AlertDescription>
+    </Alert>
   )
 
   const basicSection = (
@@ -2479,9 +2859,14 @@ export function ChannelMutateDrawer({
                     type='button'
                     variant='outline'
                     size='sm'
-                    onClick={() =>
-                      field.onChange(JSON.stringify({ '*': true }, null, 2))
-                    }
+                    onClick={() => {
+                      void confirmEnablePassthrough('headers').then(
+                        (confirmed) => {
+                          if (!confirmed) return
+                          field.onChange(JSON.stringify({ '*': true }, null, 2))
+                        }
+                      )
+                    }}
                   >
                     {t('Passthrough Template')}
                   </Button>
@@ -2810,6 +3195,27 @@ export function ChannelMutateDrawer({
                       copyChipOnClick
                     />
                   </FormControl>
+                  <div className='text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs'>
+                    <Route className='size-3.5 shrink-0' aria-hidden='true' />
+                    {mappingCount > 0 && (
+                      <span>
+                        {t('{{count}} model(s) redirected', {
+                          count: mappingCount,
+                        })}
+                      </span>
+                    )}
+                    <Button
+                      type='button'
+                      variant='link'
+                      size='sm'
+                      className='h-auto p-0 text-xs'
+                      onClick={() => setConfigurationSection('routing')}
+                    >
+                      {mappingCount > 0
+                        ? t('Edit mapping')
+                        : t('Set up model redirects')}
+                    </Button>
+                  </div>
                   {canBindTaskPlugin &&
                     canHavePluginExtensions &&
                     !showProviderPicker && (
@@ -2850,23 +3256,33 @@ export function ChannelMutateDrawer({
                             'are also listed here. Remove them from Models to keep the `/v1/models` response user-friendly and hide vendor-specific names.'
                           )}
                         </span>
-                        <Button
-                          type='button'
-                          variant='outline'
-                          size='sm'
-                          onClick={() => {
-                            const hiddenTargets = new Set(
-                              modelMappingGuardrail.exposedTargetModels
-                            )
-                            updateModels(
-                              currentModelsArray.filter(
-                                (model) => !hiddenTargets.has(model)
+                        <div className='flex shrink-0 flex-wrap gap-2'>
+                          <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            onClick={() => {
+                              const hiddenTargets = new Set(
+                                modelMappingGuardrail.exposedTargetModels
                               )
-                            )
-                          }}
-                        >
-                          {t('Remove mapped targets')}
-                        </Button>
+                              updateModels(
+                                currentModelsArray.filter(
+                                  (model) => !hiddenTargets.has(model)
+                                )
+                              )
+                            }}
+                          >
+                            {t('Remove mapped targets')}
+                          </Button>
+                          <Button
+                            type='button'
+                            variant='ghost'
+                            size='sm'
+                            onClick={() => setConfigurationSection('routing')}
+                          >
+                            {t('View mapping')}
+                          </Button>
+                        </div>
                       </AlertDescription>
                     </Alert>
                   )}
@@ -2935,19 +3351,65 @@ export function ChannelMutateDrawer({
                   )}
                 {discovery.status === 'success' &&
                   discovery.models.length > 0 && (
-                    <UpstreamModelSelection
-                      models={discovery.models}
-                      selected={currentModelsArray}
-                      existingModels={
-                        isEditing
-                          ? initialModelsRef.current
-                          : currentModelsArray
-                      }
-                      onChange={handleModelsChange}
-                      showChanges={isEditing}
-                      redirectModels={redirectModelList}
-                      redirectSourceModels={redirectModelKeyList}
-                    />
+                    <div className='space-y-3'>
+                      <UpstreamModelSelection
+                        models={discovery.models}
+                        selected={currentModelsArray}
+                        existingModels={
+                          isEditing
+                            ? initialModelsRef.current
+                            : currentModelsArray
+                        }
+                        onChange={handleModelsChange}
+                        showChanges={isEditing}
+                        redirectModels={redirectModelList}
+                        redirectSourceModels={redirectModelKeyList}
+                        onRedirectModel={handleFetchedRedirect}
+                        aliases={upstreamAliases}
+                      />
+                      <div className='flex flex-wrap items-center justify-between gap-2'>
+                        <p className='text-muted-foreground text-xs'>
+                          {t(
+                            'Redirect fetched upstream names to the names your users call.'
+                          )}
+                        </p>
+                        <div className='flex flex-wrap gap-2'>
+                          {viewportWide && (
+                            <Button
+                              type='button'
+                              variant='outline'
+                              size='sm'
+                              onClick={
+                                redirectPanelOpen
+                                  ? closeRedirectPanel
+                                  : openRedirectPanel
+                              }
+                            >
+                              <PanelLeftOpen aria-hidden='true' />
+                              {redirectPanelOpen
+                                ? t('Hide redirect panel')
+                                : t('Redirect panel')}
+                            </Button>
+                          )}
+                          <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            onClick={() =>
+                              setBatchMapping({
+                                source: 'upstream',
+                                selected: discovery.models.filter((model) =>
+                                  currentModelsArray.includes(model)
+                                ),
+                              })
+                            }
+                          >
+                            <ArrowRightLeft aria-hidden='true' />
+                            {t('Batch redirect')}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
                   )}
                 {isEditing && !previewModels && (
                   <p className='text-muted-foreground text-xs'>
@@ -3425,10 +3887,7 @@ export function ChannelMutateDrawer({
                   <FormItem>
                     <FormLabel>{t('Private Deployment URL')}</FormLabel>
                     <FormControl>
-                      <Input
-                        placeholder={t('e.g., https://fastgpt.run/api/openapi')}
-                        {...field}
-                      />
+                      <Input placeholder={baseUrlPlaceholder} {...field} />
                     </FormControl>
                     <FormDescription>
                       {t(
@@ -3714,12 +4173,7 @@ export function ChannelMutateDrawer({
                   <FormItem>
                     <FormLabel required>{t('API Base URL')}</FormLabel>
                     <FormControl>
-                      <Input
-                        placeholder={t(
-                          'e.g., https://ark.cn-beijing.volces.com'
-                        )}
-                        {...field}
-                      />
+                      <Input placeholder={baseUrlPlaceholder} {...field} />
                     </FormControl>
                     <FormDescription>
                       {t('Enter custom API endpoint URL')}
@@ -3761,15 +4215,16 @@ export function ChannelMutateDrawer({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel
-                      required={currentType === CHANNEL_TYPE_TASK_PLUGIN}
+                      required={
+                        currentType === CHANNEL_TYPE_TASK_PLUGIN ||
+                        currentType === CHANNEL_TYPE_VLLM ||
+                        currentType === CHANNEL_TYPE_SGLANG
+                      }
                     >
                       {t('Base URL')}
                     </FormLabel>
                     <FormControl>
-                      <Input
-                        placeholder={t(FIELD_PLACEHOLDERS.BASE_URL)}
-                        {...field}
-                      />
+                      <Input placeholder={baseUrlPlaceholder} {...field} />
                     </FormControl>
                     {currentType !== CHANNEL_TYPE_TASK_PLUGIN && (
                       <FormDescription>
@@ -4269,6 +4724,12 @@ export function ChannelMutateDrawer({
         section={configurationSection}
         onSectionChange={setConfigurationSection}
         statuses={configuration.sections}
+        badges={{
+          routing: {
+            count: mappingCount,
+            label: t('{{count}} model mapping(s)', { count: mappingCount }),
+          },
+        }}
         connection={
           <>
             {basicSection}
@@ -4281,9 +4742,19 @@ export function ChannelMutateDrawer({
           </>
         }
         models={modelsSection}
+        quickOptions={
+          viewportWide ? null : (
+            <ChannelQuickOptions
+              channelType={currentType}
+              sensitiveLocked={sensitiveLocked}
+              disabled={isSubmitting}
+              confirmEnablePassthrough={confirmEnablePassthrough}
+            />
+          )
+        }
         routing={
           <>
-            {modelMappingFields}
+            {redirectPanelActive ? redirectPanelNotice : modelMappingFields}
             {routingFields}
             {isEditing && channelId && (
               <ModelRoutingOverridesEditor
@@ -4383,10 +4854,16 @@ export function ChannelMutateDrawer({
                 disabled={sensitiveLocked}
                 className='space-y-4 disabled:opacity-60'
               >
+                <ResponsesWebSocketSetting
+                  channelType={currentType}
+                  disabled={sensitiveLocked || isSubmitting}
+                />
                 {formatFields}
                 <OllamaProtocolFields control={form.control} />
+                {ollamaOpenAIChatFields}
                 {thinkingFields}
-                {passthroughFields}
+                {currentType !== CHANNEL_TYPE_ADVANCED_CUSTOM &&
+                  passthroughFields}
                 {systemPromptFields}
                 {systemPromptOverrideFields}
               </fieldset>
@@ -4448,8 +4925,8 @@ export function ChannelMutateDrawer({
           className={sideDrawerContentClassName('sm:max-w-7xl')}
         >
           <SheetHeader className={sideDrawerHeaderClassName('pr-12 sm:pr-14')}>
-            <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
-              <div className='min-w-0 flex-1'>
+            <div className='flex flex-col gap-2'>
+              <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
                 <div className='flex min-w-0 items-center gap-2 sm:gap-3'>
                   <SheetTitle className='flex shrink-0 items-center gap-2 sm:gap-3'>
                     <IconBadge tone='info' size='title'>
@@ -4509,41 +4986,58 @@ export function ChannelMutateDrawer({
                     </Button>
                   )}
                 </div>
-                {isEditing && channelData?.data && (
-                  <Badge variant='secondary' className='mt-2'>
-                    {t(
-                      CHANNEL_STATUS_LABELS[
-                        currentStatus as keyof typeof CHANNEL_STATUS_LABELS
-                      ] || 'Unknown'
-                    )}
-                  </Badge>
+                {!isEditing && !showProviderPicker && (
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    className='shrink-0'
+                    onClick={pasteConnectionInfoFromClipboard}
+                  >
+                    <ClipboardPaste className='size-4' />
+                    <span>{t('Paste Connection Info')}</span>
+                  </Button>
                 )}
-                <SheetDescription
-                  className={cn(
-                    'mt-1',
-                    showProviderPicker && providerTarget && 'truncate'
-                  )}
-                  title={
-                    showProviderPicker && providerTarget
-                      ? description
-                      : undefined
-                  }
-                >
-                  {description}
-                </SheetDescription>
               </div>
-              {!isEditing && !showProviderPicker && (
-                <Button
-                  type='button'
-                  variant='outline'
-                  size='sm'
-                  className='shrink-0'
-                  onClick={pasteConnectionInfoFromClipboard}
-                >
-                  <ClipboardPaste className='size-4' />
-                  <span>{t('Paste Connection Info')}</span>
-                </Button>
-              )}
+              <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+                <div className='flex min-w-0 flex-wrap items-center gap-2 sm:flex-1'>
+                  {isEditing && channelData?.data && (
+                    <Badge variant='secondary' className='shrink-0'>
+                      {t(
+                        CHANNEL_STATUS_LABELS[
+                          currentStatus as keyof typeof CHANNEL_STATUS_LABELS
+                        ] || 'Unknown'
+                      )}
+                    </Badge>
+                  )}
+                  <SheetDescription
+                    className={cn(
+                      showProviderPicker && providerTarget && 'truncate'
+                    )}
+                    title={
+                      showProviderPicker && providerTarget
+                        ? description
+                        : undefined
+                    }
+                  >
+                    {description}
+                  </SheetDescription>
+                </div>
+                {viewportWide &&
+                  !showProviderPicker &&
+                  !channelError &&
+                  !isChannelDetailLoading && (
+                    <ChannelQuickOptions
+                      form={form}
+                      layout='inline'
+                      channelType={currentType}
+                      sensitiveLocked={sensitiveLocked}
+                      disabled={isSubmitting}
+                      className='sm:justify-end'
+                      confirmEnablePassthrough={confirmEnablePassthrough}
+                    />
+                  )}
+              </div>
             </div>
           </SheetHeader>
 
@@ -4655,6 +5149,42 @@ export function ChannelMutateDrawer({
               </Button>
             )}
           </SheetFooter>
+          {redirectPanelActive && redirectPanelPlacement && (
+            <ModelRedirectPanel
+              defaultPosition={{
+                x: redirectPanelPlacement.x,
+                y: redirectPanelPlacement.y,
+              }}
+              width={redirectPanelPlacement.width}
+              onClose={closeRedirectPanel}
+              mappingCount={mappingCount}
+              mappingValue={formValues.model_mapping || ''}
+              onMappingChange={handlePanelMappingChange}
+              onMappingCommit={handlePanelMappingCommit}
+              suggestions={namingSuggestions}
+              onApplySuggestion={handleApplySuggestion}
+              onOpenRules={() =>
+                setBatchMapping({
+                  source: 'upstream',
+                  selected: upstreamModelList.filter((model) =>
+                    currentModelsArray.includes(model)
+                  ),
+                })
+              }
+              syncModels={redirectSyncModels}
+              onSyncModelsChange={setRedirectSyncModels}
+              sourceModelOptions={modelOptions.map((option) => option.value)}
+              targetModelOptions={[
+                ...new Set([
+                  ...upstreamModelList,
+                  ...modelOptions.map((option) => option.value),
+                ]),
+              ]}
+              draftRequest={mappingDraftRequest}
+              onDraftRequestHandled={() => setMappingDraftRequest(null)}
+              disabled={isSubmitting}
+            />
+          )}
         </SheetContent>
       </Sheet>
 
@@ -4683,6 +5213,21 @@ export function ChannelMutateDrawer({
             if (!nextOpen) setModelConfiguration(null)
           }}
           onApply={handleModelsChange}
+          onRedirect={(model) => requestMappingDraft(model, '')}
+        />
+      )}
+
+      {open && batchMapping && (
+        <ModelMappingBatchDialog
+          open
+          upstreamModels={upstreamModelList}
+          channelModels={currentModelsArray}
+          initialSource={batchMapping.source}
+          initialSelected={batchMapping.selected}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setBatchMapping(null)
+          }}
+          onApply={handleBatchMappingApply}
         />
       )}
 
@@ -4731,6 +5276,14 @@ export function ChannelMutateDrawer({
         }}
         detailItems={statusCodeRiskDetailItems}
         onConfirm={() => handleStatusCodeRiskAction(true)}
+      />
+      <PassthroughWarningDialog
+        open={passthroughWarningKind !== null}
+        kind={passthroughWarningKind}
+        onOpenChange={(v) => {
+          if (!v) handlePassthroughWarningAction(false)
+        }}
+        handleConfirm={() => handlePassthroughWarningAction(true)}
       />
     </>
   )

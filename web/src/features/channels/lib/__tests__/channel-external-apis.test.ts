@@ -12,7 +12,9 @@ const BUILT_IN_EXPECTATIONS: ReadonlyArray<{
   apis: readonly ExternalAPI[]
 }> = [
   {
-    types: [1, 3, 7, 8, 17, 19, 20, 22, 24, 27, 31, 43, 45, 47, 59, 60, 101],
+    types: [
+      1, 3, 7, 8, 17, 19, 20, 22, 24, 27, 31, 43, 45, 47, 59, 60, 101, 106, 107,
+    ],
     apis: ['chat', 'responses', 'messages'],
   },
   {

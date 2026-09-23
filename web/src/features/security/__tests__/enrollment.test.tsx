@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   act,
+  cleanup,
   render as renderUI,
   screen,
   waitFor,
@@ -39,10 +40,6 @@ import { PasskeyCard } from '../components/passkey-card'
 import { TwoFACard } from '../components/two-fa-card'
 
 function render(ui: ReactElement) {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  })
-  client.setQueryData(STATUS_QUERY_KEY, { passkey_rp_ids: ['localhost'] })
   return renderUI(
     <QueryClientProvider client={client}>{ui}</QueryClientProvider>
   )
@@ -67,7 +64,12 @@ const credential = {
   getClientExtensionResults: () => ({}),
 }
 
+let client: QueryClient
 beforeEach(() => {
+  client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  client.setQueryData(STATUS_QUERY_KEY, { passkey_rp_ids: ['localhost'] })
   vi.stubGlobal(
     'PublicKeyCredential',
     class {
@@ -86,6 +88,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  cleanup()
+  client.clear()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   if (credentialsDescriptor) {
@@ -133,6 +137,11 @@ it.each(['2fa', 'passkey'] as const)(
 )
 
 it('refreshes Telegram bindings from the server result after the callback popup has closed', async () => {
+  client.setQueryData(STATUS_QUERY_KEY, {
+    telegram_oauth: true,
+    telegram_oauth_configured: true,
+    passkey_rp_ids: ['localhost'],
+  })
   const popup = {
     closed: false,
     location: { replace: vi.fn() },
@@ -191,9 +200,6 @@ it('refreshes Telegram bindings from the server result after the callback popup 
   })
   const onUpdate = vi.fn()
   const user = userEvent.setup()
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  })
   render(
     <QueryClientProvider client={client}>
       <AccountBindings
@@ -359,7 +365,12 @@ it('consumes Passkey authorization at setup and activates using only the dedicat
   })
   const success = vi.spyOn(toast, 'success')
   const user = userEvent.setup()
-  render(<TwoFACard loading={false} />)
+  client.setQueryData(STATUS_QUERY_KEY, { passkey_rp_ids: ['localhost'] })
+  render(
+    <QueryClientProvider client={client}>
+      <TwoFACard loading={false} />
+    </QueryClientProvider>
+  )
   await user.click(await screen.findByRole('button', { name: 'Enable' }))
   await screen.findByText(
     'We will prompt your device to confirm using biometrics or your hardware key.'

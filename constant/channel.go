@@ -64,7 +64,9 @@ const (
 	ChannelTypeAstraFlowGemini = 103
 	ChannelTypeSeedanceSLS     = 104
 	ChannelTypeTaskPlugin      = 105
-	ChannelTypeDummy           // this one is only for count, do not add any channel after this
+	ChannelTypeVLLM            = 106
+	ChannelTypeSGLang          = 107
+	ChannelTypeDummy           = 108 // this one is only for count, do not add any channel after this
 
 )
 
@@ -132,7 +134,7 @@ var ChannelBaseURLs = func() []string {
 		"",                                          //59
 		"",                                          //60
 	}
-	baseURLs = append(baseURLs, make([]string, ChannelTypeTaskPlugin-len(baseURLs)+1)...)
+	baseURLs = append(baseURLs, make([]string, ChannelTypeSGLang-len(baseURLs)+1)...)
 	baseURLs[ChannelTypeTokenHub] = "https://tokenhub.tencentmaas.com"
 	baseURLs[ChannelTypeXunfeiMaaS] = "https://maas-api.cn-huabei-1.xf-yun.com"
 	baseURLs[ChannelTypeAstraFlowImage] = "https://api.modelverse.cn"
@@ -212,6 +214,8 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeAstraFlowGemini: "AstraFlow Gemini",
 	ChannelTypeSeedanceSLS:     "Seedance SLS",
 	ChannelTypeTaskPlugin:      "Task Plugin",
+	ChannelTypeVLLM:            "vLLM",
+	ChannelTypeSGLang:          "SGLang",
 }
 
 func GetChannelTypeName(channelType int) string {
@@ -243,4 +247,14 @@ var ChannelSpecialBases = map[string]ChannelSpecialBase{
 		ClaudeBaseURL: "https://ark.cn-beijing.volces.com/api/coding",
 		OpenAIBaseURL: "https://ark.cn-beijing.volces.com/api/coding/v3",
 	},
+}
+
+// IsAdvancedCustomChannel includes named channels backed by route presets.
+func IsAdvancedCustomChannel(channelType int) bool {
+	switch channelType {
+	case ChannelTypeAdvancedCustom, ChannelTypeVLLM, ChannelTypeSGLang:
+		return true
+	default:
+		return false
+	}
 }

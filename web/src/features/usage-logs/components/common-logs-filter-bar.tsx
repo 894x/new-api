@@ -363,6 +363,7 @@ export function CommonLogsFilterBar<TData>(
     <LogsFilterField className={sensitiveInputClass}>
       <Combobox
         options={groupOptions}
+        dropdownClassName={sensitiveInputClass}
         allowCustomValue
         aria-label={t('Group')}
         emptyText={t('No group found.')}

@@ -3,6 +3,7 @@ package service
 import (
 	"github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 )
 
@@ -22,6 +23,13 @@ func effectiveBillingUsage(usage *dto.Usage) *dto.Usage {
 		return billingUsage
 	}
 	return usage
+}
+
+func captureRelayPerformanceUsage(info *relaycommon.RelayInfo, usage *dto.Usage) {
+	tokens := performanceTokenUsage(usage)
+	info.PerformanceInputTokens = tokens.InputTokens
+	info.PerformanceOutputTokens = tokens.OutputTokens
+	info.PerformanceCacheReadTokens = tokens.CacheReadTokens
 }
 
 func performanceTokenUsage(usage *dto.Usage) perfmetrics.RelayTokenUsage {

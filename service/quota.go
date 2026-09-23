@@ -9,7 +9,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -369,7 +368,6 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
-	completedAt := time.Now()
 	if usage == nil {
 		usage = &dto.Usage{PromptTokens: relayInfo.GetEstimatePromptTokens(), TotalTokens: relayInfo.GetEstimatePromptTokens()}
 	}
@@ -478,7 +476,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		if err := SettleModelRequestTPM(ctx, usage.PromptTokens, usage.CompletionTokens); err != nil {
 			logger.LogError(ctx, "error settling model request TPM: "+err.Error())
 		}
-		perfmetrics.RecordRelaySampleAsync(relayInfo, true, performanceTokenUsage(usage), completedAt)
+		captureRelayPerformanceUsage(relayInfo, usage)
 		return
 	}
 	if (totalTokens != 0 || fixedPriceBilling) && !groupDiscountDecision.Applied {
@@ -514,7 +512,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
-	perfmetrics.RecordRelaySampleAsync(relayInfo, true, performanceTokenUsage(usage), completedAt)
+	captureRelayPerformanceUsage(relayInfo, usage)
 }
 
 func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {

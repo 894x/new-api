@@ -27,11 +27,16 @@ import {
   DataTableRow,
   useDataTable,
 } from '@/components/data-table'
+import {
+  getAdminPlans,
+  getSelfSubscriptionFull,
+} from '@/features/subscriptions/api'
 import { useMediaQuery } from '@/hooks'
 import { useTableCompactMode } from '@/hooks/use-table-compact-mode'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { createServerError } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   DEFAULT_LOGS_DATA,
@@ -91,6 +96,22 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const searchParams = route.useSearch()
   const compactModeKey = `usage-logs:${logCategory}`
   const [compactMode, setCompactMode] = useTableCompactMode(compactModeKey)
+  const userId = useAuthStore((state) => state.auth.user?.id)
+  const { data: showWalletSource = false } = useQuery({
+    queryKey: ['usage-log-wallet-source', isAdmin, userId],
+    enabled: logCategory === 'common' && userId != null,
+    queryFn: async () => {
+      if (isAdmin) {
+        const result = await getAdminPlans()
+        return result.success && (result.data?.length ?? 0) > 0
+      }
+
+      const result = await getSelfSubscriptionFull()
+      const subscriptions =
+        result.data?.all_subscriptions ?? result.data?.subscriptions
+      return result.success && (subscriptions?.length ?? 0) > 0
+    },
+  })
 
   const {
     columnFilters,
@@ -173,7 +194,8 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     logCategory,
     isAdmin,
     isRoot,
-    canManageScope
+    canManageScope,
+    showWalletSource
   )
   const isLoadingData = isLoading || (isFetching && !data)
 

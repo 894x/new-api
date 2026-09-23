@@ -28,13 +28,14 @@ func TestPrefillGroupMigrationPostgreSQLSimulation(t *testing.T) {
 		wantError  string
 	}{
 		{name: "already migrated"},
-		{name: "preserve unknown constraint", constraint: "custom_name_constraint", wantError: "unsupported global unique"},
-		{name: "preserve unknown index", index: "custom_name_index", wantError: "unsupported global unique"},
-		{name: "replace legacy constraint", constraint: legacyPrefillGroupNameUnique, create: true},
-		{name: "replace legacy index", index: legacyPrefillGroupNameUnique},
-		{name: "invalid replacement preserves legacy", constraint: legacyPrefillGroupNameUnique, invalid: true, wantError: "unexpected definition"},
-		{name: "failed replacement rolls back", constraint: legacyPrefillGroupNameUnique, create: true, createFail: true, wantError: "create prefill group partial unique index"},
-		{name: "failed legacy removal rolls back", constraint: legacyPrefillGroupNameUnique, dropFail: true, wantError: "drop conflicting prefill group constraint"},
+		{name: "replace equivalent renamed constraint", constraint: "custom_name_constraint", create: true},
+		{name: "replace equivalent renamed index", index: "custom_name_index", create: true},
+		{name: "replace legacy constraint", constraint: "idx_prefill_groups_name", create: true},
+		{name: "replace legacy index", index: "idx_prefill_groups_name"},
+		{name: "target name occupied by global constraint", constraint: "uk_prefill_name", create: true},
+		{name: "invalid replacement preserves legacy", constraint: "idx_prefill_groups_name", invalid: true, wantError: "unexpected definition"},
+		{name: "failed replacement rolls back", constraint: "idx_prefill_groups_name", create: true, createFail: true, wantError: "create prefill group partial unique index"},
+		{name: "failed legacy removal rolls back", constraint: "idx_prefill_groups_name", dropFail: true, wantError: "drop conflicting prefill group constraint"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			connection, mock, err := sqlmock.New()
@@ -45,8 +46,7 @@ func TestPrefillGroupMigrationPostgreSQLSimulation(t *testing.T) {
 			})
 			require.NoError(t, err)
 			expectPrefillMigrationMetadata(mock, tc.constraint, tc.index)
-			knownConflict := tc.constraint == legacyPrefillGroupNameUnique || tc.index == legacyPrefillGroupNameUnique
-			if knownConflict {
+			if tc.constraint != "" || tc.index != "" {
 				mock.ExpectBegin()
 				mock.ExpectQuery(`SELECT count\(\*\) FROM information_schema.tables`).WithArgs("prefill_groups", "BASE TABLE").
 					WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
@@ -55,28 +55,26 @@ func TestPrefillGroupMigrationPostgreSQLSimulation(t *testing.T) {
 				expectPrefillMigrationMetadata(mock, tc.constraint, tc.index)
 				mock.ExpectQuery(`SELECT count\(\*\) FROM INFORMATION_SCHEMA.columns`).WithArgs("prefill_groups", "deleted_at").
 					WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-				mock.ExpectQuery(`SELECT count\(\*\) > 0 AS index_exists`).WithArgs("name", "prefill_groups", prefillGroupNameIndex).
-					WillReturnRows(sqlmock.NewRows([]string{"index_exists", "index_valid"}).AddRow(!tc.create, !tc.create && !tc.invalid))
-				if tc.create {
-					create := mock.ExpectExec(regexp.QuoteMeta(`CREATE UNIQUE INDEX IF NOT EXISTS "uk_prefill_name" ON "prefill_groups" ("name") WHERE deleted_at IS NULL`))
-					if tc.createFail {
-						create.WillReturnError(errors.New("simulated index creation failure"))
-					} else {
-						create.WillReturnResult(sqlmock.NewResult(0, 0))
-						mock.ExpectQuery(`SELECT count\(\*\) > 0 AS index_exists`).WithArgs("name", "prefill_groups", prefillGroupNameIndex).
-							WillReturnRows(sqlmock.NewRows([]string{"index_exists", "index_valid"}).AddRow(true, true))
-					}
+				dropSQL := `DROP INDEX "` + tc.index + `"`
+				if tc.constraint != "" {
+					dropSQL = `ALTER TABLE "prefill_groups" DROP CONSTRAINT "` + tc.constraint + `"`
 				}
-				if !tc.invalid && !tc.createFail {
-					dropSQL := `DROP INDEX "idx_prefill_groups_name"`
-					if tc.constraint != "" {
-						dropSQL = `ALTER TABLE "prefill_groups" DROP CONSTRAINT "idx_prefill_groups_name"`
-					}
-					drop := mock.ExpectExec(regexp.QuoteMeta(dropSQL))
-					if tc.dropFail {
-						drop.WillReturnError(errors.New("simulated constraint removal failure"))
-					} else {
-						drop.WillReturnResult(sqlmock.NewResult(0, 0))
+				drop := mock.ExpectExec(regexp.QuoteMeta(dropSQL))
+				if tc.dropFail {
+					drop.WillReturnError(errors.New("simulated constraint removal failure"))
+				} else {
+					drop.WillReturnResult(sqlmock.NewResult(0, 0))
+					mock.ExpectQuery(`SELECT count\(\*\) > 0 AS index_exists`).WithArgs("name", "prefill_groups", prefillGroupNameIndex).
+						WillReturnRows(sqlmock.NewRows([]string{"index_exists", "index_valid"}).AddRow(!tc.create, !tc.create && !tc.invalid))
+					if tc.create {
+						create := mock.ExpectExec(regexp.QuoteMeta(`CREATE UNIQUE INDEX IF NOT EXISTS "uk_prefill_name" ON "prefill_groups" ("name") WHERE deleted_at IS NULL`))
+						if tc.createFail {
+							create.WillReturnError(errors.New("simulated index creation failure"))
+						} else {
+							create.WillReturnResult(sqlmock.NewResult(0, 0))
+							mock.ExpectQuery(`SELECT count\(\*\) > 0 AS index_exists`).WithArgs("name", "prefill_groups", prefillGroupNameIndex).
+								WillReturnRows(sqlmock.NewRows([]string{"index_exists", "index_valid"}).AddRow(true, true))
+						}
 					}
 				}
 				if tc.wantError != "" {

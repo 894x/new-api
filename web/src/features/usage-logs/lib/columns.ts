@@ -34,10 +34,11 @@ export function useColumnsByCategory(
   logCategory: LogCategory,
   isAdmin: boolean,
   isRoot: boolean,
-  canViewTaskRawData = false
+  canViewTaskRawData = false,
+  showWalletSource = false
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): ColumnDef<any>[] {
-  const commonColumns = useCommonLogsColumns(isAdmin, isRoot)
+  const commonColumns = useCommonLogsColumns(isAdmin, isRoot, showWalletSource)
   const drawingColumns = useDrawingLogsColumns(isAdmin)
   const taskColumns = useTaskLogsColumns(isAdmin, isRoot, canViewTaskRawData)
 

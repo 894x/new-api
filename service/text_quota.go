@@ -12,7 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -416,7 +415,6 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 }
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
-	completedAt := time.Now()
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
 	if usage == nil {
@@ -519,7 +517,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		if err := SettleModelRequestTPM(ctx, summary.PromptTokens, summary.CompletionTokens); err != nil {
 			logger.LogError(ctx, "error settling model request TPM: "+err.Error())
 		}
-		perfmetrics.RecordRelaySampleAsync(relayInfo, true, performanceTokenUsage(billingUsage), completedAt)
+		captureRelayPerformanceUsage(relayInfo, billingUsage)
 		return
 	}
 	if summary.hasBillableUsage() && !groupDiscountDecision.Applied {
@@ -617,7 +615,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
-	perfmetrics.RecordRelaySampleAsync(relayInfo, true, performanceTokenUsage(billingUsage), completedAt)
+	captureRelayPerformanceUsage(relayInfo, billingUsage)
 }
 
 // recordAttemptVisibleCompletionTokens keeps the TPOT denominator in the same

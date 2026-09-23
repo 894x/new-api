@@ -2,14 +2,65 @@ package service
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSelectChannelStrictAffinityPrecedesDynamicRouting(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	createChannelSelectAutoGroupsChannel(t, db, 9301, "default", "gpt-5")
+	createChannelSelectAutoGroupsChannel(t, db, 9302, "default", "gpt-5")
+	model.InitChannelCache()
+	dynamic := dynamic_routing_setting.GetSetting()
+	t.Cleanup(func() { require.NoError(t, dynamic_routing_setting.ReplaceAndSync(dynamic)) })
+	enabled := dynamic
+	enabled.Enabled = true
+	require.NoError(t, dynamic_routing_setting.ReplaceAndSync(enabled))
+	affinity := operation_setting.GetChannelAffinitySetting()
+	original := *affinity
+	t.Cleanup(func() { *affinity = original })
+	rule := operation_setting.ChannelAffinityRule{Name: t.Name(), ModelRegex: []string{"^gpt-5$"}, SessionMode: "strict",
+		KeySources: []operation_setting.ChannelAffinityKeySource{{Type: "request_header", Key: "X-Affinity-Key"}}}
+	affinity.Enabled, affinity.Rules = true, []operation_setting.ChannelAffinityRule{rule}
+	cacheKey := buildChannelAffinityCacheKeySuffix(rule, "gpt-5", "default", t.Name())
+	cache := getChannelAffinityCache()
+	require.NoError(t, cache.SetWithTTL(cacheKey, 9301, time.Minute))
+	t.Cleanup(func() { _, _ = cache.DeleteMany([]string{cacheKey}) })
+	for _, available := range []bool{true, false} {
+		if !available {
+			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 9301).Update("status", common.ChannelStatusManuallyDisabled).Error)
+			model.InitChannelCache()
+		}
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		c.Request.Header.Set("X-Affinity-Key", t.Name())
+		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+		selected, _, selectErr := SelectChannelForRequest(c, "gpt-5", &RetryParam{Ctx: c, TokenGroup: "default", ModelName: "gpt-5", DynamicRoutingEligible: true})
+		if available {
+			require.Nil(t, selectErr)
+			require.NotNil(t, selected)
+			assert.Equal(t, 9301, selected.Id)
+		} else {
+			assert.Nil(t, selected)
+			require.NotNil(t, selectErr)
+			assert.Equal(t, http.StatusServiceUnavailable, selectErr.StatusCode)
+			assert.Equal(t, "strict_session_binding_unavailable", selectErr.Message)
+		}
+	}
+}
 
 func TestPinnedTaskPluginChannelTypesUsesPinnedGenerationIndex(t *testing.T) {
 	registry := jsplugin.NewRegistry()
