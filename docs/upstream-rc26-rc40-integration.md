@@ -314,6 +314,18 @@ Verification: focused backend packages passed; independent relaykit `GOWORK=off 
 
 The owner-approved SQLite plus SQL-mock/miniredis boundary remains explicit. No real MySQL/PostgreSQL acceptance, live provider acceptance, browser acceptance, push or deployment is claimed. Graph metadata is stale relative to this merge; targeted current source and executable regressions support the integration, not an exhaustive graph audit.
 
-### rc33 through rc40 — pending
+### rc33 — integrated
+
+Normal merge of official `eb99ab1b4` onto rc32 integration `418ce8074329d1c1c239dbf6244adcc2657499f8`. Includes all three upstream commits: exact reasoning-effort preservation, expression-pricing/test-consolidation conventions, and built-in GPT-6 Astra expression pricing. The sole textual conflict was the controller option import block; retained both the fork's email/URL validation imports and upstream's slices import. No fork capability or configuration migration was removed or added to resolve it.
+
+Native Chat/Responses, Claude and Gemini reasoning controls no longer undergo implicit strength normalization merely to collect metadata. Explicit modifiers and cross-protocol conversions still use the intent pipeline; `max` and `xhigh` remain distinct through its Chat/Responses pivots. Provider suffix handling respects configured preservation exemptions. The rc32 canonical billing identity, monthly policy snapshots and shared rate/capacity identities remain unchanged.
+
+New built-in pricing uses a self-contained expression. Verified against [official OpenAI GPT-6 Astra documentation](https://developers.openai.com/api/docs/models/gpt-6-astra) on 2026-09-24: standard USD per million tokens is 10 input, 50 output, 1 cache read and 12.5 cache write; above 272000 input tokens, the full request uses doubled input/cache prices and 1.5 times output pricing. The expression does not trust a client-supplied Flex tier to discount an unconfirmed upstream service tier. Explicit administrator modes/expressions and existing configured ratio/per-call prices keep the upstream precedence; no bulk legacy-price conversion or persisted option rewrite occurs. The admin options endpoint exposes effective defaults without duplicate keys or persisting those defaults.
+
+Verification: focused billing, adaptor, helper and relay-common packages passed. Imported regression cases cover exact effort/budget/include-thoughts round trips, conflicting max/xhigh pivots, the context threshold on both sides, cache categories, untrusted Flex input, override precedence (including a zero/free price), and effective admin options. Full root `go test -p 2 -json -count=1 ./...` passed all tested packages, followed by successful `go build -p 2 ./...`. Independent relaykit `GOWORK=off go build -p 2 ./...` and `go test -p 2 ./...` passed. No frontend source changed in this RC, so frontend validation was not repeated. OpenAI Docs supplied the pricing verification; the commit-message skill supplied the categorized commit format.
+
+The existing real-MySQL/PostgreSQL, live-provider, browser and deployment limitations still apply. No push, deployment or original-checkout change occurred. Graph coverage metadata was stale for the changed paths; exact source/diffs and executable tests were used, not an exhaustive graph audit.
+
+### rc34 through rc40 — pending
 
 For each RC, record merged changes, custom-feature mapping, confirmed duplication decisions, test evidence, and remaining deployment limitations here before committing.
