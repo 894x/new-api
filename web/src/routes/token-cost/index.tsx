@@ -19,12 +19,15 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { TokenCost } from '@/features/token-cost'
-import { getFreshModuleAccess } from '@/lib/nav-modules'
+import { getModuleAccessForGuard } from '@/lib/nav-modules'
 import { useAuthStore } from '@/stores/auth-store'
 
 export const Route = createFileRoute('/token-cost/')({
-  beforeLoad: async ({ location }) => {
-    const access = await getFreshModuleAccess('token_cost')
+  beforeLoad: async ({ context, location }) => {
+    const access = await getModuleAccessForGuard(
+      context.queryClient,
+      'token_cost'
+    )
     if (!access.enabled) throw redirect({ to: '/' })
     if (access.requireAuth && !useAuthStore.getState().auth.user) {
       throw redirect({ to: '/sign-in', search: { redirect: location.href } })

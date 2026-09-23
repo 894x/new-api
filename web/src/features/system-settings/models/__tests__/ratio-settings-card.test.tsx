@@ -58,6 +58,7 @@ const modelDefaults = {
   ExposeRatioEnabled: false,
   BillingMode: '{}',
   BillingExpr: '{}',
+  PluginBillingExpr: '{}',
 }
 
 const groupDefaults = {

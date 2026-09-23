@@ -185,12 +185,12 @@ func testWan3ChannelBillingLifecycle(t *testing.T, historical bool, prefix strin
 	if alias {
 		invalid := []struct{ body, message string }{
 			{`{"model":"customer-wan","input":{"prompt":"reject"},"parameters":{"duration":31}}`, "between 2 and 30"},
-			{`{"model":"customer-legacy","input":{"prompt":"reject"},"parameters":{"duration":-1}}`, "between 1 and 3600"},
+			{`{"model":"customer-legacy","input":{"prompt":"reject"},"parameters":{"duration":-1}}`, "smart duration) is only supported by wan3.0 models"},
 		}
 		if prefix != "" {
 			invalid = append(invalid, []struct{ body, message string }{
-				{`{"model":"customer-unmapped","input":{"prompt":"reject"}}`, "must map to a model served by this plugin"},
-				{`{"model":"customer-foreign","input":{"prompt":"reject"}}`, "must map to a model served by this plugin"},
+				{`{"model":"customer-unmapped","input":{"prompt":"reject"}}`, "unsupported Wan model: customer-unmapped"},
+				{`{"model":"customer-foreign","input":{"prompt":"reject"}}`, "unsupported Wan model: foreign-upstream"},
 				{`{"model":"MiniMax-H3","input":{"prompt":"reject"}}`, "not served by this plugin"},
 			}...)
 		}
@@ -293,7 +293,7 @@ func testWan3ChannelBillingLifecycle(t *testing.T, historical bool, prefix strin
 	require.True(t, ok)
 	assert.Equal(t, "reference_video", standardReference["type"])
 	assert.Equal(t, "image_to_video", standardTask.Action)
-	assert.Equal(t, map[string]any{"resolution": "720P", "duration": nil, "watermark": false, "seed": float64(0)}, standardSubmit.body["parameters"])
+	assert.Equal(t, map[string]any{"resolution": "720P", "duration": float64(5), "ratio": "adaptive", "prompt_extend": true, "watermark": false, "seed": float64(0)}, standardSubmit.body["parameters"])
 	if alias {
 		assert.Equal(t, "customer-wan", standardTask.Properties.OriginModelName)
 		assert.Equal(t, "wan3.0-video", standardTask.Properties.UpstreamModelName)

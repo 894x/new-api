@@ -177,6 +177,21 @@ func TestBillingSessionReserveBeginErrorDoesNotBlockInitialRefund(t *testing.T) 
 	assertAdmissionQuotaState(t, userID, 500, 500)
 }
 
+func TestImageReservationDoesNotTrustOrOverdrawWallet(t *testing.T) {
+	const userID = 98280
+	session, ctx := newAdmissionReserveWalletSession(t, "image-strict-reserve", userID, 500, 0)
+	session.trusted = true
+	session.relayInfo.Request = &dto.ImageRequest{}
+	require.NoError(t, session.Reserve(200))
+	assert.False(t, session.trusted)
+	assertAdmissionQuotaState(t, userID, 300, 300)
+	require.Error(t, session.Reserve(600))
+	assert.Equal(t, 200, session.GetPreConsumedQuota())
+	assertAdmissionQuotaState(t, userID, 300, 300)
+	refundAdmissionSessionAndWait(t, session, ctx, userID)
+	assertAdmissionQuotaState(t, userID, 500, 500)
+}
+
 func TestBillingSessionInitialPreConsumePersistsAppliedAdmissionEvidence(t *testing.T) {
 	const (
 		requestID = "admission-initial-applied"

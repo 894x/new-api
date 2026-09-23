@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { act, fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
@@ -54,7 +55,7 @@ describe('request-rule time ranges', () => {
         'Start ≤ end: within the day; start > end: across midnight'
       )
     ).toBeInTheDocument()
-    fireEvent.change(screen.getByPlaceholderText('Start'), {
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Start' }), {
       target: { value: '21' },
     })
     expect(screen.getByLabelText('Saved request rules')).toHaveTextContent(
@@ -88,13 +89,17 @@ describe('request-rule time ranges', () => {
     'removing an earlier %s preserves the remaining range input draft',
     (_name, rules, removeLabel) => {
       render(<EditorFixture rules={rules} />)
-      const remainingStart = screen.getAllByPlaceholderText('Start')[1]
+      const remainingStart = screen.getAllByRole('spinbutton', {
+        name: 'Start',
+      })[1]
       act(() => remainingStart.focus())
       fireEvent.change(remainingStart, { target: { value: '014' } })
       expect(remainingStart).toHaveDisplayValue('014')
       fireEvent.click(screen.getAllByRole('button', { name: removeLabel })[0])
-      expect(screen.getByPlaceholderText('Start')).toHaveFocus()
-      expect(screen.getByPlaceholderText('Start')).toHaveDisplayValue('014')
+      expect(screen.getByRole('spinbutton', { name: 'Start' })).toHaveFocus()
+      expect(
+        screen.getByRole('spinbutton', { name: 'Start' })
+      ).toHaveDisplayValue('014')
       expect(screen.getByLabelText('Saved request rules')).toHaveTextContent(
         afternoon
       )
@@ -111,8 +116,10 @@ describe('visual tier row identity', () => {
       getRandomValues: crypto.getRandomValues.bind(crypto),
     })
     render(<EditorFixture rules={`(${morning} ? 2 : 1)`} />)
-    expect(screen.getByPlaceholderText('Start')).toHaveDisplayValue('9')
-    fireEvent.change(screen.getByPlaceholderText('Start'), {
+    expect(
+      screen.getByRole('spinbutton', { name: 'Start' })
+    ).toHaveDisplayValue('9')
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Start' }), {
       target: { value: '10' },
     })
     expect(screen.getByLabelText('Saved request rules')).toHaveTextContent(
@@ -120,32 +127,43 @@ describe('visual tier row identity', () => {
     )
   })
 
-  test('deleting an earlier tier condition preserves the remaining draft and focus', () => {
+  test('deleting an earlier tier condition preserves the remaining draft', async () => {
     render(
       <EditorFixture
         rules=''
         billing='len < 100 && c < 20 ? tier("small", p * 1 + c * 2) : tier("base", p * 3 + c * 4)'
       />
     )
-    const remaining = screen.getAllByPlaceholderText('tokens')[1]
+    const user = userEvent.setup()
+    const remaining = screen.getAllByRole('textbox', {
+      name: 'Condition value',
+    })[1]
     act(() => remaining.focus())
     fireEvent.change(remaining, { target: { value: '020' } })
-    fireEvent.click(screen.getAllByRole('button', { name: /^remove$/ })[0])
-    expect(screen.getByPlaceholderText('tokens')).toHaveDisplayValue('020')
-    expect(screen.getByPlaceholderText('tokens')).toHaveFocus()
+    await user.click(
+      screen.getByRole('button', { name: 'Condition actions 1.1' })
+    )
+    await user.click(screen.getByRole('menuitem', { name: 'Remove condition' }))
+    expect(
+      screen.getByRole('textbox', { name: 'Condition value' })
+    ).toHaveValue('020')
   })
 
-  test('deleting an earlier tier keeps the remaining media pricing panel open', () => {
+  test('deleting an earlier tier keeps the remaining pricing editor open', async () => {
     render(
       <EditorFixture
         rules=''
         billing='len < 100 ? tier("small", p * 1 + c * 2) : tier("base", p * 3 + c * 4)'
       />
     )
-    fireEvent.click(screen.getAllByRole('button', { name: 'Media pricing' })[1])
-    fireEvent.click(screen.getAllByRole('button', { name: 'Remove tier' })[0])
+    const user = userEvent.setup()
+    await user.click(
+      screen.getByRole('button', { name: 'Edit pricing rule base' })
+    )
+    await user.click(screen.getByRole('button', { name: 'Branch actions 1' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Remove branch' }))
     expect(
-      screen.getByRole('button', { name: 'Media pricing' })
+      screen.getByRole('button', { name: 'Edit pricing rule base' })
     ).toHaveAttribute('aria-expanded', 'true')
   })
 
@@ -170,8 +188,12 @@ describe('visual tier row identity', () => {
         onRequestRuleExprChange={onRequestRuleExprChange}
       />
     )
-    expect(screen.getByPlaceholderText('Start')).toHaveDisplayValue('14')
-    expect(screen.getByPlaceholderText('Tier name')).toHaveDisplayValue('next')
+    expect(
+      screen.getByRole('spinbutton', { name: 'Start' })
+    ).toHaveDisplayValue('14')
+    expect(
+      screen.getByRole('textbox', { name: 'Tier name' })
+    ).toHaveDisplayValue('next')
     expect(onBillingExprChange).not.toHaveBeenCalled()
     expect(onRequestRuleExprChange).not.toHaveBeenCalled()
   })

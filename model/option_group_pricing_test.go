@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,6 +80,44 @@ func TestUpdateOptionsBulkAtomicallyReplacesGroupPricingConfiguration(t *testing
 	require.NoError(t, err)
 	require.True(t, active)
 	assert.Equal(t, 0.8, snapshot.Tiers[0].Ratio)
+}
+
+func TestPasskeyBulkUpdatePreservesAtomicGroupPricing(t *testing.T) {
+	const oldGroups = `{"old":1}`
+	const oldTiered = `{"old":{"gpt-5":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.9}]}}}`
+	const newGroups = `{"new":1.2}`
+	const newTiered = `{"new":{"gpt-5":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.8}]}}}`
+	db := setupGroupPricingOptionTest(t, oldGroups, oldTiered)
+	require.NoError(t, db.AutoMigrate(&PasskeyCredential{}))
+	savedSettings, savedAddress := *system_setting.GetPasskeySettings(), system_setting.ServerAddress
+	t.Cleanup(func() {
+		*system_setting.GetPasskeySettings() = savedSettings
+		system_setting.ServerAddress = savedAddress
+	})
+	*system_setting.GetPasskeySettings() = system_setting.PasskeySettings{}
+	system_setting.ServerAddress = ""
+	values := map[string]string{
+		"ServerAddress":                          "https://login.example.com",
+		"GroupRatio":                             newGroups,
+		ratio_setting.ModelTieredRatiosOptionKey: oldTiered,
+	}
+	require.Error(t, UpdateOptionsBulk(values))
+	var count int64
+	require.NoError(t, db.Model(&Option{}).Where(&Option{Key: "ServerAddress"}).Count(&count).Error)
+	assert.Zero(t, count, "invalid pricing must not persist domain changes")
+	assert.Empty(t, system_setting.ServerAddress)
+	assert.True(t, ratio_setting.ContainsGroupRatio("old"))
+	values[ratio_setting.ModelTieredRatiosOptionKey] = newTiered
+	require.NoError(t, UpdateOptionsBulk(values))
+	assert.Equal(t, "https://login.example.com", system_setting.ServerAddress)
+	assert.False(t, ratio_setting.ContainsGroupRatio("old"))
+	snapshot, active, err := ratio_setting.ResolveModelTieredDiscount("ordinary", "new", "gpt-5", time.Unix(10, 0))
+	require.NoError(t, err)
+	require.True(t, active)
+	assert.Equal(t, 0.8, snapshot.Tiers[0].Ratio)
+	var stored Option
+	require.NoError(t, db.Where(&Option{Key: ratio_setting.ModelTieredRatiosOptionKey}).First(&stored).Error)
+	assert.JSONEq(t, newTiered, stored.Value)
 }
 
 func TestLoadOptionsFromDatabasePublishesGroupPricingPairTogether(t *testing.T) {

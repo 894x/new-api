@@ -19,11 +19,14 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { ModelDocs } from '@/features/model-docs'
-import { getFreshModuleAccess } from '@/lib/nav-modules'
+import { getModuleAccessForGuard } from '@/lib/nav-modules'
 
 export const Route = createFileRoute('/model-docs/')({
-  beforeLoad: async () => {
-    const access = await getFreshModuleAccess('model_docs')
+  beforeLoad: async ({ context }) => {
+    const access = await getModuleAccessForGuard(
+      context.queryClient,
+      'model_docs'
+    )
     if (!access.enabled) {
       throw redirect({ to: '/' })
     }

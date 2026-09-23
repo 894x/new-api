@@ -31,7 +31,7 @@ import { usageLogSchema, type UsageLog } from '../../data/schema'
 import { useCommonLogsColumns } from '../columns/common-logs-columns'
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }))
 vi.mock('@/lib/lobe-icon', () => ({ getLobeIcon: () => null }))
 vi.mock('@/features/usage-logs', () => ({ UsageLogs: () => null }))

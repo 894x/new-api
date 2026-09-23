@@ -36,7 +36,7 @@ func TestOpenAIVideoCompatibilityUsesHostArtifactAccess(t *testing.T) {
 			var video dto.OpenAIVideo
 			require.NoError(t, common.Unmarshal(encoded, &video))
 			assert.Equal(t, task.TaskID, video.ID)
-			assert.Equal(t, task.TaskID, video.TaskID)
+			assert.Empty(t, video.TaskID)
 			assert.NotContains(t, string(encoded), "provider.example")
 			assert.NotContains(t, string(encoded), "private-task")
 			if status != model.TaskStatusSuccess {

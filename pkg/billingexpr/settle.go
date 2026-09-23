@@ -47,6 +47,9 @@ func ComputeTieredQuota(snap *BillingSnapshot, params TokenParams) (TieredResult
 }
 
 func ComputeTieredQuotaWithRequest(snap *BillingSnapshot, params TokenParams, request RequestInput) (TieredResult, error) {
+	if snap.TaskUsageBilling && UsesFixedPricingByHash(snap.ExprString, snap.ExprHash) {
+		return TieredResult{}, fmt.Errorf("fixed pricing is not supported for task usage expressions")
+	}
 	if snap.TaskUsageBilling && snap.RequestInput != nil {
 		usage := request.Usage
 		request = *snap.RequestInput
@@ -64,12 +67,19 @@ func ComputeTieredQuotaWithRequest(snap *BillingSnapshot, params TokenParams, re
 	afterGroup, clamp := common.QuotaRoundChecked(quotaBeforeGroup * snap.GroupRatio)
 	crossed := trace.MatchedTier != snap.EstimatedTier
 
-	return TieredResult{
+	result := TieredResult{
+		ImageCount:             trace.ImageCount,
+		BillingUnit:            trace.BillingUnit,
+		FixedPrice:             trace.FixedPrice,
 		ActualQuotaBeforeGroup: quotaBeforeGroup,
 		ActualQuotaAfterGroup:  afterGroup,
 		MatchedTier:            trace.MatchedTier,
 		RequestRules:           trace.RequestRules,
 		CrossedTier:            crossed,
 		Clamp:                  clamp,
-	}, nil
+	}
+	if trace.BillingUnit == BillingUnitToken && UsedVarsByHash(snap.ExprString, snap.ExprHash)["img_cr"] {
+		result.BillingTokens = &params
+	}
+	return result, nil
 }

@@ -333,6 +333,9 @@ func migrateDB() error {
 	if err := prepareQuotaVersionMigration(DB); err != nil {
 		return err
 	}
+	if err := migrateOptionPrimaryKey(DB); err != nil {
+		common.SysError("failed to migrate options primary key: " + err.Error())
+	}
 
 	err := DB.AutoMigrate(
 		&RequestCapturePolicy{},

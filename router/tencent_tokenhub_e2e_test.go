@@ -147,7 +147,7 @@ func TestTokenHubPluginSubmitQueryAndRefundEndToEnd(t *testing.T) {
 		}
 		require.NoError(t, common.Unmarshal(queryRecorder.Body.Bytes(), &video))
 		assert.Equal(t, task.TaskID, video.ID)
-		assert.Equal(t, task.TaskID, video.TaskID)
+		assert.Empty(t, video.TaskID, "OpenAI video responses expose the host task through id only")
 		assert.NotContains(t, queryRecorder.Body.String(), media.URL)
 		if index == 0 {
 			assert.Empty(t, video.Metadata)

@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { getGroups as getUserGroups } from '@/features/users/api'
 import { api, type ApiRequestConfig } from '@/lib/api'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { ensureSuccessfulModelRoutingOverridesResponse } from './lib/model-routing-overrides'
 import type {
@@ -56,10 +57,12 @@ export type TaskPluginOption = {
   website?: string
   key: string
   name: string
+  description?: Record<string, string> | null
   icon?: string
   hasIcon?: boolean
   baseUrl?: string
   models: string[]
+  channelTypes?: number[] | null
 }
 
 export async function getTaskPluginOptions(): Promise<TaskPluginOption[]> {
@@ -67,7 +70,7 @@ export async function getTaskPluginOptions(): Promise<TaskPluginOption[]> {
     success: boolean
     data: TaskPluginOption[]
   }>('/api/task_plugin_options')
-  return response.data.data
+  return requireServerSuccess(response.data).data
 }
 
 export type CodexUsageResponse = {

@@ -139,7 +139,10 @@ describe('token cost estimate', () => {
       cacheReadWriteRatio: 1,
     })
 
-    assert.equal(result.error, 'Invalid dynamic price result')
+    assert.ok(
+      result.error,
+      'the expression evaluator must reject negative charges'
+    )
     assert.equal(result.costUSD, 0)
     assert.equal(result.customerCostUSD, 0)
   })

@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -426,7 +427,13 @@ func (s *BillingSession) reserveLocked(targetQuota int, strictWallet bool) error
 	if s.requiresReconciliation {
 		return ErrBillingSessionRequiresReconciliation
 	}
-	if s.settled || s.refunded || s.refundStarted || s.trusted || targetQuota <= s.preConsumedQuota {
+	imageRequest := false
+	if s.relayInfo != nil {
+		_, imageRequest = s.relayInfo.Request.(*dto.ImageRequest)
+		imageRequest = imageRequest || s.relayInfo.ImageRequestCount > 0
+	}
+	strictWallet = strictWallet || imageRequest
+	if s.settled || s.refunded || s.refundStarted || (s.trusted && !imageRequest) || targetQuota <= s.preConsumedQuota {
 		return nil
 	}
 
@@ -573,6 +580,9 @@ func (s *BillingSession) reserveLocked(targetQuota int, strictWallet bool) error
 	s.preConsumedQuota += delta
 	s.tokenConsumed += tokenQuota
 	s.extraReserved += delta
+	if imageRequest {
+		s.trusted = false
+	}
 	s.syncRelayInfo()
 	return nil
 }

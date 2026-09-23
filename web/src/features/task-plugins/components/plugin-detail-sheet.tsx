@@ -16,6 +16,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { RotateCcw, X } from 'lucide-react'
 import { useState } from 'react'
@@ -46,6 +64,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { handleServerError } from '@/lib/handle-server-error'
 import { resolveLocalizedText } from '@/lib/localized-text'
 
 import {
@@ -57,6 +76,7 @@ import type { TaskPluginListItem } from '../types'
 import { JavaScriptViewer } from './javascript-viewer'
 import { PluginIcon } from './plugin-icon'
 import { PluginMetadataCard } from './plugin-metadata-card'
+import { PluginModelList } from './plugin-model-list'
 import { PluginSandbox } from './plugin-sandbox'
 import { SourceDiff } from './source-diff'
 import { UsageSchemaTable } from './usage-schema-table'
@@ -110,7 +130,7 @@ function PluginDetailContent(props: { plugin: TaskPluginListItem }) {
       queryClient.invalidateQueries({ queryKey: ['task-plugin', key] })
       queryClient.invalidateQueries({ queryKey: ['task-plugin-versions', key] })
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => handleServerError(error),
   })
   const detail = detailQuery.data
   const versions = versionsQuery.data ?? []
@@ -144,6 +164,16 @@ function PluginDetailContent(props: { plugin: TaskPluginListItem }) {
 
   const panelClassName =
     'min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6 data-hidden:hidden'
+  const usageProfiles = detail?.meta.usageProfiles ?? []
+  const groupedUsageModels = new Set(
+    usageProfiles.flatMap((profile) => profile.models)
+  )
+  const defaultUsageModels = (detail?.meta.models ?? []).filter(
+    (model) => !groupedUsageModels.has(model)
+  )
+  const showDefaultUsage =
+    Object.keys(detail?.meta.usageSchema ?? {}).length > 0 &&
+    (usageProfiles.length === 0 || defaultUsageModels.length > 0)
   return (
     <SheetContent
       showCloseButton={false}
@@ -223,13 +253,34 @@ function PluginDetailContent(props: { plugin: TaskPluginListItem }) {
           {detailState ?? (detail && <PluginMetadataCard meta={detail.meta} />)}
         </TabsContent>
         <TabsContent value='billing' className={panelClassName}>
-          {detailState ??
-            (detail?.meta.usageSchema &&
-            Object.keys(detail.meta.usageSchema).length > 0 ? (
-              <UsageSchemaTable schema={detail.meta.usageSchema} />
-            ) : (
-              <EmptyState title={t('No billing parameters declared')} />
-            ))}
+          {detailState ?? (
+            <div className='space-y-6'>
+              {showDefaultUsage && detail?.meta.usageSchema && (
+                <section className='space-y-3' aria-label={t('Default')}>
+                  {usageProfiles.length > 0 && (
+                    <>
+                      <h3 className='text-sm font-medium'>{t('Default')}</h3>
+                      <PluginModelList models={defaultUsageModels} />
+                    </>
+                  )}
+                  <UsageSchemaTable schema={detail.meta.usageSchema} />
+                </section>
+              )}
+              {usageProfiles.map((profile) => (
+                <section
+                  key={profile.models[0]}
+                  aria-label={profile.models.join(', ')}
+                  className='space-y-3'
+                >
+                  <PluginModelList models={profile.models} />
+                  <UsageSchemaTable schema={profile.schema} />
+                </section>
+              ))}
+              {!showDefaultUsage && usageProfiles.length === 0 && (
+                <EmptyState title={t('No billing parameters declared')} />
+              )}
+            </div>
+          )}
         </TabsContent>
         <TabsContent value='source' className={panelClassName}>
           {detailState ??

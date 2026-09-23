@@ -213,6 +213,9 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	passkeyOptionMutex.Lock()
+	defer passkeyOptionMutex.Unlock()
+	passkeyOptions := make(map[string]string)
 	dynamicRoutingOptionsMu.Lock()
 	defer dynamicRoutingOptionsMu.Unlock()
 	dynamicValues := make(map[string]string)
@@ -246,6 +249,10 @@ func loadOptionsFromDatabase() {
 		}
 	}
 	for _, option := range options {
+		if IsPasskeyDomainOption(option.Key) {
+			passkeyOptions[option.Key] = option.Value
+			continue
+		}
 		if strings.HasPrefix(option.Key, dynamic_routing_setting.OptionPrefix) {
 			dynamicValues[option.Key] = option.Value
 			continue
@@ -259,6 +266,7 @@ func loadOptionsFromDatabase() {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
 	}
+	applyPasskeyDomainOptions(passkeyOptions)
 	if len(dynamicValues) == 0 {
 		return
 	}
@@ -331,6 +339,10 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
+	if IsPasskeyDomainOption(key) {
+		_, err := UpdatePasskeyDomainOptions(map[string]string{key: value}, false, "")
+		return err
+	}
 	if IsModelPricingOption(key) {
 		return UpdateModelPricingOptions(map[string]string{key: value})
 	}
@@ -380,6 +392,12 @@ func UpdateOption(key string, value string) error {
 func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
+	}
+	for key := range values {
+		if IsPasskeyDomainOption(key) {
+			_, err := UpdatePasskeyDomainOptions(values, false, "")
+			return err
+		}
 	}
 	groupRatios, hasGroupRatios := values["GroupRatio"]
 	modelTieredRatios, hasModelTieredRatios := values[ratio_setting.ModelTieredRatiosOptionKey]
