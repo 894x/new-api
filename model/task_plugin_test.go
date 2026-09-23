@@ -1,14 +1,55 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/utils/tests"
 )
+
+// Generated DDL checks the storage contract; it does not replace migration
+// acceptance against live MySQL and PostgreSQL servers.
+func TestTaskPluginPayloadColumnDDL(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			var driver gorm.Dialector
+			if dialect == "sqlite" {
+				driver = sqlite.Open(":memory:")
+			} else {
+				connection, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					assert.NoError(t, mock.ExpectationsWereMet())
+					_ = connection.Close()
+				})
+				if dialect == "mysql" {
+					driver = mysql.New(mysql.Config{Conn: connection, SkipInitializeWithVersion: true})
+				} else {
+					driver = postgres.New(postgres.Config{Conn: connection})
+				}
+			}
+			recorder := &migrationSQLRecorder{}
+			db, err := gorm.Open(driver, &gorm.Config{DryRun: true, Logger: recorder, DisableAutomaticPing: true})
+			require.NoError(t, err)
+			require.NoError(t, db.Migrator().CreateTable(&TaskPlugin{}))
+			ddl := strings.Join(recorder.schemaMutations(), "\n")
+			columnType := "text"
+			if dialect == "mysql" {
+				columnType = "longtext"
+			}
+			for _, column := range []string{"source", "icon"} {
+				assert.Contains(t, ddl, db.Statement.Quote(column)+" "+columnType)
+			}
+		})
+	}
+}
 
 func setupTaskPluginModelTest(t *testing.T) {
 	t.Helper()

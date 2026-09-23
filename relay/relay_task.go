@@ -525,7 +525,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapperLocal(errors.New("upstream returned an empty response"), "fail_to_fetch_task", http.StatusBadGateway)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	// Any 2xx reaches the plugin parser; preserve provider-specific error
+	// decoding for all other statuses.
+	if resp.StatusCode/100 != 2 {
 		if parser, ok := adaptor.(channel.TaskSubmitErrorParser); ok {
 			return nil, parser.ParseSubmitError(c, resp, info)
 		}

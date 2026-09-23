@@ -428,6 +428,15 @@ Backend verification: full root tests and build pass after the fixes; independen
 
 Graph metadata is stale, so current source and executable regressions support these bounded findings. Live MySQL/PostgreSQL, minimum-version migration, live provider, browser visual acceptance and deployment remain unverified. No push, deployment, production-data mutation or original-checkout change occurred.
 
-### rc40 — pending
+### rc40 — integrated locally, server-database acceptance outstanding
 
-For each RC, record merged changes, custom-feature mapping, confirmed duplication decisions, test evidence, and remaining deployment limitations here before committing.
+Normal merge of upstream `0aec08fee811ec6136828fda790551b49e410301` onto rc39 integration `0358a298253452afa915e2fe416243ce821fc9a8`.
+
+- Task submissions accept every 2xx response and still pass non-2xx responses through the custom provider error parser. Plugin synchronization reads lightweight hash snapshots and retrieves changed source by immutable row ID. Plugin source/icon storage uses MySQL longtext and PostgreSQL/SQLite text; uploads allow sources up to 8 MiB. Custom task IDs, assets, provider behavior and durable settlement remain on the unified plugin path.
+- Claude tool-result images and Responses tool-output media are moved into following user messages while contiguous tool replies and unknown-payload fallbacks are preserved. Responses reasoning/text segments can reopen after intermediate completion with new item identities, and reasoning summary-part events are emitted. Alibaba OpenAI image responses retain request IDs and usage.
+- Plugin uploads can activate the uploaded version immediately. Metadata previews resolve bounded static constants without executing plugin code. Narrowed task-pricing enums keep reachable branches editable. Theme preferences use origin-local storage instead of importing legacy domain cookies; Windows provider-icon lookup is corrected.
+- The WebSocket refund fixture correction was already integrated in rc39; retained request-ID-aware assertions. Seven locales have 7789 matching translation keys with zero missing/extra keys. Existing untranslated heuristics were not bulk-edited.
+
+Verification: full root tests and build passed, including controller/provider/plugin regressions. The additional generated-DDL test passes for SQLite/MySQL/PostgreSQL; the complete model suite passed again after adding it. Existing plugin tests exercise source/icon payloads above MySQL TEXT capacity through SQLite and enforce the 8 MiB upload limit. These checks do not establish live server migration acceptance. Independent relaykit build and tests with `GOWORK=off` passed. Frontend typecheck, production build and changed-file lint passed; all **252 files / 2540 tests passed** in 396 seconds. Formatting checked 24 changed source files without changes. Whitespace checks passed.
+
+Graph metadata remains stale; current source and executable tests support the bounded integration findings. Component/React and i18n guidance informed the merge; the commit-message skill supplies the categorized commit. Live MySQL/PostgreSQL minimum-version migrations, external providers and browser visual acceptance remain unverified. No push, deployment, production-data mutation or original-checkout change occurred.
