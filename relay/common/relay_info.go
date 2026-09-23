@@ -1613,69 +1613,59 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 		return jsonData, nil
 	}
 
-	var data map[string]any
-	if err := common.Unmarshal(jsonData, &data); err != nil {
-		common.SysError("RemoveDisabledFields Unmarshal error :" + err.Error())
+	if !gjson.ValidBytes(jsonData) {
+		common.SysError("RemoveDisabledFields: invalid JSON document")
 		return jsonData, nil
 	}
-
-	// 默认移除 service_tier，除非明确允许（避免额外计费风险）
-	if !channelOtherSettings.AllowServiceTier {
-		if _, exists := data["service_tier"]; exists {
-			delete(data, "service_tier")
-		}
+	root := gjson.ParseBytes(jsonData)
+	if !root.IsObject() {
+		return jsonData, nil
 	}
-
-	// 默认移除 inference_geo，除非明确允许（避免在未授权情况下透传数据驻留区域）
-	if !channelOtherSettings.AllowInferenceGeo {
-		if _, exists := data["inference_geo"]; exists {
-			delete(data, "inference_geo")
-		}
+	disabled := map[string]bool{
+		"service_tier":      !channelOtherSettings.AllowServiceTier,
+		"inference_geo":     !channelOtherSettings.AllowInferenceGeo,
+		"speed":             !channelOtherSettings.AllowSpeed,
+		"store":             channelOtherSettings.DisableStore,
+		"safety_identifier": !channelOtherSettings.AllowSafetyIdentifier,
 	}
-
-	// 默认移除 speed，除非明确允许（避免意外切换 Claude 推理速度模式）
-	if !channelOtherSettings.AllowSpeed {
-		if _, exists := data["speed"]; exists {
-			delete(data, "speed")
+	// Reuse raw JSON values so filtering a small field neither decodes media
+	// nor rounds unrelated large integers through map[string]any.
+	result := make([]byte, 0, len(jsonData))
+	result = append(result, '{')
+	root.ForEach(func(key, value gjson.Result) bool {
+		name := key.String()
+		if disabled[name] {
+			return true
 		}
-	}
-
-	// 默认允许 store 透传，除非明确禁用（禁用可能影响 Codex 使用）
-	if channelOtherSettings.DisableStore {
-		if _, exists := data["store"]; exists {
-			delete(data, "store")
-		}
-	}
-
-	// 默认移除 safety_identifier，除非明确允许（保护用户隐私，避免向 OpenAI 报告用户信息）
-	if !channelOtherSettings.AllowSafetyIdentifier {
-		if _, exists := data["safety_identifier"]; exists {
-			delete(data, "safety_identifier")
-		}
-	}
-
-	// 默认移除 stream_options.include_obfuscation，除非明确允许（避免关闭响应流混淆保护）
-	if !channelOtherSettings.AllowIncludeObfuscation {
-		if streamOptionsAny, exists := data["stream_options"]; exists {
-			if streamOptions, ok := streamOptionsAny.(map[string]any); ok {
-				if _, includeExists := streamOptions["include_obfuscation"]; includeExists {
-					delete(streamOptions, "include_obfuscation")
+		raw := value.Raw
+		if name == "stream_options" && !channelOtherSettings.AllowIncludeObfuscation && value.IsObject() {
+			options := make([]byte, 0, len(raw))
+			options = append(options, '{')
+			value.ForEach(func(option, setting gjson.Result) bool {
+				if option.String() != "include_obfuscation" {
+					if len(options) > 1 {
+						options = append(options, ',')
+					}
+					options = append(options, option.Raw...)
+					options = append(options, ':')
+					options = append(options, setting.Raw...)
 				}
-				if len(streamOptions) == 0 {
-					delete(data, "stream_options")
-				} else {
-					data["stream_options"] = streamOptions
-				}
+				return true
+			})
+			if len(options) == 1 {
+				return true
 			}
+			raw = string(append(options, '}'))
 		}
-	}
-
-	jsonDataAfter, err := common.Marshal(data)
-	if err != nil {
-		common.SysError("RemoveDisabledFields Marshal error :" + err.Error())
-		return jsonData, nil
-	}
-	return jsonDataAfter, nil
+		if len(result) > 1 {
+			result = append(result, ',')
+		}
+		result = append(result, key.Raw...)
+		result = append(result, ':')
+		result = append(result, raw...)
+		return true
+	})
+	return append(result, '}'), nil
 }
 
 func hasRemovableDisabledField(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings) bool {

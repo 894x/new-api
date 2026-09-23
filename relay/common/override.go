@@ -633,12 +633,18 @@ func tryParseOperations(paramOverride map[string]any) ([]ParamOperation, bool) {
 }
 
 func checkConditions(data []byte, contextJSON string, conditions []ConditionOperation, logic string) (bool, error) {
+	return checkConditionsWithLookup(func(path string) gjson.Result {
+		return gjson.GetBytes(data, processNegativeIndex(data, path))
+	}, contextJSON, conditions, logic)
+}
+
+func checkConditionsWithLookup(lookup func(string) gjson.Result, contextJSON string, conditions []ConditionOperation, logic string) (bool, error) {
 	if len(conditions) == 0 {
 		return true, nil // 没有条件，直接通过
 	}
 	all := strings.ToUpper(logic) == "AND"
 	for _, condition := range conditions {
-		result, err := checkSingleCondition(data, contextJSON, condition)
+		result, err := checkSingleCondition(lookup, contextJSON, condition)
 		if err != nil {
 			return false, err
 		}
@@ -652,14 +658,15 @@ func checkConditions(data []byte, contextJSON string, conditions []ConditionOper
 	return all, nil
 }
 
-func checkSingleCondition(data []byte, contextJSON string, condition ConditionOperation) (bool, error) {
-	condition, err := resolveConditionValue(data, condition)
-	if err != nil {
-		return false, err
+func checkSingleCondition(lookup func(string) gjson.Result, contextJSON string, condition ConditionOperation) (bool, error) {
+	if condition.ValuePath != "" {
+		value := lookup(condition.ValuePath)
+		if !value.Exists() {
+			return false, fmt.Errorf("condition value_path %s does not exist", condition.ValuePath)
+		}
+		condition.Value = value.Value()
 	}
-	// 处理负数索引
-	path := processNegativeIndex(data, condition.Path)
-	value := gjson.GetBytes(data, path)
+	value := lookup(condition.Path)
 	if !value.Exists() && contextJSON != "" {
 		value = gjson.Get(contextJSON, condition.Path)
 	}
@@ -921,7 +928,15 @@ func applyOperations(jsonData []byte, operations []ParamOperation, conditionCont
 		if expanded {
 			// Conditions were evaluated against this operation's input snapshot.
 			// Each concrete operation retains the original audit/error behavior.
-			result, err = applyOperations(result, matches, context)
+			var batched bool
+			result, batched = wrapJSONValues(result, matches)
+			if batched {
+				for _, match := range matches {
+					auditRecorder.recordOperation(match.Mode, "", match.From, match.To, nil)
+				}
+			} else {
+				result, err = applyOperations(result, matches, context)
+			}
 			if err != nil {
 				return nil, err
 			}

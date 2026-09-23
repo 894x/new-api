@@ -23,6 +23,12 @@ func DeepCopy[T any](src *T) (*T, error) {
 				// request mutation and retries, instead of reflecting over each byte.
 				return json.RawMessage(bytes.Clone(src.(json.RawMessage))), nil
 			},
+		}, {
+			SrcType: []byte{},
+			DstType: []byte{},
+			Fn: func(src any) (any, error) {
+				return bytes.Clone(src.([]byte)), nil
+			},
 		}},
 	})
 	if err != nil {

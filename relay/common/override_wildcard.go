@@ -97,6 +97,15 @@ func expandWildcardOperation(data []byte, contextJSON string, op ParamOperation)
 		return nil, true, err
 	}
 	matches := make([]ParamOperation, 0, len(paths))
+	// Target canonicalization is read-only. Share one parsed snapshot instead
+	// of copying the complete media body for every wildcard match.
+	if len(paths) == 0 {
+		return matches, true, nil
+	}
+	snapshot := overrideJSONSnapshot{root: gjson.ParseBytes(data), nodes: make(map[string]gjson.Result)}
+	lookup := func(path string) gjson.Result {
+		return snapshot.get(processNegativeIndex(data, path))
+	}
 	for _, path := range paths {
 		binding := wildcardBinding{anchor: anchorParts, concrete: relayparam.JSONPathSegments(path)}
 		bound := op
@@ -121,7 +130,7 @@ func expandWildcardOperation(data []byte, contextJSON string, op ParamOperation)
 			}
 			conditions[i] = condition
 		}
-		ok, err := checkConditions(data, contextJSON, conditions, op.Logic)
+		ok, err := checkConditionsWithLookup(lookup, contextJSON, conditions, op.Logic)
 		if err != nil {
 			return nil, true, err
 		}
@@ -129,7 +138,7 @@ func expandWildcardOperation(data []byte, contextJSON string, op ParamOperation)
 			continue
 		}
 		if transfer {
-			bound.To, err = resolveWildcardTarget(data, bound.To)
+			bound.To, err = resolveWildcardTarget(&snapshot, bound.To)
 			if err != nil {
 				return nil, true, err
 			}
@@ -153,9 +162,9 @@ func expandWildcardOperation(data []byte, contextJSON string, op ParamOperation)
 // Canonicalize array indices before checking overlap, so aliases such as 00
 // cannot bypass conflict detection. Missing containers follow sjson's numeric
 // index inference; existing objects keep numeric field names unchanged.
-func resolveWildcardTarget(data []byte, path string) (string, error) {
+func resolveWildcardTarget(snapshot *overrideJSONSnapshot, path string) (string, error) {
 	parts := relayparam.JSONPathSegments(path)
-	node := gjson.ParseBytes(data)
+	node := snapshot.root
 	for i, part := range parts {
 		if node.IsArray() || !node.Exists() {
 			index, err := strconv.Atoi(part)
@@ -172,7 +181,7 @@ func resolveWildcardTarget(data []byte, path string) (string, error) {
 				parts[i] = strconv.Itoa(index)
 			}
 		}
-		node = node.Get(parts[i])
+		node = snapshot.get(strings.Join(parts[:i+1], "."))
 	}
 	return strings.Join(parts, "."), nil
 }
