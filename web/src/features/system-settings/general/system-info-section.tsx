@@ -90,6 +90,9 @@ const _systemInfoSchema = z.object({
   HomePageContent: z.string().optional(),
   BusinessContactEmail: z.string().email(),
   BusinessContactQRCode: z.string().refine(isBusinessContactImageSource),
+  general_setting: z.object({
+    docs_link: z.string(),
+  }),
   legal: z.object({
     user_agreement: z.string().optional(),
     privacy_policy: z.string().optional(),
@@ -139,6 +142,9 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
     HomePageContent: normalizedHomePageContent,
     BusinessContactEmail: normalizeValue(defaultValues.BusinessContactEmail),
     BusinessContactQRCode: normalizeValue(defaultValues.BusinessContactQRCode),
+    general_setting: {
+      docs_link: normalizeValue(defaultValues.general_setting?.docs_link),
+    },
     legal: {
       user_agreement: normalizeValue(defaultValues.legal?.user_agreement),
       privacy_policy: normalizeValue(defaultValues.legal?.privacy_policy),
@@ -172,6 +178,9 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
     }),
     BusinessContactQRCode: z.string().refine(isBusinessContactImageSource, {
       error: () => t('Please enter a valid image URL or upload an image'),
+    }),
+    general_setting: z.object({
+      docs_link: z.string(),
     }),
     legal: z.object({
       user_agreement: z.string().optional(),
@@ -321,6 +330,26 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                     </FormControl>
                     <FormDescription>
                       {t('URL to your logo image (optional)')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='general_setting.docs_link'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Documentation Link')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder={t('https://docs.example.com')}
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Link to your documentation site')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

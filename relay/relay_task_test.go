@@ -935,7 +935,7 @@ func TestSharedTaskBillingExpressionSelectionAndFrozenSettlement(t *testing.T) {
 		name, plugin, model, mapping, modelExpr, mode, wantExpr string
 		frozenPlugin, frozenExpr                                string
 		variants                                                map[string]string
-		wantPriceError                                          bool
+		wantPriceError, profiled                                bool
 	}{
 		{name: "executing plugin override", plugin: "billing-beta", model: "declared-model", modelExpr: baseExpr, mode: "tiered_expr", variants: map[string]string{"billing-alpha::declared-model": alphaExpr, "billing-beta::declared-model": betaExpr}, wantExpr: betaExpr},
 		{name: "override ignores model mode", plugin: "billing-beta", model: "declared-model", modelExpr: baseExpr, mode: "ratio", variants: map[string]string{"billing-beta::declared-model": betaExpr}, wantExpr: betaExpr},
@@ -947,13 +947,19 @@ func TestSharedTaskBillingExpressionSelectionAndFrozenSettlement(t *testing.T) {
 		{name: "fixed pricing is still rejected", plugin: "billing-beta", model: "declared-model", variants: map[string]string{"billing-beta::declared-model": `tier("fixed", fixed(1))`}, wantPriceError: true},
 		{name: "same plugin retry keeps frozen expression", plugin: "billing-alpha", model: "declared-model", modelExpr: baseExpr, mode: "tiered_expr", variants: map[string]string{"billing-alpha::declared-model": alphaExpr}, frozenPlugin: "billing-alpha", frozenExpr: baseExpr, wantExpr: baseExpr},
 		{name: "different plugin retry selects its own schema and price", plugin: "billing-beta", model: "declared-model", modelExpr: baseExpr, mode: "tiered_expr", variants: map[string]string{"billing-beta::declared-model": betaExpr}, frozenPlugin: "billing-alpha", frozenExpr: alphaExpr, wantExpr: betaExpr},
+		{name: "endpoint mapping keeps the declared profile", plugin: "billing-beta", model: "declared-model", mapping: `{"declared-model":"ep-endpoint"}`, modelExpr: baseExpr, mode: "tiered_expr", variants: map[string]string{"billing-beta::declared-model": betaExpr}, wantExpr: betaExpr, profiled: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			saveBillingConfig(t)
 			registry := pluginruntime.NewRegistry()
 			for _, spec := range []struct{ key, field, unit string }{{"billing-alpha", "seconds", "second"}, {"billing-beta", "credits", "credit"}} {
 				source := strings.ReplaceAll(billingFallbackPlugin, "bill-fallback", spec.key)
-				source = strings.Replace(source, `fetchMode:"per_task"`, `fetchMode:"per_task",usageSchema:{`+spec.field+`:{type:"number",unit:"`+spec.unit+`"}}`, 1)
+				schema := `usageSchema:{` + spec.field + `:{type:"number",unit:"` + spec.unit + `"}}`
+				if tc.profiled && spec.key == "billing-beta" {
+					// The endpoint ID is undeclared, so only the declared model's profile carries this schema.
+					schema = `usageSchema:{seconds:{type:"number",unit:"second"}},usageProfiles:[{models:["declared-model"],schema:{` + spec.field + `:{type:"number",unit:"` + spec.unit + `"}}}]`
+				}
+				source = strings.Replace(source, `fetchMode:"per_task"`, `fetchMode:"per_task",`+schema, 1)
 				source += `export function extractUsage(){return {` + spec.field + `:2};}`
 				_, err := registry.Register(source, pluginruntime.Options{})
 				require.NoError(t, err)

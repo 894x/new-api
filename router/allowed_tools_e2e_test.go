@@ -27,8 +27,11 @@ func TestAllowedToolsChatToKimiGatewayE2E(t *testing.T) {
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"kimi-k3":1}`))
 	settings := model_setting.GetGlobalSettings()
 	oldPass, oldMemory := settings.PassThroughRequestEnabled, common.MemoryCacheEnabled
+	oldCountToken := constant.CountToken
+	constant.CountToken = true
 	settings.PassThroughRequestEnabled, common.MemoryCacheEnabled = false, true
 	t.Cleanup(func() {
+		constant.CountToken = oldCountToken
 		settings.PassThroughRequestEnabled, common.MemoryCacheEnabled = oldPass, oldMemory
 		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(oldRatios))
 	})

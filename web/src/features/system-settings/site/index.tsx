@@ -36,6 +36,7 @@ const defaultSiteSettings: SiteSettings = {
   BusinessContactQRCode: '/business-contact-wechat.jpg',
   ServerAddress: '',
   TaskPublicAddress: '',
+  'general_setting.docs_link': '',
   'legal.user_agreement': '',
   'legal.privacy_policy': '',
   HeaderNavModules: '',

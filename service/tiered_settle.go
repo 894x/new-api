@@ -209,7 +209,9 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 	} else if snap != nil {
 		targetQuota = snap.EstimatedQuotaAfterGroup
 	}
-	if targetQuota <= 0 {
+	// Input-only estimates can be zero for output-priced models. Monthly
+	// settlement still needs a session, including after a free-group retry.
+	if targetQuota <= 0 && !groupModelDiscountActive {
 		return nil
 	}
 

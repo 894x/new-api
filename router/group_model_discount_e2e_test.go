@@ -737,14 +737,7 @@ func TestGroupModelMonthlyDiscountAutoGroupRetryCreatesBillingSessionForFinalPai
 
 	var admissionOperations []model.BillingAdmissionReserveOperation
 	require.NoError(t, model.DB.Order("id ASC").Find(&admissionOperations).Error)
-	require.Len(t, admissionOperations, 1, "the free first group must not create a billing session")
-	admission := admissionOperations[0]
-	assert.Equal(t, model.BillingAdmissionReserveModeInitial, admission.Mode)
-	assert.Equal(t, model.BillingAdmissionReserveStatusApplied, admission.Status)
-	assert.Zero(t, admission.FromQuota)
-	assert.Equal(t, 123, admission.TargetQuota)
-	assert.Equal(t, 123, admission.FundingReservedQuota)
-	assert.Equal(t, 123, admission.TokenReservedQuota)
+	assert.Empty(t, admissionOperations, "output-only pricing reserves no input cost; final settlement must still charge the monthly group")
 
 	var freeGroupUsageCount int64
 	require.NoError(t, model.DB.Model(&model.UserGroupModelMonthlyUsage{}).

@@ -84,6 +84,7 @@ type BillingSnapshot struct {
 	TaskPluginKey             string             `json:"task_plugin_key,omitempty"`
 	EstimatedBillingUnit      BillingUnit        `json:"estimated_billing_unit,omitempty"`
 	EstimatedFixedPrice       *float64           `json:"estimated_fixed_price,omitempty"`
+	PreConsumeMultiplier      float64            `json:"pre_consume_multiplier,omitempty"` // Reservation only; zero in older snapshots means 1.
 }
 
 // TieredResult holds everything needed after running tiered settlement.

@@ -313,6 +313,9 @@ func validateOptionValue(key string, value string) error {
 	if strings.HasPrefix(key, dynamic_routing_setting.OptionPrefix) {
 		return fmt.Errorf("dynamic routing settings must be updated atomically")
 	}
+	if err := operation_setting.ValidateQuotaOption(key, value); err != nil {
+		return err
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}

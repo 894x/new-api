@@ -33,7 +33,7 @@ func TestImageQuantityReserveKeepsMonthlyOriginalQuota(t *testing.T) {
 			if expression {
 				info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: "image_count * 20000", QuotaPerUnit: common.QuotaPerUnit, EstimatedImageCount: common.GetPointer(1)}
 			}
-			require.Nil(t, PrepareImageBillingForRequest(ctx, info, 4, false))
+			require.Nil(t, PrepareImageBillingForRequest(ctx, info, 4))
 			assert.Equal(t, 40000, info.PriceData.OriginalQuotaToPreConsume)
 			assert.Equal(t, 40000, info.PriceData.QuotaToPreConsume)
 			assert.Equal(t, 40000, billing.GetPreConsumedQuota())

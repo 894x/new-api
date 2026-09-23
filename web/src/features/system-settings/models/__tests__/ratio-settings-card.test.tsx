@@ -111,7 +111,9 @@ describe('ratio settings card tiered-discount persistence', () => {
     await user.click(screen.getByRole('button', { name: 'Switch to JSON' }))
     const input = screen.getByRole('textbox', { name: 'Model channel pools' })
     fireEvent.input(input, { target: { value: 'null' } })
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     expect(
       await screen.findByText(
         'Invalid channel pool policy. Use an object of user groups, models, and channel group arrays.'
@@ -120,7 +122,9 @@ describe('ratio settings card tiered-discount persistence', () => {
     expect(updateSystemOption).not.toHaveBeenCalled()
     const value = '{"premium":{"model-a":["official"]}}'
     fireEvent.input(input, { target: { value } })
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() =>
       expect(updateSystemOption).toHaveBeenCalledWith({
         key: 'GroupModelChannelGroups',
@@ -234,7 +238,9 @@ describe('ratio settings card tiered-discount persistence', () => {
         },
       }
     )
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     await waitFor(() =>
       expect(updateGroupPricingOptions).toHaveBeenCalledTimes(1)
@@ -277,7 +283,7 @@ describe('ratio settings card tiered-discount persistence', () => {
       target: { value: '{"premium":0.9}' },
     })
 
-    const save = screen.getByRole('button', { name: 'Save group ratios' })
+    const save = screen.getByRole('button', { name: 'Save group settings' })
     await user.click(save)
 
     await waitFor(() =>
@@ -308,7 +314,9 @@ describe('ratio settings card tiered-discount persistence', () => {
     fireEvent.input(groupRatio, { target: { value: '{"premium":0.9}' } })
     fireEvent.input(topupRatio, { target: { value: '{"premium":1.1}' } })
     fireEvent.input(tieredRatios, { target: { value: nextTieredRatios } })
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     await waitFor(() => expect(updateSystemOption).toHaveBeenCalledTimes(1))
     expect(updateGroupPricingOptions).toHaveBeenCalledTimes(1)
@@ -317,7 +325,9 @@ describe('ratio settings card tiered-discount persistence', () => {
     expect(topupRatio).toHaveValue('{"premium":1.1}')
     expect(tieredRatios).toHaveValue(nextTieredRatios)
 
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     await waitFor(() => expect(updateSystemOption).toHaveBeenCalledTimes(2))
     expect(updateGroupPricingOptions).toHaveBeenCalledTimes(1)
@@ -361,7 +371,9 @@ describe('ratio settings card tiered-discount persistence', () => {
 
     fireEvent.input(groupRatio, { target: { value: '{"premium":0.8}' } })
     fireEvent.input(topupRatio, { target: { value: '{"premium":1.2}' } })
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     await waitFor(() => expect(updateSystemOption).toHaveBeenCalledTimes(1))
     expect(updateGroupPricingOptions).toHaveBeenCalledTimes(1)
@@ -369,7 +381,9 @@ describe('ratio settings card tiered-discount persistence', () => {
     expect(groupRatio).toHaveValue('{"premium":0.8}')
     expect(topupRatio).toHaveValue('{"premium":1.2}')
 
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     await waitFor(() => expect(updateSystemOption).toHaveBeenCalledTimes(2))
     expect(updateGroupPricingOptions).toHaveBeenCalledTimes(1)

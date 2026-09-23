@@ -158,7 +158,9 @@ describe('group ratio form tiered-policy draft validation', () => {
     renderGroupRatioForm(onSave)
 
     await user.clear(screen.getByLabelText('Origin model'))
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     expect(onSave).not.toHaveBeenCalled()
     expect(
@@ -174,7 +176,9 @@ describe('group ratio form tiered-policy draft validation', () => {
       modelTieredRatios.replaceAll('premium', 'orphan')
     )
 
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     expect(onSave).not.toHaveBeenCalled()
     expect(
@@ -217,7 +221,9 @@ describe('group ratio form tiered-policy draft validation', () => {
     renderGroupRatioForm(onSave)
 
     await user.clear(screen.getByLabelText('Effective start'))
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     expect(onSave).not.toHaveBeenCalled()
     expect(
@@ -231,7 +237,9 @@ describe('group ratio form tiered-policy draft validation', () => {
     renderGroupRatioForm(onSave, modelTieredRatiosWithEnd)
 
     await user.clear(screen.getByLabelText('Effective end'))
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     expect(onSave).not.toHaveBeenCalled()
     expect(
@@ -260,7 +268,9 @@ describe('group ratio form tiered-policy draft validation', () => {
       })
     )
 
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     expect(onSave).not.toHaveBeenCalled()
     expect(screen.getByLabelText('Discount ratio 1')).toHaveAttribute(
@@ -280,7 +290,9 @@ describe('group ratio form tiered-policy draft validation', () => {
 
     const ratio = screen.getByLabelText('Discount ratio 1')
     await user.clear(ratio)
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     expect(onSave).not.toHaveBeenCalled()
     expect(ratio).toHaveValue(null)
@@ -318,7 +330,9 @@ describe('group ratio form tiered-policy draft validation', () => {
     )
     if (!textarea) throw new Error('tiered-discount JSON editor is missing')
     fireEvent.input(textarea, { target: { value: '{}' } })
-    await user.click(screen.getByRole('button', { name: 'Save group ratios' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
 
     await waitFor(() => expect(onSave).toHaveBeenCalledOnce())
   })
