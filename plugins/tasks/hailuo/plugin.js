@@ -244,7 +244,7 @@ function isModernHailuo(model) {
 }
 
 function defaultResolution(model) {
-  if (isModernHailuo(model) || model === "T2V-01-Director") return "768P";
+  if (isModernHailuo(model)) return "768P";
   return "720P";
 }
 
@@ -258,8 +258,7 @@ function resolutionFor(size, model) {
 }
 
 function outboundDuration(req) {
-  const metadata = taskMetadata(req || {});
-  const raw = metadata.duration === undefined ? req && req.duration : metadata.duration;
+  const raw = req && req.duration;
   if (raw === undefined || raw === null || raw === "") return 6;
   const n = Number(raw);
   if (!["number", "string"].includes(typeof raw) || !Number.isInteger(n) || n <= 0 || n > 3600)
@@ -268,9 +267,9 @@ function outboundDuration(req) {
 }
 
 function outboundResolution(req, model) {
+  if (req && req.resolution) return resolutionFor(req.resolution, model);
   const metadata = taskMetadata(req || {});
   if (metadata.resolution) return resolutionFor(metadata.resolution, model);
-  if (req && req.resolution) return resolutionFor(req.resolution, model);
   if (req && req.size) return resolutionFor(req.size, model);
   return defaultResolution(model);
 }
@@ -375,7 +374,7 @@ export function buildSubmitRequest(ctx) {
   if (meta.models.includes(model)) validateHailuoCombo(model, outboundDuration(req), outboundResolution(req, model), hasHailuoImage(req, false));
   const body = {
     model: model,
-    prompt: metadata.prompt === undefined ? req.prompt || undefined : metadata.prompt,
+    prompt: req.prompt || undefined,
     duration: outboundDuration(req),
     resolution: outboundResolution(req, model),
   };

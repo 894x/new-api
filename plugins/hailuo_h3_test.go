@@ -96,7 +96,7 @@ func TestH3PluginPreservesRequestDefaultsMappingAndFrames(t *testing.T) {
 	}
 }
 
-func TestLegacyHailuoPluginPreservesMetadataOverridesAndExplicitFalse(t *testing.T) {
+func TestHailuoPluginUsesOfficialParameterPrecedenceAndExplicitFalse(t *testing.T) {
 	plugin := h3Plugin(t)
 	metadata := map[string]any{"duration": 10, "resolution": "768P", "prompt": "metadata prompt", "prompt_optimizer": false, "fast_pretreatment": false, "aigc_watermark": false, "first_frame_image": "first.png", "last_frame_image": "last.png", "callback_url": "https://callback.example"}
 	encoded, err := common.Marshal(metadata)
@@ -108,7 +108,7 @@ func TestLegacyHailuoPluginPreservesMetadataOverridesAndExplicitFalse(t *testing
 		assert.Equal(t, "https://provider.example/v1/video_generation", descriptor["url"])
 		body, err := common.Marshal(descriptor["body"])
 		require.NoError(t, err)
-		assert.JSONEq(t, `{"model":"MiniMax-Hailuo-2.3","prompt":"metadata prompt","duration":10,"resolution":"768P","prompt_optimizer":false,"fast_pretreatment":false,"aigc_watermark":false,"first_frame_image":"first.png","last_frame_image":"last.png","callback_url":"https://callback.example"}`, string(body))
+		assert.JSONEq(t, `{"model":"MiniMax-Hailuo-2.3","prompt":"original","duration":6,"resolution":"768P","prompt_optimizer":false,"fast_pretreatment":false,"aigc_watermark":false,"first_frame_image":"first.png","last_frame_image":"last.png","callback_url":"https://callback.example"}`, string(body))
 	}
 	for _, invalid := range []any{[]any{7}, true} {
 		_, err := plugin.Engine.CallPath(context.Background(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{"model": "MiniMax-H3", "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "duration": invalid}}})
@@ -116,7 +116,7 @@ func TestLegacyHailuoPluginPreservesMetadataOverridesAndExplicitFalse(t *testing
 	}
 }
 
-func TestHailuoDirectorPreservesDefaultResolution(t *testing.T) {
+func TestHailuoDirectorUsesOfficialDefaultResolution(t *testing.T) {
 	plugin := h3Plugin(t)
 	for _, size := range []string{"", "unknown-size"} {
 		value, err := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{
@@ -126,7 +126,58 @@ func TestHailuoDirectorPreservesDefaultResolution(t *testing.T) {
 		require.NoError(t, err)
 		encoded, err := common.Marshal(value.(map[string]any)["body"])
 		require.NoError(t, err)
-		assert.JSONEq(t, `{"model":"T2V-01-Director","prompt":"animate","duration":6,"resolution":"768P"}`, string(encoded))
+		assert.JSONEq(t, `{"model":"T2V-01-Director","prompt":"animate","duration":6,"resolution":"720P"}`, string(encoded))
+	}
+}
+
+func TestHailuoPluginOfficialNonH3Parameters(t *testing.T) {
+	plugin := h3Plugin(t)
+	for _, tc := range []struct {
+		name, model, input, resolution, wantError string
+	}{
+		{"modern 720 normalization", "MiniMax-Hailuo-2.3", `{"duration":6,"size":"1280x720"}`, "768P", ""},
+		{"top level resolution wins", "MiniMax-Hailuo-2.3", `{"duration":6,"resolution":"1080P","metadata":{"resolution":"768P"}}`, "1080P", ""},
+		{"metadata before size", "MiniMax-Hailuo-2.3", `{"duration":6,"size":"1080P","metadata":{"resolution":"768P"}}`, "768P", ""},
+		{"metadata duration ignored", "MiniMax-Hailuo-2.3", `{"metadata":{"duration":10}}`, "768P", ""},
+		{"modern ten seconds", "MiniMax-Hailuo-2.3", `{"duration":10}`, "768P", ""},
+		{"02 image ten seconds 512", "MiniMax-Hailuo-02", `{"duration":10,"resolution":"512P","image":"frame.png"}`, "512P", ""},
+		{"fast image", "MiniMax-Hailuo-2.3-Fast", `{"duration":6,"image":"frame.png"}`, "768P", ""},
+		{"fast requires image", "MiniMax-Hailuo-2.3-Fast", `{"duration":6}`, "", "image-to-video only"},
+		{"old model six seconds only", "T2V-01", `{"duration":10}`, "", "duration must be 6"},
+		{"modern seven seconds rejected", "MiniMax-Hailuo-2.3", `{"duration":7}`, "", "duration must be 6 or 10"},
+		{"modern ten seconds 1080 rejected", "MiniMax-Hailuo-2.3", `{"duration":10,"resolution":"1080P"}`, "", "duration 10 only allows"},
+		{"02 text 512 rejected", "MiniMax-Hailuo-02", `{"duration":10,"resolution":"512P"}`, "", "duration 10 only allows"},
+		{"oversized duration", "MiniMax-Hailuo-2.3", `{"duration":3601}`, "", "between 1 and 3600"},
+		{"negative duration", "MiniMax-Hailuo-2.3", `{"duration":-1}`, "", "between 1 and 3600"},
+		{"fractional duration", "MiniMax-Hailuo-2.3", `{"duration":6.5}`, "", "between 1 and 3600"},
+		{"boolean duration", "MiniMax-Hailuo-2.3", `{"duration":true}`, "", "between 1 and 3600"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var request map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(tc.input, &request))
+			request["prompt"] = "animate"
+			_, decodeErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{
+				"model": tc.model, "body": map[string]any{"kind": "json", "value": request},
+			})
+			// Recheck the mapped upstream model, including aliases that bypass the initial catalog lookup.
+			value, buildErr := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{
+				"model": "customer-alias", "upstreamModel": tc.model, "baseUrl": "https://provider.example", "requestBody": request,
+			})
+			if tc.wantError != "" {
+				require.ErrorContains(t, decodeErr, tc.wantError)
+				require.ErrorContains(t, buildErr, tc.wantError)
+				return
+			}
+			require.NoError(t, decodeErr)
+			require.NoError(t, buildErr)
+			body := value.(map[string]any)["body"].(map[string]any)
+			assert.Equal(t, tc.resolution, body["resolution"])
+			wantDuration := request["duration"]
+			if wantDuration == nil {
+				wantDuration = float64(6)
+			}
+			assert.EqualValues(t, wantDuration, body["duration"])
+		})
 	}
 }
 
