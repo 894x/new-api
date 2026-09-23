@@ -482,6 +482,9 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 	if modelName == "" {
 		modelName = CovertMjpActionToModelName(task.Action)
 	}
+	other := model.NewLogOther()
+	other.SetPublic("task_id", task.MjId)
+	other.SetPublic("reason", reason)
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
 		LogType:   model.LogTypeRefund,
@@ -491,10 +494,7 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 		Quota:     quota,
 		TokenId:   task.TokenId,
 		Group:     task.UsingGroup,
-		Other: map[string]interface{}{
-			"task_id": task.MjId,
-			"reason":  reason,
-		},
+		Other:     other,
 	})
 	return true
 }

@@ -139,6 +139,11 @@ type TaskPrivateData struct {
 	NodeName       string               `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
 	BillingContext *TaskBillingContext  `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
 	Usage          *hosttypes.TaskUsage `json:"usage,omitempty"`           // 上游最终用量（安全公开字段的持久化来源）
+	// PluginState is plugin-owned cross-round data. Unlike Task.Data it is
+	// only replaced when a hook explicitly returns state.
+	PluginState json.RawMessage `json:"plugin_state,omitempty"`
+	// PollFailures counts consecutive unrecognized or transient poll outcomes.
+	PollFailures int `json:"poll_failures,omitempty"`
 }
 
 // TaskAssetReferences records immutable originals without persisting expiring URLs.
@@ -247,7 +252,11 @@ func (p *TaskPrivateData) Scan(val interface{}) error {
 }
 
 func (p TaskPrivateData) Value() (driver.Value, error) {
-	if (p == TaskPrivateData{}) {
+	if p.Key == "" && p.UpstreamTaskID == "" && p.ResultURL == "" &&
+		p.Execution == nil && p.BillingSource == "" && p.SubscriptionId == 0 &&
+		p.TokenId == 0 && p.NodeName == "" && p.BillingContext == nil &&
+		!p.ResponsesBackground && p.Usage == nil && p.AssetReferences == nil &&
+		len(p.PluginState) == 0 && p.PollFailures == 0 {
 		return nil, nil
 	}
 	// 同 Properties.Value:string 避免 PG simple protocol 的 bytea 编码。
@@ -555,13 +564,15 @@ func (t *Task) syncBillingReady() {
 }
 
 type taskSnapshot struct {
-	Status     TaskStatus
-	Progress   string
-	StartTime  int64
-	FinishTime int64
-	FailReason string
-	ResultURL  string
-	Data       json.RawMessage
+	Status       TaskStatus
+	Progress     string
+	StartTime    int64
+	FinishTime   int64
+	FailReason   string
+	ResultURL    string
+	Data         json.RawMessage
+	PluginState  json.RawMessage
+	PollFailures int
 }
 
 func (s taskSnapshot) Equal(other taskSnapshot) bool {
@@ -571,18 +582,22 @@ func (s taskSnapshot) Equal(other taskSnapshot) bool {
 		s.FinishTime == other.FinishTime &&
 		s.FailReason == other.FailReason &&
 		s.ResultURL == other.ResultURL &&
-		bytes.Equal(s.Data, other.Data)
+		bytes.Equal(s.Data, other.Data) &&
+		bytes.Equal(s.PluginState, other.PluginState) &&
+		s.PollFailures == other.PollFailures
 }
 
 func (t *Task) Snapshot() taskSnapshot {
 	return taskSnapshot{
-		Status:     t.Status,
-		Progress:   t.Progress,
-		StartTime:  t.StartTime,
-		FinishTime: t.FinishTime,
-		FailReason: t.FailReason,
-		ResultURL:  t.PrivateData.ResultURL,
-		Data:       t.Data,
+		Status:       t.Status,
+		Progress:     t.Progress,
+		StartTime:    t.StartTime,
+		FinishTime:   t.FinishTime,
+		FailReason:   t.FailReason,
+		ResultURL:    t.PrivateData.ResultURL,
+		Data:         t.Data,
+		PluginState:  t.PrivateData.PluginState,
+		PollFailures: t.PrivateData.PollFailures,
 	}
 }
 

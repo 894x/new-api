@@ -303,7 +303,7 @@ func TestMemoryModelRequestTPMSettlementStartsWithActualUsageAfterWindowExpires(
 	assert.False(t, allowed)
 }
 
-func TestEstimateRequestTokenRunsWhenExplicitlyCalledForTPM(t *testing.T) {
+func TestCountRequestTokenRunsWhenExplicitlyCalledForTPM(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousCountToken := constant.CountToken
 	constant.CountToken = false
@@ -318,7 +318,7 @@ func TestEstimateRequestTokenRunsWhenExplicitlyCalledForTPM(t *testing.T) {
 	}
 	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude}
 
-	tokens, err := EstimateRequestToken(ctx, meta, info)
+	tokens, err := CountRequestToken(ctx, meta, info)
 
 	require.NoError(t, err)
 	assert.Equal(t, 5, tokens)

@@ -193,11 +193,13 @@ func TestChatToResponsesStreamErrorEnvelopeClassification(t *testing.T) {
 func TestConvertedResponsesStreamsTreatMalformedUpstreamEventsAsHard(t *testing.T) {
 	prepareDynamicRoutingStreamTest(t)
 	tests := []struct {
-		name    string
-		handler func(*relaycommon.RelayInfo) (*types.NewAPIError, relaycommon.DynamicRoutingAttemptSample, bool)
+		name      string
+		wantError bool
+		handler   func(*relaycommon.RelayInfo) (*types.NewAPIError, relaycommon.DynamicRoutingAttemptSample, bool)
 	}{
 		{
-			name: "chat to responses",
+			name:      "chat to responses",
+			wantError: true,
 			handler: func(_ *relaycommon.RelayInfo) (*types.NewAPIError, relaycommon.DynamicRoutingAttemptSample, bool) {
 				c, _, resp, info := newHTTP200ErrorTestContext(t, "data: {not-json}\n\n", "text/event-stream", true)
 				info.RelayFormat = types.RelayFormatOpenAIResponses
@@ -222,7 +224,12 @@ func TestConvertedResponsesStreamsTreatMalformedUpstreamEventsAsHard(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handlerErr, sample, observed := tt.handler(nil)
-			require.Nil(t, handlerErr)
+			if tt.wantError {
+				require.NotNil(t, handlerErr)
+				assert.Equal(t, http.StatusInternalServerError, handlerErr.StatusCode)
+			} else {
+				require.Nil(t, handlerErr)
+			}
 			require.True(t, observed)
 			assert.True(t, sample.HardFailure)
 			assert.False(t, sample.Success)

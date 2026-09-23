@@ -71,7 +71,7 @@ func TestWan3PluginSettlesActualDurationWithFrozenResolution(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			adaptor := taskplugin.New(plugin)
 			body := []byte(`{"output":{"task_id":"private","task_status":"SUCCEEDED"},"usage":` + tc.usage + `}`)
-			result, err := adaptor.ParseTaskResult(body)
+			result, err := adaptor.ParseTaskResult(&model.Task{}, &http.Response{StatusCode: http.StatusOK}, body)
 			require.NoError(t, err)
 			require.NotNil(t, result.Usage)
 			assert.Equal(t, tc.input, result.Usage.Input)

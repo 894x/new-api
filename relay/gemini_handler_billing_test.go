@@ -58,7 +58,7 @@ func (b *geminiThinkingAdapterBillingRecorder) ReserveForAdmission(targetQuota i
 	return nil
 }
 
-func TestGeminiThinkingAdapterRepricesAndSettlesFrozenNoThinkingMonthlyPolicy(t *testing.T) {
+func TestGeminiThinkingAdapterKeepsOriginPricingAndFrozenMonthlyPolicy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	previousDB, previousLogDB := model.DB, model.LOG_DB
@@ -186,40 +186,37 @@ func TestGeminiThinkingAdapterRepricesAndSettlesFrozenNoThinkingMonthlyPolicy(t 
 	info.Billing = billing
 	info.FinalPreConsumedQuota = initialPrice.QuotaToPreConsume
 
-	// The request-frozen resolver must retain the admission-time 0.8 policy for
-	// the no-thinking alias even if the administrator edits the live option
-	// before the adapter discovers that effective billing model.
+	// Thinking configuration must not select a different billing alias. The
+	// origin model's admission-time monthly policy stays frozen across edits.
 	require.NoError(t, ratio_setting.UpdateModelTieredRatiosByJSONString(`{
 		"gemini-vip":{
 			"gemini-priced-base":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.4}]},
 			"gemini-priced-base-nothinking":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":0.2}]}
 		}
 	}`))
-	require.True(t, isNoThinkingRequest(request))
-	copiedRequest, err := common.DeepCopy(request)
-	require.NoError(t, err)
-	require.True(t, isNoThinkingRequest(copiedRequest))
+	require.NotNil(t, request.GenerationConfig.ThinkingConfig.ThinkingBudget)
+	require.Zero(t, *request.GenerationConfig.ThinkingConfig.ThinkingBudget)
 	require.True(t, helper.HasModelBillingConfig(noThinkingModel))
 	require.True(t, model_setting.GetGeminiSettings().ThinkingAdapterEnabled)
 
 	newAPIError := GeminiHelper(c, info)
 
 	require.Nil(t, newAPIError)
-	require.Equal(t, noThinkingModel, info.OriginModelName)
+	require.Equal(t, baseModel, info.OriginModelName)
 	require.NotNil(t, info.GroupModelDiscountSnapshot)
-	assert.Equal(t, noThinkingModel, info.GroupModelDiscountSnapshot.OriginModel)
-	assert.Equal(t, 0.8, info.GroupModelDiscountSnapshot.Tiers[0].Ratio)
-	assert.Equal(t, 0.0006, info.PriceData.ModelPrice)
-	assert.Equal(t, 300, info.PriceData.OriginalQuotaToPreConsume)
-	assert.Equal(t, []int{300}, billing.reserveCalls)
-	assert.Equal(t, []int{240}, billing.settleCalls)
+	assert.Equal(t, baseModel, info.GroupModelDiscountSnapshot.OriginModel)
+	assert.Equal(t, 0.95, info.GroupModelDiscountSnapshot.Tiers[0].Ratio)
+	assert.Equal(t, 0.0002, info.PriceData.ModelPrice)
+	assert.Equal(t, 100, info.PriceData.OriginalQuotaToPreConsume)
+	assert.Empty(t, billing.reserveCalls)
+	assert.Equal(t, []int{95}, billing.settleCalls)
 
 	settlement, err := model.GetGroupModelDiscountSettlement(requestID)
 	require.NoError(t, err)
 	assert.Equal(t, userID, settlement.UserID)
 	assert.Equal(t, usingGroup, settlement.UsingGroup)
-	assert.Equal(t, noThinkingModel, settlement.OriginModel)
-	assert.EqualValues(t, 300, settlement.OriginalQuota)
-	assert.EqualValues(t, 240, settlement.ChargedQuota)
+	assert.Equal(t, baseModel, settlement.OriginModel)
+	assert.EqualValues(t, 100, settlement.OriginalQuota)
+	assert.EqualValues(t, 95, settlement.ChargedQuota)
 	assert.Equal(t, model.GroupModelDiscountStatusSettled, settlement.Status)
 }

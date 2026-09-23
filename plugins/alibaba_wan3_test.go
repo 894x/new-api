@@ -165,7 +165,7 @@ func TestAlibabaPluginPreservesPollingStatusAndFailureDetails(t *testing.T) {
 	for _, tc := range []struct{ status, body, expected string }{
 		{"PENDING", `{}`, `{"status":"QUEUED"}`},
 		{"RUNNING", `{}`, `{"status":"IN_PROGRESS"}`},
-		{"unrecognized", `{}`, `{"status":"QUEUED"}`},
+		{"unrecognized", `{}`, `{"status":"UNKNOWN","reason":"unrecognized status: unrecognized"}`},
 		{"FAILED", `{"message":"top level failure","output":{"code":"InvalidInput","message":"nested failure"}}`, `{"status":"FAILURE","reason":"top level failure","usage":null}`},
 		{"CANCELED", `{"output":{"code":"Canceled","message":"cancelled by provider"}}`, `{"status":"FAILURE","reason":"task failed, code: Canceled , message: cancelled by provider","usage":null}`},
 		{"UNKNOWN", `{}`, `{"status":"FAILURE","reason":"task failed","usage":null}`},

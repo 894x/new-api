@@ -30,6 +30,8 @@ func GetAllLogs(c *gin.Context) {
 	}
 	if c.GetInt("role") < common.RoleRootUser {
 		model.FormatAdminLogs(logs)
+	} else {
+		model.FormatRootLogs(logs)
 	}
 	enrichTaskUsageLogs(logs)
 	pageInfo.SetTotal(int(total))

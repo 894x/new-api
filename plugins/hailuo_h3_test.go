@@ -226,7 +226,7 @@ func TestH3PluginQueryRoutesAndTransientFailures(t *testing.T) {
 		{"customer-h3", "MiniMax-H3", "https://provider.example/v2/query/video_generation/task%2Fone"},
 		{"MiniMax-Hailuo-2.3", "MiniMax-Hailuo-2.3", "https://provider.example/v1/query/video_generation?task_id=task%2Fone"},
 	} {
-		value, err := plugin.Engine.Call(context.Background(), "buildQueryRequest", map[string]any{"baseUrl": "https://provider.example", "taskId": "task/one", "apiKey": "poll-key", "requestBody": map[string]any{"origin_model": tc.origin, "model": tc.upstream}})
+		value, err := plugin.Engine.Call(context.Background(), "buildQueryRequest", map[string]any{"baseUrl": "https://provider.example/", "taskId": "task/one", "apiKey": "poll-key", "model": tc.origin, "upstreamModel": tc.upstream})
 		require.NoError(t, err)
 		assert.Equal(t, tc.expected, value.(map[string]any)["url"])
 	}

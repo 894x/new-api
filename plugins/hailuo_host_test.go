@@ -82,7 +82,7 @@ func TestH3PluginActualUsageAndFrozenImageSurcharge(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			adaptor := taskplugin.New(plugin)
-			result, err := adaptor.ParseTaskResult([]byte(tc.body))
+			result, err := adaptor.ParseTaskResult(&model.Task{}, &http.Response{StatusCode: http.StatusOK}, []byte(tc.body))
 			require.NoError(t, err)
 			require.NotNil(t, result.Usage)
 			assert.Equal(t, tc.input, result.Usage.Input)
@@ -101,7 +101,7 @@ func TestH3PluginActualUsageAndFrozenImageSurcharge(t *testing.T) {
 	t.Run("missing usage retains the estimate", func(t *testing.T) {
 		adaptor := taskplugin.New(plugin)
 		body := []byte(`{"task":{"status":"succeeded","resolution":"2K"}}`)
-		result, err := adaptor.ParseTaskResult(body)
+		result, err := adaptor.ParseTaskResult(&model.Task{}, &http.Response{StatusCode: http.StatusOK}, body)
 		require.NoError(t, err)
 		task := &model.Task{Data: body, PrivateData: model.TaskPrivateData{BillingContext: &model.TaskBillingContext{ModelRatio: 0.14, OtherRatios: map[string]float64{"seconds": 7}}}}
 		adaptor.AdjustBillingOnComplete(task, result)

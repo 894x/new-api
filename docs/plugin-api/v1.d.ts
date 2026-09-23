@@ -26,10 +26,13 @@ export interface Meta {apiVersion: 1; key: string; name: string; icon?: string; 
 export interface TaskView {task_id: string; platform: string; model?: string; result_url?: string; status: string; progress: string; fail_reason: string; created_at: number; updated_at?: number; finished_at?: number; data?: unknown}
 export interface TaskChannelSettings {doubao_video_api_mode?: "" | "v3" | "video_generations" | "custom"; doubao_video_submit_path?: string; doubao_video_fetch_path?: string}
 export interface DriverContext {requestBody: unknown; preparedRequestBody?: unknown; requestHeaders: Readonly<Record<string, string>>; action: string; model: string; upstreamModel: string; modelMappingResolved?: boolean; baseUrl: string; channelSettings?: Readonly<TaskChannelSettings>; apiKey?: string; authHeader: string; files: readonly FileReference[]; publicTaskId: string; originTasks?: readonly {taskId: string; upstreamTaskId: string; action: string; status: string; data: unknown}[]}
+export interface TaskQueryContext extends FetchContext {taskId: string; publicTaskId: string; action: string; model: string; upstreamModel: string; data: unknown; state: unknown}
+export interface BatchQueryContext extends FetchContext {tasks: readonly TaskQueryContext[]}
+export type HookHTTPResponse = {readonly status: number; readonly headers: Readonly<Record<string, string>>};
 export interface RequestDescriptor {url: string; method?: string; headers?: Record<string, string>; /** JSON body may contain FilePlaceholder objects at any depth; the host replaces each with a Base64 or data-URL string. */ body?: unknown; credentialless?: boolean; action?: string; model?: string; rewriteModel?: string; bodyType?: "json" | "multipart"; parts?: readonly {name: string; value?: unknown; fileRef?: string; filename?: string}[]}
 export interface UpstreamResponse {statusCode: number; headers: Readonly<Record<string, readonly string[]>>; body: unknown}
 export interface VideoTaskUsage {kind: "video_duration"; unit: "second"; input: number; output: number; total: number; input_images?: number}
-export interface NormalizedTaskResult {taskId?: string; status: "NOT_START" | "SUBMITTED" | "QUEUED" | "IN_PROGRESS" | "SUCCESS" | "FAILURE" | "UNKNOWN"; progress?: string; reason?: string; url?: string; remoteUrl?: string; completionTokens?: number; totalTokens?: number; usage?: VideoTaskUsage}
+export interface NormalizedTaskResult {taskId?: string; status: "NOT_START" | "SUBMITTED" | "QUEUED" | "IN_PROGRESS" | "SUCCESS" | "FAILURE" | "UNKNOWN"; progress?: string; reason?: string; url?: string; remoteUrl?: string; completionTokens?: number; totalTokens?: number; usage?: VideoTaskUsage; state?: unknown}
 /** Host-normalized result passed into completion hooks; unlike parser outputs, these fields use snake_case. */
 export interface CompletionResult {code: number; task_id: string; status: string; reason?: string; url?: string; remote_url?: string; progress?: string; completion_tokens?: number; total_tokens?: number; usage?: VideoTaskUsage; usage_facts?: Readonly<Record<string, string | number | boolean>>}
 export interface TaskArtifact {key: string; type: "video" | "audio" | "image" | "file"; mimeType?: string}
@@ -44,22 +47,21 @@ export declare function buildSubmitRequest(ctx: DriverContext): RequestDescripto
 export declare function validatePreparedRequest(ctx: DriverContext, body: unknown): void;
 /** Optional provider-specific redaction before submit/poll task data is persisted. */
 export declare function sanitizeTaskData(body: unknown, publicTaskId: string): unknown;
-export declare function parseSubmitResponse(ctx: DriverContext, response: UpstreamResponse): {taskId: string; taskData?: unknown; immediate?: NormalizedTaskResult} | {error: {code?: string; message: string; httpStatus?: number}};
+export declare function parseSubmitResponse(ctx: DriverContext, response: UpstreamResponse): {taskId: string; taskData?: unknown; immediate?: NormalizedTaskResult; state?: unknown} | {error: {code?: string; message: string; httpStatus?: number}};
 /** Optional provider error normalization. HTTP status and viewer privacy remain host-owned. */
 export declare function parseSubmitError(ctx: DriverContext, response: Pick<UpstreamResponse, "statusCode" | "body">): {code?: string; message: string} | null;
 export interface FetchContext {baseUrl: string; channelSettings?: Readonly<TaskChannelSettings>; apiKey?: string; authHeader: string; auth: Readonly<{authHeader: string; projectId?: string}>}
-export interface QueryContext extends FetchContext {taskId: string; action?: string; requestBody: Readonly<Record<string, unknown>>}
-export declare function buildQueryRequest(ctx: QueryContext): RequestDescriptor;
-export declare function buildBatchQueryRequest(ctx: FetchContext, taskIds: readonly string[]): RequestDescriptor;
-/** Result parsers receive no submission fields or credentials. */
-export declare function parseTaskResult(ctx: Readonly<Record<string, never>>, body: unknown): NormalizedTaskResult;
-export declare function parseBatchResult(ctx: Readonly<Record<string, never>>, body: unknown): readonly (NormalizedTaskResult & {taskId: string; action?: string; submitTime?: number; startTime?: number; finishTime?: number; data?: unknown})[];
+export declare function buildQueryRequest(ctx: TaskQueryContext): RequestDescriptor;
+export declare function buildBatchQueryRequest(ctx: BatchQueryContext, tasks: readonly TaskQueryContext[]): RequestDescriptor;
+/** Result parsers receive persisted query context and upstream HTTP metadata. */
+export declare function parseTaskResult(ctx: TaskQueryContext, body: unknown, response: HookHTTPResponse): NormalizedTaskResult;
+export declare function parseBatchResult(ctx: BatchQueryContext, body: unknown, response: HookHTTPResponse): readonly (NormalizedTaskResult & {taskId: string; action?: string; submitTime?: number; startTime?: number; finishTime?: number; data?: unknown})[];
 export declare function extractUsage(ctx: DriverContext & {usagePurpose?: "facts" | "billing_ratios"}): Readonly<Record<string, string | number | boolean>> | null;
 export declare function extractUsageOnSubmit(ctx: DriverContext, taskData: unknown): Readonly<Record<string, string | number | boolean>> | null;
-export declare function extractUsageOnComplete(task: TaskView | null, result: CompletionResult, data: unknown): Readonly<Record<string, string | number | boolean>> | null;
+export declare function extractUsageOnComplete(task: TaskView | TaskQueryContext | null, result: CompletionResult, data: unknown): Readonly<Record<string, string | number | boolean>> | null;
 /** Optional legacy model-ratio settlement; never overrides fixed-price or expression billing. */
 export declare function extractBillingOnComplete(task: TaskView, result: CompletionResult, context: {otherRatios: Readonly<Record<string, number>>; upstreamModel: string}): {modelUnits: number; consumedRatios?: readonly string[]} | null;
 /** resultUrl is a private legacy fallback, populated only for successful tasks. Never expose it directly to clients. */
-export interface ArtifactTaskContext {taskId: string; status: string; action: string; data: unknown; producerVersion: string; resultUrl: string}
+export interface ArtifactTaskContext {taskId: string; status: string; action: string; data: unknown; state: unknown; producerVersion: string; resultUrl: string}
 export declare function listArtifacts(task: ArtifactTaskContext): readonly TaskArtifact[];
 export declare function buildContentRequest(ctx: FetchContext & ArtifactTaskContext & {artifactKey: string; upstreamTaskId: string; clientRequest: {method: "GET" | "HEAD"; headers: Readonly<Record<string, string>>}}): RequestDescriptor;

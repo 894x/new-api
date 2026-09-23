@@ -115,7 +115,7 @@ func TestDoubaoPluginConfiguredTransportPaths(t *testing.T) {
 			assert.Equal(t, "Bearer channel-test-key", submit.auth)
 			assert.JSONEq(t, `{"model":"mapped-model","duration":5,"generate_audio":false,"content":[{"type":"image_url","image_url":{"url":"https://cdn.example/frame.png"}},{"type":"text","text":"a fox"}]}`, submit.body)
 
-			response, err = adaptor.FetchTask(server.URL+"/", "poll-key", map[string]any{"task_id": "task_123"}, "")
+			response, err = adaptor.FetchTask(server.URL+"/", "poll-key", &model.Task{TaskID: "task_123"}, "")
 			require.NoError(t, err)
 			require.NoError(t, response.Body.Close())
 			query := <-requests
@@ -150,7 +150,7 @@ func TestDoubaoPluginRejectsInvalidConfiguredPaths(t *testing.T) {
 			taskErr := adaptor.ValidateRequestAndSetAction(c, info)
 			require.NotNil(t, taskErr)
 			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
-			_, err := adaptor.FetchTask("https://provider.example", "", map[string]any{"task_id": "task_123"}, "")
+			_, err := adaptor.FetchTask("https://provider.example", "", &model.Task{TaskID: "task_123"}, "")
 			require.Error(t, err)
 		})
 	}

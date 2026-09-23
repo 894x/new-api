@@ -150,7 +150,7 @@ func TestSeedanceSLSPluginPollingPreservesNestedUsageAndFailures(t *testing.T) {
 		{"real URL", `{"status":"FAILED","fail_reason":"generation failed","result_url":"https://cdn.example/video.mp4"}`, "FAILURE", "100%", "generation failed", "https://cdn.example/video.mp4", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := adaptor.ParseTaskResult([]byte(tc.body))
+			result, err := adaptor.ParseTaskResult(&model.Task{}, &http.Response{StatusCode: http.StatusOK}, []byte(tc.body))
 			require.NoError(t, err)
 			assert.Equal(t, tc.status, result.Status)
 			assert.Equal(t, tc.progress, result.Progress)
@@ -159,9 +159,9 @@ func TestSeedanceSLSPluginPollingPreservesNestedUsageAndFailures(t *testing.T) {
 			assert.Equal(t, tc.tokens, result.TotalTokens)
 		})
 	}
-	_, err := adaptor.ParseTaskResult([]byte(`{"code":"failure","message":"try again"}`))
+	_, err := adaptor.ParseTaskResult(&model.Task{}, &http.Response{StatusCode: http.StatusOK}, []byte(`{"code":"failure","message":"try again"}`))
 	require.Error(t, err)
-	_, err = adaptor.ParseTaskResult([]byte(`{"status":"RUNNING","progress":true}`))
+	_, err = adaptor.ParseTaskResult(&model.Task{}, &http.Response{StatusCode: http.StatusOK}, []byte(`{"status":"RUNNING","progress":true}`))
 	require.Error(t, err)
 }
 

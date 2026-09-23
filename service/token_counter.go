@@ -177,6 +177,14 @@ func getImageToken(c *gin.Context, fileMeta *types.FileMeta, model string, strea
 }
 
 func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
+	if !constant.CountToken {
+		return 0, nil
+	}
+	return CountRequestToken(c, meta, info)
+}
+
+// CountRequestToken serves utility endpoints regardless of the relay estimation switch.
+func CountRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
 	return estimateRequestToken(c, meta, info, info.RelayFormat, true)
 }
 

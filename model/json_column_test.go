@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"testing"
 
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,6 +32,16 @@ func TestJSONColumnValuersReturnString(t *testing.T) {
 			name:   "TaskPrivateData",
 			valuer: TaskPrivateData{Key: "k"},
 			want:   `{"key":"k"}`,
+		},
+		{
+			name:   "TaskPrivateData usage without credentials",
+			valuer: TaskPrivateData{Usage: &hosttypes.TaskUsage{Kind: hosttypes.TaskUsageKindVideoDuration, Unit: hosttypes.TaskUsageUnitSecond, Input: 2, Output: 5, Total: 7}},
+			want:   `{"usage":{"kind":"video_duration","unit":"second","input":2,"output":5,"total":7}}`,
+		},
+		{
+			name:   "TaskPrivateData assets without credentials",
+			valuer: TaskPrivateData{AssetReferences: &TaskAssetReferences{Items: []TaskAssetReference{{AssetID: "asset-1", StoredObjectID: "object-1"}}}},
+			want:   `{"asset_references":{"items":[{"asset_id":"asset-1","stored_object_id":"object-1"}]}}`,
 		},
 		{
 			name:   "JSONValue",

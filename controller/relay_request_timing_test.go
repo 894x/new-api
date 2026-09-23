@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -49,8 +50,8 @@ func TestProcessChannelErrorRecordsRequestTiming(t *testing.T) {
 	processChannelError(
 		ctx,
 		types.ChannelError{ChannelId: 14, ChannelName: "from waninter"},
-		"mapped-kimi-k3",
 		types.NewErrorWithStatusCode(errors.New("upstream unavailable"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway),
+		&relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "mapped-kimi-k3"}},
 	)
 
 	var log model.Log

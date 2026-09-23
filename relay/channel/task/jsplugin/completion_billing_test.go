@@ -3,6 +3,7 @@ package jsplugin
 import (
 	"fmt"
 	"math"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -88,10 +89,10 @@ func TestNormalizedVideoUsageRejectsInvalidProviderQuantities(t *testing.T) {
 		`{"kind":"video_duration","unit":"second","input":1,"output":2,"total":3,"input_images":129}`,
 		`{"kind":"video_duration","unit":"token","input":1,"output":2,"total":3}`,
 	} {
-		_, err := adaptor.ParseTaskResult([]byte(body))
+		_, err := adaptor.ParseTaskResult(&model.Task{}, &http.Response{StatusCode: http.StatusOK}, []byte(body))
 		assert.Error(t, err, body)
 	}
-	result, err := adaptor.ParseTaskResult([]byte(`{"kind":"video_duration","unit":"second","input":1,"output":2,"total":3,"input_images":0}`))
+	result, err := adaptor.ParseTaskResult(&model.Task{}, &http.Response{StatusCode: http.StatusOK}, []byte(`{"kind":"video_duration","unit":"second","input":1,"output":2,"total":3,"input_images":0}`))
 	require.NoError(t, err)
 	require.NotNil(t, result.Usage)
 	require.NotNil(t, result.Usage.InputImages)

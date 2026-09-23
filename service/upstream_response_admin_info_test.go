@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 
 	"github.com/gin-gonic/gin"
@@ -20,9 +21,12 @@ func TestAppendUpstreamResponseAdminInfoCopiesCapturedIdentifiers(t *testing.T) 
 		"X-Request-Id": "request-secret",
 		"X-Trace-Id":   "trace-secret",
 	})
-	adminInfo := map[string]interface{}{"use_channel": []int{9}}
+	other := model.NewLogOther()
+	other.SetAdmin("use_channel", []int{9})
 
-	AppendUpstreamResponseAdminInfo(c, adminInfo)
+	AppendUpstreamResponseAdminInfo(c, other)
+	adminInfo, ok := other.Snapshot()["admin_info"].(map[string]interface{})
+	require.True(t, ok)
 
 	assert.Equal(t, "gen_upstream", adminInfo["upstream_response_id"])
 	headers, ok := adminInfo["upstream_request_ids"].(map[string]string)
@@ -55,7 +59,7 @@ func TestGenerateTextOtherInfoAddsAdminOnlyRequestTiming(t *testing.T) {
 		ChannelMeta:       &relaycommon.ChannelMeta{},
 	}
 
-	other := GenerateTextOtherInfo(c, relayInfo, 1, 1, 1, 0, 1, 0, 1)
+	other := GenerateTextOtherInfo(c, relayInfo, 1, 1, 1, 0, 1, 0, 1).Snapshot()
 	assert.Equal(t, common.QuotaPerUnit, other["quota_per_unit"])
 
 	adminInfo, ok := other["admin_info"].(map[string]interface{})

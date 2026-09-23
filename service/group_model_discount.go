@@ -264,11 +264,11 @@ func handleGroupModelDiscountSettleFailure(requestID string, settleErr error) er
 
 // InjectGroupModelDiscountInfo adds the exact original/net decision and tier
 // segments to a consume log. It never derives original price from GroupRatio.
-func InjectGroupModelDiscountInfo(other map[string]interface{}, decision GroupModelDiscountDecision) {
+func InjectGroupModelDiscountInfo(other *model.LogOther, decision GroupModelDiscountDecision) {
 	if other == nil || !decision.Applied || decision.Calculation == nil || decision.Settlement == nil {
 		return
 	}
-	other["group_model_discount"] = map[string]interface{}{
+	other.SetPublic("group_model_discount", map[string]interface{}{
 		"request_id":              decision.RequestID,
 		"original_quota":          decision.OriginalQuota,
 		"charged_quota":           decision.ChargedQuota,
@@ -282,5 +282,5 @@ func InjectGroupModelDiscountInfo(other map[string]interface{}, decision GroupMo
 		"period_end":              decision.Settlement.PeriodEnd,
 		"policy_hash":             decision.Settlement.PolicyHash,
 		"segments":                decision.Calculation.Segments,
-	}
+	})
 }

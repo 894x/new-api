@@ -42,6 +42,7 @@ type TaskSubmitResult struct {
 	responseHeader http.Header
 	responseBody   []byte
 	Immediate      *relaycommon.TaskInfo
+	PluginState    []byte
 	//PerCallPrice   types.PriceData
 }
 
@@ -569,6 +570,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Quota:          finalQuota,
 		OriginalQuota:  info.PriceData.OriginalQuota,
 		Immediate:      parsed.Immediate,
+		PluginState:    parsed.PluginState,
 	}, nil
 }
 
@@ -896,10 +898,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		return nil
 	}
 
-	resp, err := adaptor.FetchTask(baseURL, channelModel.Key, map[string]any{
-		"task_id": task.GetUpstreamTaskID(),
-		"action":  constant.NormalizeTaskAction(task.Action),
-	}, proxy)
+	resp, err := adaptor.FetchTask(baseURL, channelModel.Key, task, proxy)
 	if err != nil || resp == nil {
 		return nil
 	}
@@ -909,7 +908,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		return nil
 	}
 
-	ti, err := adaptor.ParseTaskResult(body)
+	ti, err := adaptor.ParseTaskResult(task, resp, body)
 	if err != nil || ti == nil {
 		return nil
 	}

@@ -4,10 +4,10 @@ export const meta = {
   name: "Hailuo Video",
   icon: "Hailuo.Color",
   description: {
-    en: "MiniMax Hailuo video generation (text-to-video and image-to-video)",
-    zh: "MiniMax 海螺视频生成（文生视频、图生视频）",
+    en: "MiniMax Hailuo video generation (text-to-video, image-to-video, and MiniMax-H3 multimodal reference)",
+    zh: "MiniMax 海螺视频生成（文生视频、图生视频、MiniMax-H3 多模态参考生视频）",
   },
-  version: "1.0.0",
+  version: "1.1.2",
   author: { name: "QuantumNous" },
   channelTypes: [35],
   models: [
@@ -28,22 +28,41 @@ export const meta = {
       type: "number",
       unit: "second",
       description: {
-        en: "Requested video duration in seconds. Hailuo 2.3/02/2.3-Fast allow 6 or 10; 01-series allow 6.",
-        zh: "请求的视频时长，单位为秒。Hailuo 2.3/02/2.3-Fast 允许 6 或 10；01 系列允许 6。",
+        en: "Requested video duration in seconds. MiniMax-H3 allows 4 to 15; Hailuo 2.3/02/2.3-Fast allow 6 or 10; 01-series allow 6.",
+        zh: "请求的视频时长，单位为秒。MiniMax-H3 允许 4 到 15；Hailuo 2.3/02/2.3-Fast 允许 6 或 10；01 系列允许 6。",
       },
     },
     resolution: {
       enum: ["512P", "768P", "720P", "1080P", "2K"],
       description: { en: "Requested output video resolution.", zh: "请求的输出视频分辨率。" },
     },
+    input_images: {
+      type: "number",
+      unit: "count",
+      description: {
+        en: "H3 input image count (estimated at submit, actual on completion).",
+        zh: "H3 输入图片数量（提交时预估，完成后按实际值）。",
+      },
+    },
+    input_video_seconds: {
+      type: "number",
+      unit: "second",
+      description: {
+        en: "H3 input video duration in seconds (reserved at the request maximum, actual on completion).",
+        zh: "H3 输入视频时长，单位为秒（提交时按请求上限预留，完成后按实际值）。",
+      },
+    },
   },
   usageExamples: [
-    { label: "2.3/02 768P 6s", facts: { seconds: 6, resolution: "768P" } },
-    { label: "2.3/02 768P 10s", facts: { seconds: 10, resolution: "768P" } },
-    { label: "2.3/02 1080P 6s", facts: { seconds: 6, resolution: "1080P" } },
-    { label: "02 512P 6s", facts: { seconds: 6, resolution: "512P" } },
-    { label: "02 512P 10s", facts: { seconds: 10, resolution: "512P" } },
-    { label: "01-series 720P 6s", facts: { seconds: 6, resolution: "720P" } },
+    { label: "2.3/02 768P 6s", facts: { seconds: 6, resolution: "768P", input_images: 0, input_video_seconds: 0 } },
+    { label: "2.3/02 768P 10s", facts: { seconds: 10, resolution: "768P", input_images: 0, input_video_seconds: 0 } },
+    { label: "2.3/02 1080P 6s", facts: { seconds: 6, resolution: "1080P", input_images: 0, input_video_seconds: 0 } },
+    { label: "02 512P 6s", facts: { seconds: 6, resolution: "512P", input_images: 0, input_video_seconds: 0 } },
+    { label: "02 512P 10s", facts: { seconds: 10, resolution: "512P", input_images: 0, input_video_seconds: 0 } },
+    { label: "01-series 720P 6s", facts: { seconds: 6, resolution: "720P", input_images: 0, input_video_seconds: 0 } },
+    { label: "H3 768P 5s", facts: { seconds: 5, resolution: "768P", input_images: 0, input_video_seconds: 0 } },
+    { label: "H3 2K 5s · 9 images", facts: { seconds: 5, resolution: "2K", input_images: 9, input_video_seconds: 0 } },
+    { label: "H3 2K 5s · input video", facts: { seconds: 5, resolution: "2K", input_images: 0, input_video_seconds: 15 } },
   ],
   protocols: [{ name: "openai_responses", supports: ["stream", "sync", "background"] }, "openai_video"],
   routes: [
@@ -287,9 +306,43 @@ function hasHailuoImage(req, hasInputReferenceFile) {
   );
 }
 
+const H3_MODEL = "MiniMax-H3";
+const H3_MIN_DURATION = 4;
+const H3_MAX_DURATION = 15;
+const H3_MAX_REFERENCE_IMAGES = 9;
+const H3_MAX_INPUT_VIDEO_SECONDS = 15;
+
+// MiniMax-H3 speaks the /v2 video generation contract: a multimodal `content`
+// array instead of flat frame fields, an explicit `ratio`, 768P/2K resolutions,
+// a task id path parameter on query, and a `{task: {...}}` query envelope.
+function isH3(model) {
+  return model === H3_MODEL;
+}
+
+function h3HasVisualContent(content) {
+  return content.some(function (item) {
+    return item && (item.type === "image_url" || item.type === "video_url");
+  });
+}
+
+function h3QueryTask(body) {
+  const task = body && typeof body === "object" && !Array.isArray(body) ? body.task : null;
+  return task && typeof task === "object" && !Array.isArray(task) ? task : null;
+}
+
+function h3APIError(body) {
+  const error = body && typeof body === "object" && !Array.isArray(body) ? body.error : null;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return null;
+  const message = trimmed(error.message);
+  if (!message) return null;
+  const statusCode = Number(error.http_code || error.code || 0);
+  return { message: message, statusCode: Number.isInteger(statusCode) ? statusCode : 0 };
+}
+
 // Older T2V-01*/I2V-01*/S2V-01 official tables disagree on 1080P support (research: 未验证).
 // Keep those models permissive: duration 6 only, resolution optional.
 function validateHailuoCombo(model, duration, resolution, hasImage) {
+  if (isH3(model)) return;
   if (model === "MiniMax-Hailuo-2.3-Fast" && !hasImage) {
     throw new Error("MiniMax-Hailuo-2.3-Fast supports image-to-video only");
   }
@@ -367,7 +420,7 @@ export function buildSubmitRequest(ctx) {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: "Bearer " + ctx.apiKey },
       body: body,
-      action: body.content.length > 1 ? "image_to_video" : "text_to_video",
+      action: h3HasVisualContent(body.content) ? "image_to_video" : "text_to_video",
     };
   }
   const metadata = taskMetadata(req);
@@ -396,6 +449,7 @@ export function parseSubmitResponse(ctx, resp) {
   const body = resp.body || {};
   const error = parseSubmitError(ctx, resp);
   if (error) return { error: error };
+  if (!body.base_resp && !usesH3(ctx)) throw new Error("hailuo submit failed");
   if (!body.task_id) throw new Error("missing task_id");
   return { taskId: body.task_id, taskData: Object.assign({}, body, { task_id: ctx.publicTaskId || body.task_id }) };
 }
@@ -424,54 +478,72 @@ export function extractUsage(ctx) {
       const images = body.content.filter((item) => item.type === "image_url").length;
       return { seconds: body.duration, resolution_multiplier: resolution, image_surcharge: 1 + (Math.max(images - 5, 0) * 0.4) / (body.duration * resolution) };
     }
-    return { seconds: body.duration, resolution: body.resolution };
+    return {
+      seconds: body.duration,
+      resolution: body.resolution,
+      input_images: body.content.filter((item) => item.type === "image_url").length,
+      input_video_seconds: body.content.some((item) => item.type === "video_url") ? H3_MAX_INPUT_VIDEO_SECONDS : 0,
+    };
   }
   if (ctx.usagePurpose === "billing_ratios") return null;
   const req = ctx.requestBody || {};
   const model = ctx.upstreamModel || req.model;
-  return { seconds: outboundDuration(req), resolution: outboundResolution(req, model) };
+  return { seconds: outboundDuration(req), resolution: outboundResolution(req, model), input_images: 0, input_video_seconds: 0 };
 }
 
 export function buildQueryRequest(ctx) {
-  const request = ctx.requestBody || {};
-  if (usesH3({ model: request.origin_model, upstreamModel: request.model })) {
-    return {
-      url: ctx.baseUrl.replace(/\/+$/, "") + "/v2/query/video_generation/" + encodeURIComponent(ctx.taskId),
-      method: "GET",
-      headers: { Accept: "application/json", Authorization: "Bearer " + ctx.apiKey },
-    };
-  }
+  // Polling carries no relay info; the host fills these identities from the
+  // persisted task properties.
+  const path = usesH3(ctx)
+    ? "/v2/query/video_generation/" + encodeURIComponent(ctx.taskId)
+    : "/v1/query/video_generation?task_id=" + encodeURIComponent(ctx.taskId);
   return {
-    url: ctx.baseUrl + "/v1/query/video_generation?task_id=" + encodeURIComponent(ctx.taskId),
+    url: ctx.baseUrl.replace(/\/+$/, "") + path,
     method: "GET",
     headers: { Accept: "application/json", Authorization: "Bearer " + ctx.apiKey },
   };
 }
 
-export function parseTaskResult(ctx, body) {
-  if (body.error) {
-    const code = Number(body.error.http_code || body.error.code || 0);
-    if (code === 408 || code === 429 || code >= 500) throw new Error(body.error.message || "temporary H3 query error");
-    return { code: Number.isFinite(code) ? code : 0, status: "FAILURE", progress: "100%", reason: body.error.message || "task failed" };
+export function parseTaskResult(_ctx, body) {
+  const apiError = h3APIError(body);
+  if (apiError) {
+    if (apiError.statusCode === 408 || apiError.statusCode === 429 || apiError.statusCode >= 500) throw new Error(apiError.message);
+    return { code: apiError.statusCode, status: "FAILURE", progress: "100%", reason: apiError.message };
   }
-  if (body.task) {
-    const task = body.task;
-    const statuses = { queued: "QUEUED", running: "IN_PROGRESS", succeeded: "SUCCESS", failed: "FAILURE", cancelled: "FAILURE" };
-    const status = statuses[task.status] || "UNKNOWN";
-    return {
-      taskId: task.id,
-      status: status,
-      progress: status === "QUEUED" ? "30%" : status === "IN_PROGRESS" ? "50%" : "100%",
-      url: status === "SUCCESS" && task.content ? task.content.url || "" : "",
-      reason: status === "FAILURE" ? (task.error && task.error.message) || "task " + task.status : "",
-      usage: h3Usage(task.usage),
+  const h3Task = h3QueryTask(body);
+  if (h3Task) {
+    const h3Statuses = { queued: "QUEUED", running: "IN_PROGRESS", succeeded: "SUCCESS", failed: "FAILURE", cancelled: "FAILURE" };
+    const h3Status = h3Statuses[h3Task.status];
+    if (!h3Status) {
+      return { status: "UNKNOWN", reason: "unrecognized status: " + String(h3Task.status || "") };
+    }
+    const h3Result = {
+      taskId: h3Task.id,
+      usage: h3Usage(h3Task.usage),
+      code: 0,
+      status: h3Status,
+      progress: h3Status === "QUEUED" ? "30%" : h3Status === "IN_PROGRESS" ? "50%" : "100%",
     };
+    if (h3Status === "SUCCESS") {
+      const url = trimmed(h3Task.content && h3Task.content.url);
+      if (url) h3Result.url = url;
+    }
+    if (h3Status === "FAILURE") {
+      h3Result.reason = trimmed(h3Task.error && h3Task.error.message) || "task " + trimmed(h3Task.status);
+    }
+    return h3Result;
+  }
+  if (body.base_resp && body.base_resp.status_code !== 0) {
+    return { code: body.base_resp.status_code || 0, status: "FAILURE", progress: "100%", reason: body.base_resp.status_msg || "" };
   }
   const base = body.base_resp || {};
   const statuses = { Preparing: "IN_PROGRESS", Queueing: "IN_PROGRESS", Processing: "IN_PROGRESS", Success: "SUCCESS", Fail: "FAILURE" };
-  const status = statuses[body.status] || "IN_PROGRESS";
+  const status = statuses[body.status];
+  if (!status) {
+    return { status: "UNKNOWN", reason: "unrecognized status: " + String(body.status || "") };
+  }
   const progress = status === "SUCCESS" || status === "FAILURE" ? "100%" : body.status === "Processing" ? "50%" : "30%";
-  const reason = base.status_code !== 0 ? base.status_msg || "" : status === "FAILURE" ? "task failed" : "";
+  const reason = status === "FAILURE" ? "task failed" : "";
   return { code: base.status_code || 0, status: status, progress: progress, reason: reason };
 }
 
@@ -485,10 +557,15 @@ function artifactFileID(ctx) {
   return trimmed(artifactData(ctx).file_id);
 }
 
+// /v2 tasks expose a public CDN URL instead of a downloadable file id.
+function h3ArtifactURL(ctx) {
+  const task = h3QueryTask(artifactData(ctx));
+  return task ? trimmed(task.content && task.content.url) : "";
+}
+
 export function listArtifacts(task) {
-  if (task.status === "SUCCESS" && artifactData(task).task && artifactData(task).task.content && artifactData(task).task.content.url)
-    return [{ key: "video", type: "video", mimeType: "video/mp4" }];
-  return task.status === "SUCCESS" && (artifactFileID(task) || trimmed(task.resultUrl)) ? [{ key: "video", type: "video", mimeType: "video/mp4" }] : [];
+  if (task.status !== "SUCCESS") return [];
+  return artifactFileID(task) || h3ArtifactURL(task) || trimmed(task.resultUrl) ? [{ key: "video", type: "video", mimeType: "video/mp4" }] : [];
 }
 
 export function buildContentRequest(ctx) {
@@ -497,8 +574,9 @@ export function buildContentRequest(ctx) {
   if (task && task.content && trimmed(task.content.url)) return { url: task.content.url, method: ctx.clientRequest.method, credentialless: true };
   const fileID = artifactFileID(ctx);
   if (!fileID) {
-    if (trimmed(ctx.resultUrl)) return { url: ctx.resultUrl, method: ctx.clientRequest.method, credentialless: true };
-    throw new Error("artifact_not_found");
+    const url = h3ArtifactURL(ctx) || trimmed(ctx.resultUrl);
+    if (!url) throw new Error("artifact_not_found");
+    return { url: url, method: ctx.clientRequest.method, credentialless: true };
   }
   return {
     url: ctx.baseUrl + "/v1/files/download?file_id=" + encodeURIComponent(fileID),
@@ -540,14 +618,26 @@ export function extractBillingOnComplete(task, _result, context) {
 }
 
 export function extractUsageOnComplete(_task, _taskResult, body) {
-  if (body && body.task) {
-    const usage = h3Usage(body.task.usage);
+  const h3Task = h3QueryTask(body);
+  if (h3Task) {
+    const resolution = trimmed(h3Task.resolution).toUpperCase();
     const facts = {};
-    // The schema's seconds field is output duration; input duration remains in
-    // the normalized usage summary and the model-unit settlement hook.
-    if (usage) facts.seconds = usage.output;
-    if (body.task.resolution) facts.resolution = body.task.resolution;
-    return facts;
+    if (resolution === "2K" || resolution === "768P") facts.resolution = resolution;
+    const usage = h3Task.usage && typeof h3Task.usage === "object" && !Array.isArray(h3Task.usage) ? h3Task.usage : {};
+    const fields = [
+      { key: "seconds", value: usage.output_seconds, minimum: H3_MIN_DURATION, maximum: H3_MAX_DURATION, integer: false },
+      { key: "input_images", value: usage.input_image_count, minimum: 0, maximum: H3_MAX_REFERENCE_IMAGES, integer: true },
+      { key: "input_video_seconds", value: usage.input_seconds, minimum: 0, maximum: H3_MAX_INPUT_VIDEO_SECONDS, integer: false },
+    ];
+    // Omit malformed or out-of-contract upstream values so settlement keeps
+    // the bounded submission estimate instead of accepting a new multiplier.
+    for (const field of fields) {
+      if (field.value === undefined || field.value === null || field.value === "") continue;
+      const value = Number(field.value);
+      if (!Number.isFinite(value) || value < field.minimum || value > field.maximum || (field.integer && !Number.isInteger(value))) continue;
+      facts[field.key] = value;
+    }
+    return Object.keys(facts).length ? facts : null;
   }
   const width = Number((body || {}).video_width || 0);
   const height = Number((body || {}).video_height || 0);
