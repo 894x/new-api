@@ -69,7 +69,7 @@ describe('model pricing currency-aware state', () => {
     )
 
     assert.deepEqual(rows, [
-      { key: 'price', label: 'ModelPrice', value: '¥0.073' },
+      { key: 'price', label: 'Fixed price', value: '¥0.073' },
     ])
   })
 })

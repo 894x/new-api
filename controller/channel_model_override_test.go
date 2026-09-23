@@ -57,9 +57,9 @@ func TestPatchChannelModelRoutingOverridesAcceptsExplicitZeroAndNull(t *testing.
 	assert.Nil(t, response.Data[0].WeightOverride)
 	assert.Equal(t, int64(0), response.Data[0].EffectivePriority)
 	assert.Equal(t, uint(8), response.Data[0].EffectiveWeight)
-	var auditLog model.Log
+	var auditLog model.AuditLog
 	require.NoError(t, db.Order("id DESC").First(&auditLog).Error)
-	assert.Contains(t, auditLog.Other, `"action":"channel.model_routing_override"`)
+	assert.Equal(t, "channel.model_routing_override", auditLog.Action)
 }
 
 func TestPatchModelChannelRoutingOverridesAppliesExactModelAcrossChannels(t *testing.T) {
@@ -108,7 +108,7 @@ func TestPatchModelChannelRoutingOverridesAppliesExactModelAcrossChannels(t *tes
 	require.NoError(t, db.Model(&model.ChannelModelOverride{}).Where("model = ?", "model-b").Count(&modelBOverrideCount).Error)
 	assert.Zero(t, modelBOverrideCount)
 	var auditCount int64
-	require.NoError(t, db.Model(&model.Log{}).Where("other LIKE ?", `%model.channel_routing_override%`).Count(&auditCount).Error)
+	require.NoError(t, db.Model(&model.AuditLog{}).Where("action = ?", "model.channel_routing_override").Count(&auditCount).Error)
 	assert.Equal(t, int64(1), auditCount)
 }
 

@@ -1,12 +1,12 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -30,17 +30,15 @@ func TestAdminAuthSkipsAssetReadAuditsButPreservesWriteAudits(t *testing.T) {
 		{"GetAsset", "/api/asset-library/admin/assets/:id/sync", "/api/asset-library/admin/assets/1/sync", true},
 	} {
 		for _, status := range []int{http.StatusOK, http.StatusInternalServerError} {
+			requestID := fmt.Sprintf("asset-audit-%s-%s-%d", tc.action, tc.url, status)
 			router := gin.New()
 			called := false
+			router.Use(func(c *gin.Context) { c.Set(common.RequestIdKey, requestID) })
 			router.POST(tc.route, AdminAuth(), func(c *gin.Context) {
 				called = true
-				// This assertion runs inside the real auth lifecycle, before the async
-				// fallback can be scheduled. No sleeps or races against the log worker.
-				_, audited := c.Writer.(*auditResponseWriter)
-				assert.Equal(t, tc.wantAudit, audited, tc.action)
 				assert.Equal(t, user.Id, c.GetInt("id"))
-				// The stub mutation handler represents an operation with its own audit.
-				c.Set(string(constant.ContextKeyAuditLogged), true)
+				actor := model.AuditActorFromContext(c.Request.Context())
+				assert.Equal(t, model.AuditActor{UserID: user.Id, Role: common.RoleAdminUser, Username: user.Username}, actor)
 				c.Status(status)
 			})
 			request := httptest.NewRequest(http.MethodPost, tc.url+"?Action="+tc.action, nil)
@@ -49,6 +47,20 @@ func TestAdminAuthSkipsAssetReadAuditsButPreservesWriteAudits(t *testing.T) {
 			router.ServeHTTP(response, request)
 			require.True(t, called)
 			assert.Equal(t, status, response.Code)
+			var entries []model.AuditLog
+			require.NoError(t, model.LOG_DB.Where("request_id = ?", requestID).Find(&entries).Error)
+			categories := make(map[string]int)
+			for _, entry := range entries {
+				categories[entry.Category]++
+				assert.Equal(t, status < 400, entry.Success)
+				assert.Equal(t, common.RoleAdminUser, entry.ActorRole)
+			}
+			assert.Equal(t, 1, categories[model.AuditCategoryAccessToken])
+			wantOperations := 0
+			if tc.wantAudit {
+				wantOperations = 1
+			}
+			assert.Equal(t, wantOperations, categories[model.AuditCategoryOperation], tc.action)
 		}
 	}
 }

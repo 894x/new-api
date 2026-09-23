@@ -23,7 +23,6 @@ import type {
   Model,
   ModelTabCategory,
   Vendor,
-  SyncDiffData,
   SyncLocale,
   SyncSource,
 } from '../types'
@@ -36,10 +35,11 @@ type DialogType =
   | 'create-model'
   | 'update-model'
   | 'create-vendor'
+  | 'vendors'
+  | 'price-sync'
   | 'update-vendor'
   | 'missing-models'
   | 'sync-wizard'
-  | 'upstream-conflict'
   | 'prefill-groups'
   | 'description'
   | 'edit-document'
@@ -59,8 +59,6 @@ type ModelsContextType = {
   setDescriptionData: (
     data: { modelName: string; description: string } | null
   ) => void
-  upstreamConflicts: SyncDiffData['conflicts']
-  setUpstreamConflicts: (conflicts: SyncDiffData['conflicts']) => void
   syncWizardOptions: { locale: SyncLocale; source: SyncSource }
   setSyncWizardOptions: React.Dispatch<
     React.SetStateAction<{ locale: SyncLocale; source: SyncSource }>
@@ -88,9 +86,6 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
     modelName: string
     description: string
   } | null>(null)
-  const [upstreamConflicts, setUpstreamConflicts] = useState<
-    SyncDiffData['conflicts']
-  >([])
   const [syncWizardOptions, setSyncWizardOptions] = useState<{
     locale: SyncLocale
     source: SyncSource
@@ -113,8 +108,6 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
         setSelectedVendor,
         descriptionData,
         setDescriptionData,
-        upstreamConflicts,
-        setUpstreamConflicts,
         syncWizardOptions,
         setSyncWizardOptions,
         tabCategory,

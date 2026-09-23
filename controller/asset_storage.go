@@ -82,7 +82,8 @@ func UpdateAdminAssetStorageQuota(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	model.RecordOperationAuditLog(c.GetInt("id"), "Updated user asset storage quota", c.ClientIP(), "asset_library.storage.quota.update", map[string]interface{}{"user_id": userID, "quota_mb": quotaMB}, nil, nil)
+	model.RecordOperationAuditLog(c.GetInt("id"), c.GetInt("role"), "Updated user asset storage quota", c.ClientIP(), "asset_library.storage.quota.update", map[string]interface{}{"user_id": userID, "quota_mb": quotaMB}, auditOperatorInfo(c), nil, c)
+	markAuditLogged(c)
 	writeAssetStorageUsage(c, userID, true)
 }
 

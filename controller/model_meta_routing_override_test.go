@@ -35,8 +35,10 @@ func TestModelMetadataRenameAndDeleteDoNotMutateChannelRouting(t *testing.T) {
 	require.NoError(t, model.PatchChannelModelOverrides([]model.ChannelModelOverridePatch{
 		{ChannelId: channel.Id, Model: "model-a", Priority: &overridePriority},
 	}))
-	metadata := model.Model{ModelName: "model-a", Status: 1, NameRule: model.NameRuleExact}
+	metadata := model.Model{ModelName: "model-a", Status: 1, DocEnabled: 1, NameRule: model.NameRuleExact}
 	require.NoError(t, metadata.Insert())
+	require.NoError(t, db.Create(&model.ModelDocument{ModelId: metadata.Id, Slug: "legacy-doc", Title: "Legacy"}).Error)
+	require.NoError(t, db.Create(&model.ModelDocumentVariant{ModelId: metadata.Id, InterfaceKey: "openai", Slug: "published-doc", Title: "Published", Published: 1, PublishedHTML: "<p>Keep this document</p>"}).Error)
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -44,7 +46,7 @@ func TestModelMetadataRenameAndDeleteDoNotMutateChannelRouting(t *testing.T) {
 	ctx.Request = httptest.NewRequest(
 		http.MethodPut,
 		"/api/models",
-		bytes.NewBufferString(`{"id":`+strconv.Itoa(metadata.Id)+`,"model_name":"model-renamed","status":1,"name_rule":0}`),
+		bytes.NewBufferString(`{"id":`+strconv.Itoa(metadata.Id)+`,"model_name":"model-renamed","status":1,"doc_enabled":1,"name_rule":0}`),
 	)
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	UpdateModelMeta(ctx)
@@ -55,6 +57,12 @@ func TestModelMetadataRenameAndDeleteDoNotMutateChannelRouting(t *testing.T) {
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &updateResponse))
 	assert.True(t, updateResponse.Success)
+	var renamed model.Model
+	require.NoError(t, db.First(&renamed, metadata.Id).Error)
+	assert.Equal(t, 1, renamed.DocEnabled)
+	var document model.ModelDocumentVariant
+	require.NoError(t, db.Where("model_id = ?", metadata.Id).First(&document).Error)
+	assert.Equal(t, "<p>Keep this document</p>", document.PublishedHTML)
 
 	recorder = httptest.NewRecorder()
 	ctx, _ = gin.CreateTestContext(recorder)
@@ -62,6 +70,16 @@ func TestModelMetadataRenameAndDeleteDoNotMutateChannelRouting(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodDelete, "/api/models/"+strconv.Itoa(metadata.Id), nil)
 	DeleteModelMeta(ctx)
 	require.Equal(t, http.StatusOK, recorder.Code)
+	var deleteResponse struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &deleteResponse))
+	require.True(t, deleteResponse.Success)
+	for _, documentTable := range []interface{}{&model.ModelDocument{}, &model.ModelDocumentVariant{}} {
+		var count int64
+		require.NoError(t, db.Model(documentTable).Where("model_id = ?", metadata.Id).Count(&count).Error)
+		assert.Zero(t, count, "deleted metadata must not leave document overrides")
+	}
 
 	var persistedChannel model.Channel
 	require.NoError(t, db.First(&persistedChannel, channel.Id).Error)

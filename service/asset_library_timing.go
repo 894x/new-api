@@ -107,8 +107,7 @@ func BeginAssetLibraryOperation(ctx context.Context, userID int, action, assetID
 		// The log store is initialized in production; service-only callers may
 		// intentionally run without an audit database (e.g. command-line tools).
 		if model.LOG_DB != nil {
-			model.RecordOperationAuditLog(userID, trace.content, trace.ip, trace.auditAction, trace.params,
-				map[string]interface{}{"asset_timing": trace.timing}, nil, requestID)
+			recordAssetLibraryAudit(ctx, userID, trace.content, trace.ip, trace.auditAction, trace.params, trace.timing)
 		}
 		data, marshalErr := common.Marshal(trace.timing)
 		if marshalErr == nil {
@@ -255,8 +254,29 @@ func recordAssetLibraryFailure(ctx context.Context, replica *model.UserAssetRepl
 		ErrorCode: assetTimingIdentifier(replica.LastErrorCode), ErrorMessage: AssetLibraryFailureMessage(replica.LastError),
 		UploadStartedAtMS: replica.UploadStartedAtMS, SubmittedAtMS: replica.SubmittedAtMS, FirstActiveAtMS: replica.FirstActiveAtMS,
 		LastPolledAtMS: replica.LastPolledAtMS, LastProcessingAtMS: replica.LastProcessingAtMS, PollCount: replica.PollCount}}
-	model.RecordOperationAuditLog(asset.UserId, "Asset processing failed ("+asset.Id+")", "", "asset_library.asset.failed",
-		map[string]interface{}{"id": asset.Id}, map[string]interface{}{"asset_timing": timing}, nil, timing.RequestID)
+	recordAssetLibraryAudit(ctx, asset.UserId, "Asset processing failed ("+asset.Id+")", "", "asset_library.asset.failed",
+		map[string]interface{}{"id": asset.Id}, timing)
+}
+
+func recordAssetLibraryAudit(ctx context.Context, ownerID int, content, ip, action string, params map[string]interface{}, timing AssetLibraryTiming) {
+	if !model.ShouldRecordOperationAuditLog(action, params) {
+		return
+	}
+	encoded, err := common.Marshal(timing)
+	if err != nil {
+		common.SysError("failed to encode asset audit timing: " + err.Error())
+		return
+	}
+	actor := model.AuditActorFromContext(ctx)
+	model.RecordAuditLog(nil, model.AuditLog{
+		UserId: ownerID, ActorRole: actor.Role, Category: model.AuditCategoryOperation,
+		Action: action, Content: content, Ip: ip, RequestId: timing.RequestID,
+		Success: timing.Outcome == "succeeded",
+		Other: model.AuditOther{
+			Op:        &model.AuditOperation{Action: action, Params: params},
+			AdminInfo: &model.AuditAdminInfo{AdminID: actor.UserID, AdminRole: actor.Role, AdminUsername: actor.Username, AssetTiming: encoded},
+		},
+	})
 }
 
 // CreateAssetLibraryRecord measures logical persistence before replication.

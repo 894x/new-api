@@ -15,7 +15,7 @@ import (
 
 func TestSLSAssetFailureSurvivesRefreshAndRecordsTransitionOnce(t *testing.T) {
 	db := setupAssetLibraryServiceTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}, &model.AuditLog{}))
 	require.NoError(t, db.Create(&model.User{Id: 7, Username: "asset-owner"}).Error)
 	previous := model.LOG_DB
 	model.LOG_DB = db
@@ -38,14 +38,23 @@ func TestSLSAssetFailureSurvivesRefreshAndRecordsTransitionOnce(t *testing.T) {
 	assert.Equal(t, model.AssetReplicaStateFailed, replica.State)
 	assert.Contains(t, replica.LastError, "copyright restrictions")
 	assert.Equal(t, "InputImageSensitiveContentDetected.PolicyViolation", replica.LastErrorCode)
-	var logs []model.Log
+	var logs []model.AuditLog
 	require.NoError(t, db.Find(&logs).Error)
 	require.Len(t, logs, 1, "only the transition should create an asset operation log")
-	assert.Equal(t, model.LogTypeAssetUpdate, logs[0].Type)
+	assert.Equal(t, "asset_library.asset.failed", logs[0].Action)
+	assert.False(t, logs[0].Success)
 	assert.Equal(t, 7, logs[0].UserId)
-	assert.Contains(t, logs[0].Other, `"status":"failed"`)
-	assert.Contains(t, logs[0].Other, "copyright restrictions")
-	assert.Zero(t, logs[0].Quota)
+	encoded, err := common.Marshal(logs[0].Other)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"status":"failed"`)
+	assert.Contains(t, string(encoded), "copyright restrictions")
+	var usageCount int64
+	require.NoError(t, db.Model(&model.Log{}).Count(&usageCount).Error)
+	assert.Zero(t, usageCount)
+	visible, total, err := model.GetAuditLogs(model.AuditLogFilter{}, 0, 10, common.RoleAdminUser)
+	require.NoError(t, err)
+	assert.Zero(t, total, "background work without an authenticated actor remains root-only")
+	assert.Empty(t, visible)
 }
 
 func TestSLSAssetCreatePreservesImmediateFailureDetails(t *testing.T) {

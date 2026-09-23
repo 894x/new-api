@@ -334,6 +334,9 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
+	if IsModelPricingOption(key) {
+		return UpdateModelPricingOptions(map[string]string{key: value})
+	}
 	updatesGroupPricing := key == "GroupRatio" || key == ratio_setting.ModelTieredRatiosOptionKey
 	var groupRatios string
 	var modelTieredRatios string

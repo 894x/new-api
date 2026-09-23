@@ -20,8 +20,8 @@ import { DescriptionDialog } from './dialogs/description-dialog'
 import { MissingModelsDialog } from './dialogs/missing-models-dialog'
 import { ModelDocumentEditorDialog } from './dialogs/model-document-editor-dialog'
 import { PrefillGroupManagement } from './dialogs/prefill-group-management'
+import { PriceSyncDialog } from './dialogs/price-sync-dialog'
 import { SyncWizardDialog } from './dialogs/sync-wizard-dialog'
-import { UpstreamConflictDialog } from './dialogs/upstream-conflict-dialog'
 import { VendorMutateDialog } from './dialogs/vendor-mutate-dialog'
 import { ModelChannelCapabilitiesDrawer } from './drawers/model-channel-capabilities-drawer'
 import { ModelMutateDrawer } from './drawers/model-mutate-drawer'
@@ -39,6 +39,10 @@ export function ModelsDialogs() {
 
   return (
     <>
+      <PriceSyncDialog
+        open={open === 'price-sync'}
+        onOpenChange={(value) => !value && setOpen(null)}
+      />
       {/* Model Create/Update Drawer */}
       <ModelMutateDrawer
         open={open === 'create-model' || open === 'update-model'}
@@ -60,6 +64,7 @@ export function ModelsDialogs() {
 
       {/* Vendor Create/Update Dialog */}
       <VendorMutateDialog
+        key={`${open}-${currentVendor?.id ?? 'new'}`}
         open={open === 'create-vendor' || open === 'update-vendor'}
         onOpenChange={(v) => !v && setOpen(null)}
         currentVendor={open === 'update-vendor' ? currentVendor : null}
@@ -74,12 +79,6 @@ export function ModelsDialogs() {
       {/* Sync Wizard Dialog */}
       <SyncWizardDialog
         open={open === 'sync-wizard'}
-        onOpenChange={(v) => !v && setOpen(null)}
-      />
-
-      {/* Upstream Conflict Dialog */}
-      <UpstreamConflictDialog
-        open={open === 'upstream-conflict'}
         onOpenChange={(v) => !v && setOpen(null)}
       />
 

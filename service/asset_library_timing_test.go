@@ -59,29 +59,35 @@ func TestAssetLibraryTimelineCapturesProviderErrorsAndRequestIDs(t *testing.T) {
 
 func TestAssetLibraryTimelineAuditPreservesRequestCorrelationAndFailures(t *testing.T) {
 	db := setupAssetLibraryServiceTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}, &model.AuditLog{}))
 	require.NoError(t, db.Create(&model.User{Id: 1, Username: "asset-owner"}).Error)
 	previous := model.LOG_DB
 	model.LOG_DB = db
 	t.Cleanup(func() { model.LOG_DB = previous })
-	ctx, finish := BeginAssetLibraryOperation(context.WithValue(t.Context(), common.RequestIdKey, "request-1"), 1, "CreateAsset", "asset-na-1")
+	ctx, finish := BeginAssetLibraryOperation(model.WithAuditActor(context.WithValue(t.Context(), common.RequestIdKey, "request-1"), 1, common.RoleCommonUser, "asset-owner"), 1, "CreateAsset", "asset-na-1")
 	span := startAssetLibraryStage(ctx, "source_download", "", "", 0)
 	span.finish(context.DeadlineExceeded)
 	SetAssetLibraryAudit(ctx, "Created asset", "", "asset_library.asset.create", map[string]interface{}{"id": "asset-na-1"})
 	finish(errors.New("secret details must not escape"))
-	var logs []model.Log
+	var logs []model.AuditLog
 	require.NoError(t, db.Find(&logs).Error)
 	require.Len(t, logs, 1)
 	assert.Equal(t, "request-1", logs[0].RequestId)
-	assert.Contains(t, logs[0].Other, `"error_kind":"timeout"`)
-	assert.Contains(t, logs[0].Other, `"asset_timing"`)
-	assert.NotContains(t, logs[0].Other, "secret")
-	assert.Zero(t, logs[0].Quota)
+	encoded, err := common.Marshal(logs[0].Other)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"error_kind":"timeout"`)
+	assert.Contains(t, string(encoded), `"asset_timing"`)
+	assert.NotContains(t, string(encoded), "secret")
+	assert.False(t, logs[0].Success)
+	assert.Equal(t, common.RoleCommonUser, logs[0].ActorRole)
+	var usageCount int64
+	require.NoError(t, db.Model(&model.Log{}).Count(&usageCount).Error)
+	assert.Zero(t, usageCount)
 }
 
 func TestAssetLibraryQueriesNeverRecordUsageLogs(t *testing.T) {
 	db := setupAssetLibraryServiceTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}, &model.AuditLog{}))
 	previous := model.LOG_DB
 	model.LOG_DB = db
 	t.Cleanup(func() { model.LOG_DB = previous })
@@ -99,6 +105,8 @@ func TestAssetLibraryQueriesNeverRecordUsageLogs(t *testing.T) {
 	}
 	var count int64
 	require.NoError(t, db.Model(&model.Log{}).Count(&count).Error)
+	assert.Zero(t, count)
+	require.NoError(t, db.Model(&model.AuditLog{}).Count(&count).Error)
 	assert.Zero(t, count)
 }
 
@@ -150,40 +158,59 @@ func TestBatchAssetTimelineUsesPerAssetStartAndAttribution(t *testing.T) {
 	}
 }
 
-func TestAssetOperationCategoriesSupportUserLogFiltering(t *testing.T) {
+func TestAssetOperationAuditPreservesActionsAndHistoricalLogs(t *testing.T) {
 	db := setupAssetLibraryServiceTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Log{}, &model.AuditLog{}))
 	require.NoError(t, db.Create(&model.User{Id: 1, Username: "asset-owner"}).Error)
 	previous := model.LOG_DB
 	model.LOG_DB = db
 	t.Cleanup(func() { model.LOG_DB = previous })
-	for _, tc := range []struct {
-		action, requestAction string
-		logType               int
-	}{
-		{"asset_library.asset.create", "", model.LogTypeAssetUpload},
-		{"asset_library.group.delete", "", model.LogTypeAssetDelete},
-		{"asset_library.asset.update", "", model.LogTypeAssetUpdate},
-		{"asset_library.group.create", "", model.LogTypeAssetGroupCreate},
-		{"asset_library.asset.sync", "", model.LogTypeAssetSync},
-		{"asset_library.group.sync", "", model.LogTypeAssetSync},
-		{"channel.asset_library.sync", "", model.LogTypeAssetSync},
-		{"asset_library.request", "AutoImport", model.LogTypeAssetUpload},
-		{"asset_library.request", "ReplicateAsset", model.LogTypeAssetSync},
-		{"asset_library.request", "SyncAssetReplicas", model.LogTypeAssetSync},
-		{"asset_library.request", "SyncAssetGroupReplicas", model.LogTypeAssetSync},
-		{"asset_library.request", "SyncAssetLibraryChannel", model.LogTypeAssetSync},
-		{"channel.asset_library.update", "", model.LogTypeManage},
-		{"user.update", "", model.LogTypeManage},
+	for _, tc := range []struct{ action, requestAction string }{
+		{"asset_library.asset.create", ""}, {"asset_library.group.delete", ""},
+		{"asset_library.asset.update", ""}, {"asset_library.group.create", ""},
+		{"asset_library.asset.sync", ""}, {"asset_library.group.sync", ""},
+		{"channel.asset_library.sync", ""}, {"asset_library.request", "AutoImport"},
+		{"asset_library.request", "ReplicateAsset"}, {"asset_library.request", "SyncAssetReplicas"},
+		{"asset_library.request", "SyncAssetGroupReplicas"}, {"asset_library.request", "SyncAssetLibraryChannel"},
+		{"channel.asset_library.update", ""}, {"user.update", ""},
 	} {
 		requestID := tc.action + tc.requestAction
-		model.RecordOperationAuditLog(1, "operation", "", tc.action, map[string]interface{}{"action": tc.requestAction}, map[string]interface{}{"private": "hidden"}, nil, requestID)
-		logs, total, err := model.GetUserLogs(1, tc.logType, 0, 0, "", "", 0, 20, "", requestID)
+		ctx := model.WithAuditActor(t.Context(), 1, common.RoleCommonUser, "asset-owner")
+		recordAssetLibraryAudit(ctx, 1, "operation", "", tc.action, map[string]interface{}{"action": tc.requestAction},
+			AssetLibraryTiming{RequestID: requestID, Outcome: "succeeded"})
+		logs, total, err := model.GetAuditLogs(model.AuditLogFilter{UserId: 1, RequestId: requestID, SelfView: true}, 0, 20, common.RoleCommonUser)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, total)
 		require.Len(t, logs, 1)
-		assert.Equal(t, tc.logType, logs[0].Type)
-		assert.NotContains(t, logs[0].Other, "private")
-		assert.Contains(t, logs[0].Other, tc.action)
+		assert.Equal(t, tc.action, logs[0].Action)
+		assert.Nil(t, logs[0].Other.AdminInfo)
+		assert.Equal(t, tc.action, logs[0].Other.Op.Action)
+		assert.True(t, logs[0].Success)
+	}
+	var count int64
+	require.NoError(t, db.Model(&model.Log{}).Count(&count).Error)
+	assert.Zero(t, count, "new operations must not be dual-written")
+	require.NoError(t, db.Create(&model.Log{UserId: 1, Type: model.LogTypeAssetUpload, RequestId: "historical-asset"}).Error)
+	legacy, total, err := model.GetUserLogs(1, model.LogTypeAssetUpload, 0, 0, "", "", 0, 20, "", "historical-asset")
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, total)
+	require.Len(t, legacy, 1)
+
+	ctx := model.WithAuditActor(t.Context(), 9, common.RoleRootUser, "root-actor")
+	recordAssetLibraryAudit(ctx, 1, "root operation", "", "asset_library.asset.sync", nil,
+		AssetLibraryTiming{RequestID: "root-asset", Outcome: "succeeded"})
+	for _, role := range []int{common.RoleCommonUser, common.RoleAdminUser, common.RoleRootUser} {
+		logs, total, err := model.GetAuditLogs(model.AuditLogFilter{RequestId: "root-asset"}, 0, 20, role)
+		require.NoError(t, err)
+		if role != common.RoleRootUser {
+			assert.Zero(t, total)
+			assert.Empty(t, logs)
+			continue
+		}
+		require.Len(t, logs, 1)
+		assert.Equal(t, 9, logs[0].Other.AdminInfo.AdminID)
+		assert.Equal(t, "root-actor", logs[0].Other.AdminInfo.AdminUsername)
+		assert.Equal(t, "asset-owner", logs[0].Username)
+		assert.NotEmpty(t, logs[0].Other.AdminInfo.AssetTiming)
 	}
 }

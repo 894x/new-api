@@ -31,6 +31,7 @@ func setupAssetLibraryControllerTestDB(t *testing.T) *gorm.DB {
 		&model.User{},
 		&model.Channel{},
 		&model.Log{},
+		&model.AuditLog{},
 		&model.ChannelAssetConfig{},
 		&model.UserAssetGroup{},
 		&model.UserAsset{},
@@ -165,35 +166,32 @@ func TestAssetLibraryMutationsRecordStructuredAudit(t *testing.T) {
 				bytes.NewBufferString(testCase.body),
 			)
 			context.Set("id", userId)
+			context.Request = context.Request.WithContext(model.WithAuditActor(context.Request.Context(), userId, common.RoleCommonUser, "asset-owner"))
 
 			AssetLibraryAction(context)
 
 			require.Equal(t, http.StatusOK, recorder.Code)
-			var logs []model.Log
+			var logs []model.AuditLog
 			require.NoError(t, db.Where("user_id = ?", userId).Find(&logs).Error)
 			require.Len(t, logs, 1)
-			expectedTypes := map[string]int{"CreateAsset": 8, "DeleteAsset": 9, "DeleteAssetGroup": 9, "UpdateAsset": 10, "UpdateAssetGroup": 10, "CreateAssetGroup": 11}
-			assert.Equal(t, expectedTypes[testCase.action], logs[0].Type)
+			assert.Equal(t, model.AuditCategoryOperation, logs[0].Category)
+			assert.Equal(t, common.RoleCommonUser, logs[0].ActorRole)
+			assert.Equal(t, testCase.expectedAction, logs[0].Action)
+			assert.True(t, logs[0].Success)
 			assert.Equal(t, "asset-owner", logs[0].Username)
 			assert.NotEmpty(t, logs[0].RequestId)
-			assert.Empty(t, logs[0].ModelName)
-			assert.Empty(t, logs[0].TokenName)
-			assert.Zero(t, logs[0].ChannelId)
-			assert.Zero(t, logs[0].Quota)
-			assert.Zero(t, logs[0].PromptTokens)
-			assert.Zero(t, logs[0].CompletionTokens)
-			assert.False(t, logs[0].IsStream)
+			var usageCount int64
+			require.NoError(t, db.Model(&model.Log{}).Count(&usageCount).Error)
+			assert.Zero(t, usageCount, "asset events must not be dual-written to usage logs")
 			assert.NotContains(t, logs[0].Content, "signed.example.com")
-			assert.NotContains(t, logs[0].Other, "signed.example.com")
-			assert.NotContains(t, logs[0].Other, "secret")
+			encoded, err := common.Marshal(logs[0].Other)
+			require.NoError(t, err)
+			assert.NotContains(t, string(encoded), "signed.example.com")
+			assert.NotContains(t, string(encoded), "secret")
 
 			var other map[string]interface{}
-			require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
-			if testCase.action == "CreateAsset" {
-				assert.Contains(t, other, "admin_info")
-			} else {
-				assert.NotContains(t, other, "admin_info")
-			}
+			require.NoError(t, common.Unmarshal(encoded, &other))
+			assert.Contains(t, other, "admin_info")
 			op, ok := other["op"].(map[string]interface{})
 			require.True(t, ok)
 			assert.Equal(t, testCase.expectedAction, op["action"])
@@ -242,10 +240,61 @@ func TestAssetLibraryCreateAuditSurvivesReplicationFailure(t *testing.T) {
 	require.Len(t, groups, 1)
 	assert.Equal(t, "characters", groups[0].Name)
 
-	var logs []model.Log
-	require.NoError(t, db.Where("user_id = ? AND type = ?", userId, model.LogTypeAssetGroupCreate).Find(&logs).Error)
+	var logs []model.AuditLog
+	require.NoError(t, db.Where("user_id = ? AND action = ?", userId, "asset_library.group.create").Find(&logs).Error)
 	require.Len(t, logs, 1)
 	assert.Contains(t, logs[0].Content, groups[0].Id)
+}
+
+func TestAdminAssetSyncWritesOneAuditWithTimeline(t *testing.T) {
+	for _, tc := range []struct {
+		name, action string
+		handler      gin.HandlerFunc
+	}{
+		{"asset", "asset_library.asset.sync", SyncAdminAssetReplicas},
+		{"group", "asset_library.group.sync", SyncAdminAssetGroupReplicas},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupAssetLibraryControllerTestDB(t)
+			user := model.User{Username: "sync-admin", Role: common.RoleAdminUser, AffCode: "sync-admin"}
+			require.NoError(t, db.Create(&user).Error)
+			group := model.UserAssetGroup{Id: "group-sync", UserId: user.Id, Name: "sync", GroupType: "AIGC"}
+			require.NoError(t, db.Create(&group).Error)
+			asset := model.UserAsset{Id: "asset-sync", UserId: user.Id, GroupId: group.Id, AssetType: "Image"}
+			require.NoError(t, db.Create(&asset).Error)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"success":true,"data":{"logical_id":"upstream-asset","status":"Active"}}`))
+			}))
+			t.Cleanup(server.Close)
+			require.NoError(t, db.Create(&model.Channel{Id: 33, Type: constant.ChannelTypeSeedanceSLS, Key: "test-key"}).Error)
+			require.NoError(t, db.Create(&model.ChannelAssetConfig{ChannelId: 33, Enabled: true, Backend: service.AssetLibraryBackendSeedanceSLS, BaseURL: server.URL, AuthType: service.AssetLibraryAuthBearer, APIKey: "test-key"}).Error)
+			require.NoError(t, db.Create(&model.UserAssetGroupReplica{GroupId: group.Id, ChannelId: 33, UpstreamGroupId: "upstream-group", State: model.AssetReplicaStateReady}).Error)
+			require.NoError(t, db.Create(&model.UserAssetReplica{AssetId: asset.Id, ChannelId: 33, UpstreamAssetId: "upstream-asset", State: model.AssetReplicaStateProcessing}).Error)
+			id := asset.Id
+			if tc.name == "group" {
+				id = group.Id
+			}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/asset-library/admin/"+tc.name+"/"+id+"/sync", bytes.NewBufferString(`{"channel_ids":[]}`))
+			c.Request = c.Request.WithContext(model.WithAuditActor(c.Request.Context(), user.Id, user.Role, user.Username))
+			c.Set("id", user.Id)
+			c.Set("role", user.Role)
+			c.Params = gin.Params{{Key: "id", Value: id}}
+			tc.handler(c)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var entries []model.AuditLog
+			require.NoError(t, db.Find(&entries).Error)
+			require.Len(t, entries, 1)
+			assert.Equal(t, tc.action, entries[0].Action)
+			assert.Equal(t, user.Role, entries[0].ActorRole)
+			assert.True(t, entries[0].Success)
+			require.NotNil(t, entries[0].Other.AdminInfo)
+			assert.NotEmpty(t, entries[0].Other.AdminInfo.AssetTiming)
+			assert.True(t, common.GetContextKeyBool(c, constant.ContextKeyAuditLogged))
+		})
+	}
 }
 
 func TestAssetLibraryActionRejectsUnsupportedVersionWithOfficialEnvelope(t *testing.T) {
@@ -611,18 +660,21 @@ func TestCreateAssetRejectsInvalidRemoteMediaBeforePersistence(t *testing.T) {
 	var assetCount int64
 	require.NoError(t, db.Model(&model.UserAsset{}).Count(&assetCount).Error)
 	assert.Zero(t, assetCount)
-	var logs []model.Log
-	require.NoError(t, db.Where("type = ?", model.LogTypeAssetUpload).Find(&logs).Error)
+	var logs []model.AuditLog
+	require.NoError(t, db.Where("action = ?", "asset_library.request").Find(&logs).Error)
 	require.Len(t, logs, 1, "a rejected upload must retain its diagnostic timeline")
+	assert.False(t, logs[0].Success)
+	encoded, err := common.Marshal(logs[0].Other)
+	require.NoError(t, err)
 	var other map[string]any
-	require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
+	require.NoError(t, common.Unmarshal(encoded, &other))
 	admin, ok := other["admin_info"].(map[string]any)
 	require.True(t, ok)
 	timing, ok := admin["asset_timing"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "failed", timing["outcome"])
-	assert.Contains(t, logs[0].Other, "media_inspection")
-	assert.NotContains(t, logs[0].Other, imageURL)
+	assert.Contains(t, string(encoded), "media_inspection")
+	assert.NotContains(t, string(encoded), imageURL)
 }
 
 func TestGetAssetWithoutReplicaDoesNotRecordUsageLog(t *testing.T) {

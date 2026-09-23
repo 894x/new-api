@@ -111,16 +111,18 @@ func SyncAdminAssetReplicas(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid request body: " + err.Error()})
 		return
 	}
-	report, err := service.SyncAssetReplicas(c.Request.Context(), asset, request.ChannelIds)
+	ctx, finish := service.BeginAssetLibraryOperation(c.Request.Context(), asset.UserId, "SyncAssetReplicas", asset.Id)
+	c.Request = c.Request.WithContext(ctx)
+	params := map[string]interface{}{"id": asset.Id, "channel_ids": request.ChannelIds}
+	recordAssetLibraryAudit(c, asset.UserId, "asset_library.asset.sync", params)
+	report, err := service.SyncAssetReplicas(ctx, asset, request.ChannelIds)
+	defer func() { finish(err) }()
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAudit(c, "asset_library.asset.sync", map[string]interface{}{
-		"id":          asset.Id,
-		"channel_ids": request.ChannelIds,
-		"error_count": len(report.Errors),
-	})
+	params["error_count"] = len(report.Errors)
+	recordAssetLibraryAudit(c, asset.UserId, "asset_library.asset.sync", params)
 	common.ApiSuccess(c, report)
 }
 
@@ -147,16 +149,18 @@ func SyncAdminAssetGroupReplicas(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid request body: " + err.Error()})
 		return
 	}
-	report, err := service.SyncAssetGroupReplicas(c.Request.Context(), group, request.ChannelIds)
+	ctx, finish := service.BeginAssetLibraryOperation(c.Request.Context(), group.UserId, "SyncAssetGroupReplicas", group.Id)
+	c.Request = c.Request.WithContext(ctx)
+	params := map[string]interface{}{"id": group.Id, "channel_ids": request.ChannelIds}
+	recordAssetLibraryAudit(c, group.UserId, "asset_library.group.sync", params)
+	report, err := service.SyncAssetGroupReplicas(ctx, group, request.ChannelIds)
+	defer func() { finish(err) }()
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAudit(c, "asset_library.group.sync", map[string]interface{}{
-		"id":          group.Id,
-		"channel_ids": request.ChannelIds,
-		"error_count": len(report.Errors),
-	})
+	params["error_count"] = len(report.Errors)
+	recordAssetLibraryAudit(c, group.UserId, "asset_library.group.sync", params)
 	common.ApiSuccess(c, report)
 }
 

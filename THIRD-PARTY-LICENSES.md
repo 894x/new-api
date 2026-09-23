@@ -10,11 +10,15 @@ Transitive dependencies should be audited before a final external release.
 
 | Area        | Scope       | Ecosystem | Dependency                                            | Version                              | License                                            |
 |-------------|-------------|-----------|-------------------------------------------------------|--------------------------------------|----------------------------------------------------|
+| backend     | production  | Go        | `github.com/ClickHouse/clickhouse-go/v2`               | `v2.46.0`                            | Apache-2.0                                         |
+| backend     | production  | Go        | `github.com/coreos/go-oidc/v3`                        | `v3.21.0`                            | Apache-2.0                                         |
+| backend     | production  | Go        | `github.com/klauspost/compress`                      | `v1.18.3`                            | BSD-3-Clause; Apache-2.0 for gzhttp                  |
+| backend     | production  | Go        | `golang.org/x/oauth2`                                | `v0.36.0`                            | BSD-3-Clause                                       |
 | backend     | production  | Go        | `github.com/Calcium-Ion/go-epay`                      | `v0.0.4`                             | Proprietary/Internal - owned by project maintainer |
 | backend     | test        | Go        | `github.com/DATA-DOG/go-sqlmock`                      | `v1.5.2`                             | BSD-3-Clause                                       |
 | backend     | production  | Go        | `github.com/abema/go-mp4`                             | `v1.4.1`                             | MIT                                                |
 | backend     | test        | Go        | `github.com/alicebob/miniredis/v2`                    | `v2.38.0`                            | MIT                                                |
-| backend     | production  | Go        | `github.com/andybalholm/brotli`                       | `v1.1.1`                             | MIT                                                |
+| backend     | production  | Go        | `github.com/andybalholm/brotli`                       | `v1.2.0`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/anknown/ahocorasick`                      | `v0.0.0-20190904063843-d75dbd5169c0` | MIT                                                |
 | backend     | production  | Go        | `github.com/aws/aws-sdk-go-v2`                        | `v1.41.5`                            | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/aws/aws-sdk-go-v2/credentials`            | `v1.19.10`                           | Apache-2.0                                         |
@@ -25,7 +29,7 @@ Transitive dependencies should be audited before a final external release.
 | backend     | production  | Go        | `github.com/gin-contrib/gzip`                         | `v0.0.6`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/gin-contrib/static`                       | `v0.0.1`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/gin-gonic/gin`                            | `v1.9.1`                             | MIT                                                |
-| backend     | production  | Go        | `github.com/glebarez/sqlite`                          | `v1.9.0`                             | MIT                                                |
+| backend     | production  | Go        | `github.com/glebarez/sqlite`                          | `v1.11.0`                            | MIT                                                |
 | backend     | production  | Go        | `github.com/go-audio/aiff`                            | `v1.1.0`                             | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/go-audio/wav`                             | `v1.1.0`                             | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/go-playground/validator/v10`              | `v10.20.0`                           | MIT                                                |

@@ -544,10 +544,13 @@ func deleteAssetLibraryGroup(c *gin.Context, userId int) {
 }
 
 func recordAssetLibraryAudit(c *gin.Context, userId int, action string, params map[string]interface{}) {
+	markAuditLogged(c)
 	if service.SetAssetLibraryAudit(c.Request.Context(), auditContentEN(action, params), c.ClientIP(), action, params) {
 		return
 	}
-	model.RecordOperationAuditLog(userId, auditContentEN(action, params), c.ClientIP(), action, params, nil, nil)
+	actor := model.AuditActorFromContext(c.Request.Context())
+	adminInfo := &model.AuditAdminInfo{AdminID: actor.UserID, AdminRole: actor.Role}
+	model.RecordOperationAuditLog(userId, actor.Role, auditContentEN(action, params), c.ClientIP(), action, params, adminInfo, nil, c)
 }
 
 func buildAssetLibraryGroupResult(group *model.UserAssetGroup, includeReplication bool) (dto.AssetGroupResult, error) {

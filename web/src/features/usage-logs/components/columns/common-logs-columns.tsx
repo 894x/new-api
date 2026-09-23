@@ -125,8 +125,7 @@ function buildTypeDetailSegments(
   other: LogOtherData | null,
   t: (key: string, opts?: Record<string, unknown>) => string
 ): DetailSegment[] {
-  // Operation and login logs: render localized content from the
-  // structured op descriptor instead of the raw (English-fallback) content.
+  // Preserve structured descriptions for top-ups and historical asset audits.
   if (other?.op) {
     const text = renderAuditContent(other, t)
     return text ? [{ text }] : []
@@ -723,6 +722,7 @@ export function useCommonLogsColumns(
       accessorKey: 'content',
       header: t('Details'),
       cell: function DetailsCell({ row }) {
+        const { t } = useTranslation()
         const [dialogOpen, setDialogOpen] = useState(false)
         const log = row.original
         const other = parseLogOther(log.other)
