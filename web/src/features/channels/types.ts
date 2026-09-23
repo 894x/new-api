@@ -113,6 +113,7 @@ export type ModelRoutingOverridePatch = Pick<
 // ============================================================================
 
 export interface ChannelSettings {
+  task_plugin_key?: string
   force_format?: boolean
   thinking_to_content?: boolean
   ollama_native_claude?: boolean

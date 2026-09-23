@@ -30,21 +30,32 @@ const tableDensityClassNames = {
   compact: '[&_tbody>tr]:h-10 [&_td]:py-1 [&_th]:h-8',
 } as const
 
-function Table({ className, compact, ...props }: TableProps) {
+function Table({
+  className,
+  withContainer = true,
+  compact,
+  ...props
+}: TableProps & { withContainer?: boolean }) {
+  const table = (
+    <table
+      data-slot='table'
+      className={cn(
+        'w-full caption-bottom text-sm tabular-nums [font-family:var(--font-body)] [&_td]:text-sm [&_td]:font-medium [&_th]:text-sm [&_:is(th,td)_*]:[font-family:inherit] [&_:is(th,td)_*]:[font-size:inherit] [&_:is(th,td)_*]:[font-weight:inherit]',
+        '[&_[data-table-text=secondary]]:text-xs [&_[data-table-text=secondary]]:font-normal',
+        compact && tableDensityClassNames.compact,
+        className
+      )}
+      {...props}
+    />
+  )
+
+  if (!withContainer) return table
   return (
     <div
       data-slot='table-container'
       className='relative w-full overflow-x-auto overflow-y-hidden'
     >
-      <table
-        data-slot='table'
-        className={cn(
-          'w-full caption-bottom text-sm tabular-nums [&_td]:text-sm [&_td_*]:text-sm [&_th]:text-sm [&_th_*]:text-sm',
-          compact && tableDensityClassNames.compact,
-          className
-        )}
-        {...props}
-      />
+      {table}
     </div>
   )
 }

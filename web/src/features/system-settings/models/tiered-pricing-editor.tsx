@@ -21,6 +21,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useState,
   type ChangeEvent,
@@ -53,6 +54,12 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  formatPricingAmount,
+  USD_PRICING_CURRENCY,
+  type PricingCurrency,
+} from '@/features/model-pricing/currency'
+import { PricingAmountInput } from '@/features/model-pricing/pricing-amount-input'
 import {
   BILLING_EXTRA_VARS,
   COMMON_TIMEZONES,
@@ -100,11 +107,6 @@ import {
   tryParseVisualConfig,
 } from '@/features/pricing/lib/tier-expr'
 import { cn } from '@/lib/utils'
-
-import {
-  formatDisplayPriceFromUSD,
-  formatUSDPriceFromDisplay,
-} from './pricing-format'
 
 const CACHE_PRICE_VARS = BILLING_EXTRA_VARS.filter(
   (variable) => variable.group === 'cache'
@@ -319,20 +321,6 @@ const PRESET_GROUPS: PresetGroup[] = [
 
 function unitCostToPrice(uc: number | string): number {
   return Number(uc) || 0
-}
-
-function unitCostToDisplayPrice(
-  unitCost: number | string,
-  exchangeRate: number
-): number {
-  return Number(formatDisplayPriceFromUSD(unitCost, exchangeRate))
-}
-
-function displayPriceToUnitCost(
-  displayPrice: number | string,
-  exchangeRate: number
-): number {
-  return Number(formatUSDPriceFromDisplay(displayPrice, exchangeRate))
 }
 
 function formatTokenHint(n: number | string | null | undefined): string {
@@ -572,21 +560,32 @@ function ConditionRow({ condition, onChange, onRemove }: ConditionRowProps) {
 // ---------------------------------------------------------------------------
 
 type PriceFieldProps = {
+  currency: PricingCurrency
   label: string
   hint?: string
   value: number
   onChange: (next: number) => void
 }
 
-function PriceField({ label, hint, value, onChange }: PriceFieldProps) {
+function PriceField({
+  label,
+  hint,
+  value,
+  onChange,
+  currency,
+}: PriceFieldProps) {
+  const id = useId()
   return (
     <div className='w-36 space-y-0.5'>
-      <Label className='text-muted-foreground text-xs'>{label}</Label>
-      <DraftNumberInput
-        min={0}
-        step={0.000001}
-        value={Number.isFinite(value) ? value : 0}
-        onValueChange={onChange}
+      <Label htmlFor={id} className='text-muted-foreground text-xs'>
+        {label}
+      </Label>
+      <PricingAmountInput
+        id={id}
+        currency={currency}
+        aria-label={label}
+        value={value}
+        onChange={(next) => onChange(Number(next))}
         className='h-8 w-full'
       />
       {hint && <p className='text-muted-foreground text-xs'>{hint}</p>}
@@ -599,25 +598,23 @@ function PriceField({ label, hint, value, onChange }: PriceFieldProps) {
 // ---------------------------------------------------------------------------
 
 type VisualTierCardProps = {
+  currency: PricingCurrency
   tier: VisualTier
   index: number
   total: number
   onChange: (next: VisualTier) => void
   onRemove: () => void
   onAddCondition: () => void
-  exchangeRate: number
-  priceSuffix: string
 }
 
 function VisualTierCard({
+  currency,
   tier,
   index,
   total,
   onChange,
   onRemove,
   onAddCondition,
-  exchangeRate,
-  priceSuffix,
 }: VisualTierCardProps) {
   const { t } = useTranslation()
   const cacheMode = getTierCacheMode(tier)
@@ -651,14 +648,8 @@ function VisualTierCard({
     })
   }
 
-  const inputUnitPrice = unitCostToDisplayPrice(
-    tier.input_unit_cost,
-    exchangeRate
-  )
-  const outputUnitPrice = unitCostToDisplayPrice(
-    tier.output_unit_cost,
-    exchangeRate
-  )
+  const inputUnitPrice = unitCostToPrice(tier.input_unit_cost)
+  const outputUnitPrice = unitCostToPrice(tier.output_unit_cost)
   const hasMediaPricing = MEDIA_PRICE_VARS.some((variable) => {
     const fieldKey = variable.tierField as keyof VisualTier
     return unitCostToPrice((tier[fieldKey] as number | undefined) ?? 0) > 0
@@ -673,22 +664,15 @@ function VisualTierCard({
     variable: (typeof BILLING_EXTRA_VARS)[number]
   ) => {
     const fieldKey = variable.tierField as keyof VisualTier
-    const value = unitCostToDisplayPrice(
-      (tier[fieldKey] as number | undefined) ?? 0,
-      exchangeRate
-    )
+    const value = unitCostToPrice((tier[fieldKey] as number | undefined) ?? 0)
 
     return (
       <PriceField
+        currency={currency}
         key={variable.key}
         label={t(variable.label)}
         value={value}
-        onChange={(next) =>
-          handlePriceChange(
-            fieldKey,
-            displayPriceToUnitCost(next, exchangeRate)
-          )
-        }
+        onChange={(next) => handlePriceChange(fieldKey, next)}
       />
     )
   }
@@ -758,31 +742,23 @@ function VisualTierCard({
         <div className='flex items-center justify-between gap-3'>
           <Label className='text-sm font-semibold'>{t('Token prices')}</Label>
           <span className='bg-muted text-muted-foreground rounded-md px-2 py-1 text-xs'>
-            {priceSuffix}
+            {currency.symbol}/{t('1M token')}
           </span>
         </div>
 
         <div className='space-y-3'>
           <div className='flex flex-wrap gap-x-4 gap-y-2'>
             <PriceField
+              currency={currency}
               label={t('Input price')}
               value={inputUnitPrice}
-              onChange={(value) =>
-                handlePriceChange(
-                  'input_unit_cost',
-                  displayPriceToUnitCost(value, exchangeRate)
-                )
-              }
+              onChange={(value) => handlePriceChange('input_unit_cost', value)}
             />
             <PriceField
+              currency={currency}
               label={t('Output price')}
               value={outputUnitPrice}
-              onChange={(value) =>
-                handlePriceChange(
-                  'output_unit_cost',
-                  displayPriceToUnitCost(value, exchangeRate)
-                )
-              }
+              onChange={(value) => handlePriceChange('output_unit_cost', value)}
             />
           </div>
 
@@ -855,18 +831,12 @@ function VisualTierCard({
 // ---------------------------------------------------------------------------
 
 type VisualEditorProps = {
+  currency: PricingCurrency
   visualConfig: VisualConfig | null
   onChange: (next: VisualConfig) => void
-  exchangeRate: number
-  priceSuffix: string
 }
 
-function VisualEditor({
-  visualConfig,
-  onChange,
-  exchangeRate,
-  priceSuffix,
-}: VisualEditorProps) {
+function VisualEditor({ visualConfig, onChange, currency }: VisualEditorProps) {
   const { t } = useTranslation()
   const config = useMemo(
     () => normalizeVisualConfig(visualConfig),
@@ -941,6 +911,7 @@ function VisualEditor({
       </p>
       {config.tiers.map((tier, index) => (
         <VisualTierCard
+          currency={currency}
           key={editorRowKey(tier)}
           tier={tier}
           index={index}
@@ -948,8 +919,6 @@ function VisualEditor({
           onChange={(next) => handleTierChange(index, next)}
           onRemove={() => handleRemoveTier(index)}
           onAddCondition={() => handleAddCondition(index)}
-          exchangeRate={exchangeRate}
-          priceSuffix={priceSuffix}
         />
       ))}
       <Button
@@ -1436,11 +1405,14 @@ function PresetSection({ applyPreset }: PresetSectionProps) {
 // ---------------------------------------------------------------------------
 
 type EstimatorProps = {
+  currency: PricingCurrency
   effectiveExpr: string
 }
 
-function CostEstimator({ effectiveExpr }: EstimatorProps) {
+function CostEstimator({ effectiveExpr, currency }: EstimatorProps) {
   const { t } = useTranslation()
+  const inputId = useId()
+  const outputId = useId()
   const [promptTokens, setPromptTokens] = useState(0)
   const [completionTokens, setCompletionTokens] = useState(0)
   const [extras, setExtras] = useState<ExtraTokenValues>({
@@ -1476,16 +1448,22 @@ function CostEstimator({ effectiveExpr }: EstimatorProps) {
       </div>
       <div className='grid grid-cols-2 gap-3'>
         <div className='space-y-1'>
-          <Label className='text-xs'>{t('Input tokens')}</Label>
+          <Label htmlFor={inputId} className='text-xs'>
+            {t('Input tokens')}
+          </Label>
           <DraftNumberInput
+            id={inputId}
             min={0}
             value={promptTokens}
             onValueChange={setPromptTokens}
           />
         </div>
         <div className='space-y-1'>
-          <Label className='text-xs'>{t('Output tokens')}</Label>
+          <Label htmlFor={outputId} className='text-xs'>
+            {t('Output tokens')}
+          </Label>
           <DraftNumberInput
+            id={outputId}
             min={0}
             value={completionTokens}
             onValueChange={setCompletionTokens}
@@ -1536,7 +1514,8 @@ function CostEstimator({ effectiveExpr }: EstimatorProps) {
         ) : (
           <div className='flex items-center gap-2'>
             <span className='font-medium'>
-              {t('Estimated quota cost')}: {result.cost.toLocaleString()}
+              {t('Estimated cost')}:{' '}
+              {formatPricingAmount(result.cost / 1_000_000, currency)}
             </span>
             {result.matchedTier && (
               <Badge variant='outline' className='text-xs'>
@@ -1703,11 +1682,10 @@ function LlmPromptHelper({ modelName }: LlmPromptHelperProps) {
 // ---------------------------------------------------------------------------
 
 export type TieredPricingEditorProps = {
+  currency?: PricingCurrency
   modelName?: string
   billingExpr: string
   requestRuleExpr: string
-  currencyLabel?: string
-  exchangeRate?: number
   onBillingExprChange: (next: string) => void
   onRequestRuleExprChange: (next: string) => void
 }
@@ -1715,18 +1693,17 @@ export type TieredPricingEditorProps = {
 type EditorMode = 'visual' | 'raw'
 
 export const TieredPricingEditor = memo(function TieredPricingEditor({
+  currency = USD_PRICING_CURRENCY,
   modelName,
   billingExpr: currentExpr,
   requestRuleExpr: currentRequestRuleExpr,
-  currencyLabel = 'USD',
-  exchangeRate = 1,
   onBillingExprChange,
   onRequestRuleExprChange,
 }: TieredPricingEditorProps) {
   const { t } = useTranslation()
-  const priceSuffix =
-    currencyLabel === 'USD' ? '$/1M tokens' : `${currencyLabel}/1M tokens`
-  const [editorMode, setEditorMode] = useState<EditorMode>('visual')
+  const [editorMode, setEditorMode] = useState<EditorMode>(() =>
+    currentExpr && !tryParseVisualConfig(currentExpr) ? 'raw' : 'visual'
+  )
   const [visualConfig, setVisualConfig] = useState<VisualConfig | null>(() =>
     withVisualEditorKeys(
       tryParseVisualConfig(currentExpr) ?? createDefaultVisualConfig()
@@ -1895,25 +1872,22 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
         )}
       </div>
 
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'Raw expressions and presets use USD. Currency selection only converts visual price inputs and monetary previews.'
+        )}
+      </p>
       <PresetSection applyPreset={applyPreset} />
 
       <div className='bg-muted/30 space-y-3 rounded-md border p-3'>
         {editorMode === 'visual' ? (
           <VisualEditor
+            currency={currency}
             visualConfig={visualConfig}
             onChange={handleVisualChange}
-            exchangeRate={exchangeRate}
-            priceSuffix={priceSuffix}
           />
         ) : (
           <div className='space-y-3'>
-            {currencyLabel === 'CNY' && (
-              <Alert>
-                <AlertDescription className='text-xs'>
-                  {t('Expression prices always use USD per 1M tokens.')}
-                </AlertDescription>
-              </Alert>
-            )}
             <RawExprEditor exprString={rawExpr} onChange={handleRawChange} />
           </div>
         )}
@@ -1978,7 +1952,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
         )}
       </div>
 
-      <CostEstimator effectiveExpr={effectiveExpr} />
+      <CostEstimator effectiveExpr={effectiveExpr} currency={currency} />
     </div>
   )
 })

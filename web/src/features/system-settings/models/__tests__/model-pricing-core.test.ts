@@ -16,48 +16,34 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import assert from 'node:assert/strict'
-
-import { describe, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import {
   buildPreviewRows,
   createInitialLaneState,
-  deriveModelRatioFromDisplayPrice,
   EMPTY_LANE_ENABLED,
   EMPTY_LANE_PRICES,
 } from '../model-pricing-core'
 
-describe('model pricing currency-aware state', () => {
-  it('derives the canonical model ratio from the display currency price', () => {
-    assert.equal(deriveModelRatioFromDisplayPrice('2', 1), '1')
-    assert.equal(deriveModelRatioFromDisplayPrice('14.6', 7.3), '1')
-    assert.equal(deriveModelRatioFromDisplayPrice('3', 7.3), '0.205479452055')
-    assert.equal(deriveModelRatioFromDisplayPrice('', 7.3), '')
-    assert.equal(deriveModelRatioFromDisplayPrice('3', 0), '')
-  })
+describe('model pricing canonical state and currency previews', () => {
+  it('keeps token and audio lane prices in USD before display conversion', () => {
+    const state = createInitialLaneState({
+      name: 'test-model',
+      ratio: '1.5',
+      completionRatio: '5',
+      audioRatio: '1.27',
+      audioCompletionRatio: '4',
+    })
 
-  it('converts stored USD token prices to CNY while preserving ratios', () => {
-    const state = createInitialLaneState(
-      {
-        name: 'test-model',
-        ratio: '1.5',
-        completionRatio: '5',
-        audioRatio: '1.27',
-        audioCompletionRatio: '4',
-      },
-      7.3
-    )
-
-    assert.equal(state.promptPrice, '21.9')
-    assert.equal(state.prices.completion, '109.5')
-    assert.equal(state.prices.audioInput, '27.813')
-    assert.equal(state.prices.audioOutput, '111.252')
+    expect(state.promptPrice).toBe('3')
+    expect(state.prices.completion).toBe('15')
+    expect(state.prices.audioInput).toBe('3.81')
+    expect(state.prices.audioOutput).toBe('15.24')
   })
 
   it('uses the selected currency formatter in fixed-price previews', () => {
     const rows = buildPreviewRows(
-      { name: 'test-model', price: '0.073' },
+      { name: 'test-model', price: '0.01' },
       'per-request',
       '',
       '',
@@ -65,10 +51,10 @@ describe('model pricing currency-aware state', () => {
       EMPTY_LANE_PRICES,
       EMPTY_LANE_ENABLED,
       (key) => key,
-      (value) => `¥${value}`
+      { label: 'CNY', symbol: '¥', exchangeRate: 7.3 }
     )
 
-    assert.deepEqual(rows, [
+    expect(rows).toEqual([
       { key: 'price', label: 'Fixed price', value: '¥0.073' },
     ])
   })

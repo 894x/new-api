@@ -1,6 +1,8 @@
 package model
 
 import (
+	"slices"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
@@ -62,10 +64,5 @@ func isChannelEnabledForGroupModelDB(group string, modelName string, channelID i
 }
 
 func isChannelIDInList(list []cachedChannelRouting, channelID int) bool {
-	for _, routing := range list {
-		if routing.ChannelId == channelID {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(list, func(routing cachedChannelRouting) bool { return routing.ChannelId == channelID })
 }

@@ -56,21 +56,21 @@ type TencentUsage struct {
 
 type TencentResponseChoices struct {
 	FinishReason string         `json:"FinishReason,omitempty"` // 流式结束标志位，为 stop 则表示尾包
-	Messages     TencentMessage `json:"Message,omitempty"`      // 内容，同步模式返回内容，流模式为 null 输出 content 内容总数最多支持 1024token。
-	Delta        TencentMessage `json:"Delta,omitempty"`        // 内容，流模式返回内容，同步模式为 null 输出 content 内容总数最多支持 1024token。
+	Messages     TencentMessage `json:"Message"`                // 内容，同步模式返回内容，流模式为 null 输出 content 内容总数最多支持 1024token。
+	Delta        TencentMessage `json:"Delta"`                  // 内容，流模式返回内容，同步模式为 null 输出 content 内容总数最多支持 1024token。
 }
 
 type TencentChatResponse struct {
-	Choices  []TencentResponseChoices `json:"Choices,omitempty"`  // 结果
-	Created  int64                    `json:"Created,omitempty"`  // unix 时间戳的字符串
-	Id       string                   `json:"Id,omitempty"`       // 会话 id
-	Usage    TencentUsage             `json:"Usage,omitempty"`    // token 数量
-	Error    TencentError             `json:"Error,omitempty"`    // 旧版错误字段，兼容数值 Code
-	ErrorMsg TencentError             `json:"ErrorMsg,omitempty"` // 官方流式错误字段，Code 通常为字符串
-	Note     string                   `json:"Note,omitempty"`     // 注释
-	ReqID    string                   `json:"Req_id,omitempty"`   // 唯一请求 Id，每次请求都会返回。用于反馈接口入参
+	Choices  []TencentResponseChoices `json:"Choices,omitempty"` // 结果
+	Created  int64                    `json:"Created,omitempty"` // unix 时间戳的字符串
+	Id       string                   `json:"Id,omitempty"`      // 会话 id
+	Usage    TencentUsage             `json:"Usage"`             // token 数量
+	Error    TencentError             `json:"Error"`             // 旧版错误字段，兼容数值 Code
+	ErrorMsg TencentError             `json:"ErrorMsg"`          // 官方流式错误字段，Code 通常为字符串
+	Note     string                   `json:"Note,omitempty"`    // 注释
+	ReqID    string                   `json:"Req_id,omitempty"`  // 唯一请求 Id，每次请求都会返回。用于反馈接口入参
 }
 
 type TencentChatResponseSB struct {
-	Response TencentChatResponse `json:"Response,omitempty"`
+	Response TencentChatResponse `json:"Response"`
 }

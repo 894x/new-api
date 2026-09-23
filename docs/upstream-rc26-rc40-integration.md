@@ -365,6 +365,20 @@ Verification: focused backend packages, full root tests/build and independent re
 
 Existing real-MySQL/PostgreSQL, external-provider, browser and deployment limitations remain. No schema/dependency upgrade, live settings conversion, push, deployment or original-checkout changes were performed. Graph metadata remained stale, so exact source and executable tests supplied the evidence. Component/React skills guided shared-control reuse; the commit skill supplies the categorized commit format.
 
-### rc36 through rc40 — pending
+### rc36 — integrated locally
+
+Normal merge of official `ea7cb0ba4` onto rc35 integration `d121902ce199ea7d7bf3210463de26661ff984bb`. Includes plugin metadata/icons/websites/default base URLs and localized usage labels, channel-derived model catalog rows and visibility filters, unified pricing currencies, administration table/mobile refinements, redemption batch deletion/export, and Go modernization.
+
+- Adopted the official USD-backed pricing editor and persisted USD/site-currency selector. Removed the overlapping fork-only CNY state conversion; the shared amount control now owns display conversion while stored prices and expressions remain USD. Kept stable tier/rule row identity and independent metadata/pricing drafts. No live prices or settings were rewritten.
+- Retained model documents, per-model channel routing overrides, capability permissions, compact table density, task usage totals and generation-speed display on mobile. Channel-only catalog rows must first save metadata before editing or enabling a document; the new disabled-control regression also checks that clicking cannot send a write for ID zero. Generation throughput continues to exclude the first token, distinct from overall throughput.
+- Preserved the fork's cached priority/weight/RPM/TPM routing, durable quota reservation/settlement, wallet versions, subscription deltas, Tencent streaming cancellation/error handling and parameter override path semantics. Mechanical upstream map/slice/type changes do not restore superseded quota writers.
+- Adopted plugin base-URL provenance auditing and metadata presentation without dropping custom plugin source diffs, provider behavior, assets or channel IDs. Corrected an imported test's hard-coded upstream type 61 to this fork's `ChannelTypeTaskPlugin` (105).
+- Seven-locale synchronization reports zero missing/extra keys. Existing untranslated entries outside this merge were not bulk-edited. Shared components and the official currency controls were reused under the component/React guidance.
+
+Verification: full uncached root tests and root build passed; independent relaykit `GOWORK=off` tests/build passed. Frontend typecheck, changed-file lint and production build passed. The initial 457-test targeted batch exposed incomplete upstream test fixtures for the retained routing API, an obsolete CNY-default expectation and a generation-speed expectation that did not exclude the first token; all three affected files passed 48 tests after correction. Full frontend testing completed **199 files / 1442 tests: 1441 passed, one new document-switch test failed because its assertion expected a native disabled attribute instead of ARIA**. Correcting that assertion made the isolated case pass; the full suite was not rerun after this test-only correction. Plugin formatting/lint passed with seven existing caught-error-cause warnings.
+
+The two affected model test files subsequently passed all **35 tests**, followed by another successful typecheck. Root build and plugin tests also passed after formatting. No database schema or dependency upgrade, live MySQL/PostgreSQL acceptance, external-provider acceptance, browser acceptance, push, deployment or original-checkout change is claimed. SQLite and existing mocked dialect coverage follow the owner's accepted verification boundary. Graph coverage was checked for the changed paths but its generation is stale; current source and executable tests, not graph completeness, support these results.
+
+### rc37 through rc40 — pending
 
 For each RC, record merged changes, custom-feature mapping, confirmed duplication decisions, test evidence, and remaining deployment limitations here before committing.

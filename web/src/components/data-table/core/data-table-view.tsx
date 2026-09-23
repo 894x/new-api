@@ -19,13 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import type { Row, Table as TanstackTable } from '@tanstack/react-table'
 import * as React from 'react'
 
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableRow,
-  tableDensityClassNames,
-} from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableRow } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 
 import {
@@ -155,13 +149,10 @@ function SplitHeaderTableView<TData>({
           props.bodyContainerClassName
         )}
       >
-        <table
-          data-slot='table'
-          className={cn(
-            'w-full caption-bottom text-sm tabular-nums [&_td]:text-sm [&_td_*]:text-sm [&_th]:text-sm [&_th_*]:text-sm',
-            props.compact && tableDensityClassNames.compact,
-            props.tableClassName
-          )}
+        <Table
+          withContainer={false}
+          compact={props.compact}
+          className={props.tableClassName}
           style={tableSizing.style}
         >
           {tableSizing.colgroup}
@@ -173,7 +164,7 @@ function SplitHeaderTableView<TData>({
             getColumnClassName={getColumnClassName}
           />
           {renderTableBody(props, rows, colSpan, getColumnClassName)}
-        </table>
+        </Table>
       </div>
     </div>
   )

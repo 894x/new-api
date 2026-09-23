@@ -23,13 +23,13 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useId,
   useMemo,
   useRef,
   useState,
 } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 
 import { sideDrawerContentClassName } from '@/components/drawer-layout'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -50,11 +50,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from '@/components/ui/input-group'
+import { InputGroup, InputGroupAddon } from '@/components/ui/input-group'
 import {
   Sheet,
   SheetContent,
@@ -63,6 +59,13 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  getSitePricingCurrency,
+  isValidPricingCurrency,
+  USD_PRICING_CURRENCY,
+} from '@/features/model-pricing/currency'
+import { PricingAmountInput } from '@/features/model-pricing/pricing-amount-input'
+import { PricingCurrencySelector } from '@/features/model-pricing/pricing-currency-selector'
 import { usePricingData } from '@/features/pricing/hooks/use-pricing-data'
 import {
   createDefaultTaskVisualConfig,
@@ -70,6 +73,7 @@ import {
 } from '@/features/pricing/lib/task-expr'
 import type { BillingUsageSchema } from '@/features/pricing/types'
 import { cn } from '@/lib/utils'
+import { usePricingPreferencesStore } from '@/stores/pricing-preferences-store'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import {
@@ -78,10 +82,8 @@ import {
   buildPreviewRows,
   createInitialLaneState,
   createModelPricingSchema,
-  deriveModelRatioFromDisplayPrice,
   hasValue,
   laneConfigs,
-  numericDraftRegex,
   ratioFieldByLane,
   toNumberOrNull,
   type LaneKey,
@@ -90,11 +92,7 @@ import {
   type PricingMode,
 } from './model-pricing-core'
 import { PriceInput, PriceLane } from './model-pricing-inputs'
-import {
-  formatDisplayPriceFromUSD,
-  formatPricingNumber,
-  formatUSDPriceFromDisplay,
-} from './pricing-format'
+import { formatPricingNumber } from './pricing-format'
 import { TaskUsagePricingEditor } from './task-usage-pricing-editor'
 import { TieredPricingEditor } from './tiered-pricing-editor'
 
@@ -115,6 +113,7 @@ type ModelPricingEditorPanelProps = Omit<
   'open' | 'onOpenChange'
 > & {
   className?: string
+  embedded?: boolean
 }
 
 export type ModelPricingEditorPanelHandle = {
@@ -170,10 +169,30 @@ export const ModelPricingEditorPanel = forwardRef<
   ModelPricingEditorPanelHandle,
   ModelPricingEditorPanelProps
 >(function ModelPricingEditorPanel(
-  { editData, className, onSave, isSaving, usageSchema, onDirtyChange },
+  {
+    editData,
+    className,
+    onSave,
+    isSaving,
+    usageSchema,
+    onDirtyChange,
+    embedded = false,
+  },
   ref
 ) {
   const { t } = useTranslation()
+  const promptPriceId = useId()
+  const formElementRef = useRef<HTMLFormElement>(null)
+  const currencyConfig = useSystemConfigStore((state) => state.config.currency)
+  const preference = usePricingPreferencesStore((state) => state.currency)
+  const siteCurrency = useMemo(
+    () => getSitePricingCurrency(currencyConfig),
+    [currencyConfig]
+  )
+  const currency =
+    preference === 'site' && isValidPricingCurrency(siteCurrency)
+      ? siteCurrency
+      : USD_PRICING_CURRENCY
   const [pricingMode, setPricingMode] = useState<PricingMode>('per-token')
   const [promptPrice, setPromptPrice] = useState('')
   const [lanePrices, setLanePrices] = useState<Record<LaneKey, string>>({
@@ -187,27 +206,6 @@ export const ModelPricingEditorPanel = forwardRef<
   const [editorReloadToken, setEditorReloadToken] = useState(0)
   const autoSwitchedForRef = useRef<string | null>(null)
   const isEditMode = !!editData
-  const quotaDisplayType = useSystemConfigStore(
-    (state) => state.config.currency.quotaDisplayType
-  )
-  const configuredUsdExchangeRate = useSystemConfigStore(
-    (state) => state.config.currency.usdExchangeRate
-  )
-  const currencyConfigLoading = useSystemConfigStore((state) => state.loading)
-  const isCnyPricing = quotaDisplayType === 'CNY'
-  const hasValidCnyExchangeRate =
-    !isCnyPricing ||
-    (Number.isFinite(configuredUsdExchangeRate) &&
-      configuredUsdExchangeRate > 0)
-  const pricingExchangeRate = isCnyPricing ? configuredUsdExchangeRate : 1
-  const pricingCurrencySymbol = isCnyPricing ? '¥' : '$'
-  const pricingCurrencyLabel = isCnyPricing ? 'CNY' : 'USD'
-  const priceUnitSuffix = isCnyPricing ? 'CNY/1M' : '$/1M'
-  const pricingFieldsReady = !currencyConfigLoading && hasValidCnyExchangeRate
-  const formatPreviewPrice = useCallback(
-    (value: string) => `${pricingCurrencySymbol}${value}`,
-    [pricingCurrencySymbol]
-  )
   const { models: pricingModels } = usePricingData()
 
   const form = useForm<ModelPricingFormValues>({
@@ -265,14 +263,12 @@ export const ModelPricingEditorPanel = forwardRef<
       : billingExpr
 
   useEffect(() => {
-    if (currencyConfigLoading) return
-
-    const nextLaneState = createInitialLaneState(editData, pricingExchangeRate)
+    const nextLaneState = createInitialLaneState(editData)
 
     if (editData) {
       form.reset({
         name: editData.name,
-        price: formatDisplayPriceFromUSD(editData.price, pricingExchangeRate),
+        price: editData.price || '',
         ratio: editData.ratio || '',
         cacheRatio: editData.cacheRatio || '',
         createCacheRatio: editData.createCacheRatio || '',
@@ -312,7 +308,7 @@ export const ModelPricingEditorPanel = forwardRef<
     setLaneEnabled(nextLaneState.enabled)
     setEditorReloadToken((token) => token + 1)
     autoSwitchedForRef.current = null
-  }, [currencyConfigLoading, editData, form, pricingExchangeRate])
+  }, [editData, form])
 
   useEffect(() => {
     if (!editData) return
@@ -381,9 +377,7 @@ export const ModelPricingEditorPanel = forwardRef<
     const inputPrice = toNumberOrNull(nextPromptPrice)
     setFormValue(
       'ratio',
-      inputPrice !== null
-        ? deriveModelRatioFromDisplayPrice(nextPromptPrice, pricingExchangeRate)
-        : ''
+      inputPrice !== null ? formatPricingNumber(inputPrice / 2) : ''
     )
 
     laneConfigs.forEach(({ key }) => {
@@ -405,13 +399,11 @@ export const ModelPricingEditorPanel = forwardRef<
   }
 
   const handlePromptPriceChange = (value: string) => {
-    if (!numericDraftRegex.test(value)) return
     setPromptPrice(value)
     syncLaneRatios(value, lanePrices, laneEnabled)
   }
 
   const handleLanePriceChange = (lane: LaneKey, value: string) => {
-    if (!numericDraftRegex.test(value)) return
     const nextLanePrices = { ...lanePrices, [lane]: value }
     setLanePrices(nextLanePrices)
 
@@ -479,7 +471,7 @@ export const ModelPricingEditorPanel = forwardRef<
         lanePrices,
         laneEnabled,
         t,
-        formatPreviewPrice
+        currency
       ),
     [
       resolvedBillingExpr,
@@ -489,8 +481,8 @@ export const ModelPricingEditorPanel = forwardRef<
       promptPrice,
       requestRuleExpr,
       t,
-      formatPreviewPrice,
       watchedValues,
+      currency,
     ]
   )
 
@@ -540,15 +532,6 @@ export const ModelPricingEditorPanel = forwardRef<
   }, [editData, laneEnabled, lanePrices, pricingMode, promptPrice, t])
 
   const validatePricingValues = useCallback(() => {
-    if (!pricingFieldsReady) {
-      toast.error(
-        t(
-          'Set a positive CNY per USD exchange rate before editing model prices.'
-        )
-      )
-      return false
-    }
-
     if (
       pricingMode === 'per-token' &&
       ((toNumberOrNull(promptPrice) === 0 &&
@@ -592,25 +575,14 @@ export const ModelPricingEditorPanel = forwardRef<
     }
 
     return true
-  }, [
-    form,
-    laneEnabled,
-    lanePrices,
-    pricingFieldsReady,
-    pricingMode,
-    promptPrice,
-    t,
-  ])
+  }, [form, laneEnabled, lanePrices, pricingMode, promptPrice, t])
 
   const buildSubmitData = useCallback(
     (values: ModelPricingFormValues) => {
       const data: ModelRatioData = {
         name: values.name.trim(),
         billingMode: pricingMode,
-        price:
-          pricingMode === 'per-request'
-            ? formatUSDPriceFromDisplay(values.price, pricingExchangeRate)
-            : '',
+        price: values.price || '',
         ratio: values.ratio || '',
         cacheRatio: values.cacheRatio || '',
         createCacheRatio: values.createCacheRatio || '',
@@ -627,13 +599,20 @@ export const ModelPricingEditorPanel = forwardRef<
 
       return data
     },
-    [resolvedBillingExpr, pricingExchangeRate, pricingMode, requestRuleExpr]
+    [pricingMode, requestRuleExpr, resolvedBillingExpr]
   )
 
   useImperativeHandle(
     ref,
     () => ({
       commitDraft: async () => {
+        const amounts =
+          formElementRef.current?.querySelectorAll<HTMLInputElement>(
+            'input[data-pricing-amount]'
+          )
+        if (amounts && [...amounts].some((input) => !input.reportValidity())) {
+          return null
+        }
         const isValid = await form.trigger()
         if (!isValid || !validatePricingValues()) return null
         return buildSubmitData(form.getValues())
@@ -647,29 +626,38 @@ export const ModelPricingEditorPanel = forwardRef<
   return (
     <div
       className={cn(
-        'bg-background flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border',
+        'bg-background flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border',
         className
       )}
     >
-      <div className='border-b p-4'>
-        <div className='flex flex-wrap items-start justify-between gap-3'>
-          <div className='min-w-0'>
-            <h3 className='truncate text-base font-medium'>
-              {isEditMode ? t('Edit model pricing') : t('Add model pricing')}
-            </h3>
+      {!embedded && (
+        <div className='border-b p-4'>
+          <div className='flex flex-wrap items-start justify-between gap-3'>
+            <div className='min-w-0'>
+              <h3 className='truncate text-base font-medium'>
+                {isEditMode ? t('Edit model pricing') : t('Add model pricing')}
+              </h3>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <Form {...form}>
         <form
+          ref={formElementRef}
           onSubmit={(event) => event.preventDefault()}
           className='flex min-h-0 flex-1 flex-col'
           autoComplete='off'
         >
-          <div className='min-h-0 flex-1 overflow-y-auto p-4 pb-6'>
-            <div className='grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(220px,260px)]'>
-              <FieldGroup>
+          <div
+            role='region'
+            aria-label={
+              isEditMode ? t('Edit model pricing') : t('Add model pricing')
+            }
+            className='@container/pricing-editor min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-6'
+          >
+            <div className='grid min-w-0 items-start gap-4 @min-[960px]/pricing-editor:grid-cols-[minmax(0,1fr)_260px]'>
+              <FieldGroup className='min-w-0'>
                 {warnings.length > 0 && (
                   <Alert variant='destructive'>
                     <AlertTriangle data-icon='inline-start' />
@@ -683,52 +671,35 @@ export const ModelPricingEditorPanel = forwardRef<
                   </Alert>
                 )}
 
-                {isCnyPricing && !currencyConfigLoading && (
-                  <Alert
-                    variant={
-                      hasValidCnyExchangeRate ? 'default' : 'destructive'
-                    }
-                  >
-                    {!hasValidCnyExchangeRate && (
-                      <AlertTriangle data-icon='inline-start' />
-                    )}
-                    <AlertDescription>
-                      {hasValidCnyExchangeRate
-                        ? t(
-                            'CNY prices are converted to USD at {{rate}} CNY per USD when saved.',
-                            { rate: pricingExchangeRate }
-                          )
-                        : t(
-                            'Set a positive CNY per USD exchange rate before editing model prices.'
+                {!embedded && (
+                  <FormField
+                    control={form.control}
+                    name='name'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Model name')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder={t('gpt-4')}
+                            {...field}
+                            disabled={isEditMode}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'The exact model identifier as used in API requests.'
                           )}
-                    </AlertDescription>
-                  </Alert>
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
                 )}
 
-                <FormField
-                  control={form.control}
-                  name='name'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Model name')}</FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder={t('gpt-4')}
-                          {...field}
-                          disabled={isEditMode}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        {t(
-                          'The exact model identifier as used in API requests.'
-                        )}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                <PricingCurrencySelector siteCurrency={siteCurrency} />
 
                 <Tabs
+                  key={editorReloadToken}
                   value={pricingMode}
                   onValueChange={handleModeChange}
                   className='gap-4'
@@ -745,7 +716,10 @@ export const ModelPricingEditorPanel = forwardRef<
                     </TabsTrigger>
                   </TabsList>
 
-                  <TabsContent value='per-token' className='pt-0'>
+                  <TabsContent
+                    value='per-token'
+                    className='@container/pricing-fields min-w-0 pt-0'
+                  >
                     {taskUsageSchema &&
                       Object.keys(taskUsageSchema).length > 0 && (
                         <Alert className='mb-4'>
@@ -772,64 +746,80 @@ export const ModelPricingEditorPanel = forwardRef<
                           </AlertDescription>
                         </Alert>
                       )}
-                    <FieldGroup className='gap-5'>
-                      <Field>
-                        <FieldLabel>{t('Input price')}</FieldLabel>
+                    {embedded && (
+                      <p className='text-muted-foreground mb-3 text-xs'>
+                        {t('{{currency}} price per 1M tokens.', {
+                          currency: currency.label,
+                        })}{' '}
+                        {t('Disabled lanes are omitted on save.')}
+                      </p>
+                    )}
+                    <div
+                      className={cn(
+                        'grid min-w-0 gap-3',
+                        embedded && '@min-[560px]/pricing-fields:grid-cols-2'
+                      )}
+                    >
+                      <Field
+                        className={cn(
+                          'min-w-0',
+                          embedded && 'rounded-lg border p-3'
+                        )}
+                      >
+                        <FieldLabel htmlFor={promptPriceId}>
+                          {t('Input price')}
+                        </FieldLabel>
+                        <FieldDescription
+                          id={`${promptPriceId}-description`}
+                          className={embedded ? 'text-xs' : undefined}
+                        >
+                          {t('{{currency}} price per 1M input tokens.', {
+                            currency: currency.label,
+                          })}
+                        </FieldDescription>
                         <PriceInput
+                          currency={currency}
+                          id={promptPriceId}
+                          aria-describedby={`${promptPriceId}-description`}
                           value={promptPrice}
-                          placeholder={formatDisplayPriceFromUSD(
-                            '3',
-                            pricingExchangeRate
-                          )}
-                          disabled={!pricingFieldsReady}
-                          prefix={pricingCurrencySymbol}
-                          suffix={priceUnitSuffix}
+                          placeholder='3'
                           onChange={handlePromptPriceChange}
                         />
-                        <FieldDescription>
-                          {isCnyPricing
-                            ? t('CNY price per 1M input tokens.')
-                            : t('USD price per 1M input tokens.')}
-                        </FieldDescription>
                       </Field>
 
-                      <div className='grid gap-3 sm:grid-cols-[repeat(auto-fit,minmax(400px,1fr))]'>
-                        {laneConfigs.map((lane) => {
-                          const laneDisabled =
-                            !pricingFieldsReady ||
-                            (lane.key === 'audioOutput' &&
-                              (!laneEnabled.audioInput ||
-                                !hasValue(lanePrices.audioInput)))
-                          return (
-                            <PriceLane
-                              key={lane.key}
-                              title={t(lane.titleKey)}
-                              description={t(lane.descriptionKey)}
-                              placeholder={formatDisplayPriceFromUSD(
-                                lane.placeholder,
-                                pricingExchangeRate
-                              )}
-                              value={lanePrices[lane.key]}
-                              enabled={laneEnabled[lane.key]}
-                              disabled={laneDisabled}
-                              prefix={pricingCurrencySymbol}
-                              suffix={priceUnitSuffix}
-                              unitDescription={
-                                isCnyPricing
-                                  ? t('CNY price per 1M tokens.')
-                                  : t('USD price per 1M tokens.')
-                              }
-                              onEnabledChange={(checked) =>
-                                handleLaneToggle(lane.key, checked)
-                              }
-                              onChange={(value) =>
-                                handleLanePriceChange(lane.key, value)
-                              }
-                            />
-                          )
-                        })}
-                      </div>
-                    </FieldGroup>
+                      {laneConfigs.map((lane) => {
+                        const disabled =
+                          lane.key === 'audioOutput' &&
+                          (!laneEnabled.audioInput ||
+                            !hasValue(lanePrices.audioInput))
+                        return (
+                          <PriceLane
+                            currency={currency}
+                            key={lane.key}
+                            compact={embedded}
+                            title={t(lane.titleKey)}
+                            description={t(lane.descriptionKey)}
+                            placeholder={lane.placeholder}
+                            value={lanePrices[lane.key]}
+                            enabled={laneEnabled[lane.key]}
+                            disabled={disabled}
+                            disabledReason={
+                              disabled
+                                ? t(
+                                    'Audio output price requires an audio input price.'
+                                  )
+                                : undefined
+                            }
+                            onEnabledChange={(checked) =>
+                              handleLaneToggle(lane.key, checked)
+                            }
+                            onChange={(value) =>
+                              handleLanePriceChange(lane.key, value)
+                            }
+                          />
+                        )
+                      })}
+                    </div>
                   </TabsContent>
 
                   <TabsContent value='per-request' className='pt-0'>
@@ -840,42 +830,31 @@ export const ModelPricingEditorPanel = forwardRef<
                         render={({ field }) => (
                           <FormItem className='contents'>
                             <Field>
-                              <FieldLabel>{t('Fixed price')}</FieldLabel>
-                              <FormControl>
-                                <InputGroup>
-                                  <InputGroupAddon>
-                                    {pricingCurrencySymbol}
-                                  </InputGroupAddon>
-                                  <InputGroupInput
-                                    aria-label={t('Fixed price')}
-                                    inputMode='decimal'
-                                    placeholder={formatDisplayPriceFromUSD(
-                                      '0.01',
-                                      pricingExchangeRate
-                                    )}
-                                    disabled={!pricingFieldsReady}
+                              <FormLabel>{t('Fixed price')}</FormLabel>
+                              <InputGroup className='has-[[data-pricing-error]]:h-auto has-[[data-pricing-error]]:flex-wrap'>
+                                <InputGroupAddon>
+                                  {currency.symbol}
+                                </InputGroupAddon>
+                                <FormControl>
+                                  <PricingAmountInput
                                     {...field}
-                                    onChange={(event) => {
-                                      const value = event.target.value
-                                      if (numericDraftRegex.test(value)) {
-                                        field.onChange(value)
-                                      }
-                                    }}
+                                    value={field.value ?? ''}
+                                    currency={currency}
+                                    grouped
+                                    placeholder='0.01'
+                                    onChange={field.onChange}
                                   />
-                                  <InputGroupAddon align='inline-end'>
-                                    {t('per request')}
-                                  </InputGroupAddon>
-                                </InputGroup>
-                              </FormControl>
-                              <FieldDescription>
-                                {isCnyPricing
-                                  ? t(
-                                      'Cost in CNY per request, converted to USD when saved.'
-                                    )
-                                  : t(
-                                      'Cost in USD per request, regardless of tokens used.'
-                                    )}
-                              </FieldDescription>
+                                </FormControl>
+                                <InputGroupAddon align='inline-end'>
+                                  {t('per request')}
+                                </InputGroupAddon>
+                              </InputGroup>
+                              <FormDescription>
+                                {t(
+                                  'Cost in {{currency}} per request, regardless of tokens used.',
+                                  { currency: currency.label }
+                                )}
+                              </FormDescription>
                               <FormMessage />
                             </Field>
                           </FormItem>
@@ -888,6 +867,7 @@ export const ModelPricingEditorPanel = forwardRef<
                     <FieldGroup className='gap-5'>
                       {taskUsageSchema ? (
                         <TaskUsagePricingEditor
+                          currency={currency}
                           key={`${editorReloadToken}:${watchedValues.name}`}
                           billingExpr={resolvedBillingExpr}
                           requestRuleExpr={requestRuleExpr}
@@ -897,25 +877,25 @@ export const ModelPricingEditorPanel = forwardRef<
                           onRequestRuleExprChange={setRequestRuleExpr}
                         />
                       ) : (
-                        pricingFieldsReady && (
-                          <TieredPricingEditor
-                            key={editorReloadToken}
-                            modelName={watchedValues.name}
-                            billingExpr={billingExpr}
-                            requestRuleExpr={requestRuleExpr}
-                            currencyLabel={pricingCurrencyLabel}
-                            exchangeRate={pricingExchangeRate}
-                            onBillingExprChange={setBillingExpr}
-                            onRequestRuleExprChange={setRequestRuleExpr}
-                          />
-                        )
+                        <TieredPricingEditor
+                          currency={currency}
+                          key={editorReloadToken}
+                          modelName={watchedValues.name}
+                          billingExpr={billingExpr}
+                          requestRuleExpr={requestRuleExpr}
+                          onBillingExprChange={setBillingExpr}
+                          onRequestRuleExprChange={setRequestRuleExpr}
+                        />
                       )}
                     </FieldGroup>
                   </TabsContent>
                 </Tabs>
               </FieldGroup>
 
-              <aside className='bg-muted/20 sticky top-0 rounded-lg border'>
+              <aside
+                aria-label={t('Preview')}
+                className='bg-muted/20 min-w-0 rounded-lg border @min-[960px]/pricing-editor:sticky @min-[960px]/pricing-editor:top-0'
+              >
                 <div className='border-b px-3 py-2'>
                   <div className='text-sm font-medium'>{t('Preview')}</div>
                 </div>

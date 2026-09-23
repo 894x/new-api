@@ -1,5 +1,7 @@
 package authz
 
+import "slices"
+
 import "github.com/casbin/casbin/v2"
 
 // Can reports whether the subject may perform the permission. A superuser role
@@ -9,12 +11,9 @@ func Can(userID int, systemRole int, permission Permission) bool {
 	if !isKnownPermission(permission) {
 		return false
 	}
-
 	roles := resolveSubjectRoles(userID, systemRole)
-	for _, role := range roles {
-		if isSuperuserRole(role) {
-			return true
-		}
+	if slices.ContainsFunc(roles, isSuperuserRole) {
+		return true
 	}
 	e := currentEnforcer()
 	if e == nil {

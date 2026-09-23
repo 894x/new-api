@@ -61,12 +61,14 @@ export function ModelDocSwitch(props: ModelDocSwitchProps) {
     <Switch
       checked={props.model.doc_enabled === 1}
       onCheckedChange={(checked) => mutation.mutate(checked)}
-      disabled={!props.model.doc_available || mutation.isPending}
+      disabled={
+        props.model.id <= 0 || !props.model.doc_available || mutation.isPending
+      }
       aria-label={t('Enable model document')}
     />
   )
 
-  if (props.model.doc_available) return control
+  if (props.model.id > 0 && props.model.doc_available) return control
 
   return (
     <Tooltip>
@@ -74,7 +76,9 @@ export function ModelDocSwitch(props: ModelDocSwitchProps) {
         {control}
       </TooltipTrigger>
       <TooltipContent>
-        {t('No HTML document is available for this model.')}
+        {props.model.id <= 0
+          ? t('Add metadata')
+          : t('No HTML document is available for this model.')}
       </TooltipContent>
     </Tooltip>
   )
