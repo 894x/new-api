@@ -115,6 +115,7 @@ export type ModelRoutingOverridePatch = Pick<
 export interface ChannelSettings {
   force_format?: boolean
   thinking_to_content?: boolean
+  ollama_native_claude?: boolean
   proxy?: string
   pass_through_body_enabled?: boolean
   system_prompt?: string

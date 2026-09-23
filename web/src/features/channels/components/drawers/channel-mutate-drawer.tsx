@@ -195,6 +195,7 @@ import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
 import { ModelRoutingOverridesEditor } from '../model-routing-overrides-editor'
 import { LargeBodyRoutingFields } from './large-body-routing-fields'
+import { OllamaProtocolFields } from './ollama-protocol-fields'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
@@ -303,6 +304,7 @@ const SENSITIVE_FORM_FIELDS = [
   'doubao_video_fetch_path',
   'force_format',
   'thinking_to_content',
+  'ollama_native_claude',
   'proxy',
   'http_protocol',
   'http2_connection_shards',
@@ -363,6 +365,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.system_prompt?.trim() ||
     values.force_format ||
     values.thinking_to_content ||
+    values.ollama_native_claude ||
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
     values.http1_large_body_enabled ||
@@ -787,6 +790,7 @@ export function ChannelMutateDrawer({
   const currentHeaderOverride = form.watch('header_override')
   const currentForceFormat = form.watch('force_format')
   const currentThinkingToContent = form.watch('thinking_to_content')
+  const currentOllamaNativeClaude = form.watch('ollama_native_claude')
   const currentPassThroughBodyEnabled = form.watch('pass_through_body_enabled')
   const currentDisableTaskPollingSleep = form.watch(
     'disable_task_polling_sleep'
@@ -1089,6 +1093,7 @@ export function ChannelMutateDrawer({
   const extraSettingsConfigured = Boolean(
     currentForceFormat ||
     currentThinkingToContent ||
+    (currentType === 4 && currentOllamaNativeClaude) ||
     currentPassThroughBodyEnabled ||
     currentDisableTaskPollingSleep ||
     currentProxy?.trim() ||
@@ -4482,6 +4487,7 @@ export function ChannelMutateDrawer({
                             className='space-y-4 disabled:opacity-60'
                           >
                             <div className='divide-border space-y-0 divide-y border-y'>
+                              <OllamaProtocolFields control={form.control} />
                               {currentType === 1 && (
                                 <FormField
                                   control={form.control}
