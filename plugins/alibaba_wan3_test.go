@@ -20,6 +20,82 @@ func alibabaPlugin(t *testing.T) *pluginruntime.LoadedPlugin {
 	return plugin
 }
 
+func TestWan3CompatibilityProtocolsUseAutomaticDurationAndSize(t *testing.T) {
+	plugin := alibabaPlugin(t)
+	for _, tc := range []struct{ protocol, request string }{
+		{"openai_responses", `{"input":"animate","duration":-1,"size":"1280*720"}`},
+		{"openai_video", `{"prompt":"animate","seconds":-1,"size":"1280*720"}`},
+		{"openai_video", `{"prompt":"animate","auto_duration":true,"size":"1280*720"}`},
+		{"openai_responses", `{"input":"animate","metadata":{"parameters":{"duration":-1}},"size":"1280*720"}`},
+	} {
+		t.Run(tc.protocol+tc.request, func(t *testing.T) {
+			var request map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(tc.request, &request))
+			intent, err := plugin.Engine.CallPath(t.Context(), "protocols", []string{tc.protocol, "decodeRequest"}, map[string]any{"model": "my-wan", "upstreamModel": "wan3.0-video", "body": map[string]any{"kind": "json", "value": request}})
+			require.NoError(t, err)
+			ctx := map[string]any{"model": "my-wan", "upstreamModel": "wan3.0-video", "modelMappingResolved": true, "requestBody": intent.(map[string]any)["requestBody"]}
+			value, err := plugin.Engine.Call(t.Context(), "buildSubmitRequest", ctx)
+			require.NoError(t, err)
+			encoded, err := common.Marshal(value.(map[string]any)["body"])
+			require.NoError(t, err)
+			assert.JSONEq(t, `{"model":"wan3.0-video","input":{"prompt":"animate"},"parameters":{"duration":-1,"resolution":"720P","ratio":"adaptive","audio":true,"prompt_extend":true,"watermark":false}}`, string(encoded))
+			usage, err := plugin.Engine.Call(t.Context(), "extractUsage", ctx)
+			require.NoError(t, err)
+			encoded, err = common.Marshal(usage)
+			require.NoError(t, err)
+			assert.JSONEq(t, `{"seconds":30,"resolution":"720P"}`, string(encoded))
+			ctx["upstreamModel"] = "wan2.7-t2v"
+			_, err = plugin.Engine.Call(t.Context(), "buildSubmitRequest", ctx)
+			require.ErrorContains(t, err, "duration must be between 1 and 3600")
+		})
+	}
+	_, err := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{"upstreamModel": "wan3.0-video", "requestBody": map[string]any{"prompt": "animate", "size": "1000*1000"}})
+	require.ErrorContains(t, err, "invalid size")
+}
+
+func TestWan3ResponsesImageOnlyUsesMappedModel(t *testing.T) {
+	plugin := alibabaPlugin(t)
+	for _, model := range []string{"wan3.0-video", "wan3.0-video-prime", "wan2.7-t2v"} {
+		t.Run(model, func(t *testing.T) {
+			value, err := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_responses", "decodeRequest"}, map[string]any{
+				"model": "my-wan", "upstreamModel": model, "body": map[string]any{"kind": "json", "value": map[string]any{"input": []any{map[string]any{"type": "input_image", "image_url": "https://cdn.example/frame.png"}}}},
+			})
+			if model == "wan2.7-t2v" {
+				require.ErrorContains(t, err, "input is required")
+				return
+			}
+			require.NoError(t, err)
+			intent := value.(map[string]any)
+			assert.Equal(t, "image_to_video", intent["action"])
+			value, err = plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{"model": "my-wan", "upstreamModel": model, "modelMappingResolved": true, "requestBody": intent["requestBody"]})
+			require.NoError(t, err)
+			encoded, err := common.Marshal(value.(map[string]any)["body"].(map[string]any)["input"])
+			require.NoError(t, err)
+			assert.JSONEq(t, `{"prompt":"","media":[{"type":"first_frame","url":"https://cdn.example/frame.png"}]}`, string(encoded))
+		})
+	}
+}
+
+func TestWanCompletionUsesProviderResolutionAndCombinedDuration(t *testing.T) {
+	plugin := alibabaPlugin(t)
+	for _, tc := range []struct{ body, want string }{
+		{`{"usage":{"duration":7.5,"output_video_duration":7.5,"SR":720}}`, `{"seconds":7.5,"resolution":"720P"}`},
+		{`{"usage":{"input_video_duration":8,"output_video_duration":7.5,"SR":1080}}`, `{"seconds":15.5,"resolution":"1080P"}`},
+		{`{"usage":{"input_video_duration":25,"output_video_duration":15,"SR":480}}`, `{"seconds":30,"resolution":"480P"}`},
+		{`{"output":{"duration":5,"resolution":"1080p"}}`, `{"seconds":5,"resolution":"1080P"}`},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			var body map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(tc.body, &body))
+			value, err := plugin.Engine.Call(t.Context(), "extractUsageOnComplete", map[string]any{}, map[string]any{}, body)
+			require.NoError(t, err)
+			encoded, err := common.Marshal(value)
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.want, string(encoded))
+		})
+	}
+}
+
 func TestWan3NativePluginPreservesPayloadAndMappedModels(t *testing.T) {
 	plugin := alibabaPlugin(t)
 	const body = `{"model":"customer-wan","input":{"media":[{"type":"reference_video","url":"https://cdn.example/input.mp4"}],"future_input":false},"parameters":{"duration":-1,"resolution":"1080P","ratio":"adaptive","seed":0,"audio":false,"watermark":false,"prompt_extend":false},"future_option":{"enabled":false,"count":0}}`

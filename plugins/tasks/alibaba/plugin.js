@@ -7,7 +7,7 @@ export const meta = {
     en: "Alibaba Cloud Bailian Wanxiang video generation (text-to-video and image-to-video)",
     zh: "阿里云百炼万相视频生成（文生视频、图生视频）",
   },
-  version: "1.0.1",
+  version: "1.1.0",
   author: { name: "QuantumNous" },
   channelTypes: [17],
   models: [
@@ -61,6 +61,22 @@ function secondImage(req) {
   return "";
 }
 
+const SIZE_TO_RESOLUTION = {
+  "832*480": "480P",
+  "480*832": "480P",
+  "624*624": "480P",
+  "1280*720": "720P",
+  "720*1280": "720P",
+  "960*960": "720P",
+  "1088*832": "720P",
+  "832*1088": "720P",
+  "1920*1080": "1080P",
+  "1080*1920": "1080P",
+  "1440*1440": "1080P",
+  "1632*1248": "1080P",
+  "1248*1632": "1080P",
+};
+
 function normalizeResolution(value) {
   let resolution = String(value || "").toUpperCase();
   if (!resolution.endsWith("P")) resolution += "P";
@@ -108,15 +124,14 @@ function validateNative(body, model, allowUnresolvedSmart) {
 // Smart duration is a provider mode, not a negative billing quantity. Decoders
 // normalize it before the host's generic multiplier checks; the wire builder
 // restores the sentinel only after model-specific validation.
-function normalizeSmartDuration(request) {
+function normalizeAutoDuration(request) {
   const req = Object.assign({}, request);
-  delete req.smartDuration;
   if (req.nativeRequest) {
     req.nativeRequest = Object.assign({}, req.nativeRequest);
     if (req.nativeRequest.parameters && req.nativeRequest.parameters.duration === -1) {
       req.nativeRequest.parameters = Object.assign({}, req.nativeRequest.parameters);
       delete req.nativeRequest.parameters.duration;
-      req.smartDuration = true;
+      req.auto_duration = true;
     }
     return req;
   }
@@ -127,11 +142,14 @@ function normalizeSmartDuration(request) {
   if (metadata.parameters && metadata.parameters.duration === -1) {
     req.metadata.parameters = Object.assign({}, metadata.parameters);
     delete req.metadata.parameters.duration;
-    req.smartDuration = true;
-  } else if ((req.duration === -1 || req.seconds === -1 || req.seconds === "-1") && (!metadata.parameters || metadata.parameters.duration === undefined)) {
-    req.smartDuration = true;
+    req.auto_duration = true;
+  } else if (
+    (req.duration === -1 || req.duration === "-1" || req.seconds === -1 || req.seconds === "-1") &&
+    (!metadata.parameters || metadata.parameters.duration === undefined)
+  ) {
+    req.auto_duration = true;
   }
-  if (req.duration === -1) delete req.duration;
+  if (req.duration === -1 || req.duration === "-1") delete req.duration;
   if (req.seconds === -1 || req.seconds === "-1") delete req.seconds;
   return req;
 }
@@ -144,7 +162,7 @@ function convert(ctx) {
   const allowUnresolvedSmart = !ctx.modelMappingResolved && !meta.models.includes(upstreamModel);
   if (req.nativeRequest) {
     const body = Object.assign({}, req.nativeRequest, { model: upstreamModel });
-    if (req.smartDuration) body.parameters = Object.assign({}, body.parameters || {}, { duration: -1 });
+    if (req.auto_duration === true) body.parameters = Object.assign({}, body.parameters || {}, { duration: -1 });
     validateNative(body, validationModel, allowUnresolvedSmart);
     return body;
   }
@@ -178,7 +196,7 @@ function convert(ctx) {
   const metadata = req.metadata || {};
   Object.assign(input, metadata.input || {});
   Object.assign(parameters, metadata.parameters || {});
-  if (req.smartDuration) parameters.duration = -1;
+  if (req.auto_duration === true) parameters.duration = -1;
   const model = metadata.model === undefined ? upstreamModel : metadata.model;
   if (model !== upstreamModel) throw new Error("can't change model with metadata");
   const body = { model: model, input: input, parameters: parameters };
@@ -198,6 +216,15 @@ function convert(ctx) {
     delete input.last_frame_url;
     delete input.audio_url;
   }
+  if (wan3) {
+    if (parameters.size) {
+      const resolution = SIZE_TO_RESOLUTION[parameters.size];
+      if (!resolution) throw new Error("invalid size: " + parameters.size);
+      parameters.resolution = resolution;
+      delete parameters.size;
+    }
+    if (Array.isArray(input.media) && input.media.length === 0) delete input.media;
+  }
   validateNative(body, validationModel, allowUnresolvedSmart);
   for (const key of ["resolution", "size"]) if (!parameters[key]) delete parameters[key];
   return body;
@@ -205,23 +232,7 @@ function convert(ctx) {
 
 function resolutionRatio(body) {
   const parameters = body.parameters || {};
-  let resolution = parameters.size
-    ? {
-        "832*480": "480P",
-        "480*832": "480P",
-        "624*624": "480P",
-        "1280*720": "720P",
-        "720*1280": "720P",
-        "960*960": "720P",
-        "1088*832": "720P",
-        "832*1088": "720P",
-        "1920*1080": "1080P",
-        "1080*1920": "1080P",
-        "1440*1440": "1080P",
-        "1632*1248": "1080P",
-        "1248*1632": "1080P",
-      }[parameters.size]
-    : normalizeResolution(parameters.resolution || (isWan3(body.model) ? "1080P" : ""));
+  let resolution = parameters.size ? SIZE_TO_RESOLUTION[parameters.size] : normalizeResolution(parameters.resolution || (isWan3(body.model) ? "1080P" : ""));
   const ratios = {
     "wan3.0-video": { "480P": 1, "720P": 2, "1080P": 4 },
     "wan3.0-video-prime": { "480P": 1, "720P": 2, "1080P": 4 },
@@ -316,23 +327,7 @@ export function extractUsage(ctx) {
     if (resolution && resolution.value !== undefined) ratios[resolution.key] = resolution.value;
     return ratios;
   }
-  let resolution = parameters.size
-    ? {
-        "832*480": "480P",
-        "480*832": "480P",
-        "624*624": "480P",
-        "1280*720": "720P",
-        "720*1280": "720P",
-        "960*960": "720P",
-        "1088*832": "720P",
-        "832*1088": "720P",
-        "1920*1080": "1080P",
-        "1080*1920": "1080P",
-        "1440*1440": "1080P",
-        "1632*1248": "1080P",
-        "1248*1632": "1080P",
-      }[parameters.size]
-    : normalizeResolution(parameters.resolution || (wan3 ? "1080P" : ""));
+  let resolution = parameters.size ? SIZE_TO_RESOLUTION[parameters.size] : normalizeResolution(parameters.resolution || (wan3 ? "1080P" : ""));
   if (!["480P", "720P", "1080P"].includes(resolution)) resolution = "720P";
   return { seconds: seconds, resolution: resolution };
 }
@@ -354,13 +349,14 @@ export function extractBillingOnComplete(task, _result, context) {
 
 export function extractUsageOnComplete(task, taskResult, body) {
   const output = (body && body.output) || {};
+  const usage = (body && body.usage) || {};
   const facts = {};
-  const seconds = Number(output.duration || output.duration_seconds || 0);
+  const seconds = Number(usage.output_video_duration || usage.duration || output.duration || output.duration_seconds || 0);
   if (Number.isFinite(seconds) && seconds > 0) facts.seconds = Math.min(seconds, 3600);
-  const resolution = normalizeResolution(output.resolution || "");
+  const resolution = normalizeResolution(usage.SR || output.resolution || "");
   if (["480P", "720P", "1080P"].includes(resolution)) facts.resolution = resolution;
-  const usage = wanUsage(body && body.usage);
-  if (usage) facts.seconds = Math.min(usage.total, 30);
+  const normalizedUsage = wanUsage(body && body.usage);
+  if (normalizedUsage) facts.seconds = Math.min(normalizedUsage.total, 30);
   return facts;
 }
 
@@ -410,7 +406,7 @@ export const native = {
       kind: "submit",
       model: req.model,
       action: input.img_url || (input.media || []).length ? "image_to_video" : "text_to_video",
-      requestBody: normalizeSmartDuration({ model: req.model, nativeRequest: req }),
+      requestBody: normalizeAutoDuration({ model: req.model, nativeRequest: req }),
     };
   },
   taskCreated: function (ctx, task) {
@@ -456,21 +452,24 @@ export const protocols = {
       for (const image of input.images) if (!images.includes(image)) images.push(image);
       if (images.length) requestBody.images = images;
       if (trimmed(req.input_reference)) requestBody.input_reference = trimmed(req.input_reference);
-      for (const key of ["size", "duration", "seconds"]) {
+      for (const key of ["size", "duration", "seconds", "auto_duration"]) {
         if (Object.prototype.hasOwnProperty.call(req, key)) requestBody[key] = req[key];
       }
       if (Object.prototype.hasOwnProperty.call(req, "metadata")) requestBody.metadata = req.metadata;
+      const normalized = normalizeAutoDuration(requestBody);
+      const mappedModel = ctx.upstreamModel || model;
+      const media = normalized.metadata && normalized.metadata.input && normalized.metadata.input.media;
       if (
         !prompt &&
-        (!model.includes("i2v") || !firstImage(requestBody)) &&
-        !(isWan3(model) && ((requestBody.metadata && requestBody.metadata.input && requestBody.metadata.input.media) || firstImage(requestBody)))
+        !(mappedModel.includes("i2v") && firstImage(normalized)) &&
+        !(isWan3(mappedModel) && (firstImage(normalized) || (Array.isArray(media) && media.length)))
       )
         throw new Error("input is required");
       return {
         kind: "submit",
         model: model,
         action: firstImage(requestBody) ? "image_to_video" : "text_to_video",
-        requestBody: normalizeSmartDuration(requestBody),
+        requestBody: normalized,
       };
     },
     renderEvents: function (ctx, task, previousState) {
@@ -545,11 +544,12 @@ export const protocols = {
         else if (req.duration !== undefined) req.seconds = Number(req.duration);
         if (req.duration !== undefined) req.duration = Number(req.duration);
       } else throw new Error("JSON or multipart body required");
+      const requestBody = normalizeAutoDuration(Object.assign({}, req, { model: ctx.model }));
       return {
         kind: "submit",
         model: ctx.model,
         action: firstImage(req) ? "image_to_video" : "text_to_video",
-        requestBody: normalizeSmartDuration(Object.assign({}, req, { model: ctx.model })),
+        requestBody: requestBody,
       };
     },
     render: function (ctx, task) {

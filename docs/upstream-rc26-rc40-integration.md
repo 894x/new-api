@@ -351,6 +351,20 @@ Verification performed on 2026-09-24:
 
 The component/i18n skills guided reuse of existing controls and locale synchronization; the commit skill supplied the categorized commit format. Graph generation was stale/new paths untracked, so current source and tests were used after coverage checks. Dependency licenses were checked from downloaded module license files. No push, deployment or original-checkout changes occurred.
 
-### rc35 through rc40 — pending
+### rc35 — integrated locally
+
+Normal merge of upstream `bee45b58a` onto rc34 integration `104019b9e02234f6b48e1ba90a46b8e4dbfa652d`. Nine upstream commits add Wan 3.0 support, Kimi K3 dynamic tool messages, a host-injected relaykit JSON codec, plugin alias/disable fixes, hourly success history, nested drawer portals and a three-column pricing grid.
+
+The overlapping Wan implementation is unified in the existing JS plugin. Upstream size-to-resolution mapping, public automatic-duration marker, channel-mapped image-only Responses requests and completion `usage.SR` resolution are adopted. Fork native payload passthrough, unknown provider fields, explicit false/zero values, model-aware validation, Wan 2.7 media behavior, reference-video reservation and combined input/output duration billing remain. Automatic duration reserves 30 seconds and rejects resolved non-Wan-3 models. New tests cover both compatibility protocols through wire construction and usage extraction, aliases, invalid sizes and completion usage; existing native passthrough and quantity-boundary tests remain.
+
+Plugin control follows upstream: the extra override-layer switch is removed, while the global task-plugin master and individual plugin switches remain. Disabling a plugin with an override also suppresses its factory fallback. Custom provider plugins remain registered, with alias decoding tested across all ten built-ins. Kimi message tools are counted and serialized without inventing null content or inserting the system prompt into a tool-loading message; fork annotations and final outbound admission remain intact. Both host and standalone relaykit JSON helpers keep the standard codec behavior, with host injection occurring only at startup.
+
+The shared upstream drawer portal context replaces the rc34 mobile-only combobox workaround; custom option behavior remains. The hourly success series uses request-weighted aggregation and retains group isolation; a real SQLite regression covers four hours, unequal bucket sizes and an empty visible-group set.
+
+Verification: focused backend packages, full root tests/build and independent relaykit tests/build passed. The final new hourly-summary fixture explicitly initializes database dialect state and its package passes. Frontend typecheck, changed-file lint, production build and the 25 portal/pricing tests passed. Alibaba plugin formatting/lint passed with one existing caught-error-cause warning. Initial full frontend testing passed 1119/1121 tests, with a performance-filter timeout and a transient setup-guide visibility assertion; the unchanged setup-guide file passed in isolation. A full rerun without concurrent backend testing passed **176 files / 1121 tests**, without changing tests or timeouts.
+
+Existing real-MySQL/PostgreSQL, external-provider, browser and deployment limitations remain. No schema/dependency upgrade, live settings conversion, push, deployment or original-checkout changes were performed. Graph metadata remained stale, so exact source and executable tests supplied the evidence. Component/React skills guided shared-control reuse; the commit skill supplies the categorized commit format.
+
+### rc36 through rc40 — pending
 
 For each RC, record merged changes, custom-feature mapping, confirmed duplication decisions, test evidence, and remaining deployment limitations here before committing.
