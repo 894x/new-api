@@ -322,9 +322,20 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 	adaptor.Init(info)
+	// Submit hooks cache the upstream body during validation. Resolve the
+	// channel mapping first, but keep the public model as the billing identity.
+	mappedBeforeValidate := info.OriginModelName != ""
+	if mappedBeforeValidate {
+		info.UpstreamModelName = info.OriginModelName
+		if err := helper.ModelMappedHelper(c, info, nil); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
+		}
+	}
 	// Capture the client contract before asset rewriting and channel policies.
 	// Persist only expression-referenced probes, not this full transient input.
-	if info.BillingRequestInput == nil && billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModeTieredExpr {
+	// Mapped aliases may inherit a target expression after submit-hook model
+	// rewriting; their original request must be available at that point too.
+	if info.BillingRequestInput == nil && (info.IsModelMapped || billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModeTieredExpr) {
 		input, inputErr := helper.ResolveIncomingBillingExprRequestInput(c, info)
 		if inputErr != nil {
 			return nil, service.TaskErrorWrapperLocal(inputErr, "model_price_error", http.StatusBadRequest)
@@ -351,11 +362,12 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		modelName = service.CoverTaskActionToModelName(platform, info.Action)
 	}
 
-	// 2.5 应用渠道的模型映射（与同步任务对齐）
-	info.OriginModelName = modelName
-	info.UpstreamModelName = modelName
-	if err := helper.ModelMappedHelper(c, info, nil); err != nil {
-		return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
+	if !mappedBeforeValidate {
+		info.OriginModelName = modelName
+		info.UpstreamModelName = modelName
+		if err := helper.ModelMappedHelper(c, info, nil); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
+		}
 	}
 	if validator, ok := adaptor.(channel.MappedTaskRequestValidator); ok {
 		if taskErr := validator.ValidateMappedRequest(c, info); taskErr != nil {
@@ -369,13 +381,27 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	var err error
 	frozenBilling := info.TieredBillingSnapshot
 	reuseTaskExpression := frozenBilling != nil && frozenBilling.TaskUsageBilling && frozenBilling.ModelName == modelName
-	if reuseTaskExpression || billing_setting.GetBillingMode(modelName) == billing_setting.BillingModeTieredExpr {
-		exprStr, exists := billing_setting.GetBillingExpr(modelName)
+	useTiered := billing_setting.GetBillingMode(modelName) == billing_setting.BillingModeTieredExpr
+	var exprStr string
+	var exists bool
+	if useTiered {
+		exprStr, exists = billing_setting.GetBillingExpr(modelName)
+	} else if info.IsModelMapped {
+		if billing_setting.GetBillingMode(info.UpstreamModelName) == billing_setting.BillingModeTieredExpr {
+			if tailExpr, tailOK := billing_setting.GetBillingExpr(info.UpstreamModelName); tailOK && strings.TrimSpace(tailExpr) != "" {
+				exprStr = tailExpr
+				exists = true
+				useTiered = true
+			}
+		}
+	}
+	if reuseTaskExpression || useTiered {
 		quotaPerUnit := common.QuotaPerUnit
 		var frozenRequest *billingexpr.RequestInput
 		if reuseTaskExpression {
 			// Channel retries may refresh usage estimates and group discounts,
-			// but an admitted task retains its expression and conversion contract.
+			// but an admitted task retains its expression and conversion contract,
+			// including expressions inherited from the first channel's target.
 			exprStr, exists = frozenBilling.ExprString, true
 			quotaPerUnit = frozenBilling.QuotaPerUnit
 			frozenRequest = frozenBilling.RequestInput

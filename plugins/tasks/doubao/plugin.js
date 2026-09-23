@@ -337,7 +337,10 @@ export function extractUsage(ctx) {
   validateDuration(req, metadata);
   const content = req.content === undefined ? metadata.content : req.content;
   if (ctx.usagePurpose === "billing_ratios") {
-    const ratio = videoInputRatio(ctx.model, req.resolution || metadata.resolution, content);
+    // Known mapped models own their rates. A custom deployment identifier has
+    // no rate table, so retain the public model's existing pricing contract.
+    const rateModel = meta.models.includes(ctx.upstreamModel) ? ctx.upstreamModel : ctx.model;
+    const ratio = videoInputRatio(rateModel, req.resolution || metadata.resolution, content);
     return ratio === 1 ? null : { video_input_ratio: ratio };
   }
   let seconds = Number(req.seconds || req.duration || metadata.duration || 0);

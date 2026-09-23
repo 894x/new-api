@@ -688,8 +688,9 @@ protocols.openai_video = {
       }
     }
     const hasImage = hasHailuoImage(req, hasInputReferenceFile);
-    if (ctx.model === "MiniMax-H3") h3VideoRequest(req, ctx.model, false);
-    else if (meta.models.includes(ctx.model)) validateHailuoCombo(ctx.model, outboundDuration(req), outboundResolution(req, ctx.model), hasImage);
+    const comboModel = ctx.upstreamModel || ctx.model;
+    if (comboModel === "MiniMax-H3") h3VideoRequest(req, comboModel, false);
+    else if (meta.models.includes(comboModel)) validateHailuoCombo(comboModel, outboundDuration(req), outboundResolution(req, comboModel), hasImage);
     return {
       kind: "submit",
       model: ctx.model,

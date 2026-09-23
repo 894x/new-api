@@ -128,6 +128,36 @@ func TestDoubaoPluginPreservesPricingAndApproved25Rates(t *testing.T) {
 	}
 }
 
+func TestDoubaoPluginMappedRateIdentity(t *testing.T) {
+	plugin := doubaoPlugin(t)
+	for _, tc := range []struct {
+		name, model, upstream string
+		want                  float64
+	}{
+		{"alias to official model", "customer-video", "doubao-seedance-2-0-260128", 31.0 / 46},
+		{"known target overrides public model", "doubao-seedance-2-0-260128", "doubao-seedance-2-5-260628", 7.0 / 10.7},
+		{"custom deployment keeps public rate", "doubao-seedance-2-0-260128", "ep-custom-deployment", 31.0 / 46},
+		{"known target with unit ratio does not fall back", "doubao-seedance-2-0-260128", "doubao-seedance-2-0-fast-260128", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			value, err := plugin.Engine.Call(t.Context(), "extractUsage", map[string]any{
+				"model": tc.model, "upstreamModel": tc.upstream, "usagePurpose": "billing_ratios",
+				"requestBody": map[string]any{"resolution": "1080p", "content": []any{
+					map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://cdn.example/input.mp4"}},
+				}},
+			})
+			require.NoError(t, err)
+			if tc.want == 1 {
+				assert.Nil(t, value)
+				return
+			}
+			ratios, ok := value.(map[string]any)
+			require.True(t, ok)
+			assert.InDelta(t, tc.want, ratios["video_input_ratio"], 1e-12)
+		})
+	}
+}
+
 func TestDoubaoPluginRejectsDurationBypasses(t *testing.T) {
 	for _, input := range []string{
 		`{"duration":3601}`,

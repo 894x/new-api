@@ -65,7 +65,7 @@ Transitive dependencies should be audited before a final external release.
 | backend     | production  | Go        | `gopkg.in/yaml.v3`                                    | `v3.0.1`                             | Apache-2.0 OR MIT                                  |
 | backend     | production  | Go        | `gorm.io/driver/mysql`                                | `v1.4.3`                             | MIT                                                |
 | backend     | production  | Go        | `gorm.io/driver/postgres`                             | `v1.5.2`                             | MIT                                                |
-| backend     | production  | Go        | `gorm.io/gorm`                                        | `v1.25.2`                            | MIT                                                |
+| backend     | production  | Go        | `gorm.io/gorm`                                        | `v1.25.12`                           | MIT                                                |
 | backend     | production  | Go        | `github.com/expr-lang/expr`                           | `v1.17.8`                            | MIT                                                |
 | web | production | npm | `@base-ui/react` | `1.6.0` | MIT |
 | web | production | npm | `@codemirror/lang-javascript` | `6.2.5` | MIT |
@@ -103,6 +103,7 @@ Transitive dependencies should be audited before a final external release.
 | web | production | npm | `motion` | `12.42.2` | MIT |
 | web | production | npm | `nanoid` | `5.1.16` | MIT |
 | web | production | npm | `next-themes` | `0.4.6` | MIT |
+| web | production | npm | `node-forge` | `1.4.0` | BSD-3-Clause OR GPL-2.0 |
 | web | production | npm | `qrcode.react` | `4.2.0` | ISC |
 | web | production | npm | `react` | `19.2.7` | MIT |
 | web | production | npm | `react-day-picker` | `10.0.1` | MIT |
@@ -132,6 +133,7 @@ Transitive dependencies should be audited before a final external release.
 | web | development | npm | `@tanstack/react-router-devtools` | `1.167.0` | MIT |
 | web | development | npm | `@tanstack/router-plugin` | `1.168.23` | MIT |
 | web | development | npm | `@types/node` | `26.1.1` | MIT |
+| web | development | npm | `@types/node-forge` | `1.3.14` | MIT |
 | web | development | npm | `@types/react` | `19.2.17` | MIT |
 | web | development | npm | `@types/react-dom` | `19.2.3` | MIT |
 | web | development | npm | `@typescript/native-preview` | `7.0.0-dev.20260707.2` | Apache-2.0 |

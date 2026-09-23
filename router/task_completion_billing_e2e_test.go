@@ -27,19 +27,24 @@ func TestPluginTerminalBillingEndToEnd(t *testing.T) {
 		name                                    string
 		immediate, expression, monthly, failure bool
 		retryChange                             string
+		inherited                               bool
 	}{
-		{"immediate expression", true, true, false, false, ""},
-		{"immediate expression failure", true, true, false, true, ""},
-		{"immediate monthly expression", true, true, true, false, ""},
-		{"immediate monthly expression failure", true, true, true, true, ""},
-		{"polled monthly expression", false, true, true, false, ""},
-		{"polled monthly expression failure", false, true, true, true, ""},
-		{"immediate ratio", true, false, false, false, ""},
-		{"immediate ratio failure", true, false, false, true, ""},
-		{"immediate monthly ratio", true, false, true, false, ""},
-		{"retry retains expression and quota unit", true, true, false, false, "expression"},
-		{"retry retains expression mode", false, true, false, false, "mode"},
-		{"retry retains deleted expression through monthly polling", false, true, true, false, "deleted"},
+		{"immediate expression", true, true, false, false, "", false},
+		{"immediate expression failure", true, true, false, true, "", false},
+		{"immediate monthly expression", true, true, true, false, "", false},
+		{"immediate monthly expression failure", true, true, true, true, "", false},
+		{"polled monthly expression", false, true, true, false, "", false},
+		{"polled monthly expression failure", false, true, true, true, "", false},
+		{"immediate ratio", true, false, false, false, "", false},
+		{"immediate ratio failure", true, false, false, true, "", false},
+		{"immediate monthly ratio", true, false, true, false, "", false},
+		{"retry retains expression and quota unit", true, true, false, false, "expression", false},
+		{"retry retains expression mode", false, true, false, false, "mode", false},
+		{"retry retains deleted expression through monthly polling", false, true, true, false, "deleted", false},
+		{"mapped expression overrides existing alias per-call price", true, true, false, false, "", true},
+		{"retry freezes inherited expression and quota unit", true, true, false, false, "expression", true},
+		{"retry retains inherited expression mode", false, true, false, false, "mode", true},
+		{"retry retains deleted inherited expression through monthly polling", false, true, true, false, "deleted", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setupRelayRouterTestDB(t)
@@ -63,9 +68,17 @@ func TestPluginTerminalBillingEndToEnd(t *testing.T) {
 			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
 			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"billing-fixture":2}`))
 			settings := map[string]string{"billing_setting.billing_mode": `{}`, "group_ratio_setting.group_ratio": `{"default":0.25}`, "group_ratio_setting.model_tiered_ratios": `{}`}
+			expressionModel := "billing-fixture"
+			if tc.inherited {
+				expressionModel = "billing-target"
+				require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"billing-fixture":0.003}`))
+			}
 			if tc.expression {
-				settings["billing_setting.billing_mode"] = `{"billing-fixture":"tiered_expr"}`
-				settings["billing_setting.billing_expr"] = `{"billing-fixture":"tier(\"base\", u(\"seconds\") * (param(\"quality\") == \"high\" ? 2 : 1))"}`
+				settings["billing_setting.billing_mode"] = fmt.Sprintf(`{%q:"tiered_expr"}`, expressionModel)
+				settings["billing_setting.billing_expr"] = fmt.Sprintf(`{%q:%q}`, expressionModel, `tier("base", u("seconds") * (param("quality") == "high" ? 2 : 1))`)
+				if tc.inherited {
+					settings["billing_setting.billing_mode"] = `{"billing-fixture":"ratio","billing-target":"tiered_expr"}`
+				}
 			}
 			if tc.monthly {
 				settings["group_ratio_setting.model_tiered_ratios"] = `{"default":{"billing-fixture":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":1},{"min_monthly_original_quota":10000,"ratio":0.5}]}}}`
@@ -73,7 +86,7 @@ func TestPluginTerminalBillingEndToEnd(t *testing.T) {
 			require.NoError(t, config.GlobalConfig.LoadFromDB(settings))
 			pluginruntime.DefaultRegistry = pluginruntime.NewRegistry()
 			_, err := pluginruntime.DefaultRegistry.RegisterFactory(`
-export const meta = {apiVersion:1,key:"billing-fixture",name:"Billing fixture",version:"1.0.0",author:{name:"Test"},models:["billing-fixture"],fetchMode:"per_task",usageSchema:{seconds:{type:"number",unit:"second",description:"Video duration"}},routes:[{method:"POST",path:"/billing-fixture/jobs",type:"submit",decode:"decode",render:"created"}]};
+export const meta = {apiVersion:1,key:"billing-fixture",name:"Billing fixture",version:"1.0.0",author:{name:"Test"},models:["billing-fixture","billing-target"],fetchMode:"per_task",usageSchema:{seconds:{type:"number",unit:"second",description:"Video duration"}},routes:[{method:"POST",path:"/billing-fixture/jobs",type:"submit",decode:"decode",render:"created"}]};
 export const native = {decode(ctx){return {kind:"submit",model:ctx.body.value.model,action:"text_to_video",requestBody:ctx.body.value};},created(ctx,task){return {id:task.task_id,status:task.status};}};
 export function buildSubmitRequest(ctx){return {url:ctx.baseUrl+"/submit",method:"POST",body:ctx.requestBody};}
 export function extractUsage(ctx){return {seconds:ctx.requestBody.seconds};}
@@ -98,7 +111,7 @@ export function extractUsageOnComplete(task,result,b){return {seconds:b.seconds}
 						changed := map[string]string{}
 						switch tc.retryChange {
 						case "expression":
-							changed["billing_setting.billing_expr"] = `{"billing-fixture":"u(\"seconds\") * 99"}`
+							changed["billing_setting.billing_expr"] = fmt.Sprintf(`{%q:%q}`, expressionModel, `u("seconds") * 99`)
 						case "mode":
 							changed["billing_setting.billing_mode"] = `{}`
 						case "deleted":
@@ -130,6 +143,9 @@ export function extractUsageOnComplete(task,result,b){return {seconds:b.seconds}
 			require.NoError(t, model.DB.Create(&token).Error)
 			channelSettings := `{"task_plugin_key":"billing-fixture"}`
 			ch := model.Channel{Type: constant.ChannelTypeTaskPlugin, Name: "billing-fixture", Key: "provider-key", Models: "billing-fixture", Group: "default", Status: common.ChannelStatusEnabled, BaseURL: &upstream.URL, Setting: &channelSettings, AutoBan: common.GetPointer(0), Priority: common.GetPointer(int64(10))}
+			if tc.inherited {
+				ch.ModelMapping = common.GetPointer(`{"billing-fixture":"billing-target"}`)
+			}
 			require.NoError(t, model.DB.Create(&ch).Error)
 			require.NoError(t, ch.AddAbilities(nil))
 			var retryChannel model.Channel
@@ -150,6 +166,13 @@ export function extractUsageOnComplete(task,result,b){return {seconds:b.seconds}
 			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 			var task model.Task
 			require.NoError(t, model.DB.First(&task).Error)
+			if tc.inherited {
+				assert.Equal(t, "billing-fixture", task.Properties.OriginModelName)
+				assert.Equal(t, "billing-target", task.Properties.UpstreamModelName)
+				require.NotNil(t, task.PrivateData.BillingContext)
+				require.NotNil(t, task.PrivateData.BillingContext.TieredSnapshot)
+				assert.Equal(t, "billing-fixture", task.PrivateData.BillingContext.TieredSnapshot.ModelName)
+			}
 			if tc.retryChange != "" {
 				wantReserve := 2500
 				if tc.monthly {
