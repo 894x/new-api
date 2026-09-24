@@ -16,6 +16,17 @@ type OpenAIError struct {
 	Param    string          `json:"param"`
 	Code     any             `json:"code"`
 	Metadata json.RawMessage `json:"metadata,omitempty"`
+	// RawError replaces the serialized object when a provider embeds a JSON
+	// error in its message. It is never serialized as an additional field.
+	RawError json.RawMessage `json:"-"`
+}
+
+func (e OpenAIError) MarshalJSON() ([]byte, error) {
+	if len(e.RawError) > 0 {
+		return e.RawError, nil
+	}
+	type plainOpenAIError OpenAIError
+	return kitutil.Marshal(plainOpenAIError(e))
 }
 
 // IsPresent reports whether an upstream response actually contains an error.

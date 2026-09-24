@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
+	"gopkg.in/yaml.v3"
 )
 
 const publicErrorMessage = "请求处理失败，请稍后重试。如果多次尝试仍然失败，请联系管理员。"
@@ -65,6 +66,232 @@ func PublicErrorMessage(requestId string) string {
 	return common.MessageWithRequestId(publicErrorMessage, requestId)
 }
 
+func matchingObjectEnd(message string, start int) (int, bool) {
+	depth := 0
+	hasTopLevelColon := false
+	var quote byte
+	escaped := false
+	for i := start; i < len(message); i++ {
+		ch := message[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch ch {
+		case '\'', '"':
+			quote = ch
+		case '{':
+			depth++
+		case ':':
+			if depth == 1 {
+				hasTopLevelColon = true
+			}
+		case '}':
+			depth--
+			if depth == 0 {
+				return i, hasTopLevelColon
+			}
+		}
+	}
+	return -1, false
+}
+
+func hasMissingMappingValue(candidate []byte) bool {
+	var quote byte
+	escaped := false
+	for i, ch := range candidate {
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			continue
+		}
+		if ch != ':' {
+			continue
+		}
+		for j := i + 1; j < len(candidate); j++ {
+			if candidate[j] == ' ' || candidate[j] == '\t' || candidate[j] == '\n' {
+				continue
+			}
+			if candidate[j] == ',' || candidate[j] == '}' {
+				return true
+			}
+			break
+		}
+	}
+	return false
+}
+
+func normalizePythonNull(candidate []byte) []byte {
+	result := make([]byte, 0, len(candidate))
+	var quote byte
+	escaped := false
+	for i := 0; i < len(candidate); i++ {
+		ch := candidate[i]
+		if quote != 0 {
+			result = append(result, ch)
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			quote = ch
+			result = append(result, ch)
+			continue
+		}
+		if i+4 <= len(candidate) && string(candidate[i:i+4]) == "None" {
+			previous := byte(0)
+			for j := i - 1; j >= 0; j-- {
+				if candidate[j] != ' ' && candidate[j] != '\t' && candidate[j] != '\n' {
+					previous = candidate[j]
+					break
+				}
+			}
+			next := byte(0)
+			for j := i + 4; j < len(candidate); j++ {
+				if candidate[j] != ' ' && candidate[j] != '\t' && candidate[j] != '\n' {
+					next = candidate[j]
+					break
+				}
+			}
+			if (previous == ':' || previous == '[' || previous == ',') &&
+				(next == ',' || next == '}' || next == ']') {
+				result = append(result, "null"...)
+				i += 3
+				continue
+			}
+		}
+		result = append(result, ch)
+	}
+	return result
+}
+
+func embeddedMessageDictionary(message string) json.RawMessage {
+	for start := strings.IndexByte(message, '{'); start >= 0; {
+		end, hasTopLevelColon := matchingObjectEnd(message, start)
+		if end < 0 {
+			return nil
+		}
+		candidate := []byte(message[start : end+1])
+		var value map[string]any
+		if common.Unmarshal(candidate, &value) != nil {
+			value = nil
+			if hasTopLevelColon && !hasMissingMappingValue(candidate) {
+				// Provider validation errors can include Python-style flow maps.
+				// YAML parses this notation without evaluating expressions.
+				_ = yaml.Unmarshal(normalizePythonNull(candidate), &value)
+			}
+		}
+		if value != nil {
+			encoded, err := common.Marshal(value)
+			if err == nil {
+				return encoded
+			}
+		}
+		next := strings.IndexByte(message[end+1:], '{')
+		if next < 0 {
+			break
+		}
+		start = end + next + 1
+	}
+	return nil
+}
+
+func attachEmbeddedMessageDictionary(raw json.RawMessage) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if common.Unmarshal(raw, &fields) != nil || fields == nil {
+		return raw
+	}
+	if _, exists := fields["message_data"]; exists {
+		return raw
+	}
+	var message string
+	if common.Unmarshal(fields["message"], &message) != nil {
+		return raw
+	}
+	if data := embeddedMessageDictionary(message); len(data) > 0 {
+		fields["message_data"] = data
+		if enriched, err := common.Marshal(fields); err == nil {
+			return enriched
+		}
+	}
+	return raw
+}
+
+func embeddedJSONObject(message string) json.RawMessage {
+	for start := strings.IndexByte(message, '{'); start >= 0; {
+		end, _ := matchingObjectEnd(message, start)
+		if end < 0 {
+			return nil
+		}
+		candidate := json.RawMessage(message[start : end+1])
+		var fields map[string]json.RawMessage
+		if common.Unmarshal(candidate, &fields) == nil && fields != nil {
+			return candidate
+		}
+		next := strings.IndexByte(message[end+1:], '{')
+		if next < 0 {
+			break
+		}
+		start = end + next + 1
+	}
+	return nil
+}
+
+// Some providers append a JSON object (or a JSON-encoded object string) to
+// their error message. Return the decoded object as the entire error payload.
+func unwrapEmbeddedUpstreamError(result types.OpenAIError) types.OpenAIError {
+	message := result.Message
+	if raw := embeddedJSONObject(message); len(raw) > 0 {
+		result.RawError = attachEmbeddedMessageDictionary(raw)
+		return result
+	}
+	for start := strings.IndexByte(message, '"'); start >= 0; {
+		if afterQuote := strings.TrimLeft(message[start+1:], " \t\r\n"); strings.HasPrefix(afterQuote, "{") {
+			var decoded string
+			if common.DecodeJson(strings.NewReader(message[start:]), &decoded) == nil {
+				if raw := embeddedJSONObject(decoded); len(raw) > 0 {
+					result.RawError = attachEmbeddedMessageDictionary(raw)
+					return result
+				}
+			}
+		}
+		next := strings.IndexByte(message[start+1:], '"')
+		if next < 0 {
+			break
+		}
+		start += next + 1
+	}
+	if start := strings.IndexByte(message, '{'); start >= 0 && strings.Contains(message[start:], `\"`) {
+		var decoded string
+		if common.Unmarshal([]byte(`"`+message[start:]+`"`), &decoded) == nil {
+			if raw := embeddedJSONObject(decoded); len(raw) > 0 {
+				result.RawError = attachEmbeddedMessageDictionary(raw)
+			}
+		}
+	}
+	return result
+}
+
 func OpenAIErrorForClient(c *gin.Context, err *types.NewAPIError) types.OpenAIError {
 	if err != nil && err.GetErrorCode() == types.ErrorCodeChannelModelCapacityExhausted {
 		return types.OpenAIError{Code: string(types.ErrorCodeChannelModelCapacityExhausted), Type: "rate_limit_error", Message: "The requested model is temporarily at capacity. Retry after the indicated delay."}
@@ -89,7 +316,10 @@ func OpenAIErrorForClient(c *gin.Context, err *types.NewAPIError) types.OpenAIEr
 			Code:    "request_failed",
 		}
 	}
-	result := err.ToOpenAIError()
+	result := unwrapEmbeddedUpstreamError(err.ToOpenAIError())
+	if len(result.RawError) > 0 {
+		return result
+	}
 	result.Message = common.MessageWithRequestId(result.Message, c.GetString(common.RequestIdKey))
 	return result
 }
