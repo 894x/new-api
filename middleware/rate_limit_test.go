@@ -73,6 +73,40 @@ func TestRedisIPRateLimiterThresholdTTLAndNamespace(t *testing.T) {
 	assert.True(t, redisServer.Exists(legacyKey), "the v2 counter must not touch an old list key")
 }
 
+func TestGlobalWebRateLimitExcludesStaticAssets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	redisServer, _ := useRateLimitMiniRedis(t)
+
+	previousEnabled := common.GlobalWebRateLimitEnable
+	previousLimit := common.GlobalWebRateLimitNum
+	previousDuration := common.GlobalWebRateLimitDuration
+	common.GlobalWebRateLimitEnable = true
+	common.GlobalWebRateLimitNum = 1
+	common.GlobalWebRateLimitDuration = 180
+	t.Cleanup(func() {
+		common.GlobalWebRateLimitEnable = previousEnabled
+		common.GlobalWebRateLimitNum = previousLimit
+		common.GlobalWebRateLimitDuration = previousDuration
+	})
+
+	router := gin.New()
+	require.NoError(t, router.SetTrustedProxies(nil))
+	router.NoRoute(GlobalWebRateLimit(), func(c *gin.Context) { c.Status(http.StatusOK) })
+	remoteAddr := "192.0.2.50:12345"
+	key := redisIPRateLimitKey("GW", "192.0.2.50")
+	for _, path := range []string{"/static/js/a.js", "/static/css/a.css", "/static/js/b.js"} {
+		assert.Equal(t, http.StatusOK, performRateLimitRequest(router, path, remoteAddr).Code)
+	}
+	assert.False(t, redisServer.Exists(key))
+	assert.Equal(t, http.StatusOK, performRateLimitRequest(router, "/", remoteAddr).Code)
+	assert.Equal(t, http.StatusTooManyRequests, performRateLimitRequest(router, "/settings", remoteAddr).Code)
+	postResponse := httptest.NewRecorder()
+	postRequest := httptest.NewRequest(http.MethodPost, "/static/js/a.js", nil)
+	postRequest.RemoteAddr = remoteAddr
+	router.ServeHTTP(postResponse, postRequest)
+	assert.Equal(t, http.StatusTooManyRequests, postResponse.Code)
+}
+
 func TestRedisUserRateLimiterUsesSharedFixedWindow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	redisServer, _ := useRateLimitMiniRedis(t)

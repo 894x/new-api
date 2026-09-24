@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -159,10 +160,19 @@ func rateLimitFactory(maxRequestNum int, duration int64, mark string) func(c *gi
 }
 
 func GlobalWebRateLimit() func(c *gin.Context) {
-	if common.GlobalWebRateLimitEnable {
-		return rateLimitFactory(common.GlobalWebRateLimitNum, common.GlobalWebRateLimitDuration, "GW")
+	if !common.GlobalWebRateLimitEnable {
+		return defNext
 	}
-	return defNext
+	limit := rateLimitFactory(common.GlobalWebRateLimitNum, common.GlobalWebRateLimitDuration, "GW")
+	return func(c *gin.Context) {
+		// A cold frontend load can fetch more assets than the page limit allows.
+		if (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead) &&
+			strings.HasPrefix(c.Request.URL.Path, "/static/") {
+			c.Next()
+			return
+		}
+		limit(c)
+	}
 }
 
 func GlobalAPIRateLimit() func(c *gin.Context) {
