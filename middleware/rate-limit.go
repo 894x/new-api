@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -251,4 +252,39 @@ func SearchRateLimit() func(c *gin.Context) {
 		return defNext
 	}
 	return userRateLimitFactory(common.SearchRateLimitNum, common.SearchRateLimitDuration, "SR")
+}
+
+// LogQueryRateLimit must run after TokenAuthReadOnly. All tokens belonging to
+// one user share this bucket; login and other critical operations do not.
+func LogQueryRateLimit() gin.HandlerFunc {
+	if !common.LogQueryRateLimitEnable {
+		return defNext
+	}
+	var memoryLimiter common.InMemoryRateLimiter
+	if !common.RedisEnabled {
+		memoryLimiter.Init(common.RateLimitKeyExpirationDuration)
+	}
+	return func(c *gin.Context) {
+		userID := c.GetInt("id")
+		if userID <= 0 {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		limit, err := model.GetUserLogQueryRateLimit(userID)
+		if err != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("log query limit lookup failed (user=%d): %v", userID, err))
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		if limit <= 0 || limit > common.MaxLogQueryRateLimit {
+			limit = common.LogQueryRateLimitNum
+		}
+		if common.RedisEnabled {
+			userRedisRateLimiter(c, limit, common.LogQueryRateLimitDuration, redisUserRateLimitKey("LQ", userID))
+			return
+		}
+		if !memoryLimiter.Request(fmt.Sprintf("LQ:user:%d", userID), limit, common.LogQueryRateLimitDuration) {
+			writeRateLimited(c, common.LogQueryRateLimitDuration)
+		}
+	}
 }

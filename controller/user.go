@@ -428,7 +428,15 @@ func GetUser(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    user,
+		"data": struct {
+			*model.User
+			LogQueryRateLimitPolicy gin.H `json:"log_query_rate_limit_policy"`
+		}{user, gin.H{
+			"enabled":        common.LogQueryRateLimitEnable,
+			"default_limit":  common.LogQueryRateLimitNum,
+			"window_seconds": common.LogQueryRateLimitDuration,
+			"max_limit":      common.MaxLogQueryRateLimit,
+		}},
 	})
 	return
 }
@@ -679,6 +687,16 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
+	if updatedUser.LogQueryRateLimit != nil {
+		if c.GetInt("role") < common.RoleAdminUser {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege)})
+			return
+		}
+		if *updatedUser.LogQueryRateLimit < 0 || *updatedUser.LogQueryRateLimit > common.MaxLogQueryRateLimit {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "message": "log_query_rate_limit must be between 0 and 60000"})
+			return
+		}
+	}
 	updatedUser.Username = strings.TrimSpace(updatedUser.Username)
 	if updatedUser.Username == "" {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
@@ -788,6 +806,10 @@ func UpdateSelf(c *gin.Context) {
 	var requestData map[string]any
 	if err := common.DecodeJson(c.Request.Body, &requestData); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if _, exists := requestData["log_query_rate_limit"]; exists {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege)})
 		return
 	}
 

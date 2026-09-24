@@ -135,6 +135,12 @@ func InitEnv() {
 	SearchRateLimitEnable = GetEnvOrDefaultBool("SEARCH_RATE_LIMIT_ENABLE", true)
 	SearchRateLimitNum = GetEnvOrDefault("SEARCH_RATE_LIMIT", 10)
 	SearchRateLimitDuration = int64(GetEnvOrDefault("SEARCH_RATE_LIMIT_DURATION", 60))
+	LogQueryRateLimitEnable = GetEnvOrDefaultBool("LOG_QUERY_RATE_LIMIT_ENABLE", true)
+	LogQueryRateLimitNum = GetEnvOrDefault("LOG_QUERY_RATE_LIMIT", 60)
+	LogQueryRateLimitDuration = int64(GetEnvOrDefault("LOG_QUERY_RATE_LIMIT_DURATION", 60))
+	if LogQueryRateLimitNum < 1 || LogQueryRateLimitNum > MaxLogQueryRateLimit || LogQueryRateLimitDuration < 1 || LogQueryRateLimitDuration > 1200 {
+		log.Fatal("LOG_QUERY_RATE_LIMIT must be between 1 and 60000; LOG_QUERY_RATE_LIMIT_DURATION must be between 1 and 1200 seconds")
+	}
 	initConstantEnv()
 }
 

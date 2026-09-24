@@ -114,6 +114,8 @@ type User struct {
 	LastLoginAt          int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
 	AuthVersion          int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
 	AdminPermissions     map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
+	// Nil or zero inherits the global log-query limit; only admin edits may set it.
+	LogQueryRateLimit *int `json:"log_query_rate_limit,omitempty" gorm:"type:int"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -890,6 +892,7 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 		"aff_quota",
 		"aff_history",
 		"auth_version",
+		"log_query_rate_limit",
 	).Updates(newUser).Error; err != nil {
 		return err
 	}
@@ -917,6 +920,9 @@ func (user *User) Edit(updatePassword bool) error {
 }
 
 func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
+	if user.LogQueryRateLimit != nil && (*user.LogQueryRateLimit < 0 || *user.LogQueryRateLimit > common.MaxLogQueryRateLimit) {
+		return errors.New("log_query_rate_limit must be between 0 and 60000")
+	}
 	var err error
 	if updatePassword {
 		user.Password, err = common.HashAccountPassword(user.Password)
@@ -931,6 +937,9 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 		"display_name": newUser.DisplayName,
 		"group":        newUser.Group,
 		"remark":       newUser.Remark,
+	}
+	if newUser.LogQueryRateLimit != nil {
+		updates["log_query_rate_limit"] = *newUser.LogQueryRateLimit
 	}
 	if updatePassword {
 		updates["password"] = newUser.Password

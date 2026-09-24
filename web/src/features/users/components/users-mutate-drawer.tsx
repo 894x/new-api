@@ -95,6 +95,7 @@ import {
   transformUserToFormDefaults,
 } from '../lib'
 import type { User } from '../types'
+import { UserLogQueryLimit } from './user-log-query-limit'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { UserRequestCapture } from './user-request-capture'
 import { useUsers } from './users-provider'
@@ -145,6 +146,7 @@ export function UsersMutateDrawer({
   // Load existing data when updating
   useEffect(() => {
     if (open && isUpdate && currentRow) {
+      form.reset(USER_FORM_DEFAULT_VALUES)
       // For update, fetch fresh data
       getUser(currentRow.id)
         .then((result) => {
@@ -259,6 +261,7 @@ export function UsersMutateDrawer({
                 />
               )}
               {/* Basic Information */}
+              {isUpdate && isAdmin && <UserLogQueryLimit />}
               <SideDrawerSection>
                 <h3 className='text-sm font-medium'>
                   {t('Basic Information')}

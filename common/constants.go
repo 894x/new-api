@@ -234,7 +234,14 @@ var (
 	SearchRateLimitEnable         = true
 	SearchRateLimitNum            = 10
 	SearchRateLimitDuration int64 = 60
+
+	LogQueryRateLimitEnable         = true
+	LogQueryRateLimitNum            = 60
+	LogQueryRateLimitDuration int64 = 60
 )
+
+// MaxLogQueryRateLimit bounds administrator overrides and environment defaults.
+const MaxLogQueryRateLimit = 60000
 
 var RateLimitKeyExpirationDuration = 20 * time.Minute
 

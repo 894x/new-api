@@ -32,6 +32,13 @@ export type UserStatus = z.infer<typeof userStatusSchema>
 export const userRoleSchema = z.number()
 export type UserRole = z.infer<typeof userRoleSchema>
 
+export const logQueryRateLimitPolicySchema = z.object({
+  enabled: z.boolean(),
+  default_limit: z.number(),
+  window_seconds: z.number(),
+  max_limit: z.number(),
+})
+
 export const userSchema = z.object({
   id: z.number(),
   username: z.string(),
@@ -60,6 +67,8 @@ export const userSchema = z.object({
   last_login_at: z.number().optional(),
   DeletedAt: z.any().nullable().optional(),
   remark: z.string().optional(),
+  log_query_rate_limit: z.number().nullable().optional(),
+  log_query_rate_limit_policy: logQueryRateLimitPolicySchema.optional(),
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
     .optional(),
@@ -126,6 +135,7 @@ export interface UserFormData {
   quota?: number // Only used when updating user
   group?: string // Only used when updating user
   remark?: string // Only used when updating user
+  log_query_rate_limit?: number // 0 inherits the global limit; admin edits only
   admin_permissions?: AdminPermissionMatrix
 }
 

@@ -28,7 +28,11 @@ import { quotaUnitsToDollars } from '@/lib/format'
 import { ROLE } from '@/lib/roles'
 
 import { DEFAULT_GROUP } from '../constants'
-import type { UserFormData, User } from '../types'
+import {
+  logQueryRateLimitPolicySchema,
+  type UserFormData,
+  type User,
+} from '../types'
 
 // ============================================================================
 // Form Schema
@@ -42,6 +46,13 @@ export const userFormSchema = z.object({
   quota_dollars: z.number().min(0).optional(),
   group: z.string().optional(),
   remark: z.string().optional(),
+  log_query_rate_limit: z
+    .number()
+    .int('Enter a whole number from 0 to 60000')
+    .min(0, 'Enter a whole number from 0 to 60000')
+    .max(60000, 'Enter a whole number from 0 to 60000')
+    .optional(),
+  log_query_rate_limit_policy: logQueryRateLimitPolicySchema.optional(),
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
     .optional(),
@@ -103,6 +114,7 @@ export function transformFormDataToPayload(
     payload.group = data.group
     payload.remark = data.remark || undefined
     payload.id = userId
+    payload.log_query_rate_limit = data.log_query_rate_limit
   }
 
   return payload
@@ -122,6 +134,8 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     quota_dollars: quotaUnitsToDollars(user.quota),
     group: user.group || DEFAULT_GROUP,
     remark: user.remark || '',
+    log_query_rate_limit: user.log_query_rate_limit ?? 0,
+    log_query_rate_limit_policy: user.log_query_rate_limit_policy,
     admin_permissions: user.admin_permissions ?? {},
   }
 }
