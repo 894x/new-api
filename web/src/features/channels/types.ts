@@ -158,6 +158,7 @@ export interface ChannelOtherSettings {
 export type ParameterCapabilityAction = 'reject' | 'drop' | 'clamp'
 
 export interface ParameterCapability {
+  media?: VideoMediaCapability
   transform?:
     | 'none'
     | 'image_url_to_base64'
@@ -169,6 +170,14 @@ export interface ParameterCapability {
   allowed_values?: string[]
   on_violation?: ParameterCapabilityAction
   participate_in_selection?: boolean
+}
+
+export interface VideoMediaCapability {
+  kind?: 'video'
+  formats?: Partial<
+    Record<'url' | 'base64', { supported?: boolean; max_media_bytes?: number }>
+  >
+  conversions?: { url_to_base64?: boolean; base64_to_url?: boolean }
 }
 
 export interface ModelParameterCapabilityRule {

@@ -345,6 +345,7 @@ func migrateDB() error {
 		&UserAssetGroup{},
 		&UserAsset{},
 		&AssetStoredObject{},
+		&RelayMediaObject{},
 		&AssetStorageAccount{},
 		&UserAssetGroupReplica{},
 		&UserAssetReplica{},

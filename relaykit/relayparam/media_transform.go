@@ -21,7 +21,7 @@ func ApplyMediaTransforms(data []byte, config *dto.ParameterCapabilityConfig, mo
 	capabilities := config.Resolve(model)
 	paths := make([]string, 0)
 	for path, capability := range capabilities {
-		if capability.HasMediaTransform() && (capability.Supported == nil || *capability.Supported) {
+		if capability.Media == nil && capability.HasMediaTransform() && (capability.Supported == nil || *capability.Supported) {
 			paths = append(paths, path)
 		}
 	}

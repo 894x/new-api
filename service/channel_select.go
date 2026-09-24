@@ -362,9 +362,10 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 	var selectGroup string
 	if retry.GetRetry() == 0 {
 		// Strict bindings must not be bypassed by dynamic routing. Best-effort
-		// affinity retains the fork's dynamic-routing precedence.
+		// affinity retains dynamic-routing and video-delivery tier precedence.
 		if preferredChannelID, found := GetPreferredChannelByAffinity(c, modelName, usingGroup); found &&
-			(RequestPolicy(c).SessionMode == "strict" || !retry.DynamicRoutingEligible || !DynamicRoutingEnabled()) {
+			(RequestPolicy(c).SessionMode == "strict" ||
+				(!RequestHasVideoMedia(retry.RequestBody) && (!retry.DynamicRoutingEligible || !DynamicRoutingEnabled()))) {
 			affinityUsable := false
 			preferred, err := model.CacheGetChannel(preferredChannelID)
 			affinitySatisfied := false

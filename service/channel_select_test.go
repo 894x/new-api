@@ -11,12 +11,63 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVideoDeliveryPreferenceDoesNotOverrideStrictAffinity(t *testing.T) {
+	for _, mode := range []string{"prefer", "strict"} {
+		t.Run(mode, func(t *testing.T) {
+			db := setupChannelSelectAutoGroupsTest(t)
+			configureDynamicRoutingForTest(t, false)
+			for _, id := range []int{9401, 9402} {
+				createChannelSelectAutoGroupsChannel(t, db, id, "default", "gpt-5")
+				var channel model.Channel
+				require.NoError(t, db.First(&channel, id).Error)
+				channel.SetOtherSettings(kitdto.ChannelOtherSettings{ParameterCapabilities: &kitdto.ParameterCapabilityConfig{
+					Defaults: map[string]kitdto.ParameterCapability{"messages.*.content.*.video_url": {
+						ParticipateInSelection: common.GetPointer(true),
+						Media: &kitdto.MediaCapability{Kind: "video", Formats: map[string]kitdto.MediaFormatCapability{
+							"url": {Supported: common.GetPointer(true)}, "base64": {Supported: common.GetPointer(id == 9402)},
+						}, Conversions: kitdto.MediaConversions{Base64ToURL: common.GetPointer(true)}},
+					}},
+				}})
+				require.NoError(t, db.Model(&channel).Update("settings", channel.OtherSettings).Error)
+			}
+			model.InitChannelCache()
+			affinity := operation_setting.GetChannelAffinitySetting()
+			previous := *affinity
+			t.Cleanup(func() { *affinity = previous })
+			rule := operation_setting.ChannelAffinityRule{Name: t.Name(), ModelRegex: []string{"^gpt-5$"}, SessionMode: mode,
+				KeySources: []operation_setting.ChannelAffinityKeySource{{Type: "request_header", Key: "X-Affinity-Key"}}}
+			affinity.Enabled, affinity.Rules = true, []operation_setting.ChannelAffinityRule{rule}
+			cacheKey := buildChannelAffinityCacheKeySuffix(rule, "gpt-5", "default", t.Name())
+			cache := getChannelAffinityCache()
+			require.NoError(t, cache.SetWithTTL(cacheKey, 9401, time.Minute))
+			t.Cleanup(func() { _, _ = cache.DeleteMany([]string{cacheKey}) })
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			c.Request.Header.Set("X-Affinity-Key", t.Name())
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+			selected, _, selectionErr := SelectChannelForRequest(c, "gpt-5", &RetryParam{
+				Ctx: c, ModelName: "gpt-5", TokenGroup: "default", RequestPath: c.Request.URL.Path,
+				RequestBody: []byte(`{"messages":[{"content":[{"video_url":{"url":"data:video/mp4;base64,AAAA"}}]}]}`),
+			})
+			require.Nil(t, selectionErr)
+			require.NotNil(t, selected)
+			if mode == "strict" {
+				assert.Equal(t, 9401, selected.Id, "strict sessions retain their bound channel")
+			} else {
+				assert.Equal(t, 9402, selected.Id, "best-effort affinity must not bypass native video delivery")
+			}
+		})
+	}
+}
 
 func TestSelectChannelStrictAffinityPrecedesDynamicRouting(t *testing.T) {
 	db := setupChannelSelectAutoGroupsTest(t)

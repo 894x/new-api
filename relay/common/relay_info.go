@@ -218,6 +218,7 @@ type RelayInfo struct {
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
 	ParameterCapabilityAudit              []relayparam.CapabilityChange
+	MediaProcessor                        relayparam.MediaProcessor
 
 	PriceData hosttypes.PriceData
 

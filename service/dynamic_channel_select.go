@@ -54,6 +54,15 @@ func ObserveDynamicRoutingSample(key dynamicrouting.ObservationKey, sample dynam
 }
 
 func getSatisfiedChannelForRoute(param *RetryParam, group string, retry int) (*model.Channel, bool, error) {
+	filtered, mediaSelection, filterErr := filterVideoMediaChannels(param, group)
+	if filterErr != nil {
+		return nil, false, filterErr
+	}
+	param = filtered
+	if mediaSelection {
+		// Attempted channels are already removed; do not skip another priority tier.
+		retry = 0
+	}
 	if param.DynamicRoutingEligible {
 		channel, handled, allAttempted, err := selectDynamicSatisfiedChannel(param, group)
 		if handled || err != nil {

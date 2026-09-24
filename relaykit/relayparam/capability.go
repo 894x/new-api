@@ -13,6 +13,7 @@ import (
 )
 
 type CapabilityViolationError struct {
+	Retryable bool
 	Model     string
 	Parameter string
 	Value     string

@@ -85,7 +85,7 @@ func textRequestViaResponses(c *gin.Context, info *relaycommon.RelayInfo, adapto
 			return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 
-		chatJSON, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(chatJSON, info, service.NewParameterMediaTransformer(c))
+		chatJSON, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(chatJSON, info, service.NewParameterMediaTransformer(c, info))
 		if err != nil {
 			return nil, newAPIErrorFromRequestPolicy(err)
 		}
@@ -136,7 +136,7 @@ func relayResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, adaptor 
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 	if !paramOverrideApplied {
-		jsonData, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(jsonData, info, service.NewParameterMediaTransformer(c))
+		jsonData, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(jsonData, info, service.NewParameterMediaTransformer(c, info))
 		if err != nil {
 			return nil, newAPIErrorFromRequestPolicy(err)
 		}

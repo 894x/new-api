@@ -164,6 +164,7 @@ func TestParameterCapabilityConfigValidatesRequestBodySizeConstraint(t *testing.
 		{Supported: &disabled},
 		{Max: &max, OnViolation: ParameterCapabilityActionClamp},
 		{Transform: ParameterTransformImage},
+		{Media: &MediaCapability{Kind: "video"}},
 	}
 	for _, capability := range tests {
 		config := ParameterCapabilityConfig{Defaults: map[string]ParameterCapability{

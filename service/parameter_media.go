@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/relayparam"
 	"github.com/gin-gonic/gin"
 )
@@ -30,7 +31,12 @@ type parameterMediaCache struct {
 
 // NewParameterMediaTransformer creates a lazy request-scoped downloader. No I/O
 // or cache allocation occurs for requests without a matching remote media field.
-func NewParameterMediaTransformer(c *gin.Context) relayparam.MediaTransformer {
+func NewParameterMediaTransformer(c *gin.Context, infos ...*relaycommon.RelayInfo) relayparam.MediaTransformer {
+	for _, info := range infos {
+		if info != nil {
+			info.MediaProcessor = requestVideoMedia(c)
+		}
+	}
 	return func(source, mediaType string) (string, error) {
 		if c == nil || c.Request == nil {
 			return "", errors.New("request context is unavailable")

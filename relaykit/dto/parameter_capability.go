@@ -68,13 +68,14 @@ type ParameterCapabilitySelector struct {
 }
 
 type ParameterCapability struct {
-	Transform              string   `json:"transform,omitempty"`
-	Supported              *bool    `json:"supported,omitempty"`
-	Min                    *float64 `json:"min,omitempty"`
-	Max                    *float64 `json:"max,omitempty"`
-	AllowedValues          []string `json:"allowed_values,omitempty"`
-	OnViolation            string   `json:"on_violation,omitempty"`
-	ParticipateInSelection *bool    `json:"participate_in_selection,omitempty"`
+	Media                  *MediaCapability `json:"media,omitempty"`
+	Transform              string           `json:"transform,omitempty"`
+	Supported              *bool            `json:"supported,omitempty"`
+	Min                    *float64         `json:"min,omitempty"`
+	Max                    *float64         `json:"max,omitempty"`
+	AllowedValues          []string         `json:"allowed_values,omitempty"`
+	OnViolation            string           `json:"on_violation,omitempty"`
+	ParticipateInSelection *bool            `json:"participate_in_selection,omitempty"`
 }
 
 func (c *ParameterCapabilityConfig) Validate() error {
@@ -171,7 +172,7 @@ func validateParameterCapabilityMap(parameters map[string]ParameterCapability) e
 	}
 	for path, capability := range parameters {
 		if path == ParameterCapabilityRequestBodySizeBytes {
-			if capability.Transform != "" || capability.Supported != nil || len(capability.AllowedValues) > 0 {
+			if capability.Media != nil || capability.Transform != "" || capability.Supported != nil || len(capability.AllowedValues) > 0 {
 				return fmt.Errorf("parameter %s only supports min, max, reject, and channel selection", path)
 			}
 			if capability.OnViolation != "" && capability.OnViolation != ParameterCapabilityActionReject {
@@ -195,6 +196,17 @@ func validateParameterCapabilityMap(parameters map[string]ParameterCapability) e
 				return fmt.Errorf("parameter %s minimum cannot exceed maximum", path)
 			}
 			continue
+		}
+		if capability.Media != nil {
+			if err := capability.Media.Validate(); err != nil {
+				return fmt.Errorf("parameter %s: %w", path, err)
+			}
+			if !strings.HasSuffix(path, ".video_url") && !strings.HasSuffix(path, ".video_url.url") {
+				return fmt.Errorf("parameter %s: video media capabilities require a video_url field", path)
+			}
+			if capability.OnViolation != "" && capability.OnViolation != ParameterCapabilityActionReject {
+				return fmt.Errorf("parameter %s: media capabilities must reject incompatible values", path)
+			}
 		}
 		switch capability.Transform {
 		case "", ParameterTransformNone, ParameterTransformImage, ParameterTransformAudio, ParameterTransformVideo:
@@ -234,6 +246,7 @@ func validateParameterCapabilityMap(parameters map[string]ParameterCapability) e
 func mergeParameterCapabilityMap(target map[string]ParameterCapability, source map[string]ParameterCapability) {
 	for path, override := range source {
 		base := target[path]
+		base.Media = MergeMediaCapability(base.Media, override.Media)
 		if override.Transform != "" {
 			base.Transform = override.Transform
 		}
@@ -260,7 +273,7 @@ func mergeParameterCapabilityMap(target map[string]ParameterCapability, source m
 }
 
 func (c ParameterCapability) HasMediaTransform() bool {
-	return c.Transform != "" && c.Transform != ParameterTransformNone
+	return c.Media != nil || (c.Transform != "" && c.Transform != ParameterTransformNone)
 }
 
 func (c *ParameterCapabilityConfig) HasMediaTransforms(model string) bool {
