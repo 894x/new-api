@@ -45,6 +45,7 @@ import {
 import type { User } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 import { UserQuotaCell } from './user-quota-cell'
+import { UserRequestCaptureCell } from './user-request-capture'
 
 export function useUsersColumns(): ColumnDef<User>[] {
   const { t } = useTranslation()
@@ -272,6 +273,14 @@ export function useUsersColumns(): ColumnDef<User>[] {
         },
         size: 240,
         enableSorting: false,
+        meta: { mobileHidden: true },
+      },
+      {
+        id: 'request_capture',
+        header: t('Detailed logs'),
+        cell: ({ row }) => <UserRequestCaptureCell user={row.original} />,
+        enableSorting: false,
+        size: 120,
         meta: { mobileHidden: true },
       },
       {
