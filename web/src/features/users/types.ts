@@ -156,8 +156,39 @@ export interface ManageUserQuotaPayload {
   value: number
 }
 
+export interface UserGroupRateLimit {
+  limits: [number, number, number]
+  models: Record<
+    string,
+    {
+      rpm?: number
+      tpm?: number
+    }
+  >
+}
+
+export interface UserGroupConfig {
+  user_id: number
+  username: string
+  group: string
+  discounts: Record<string, number>
+  rate_limit_enabled: boolean
+  global_rate_limit_enabled: boolean
+  rate_limit: UserGroupRateLimit
+  model_channel_groups: Record<string, string[]>
+  available_group_ratios: Record<string, number>
+}
+
+export interface UpdateUserGroupConfigPayload {
+  group: string
+  discounts: Record<string, number>
+  rate_limit_enabled: boolean
+  rate_limit: UserGroupRateLimit
+  model_channel_groups: Record<string, string[]>
+}
+
 // ============================================================================
 // Dialog Types
 // ============================================================================
 
-export type UsersDialogType = 'create' | 'update' | 'delete'
+export type UsersDialogType = 'create' | 'update' | 'delete' | 'group-config'

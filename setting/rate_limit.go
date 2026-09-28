@@ -88,6 +88,30 @@ func GetGroupRateLimit(group string) (totalCount, successCount, tpm int, found b
 	return config.Limits[0], config.Limits[1], config.Limits[2], true
 }
 
+func GetModelRequestRateLimitGroups() map[string]GroupRateLimit {
+	ModelRequestRateLimitMutex.RLock()
+	defer ModelRequestRateLimitMutex.RUnlock()
+
+	groups := make(map[string]GroupRateLimit, len(ModelRequestRateLimitGroup))
+	for group, config := range ModelRequestRateLimitGroup {
+		models := make(map[string]ModelRateLimit, len(config.Models))
+		for modelName, limits := range config.Models {
+			var rpm, tpm *int
+			if limits.RPM != nil {
+				value := *limits.RPM
+				rpm = &value
+			}
+			if limits.TPM != nil {
+				value := *limits.TPM
+				tpm = &value
+			}
+			models[modelName] = ModelRateLimit{RPM: rpm, TPM: tpm}
+		}
+		groups[group] = GroupRateLimit{Limits: config.Limits, Models: models}
+	}
+	return groups
+}
+
 // ResolveGroupModelRateLimit preserves the legacy request window and success
 // limit when RPM is inherited. An explicit RPM counts all requests in 60 seconds.
 func ResolveGroupModelRateLimit(group, modelName string) (total, success, tpm int, duration int64) {

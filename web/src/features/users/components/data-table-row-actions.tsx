@@ -28,6 +28,7 @@ import {
   ShieldAlert,
   Link2,
   CreditCard,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -85,6 +86,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const handleDelete = () => {
     setCurrentRow(user)
     setOpen('delete')
+  }
+
+  const handleGroupConfig = () => {
+    setCurrentRow(user)
+    setOpen('group-config')
   }
 
   const handleManage = async (action: Exclude<ManageUserAction, 'delete'>) => {
@@ -223,6 +229,15 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             <CreditCard size={16} />
           </DropdownMenuShortcut>
         </DropdownMenuItem>
+
+        {currentUser?.role === ROLE.SUPER_ADMIN && (
+          <DropdownMenuItem onClick={handleGroupConfig}>
+            {t('Customer group configuration')}
+            <DropdownMenuShortcut>
+              <SlidersHorizontal size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+        )}
 
         <DropdownMenuSeparator />
 

@@ -7804,6 +7804,22 @@
     "Zhipu": "智谱",
     "Zhipu GLM": "智谱GLM",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Customer group configuration": "客户分组配置",
+    "Customer group configuration saved": "客户分组配置已保存",
+    "Configure policies for {{username}} using user group {{group}}.": "为用户 {{username}} 配置用户分组 {{group}} 的策略。",
+    "Configure discounts, rate limits, and model channel pools.": "配置折扣、限速和模型渠道池。",
+    "Discounts": "折扣",
+    "Specified group discounts": "指定分组折扣",
+    "Set the ratio charged when this user group uses each billing group. Unconfigured billing groups keep their base ratio.": "设置该用户分组使用各计费分组时的扣费倍率。未配置的计费分组继续使用基础倍率。",
+    "These limits match the user group, even when an API key selects a different channel group.": "这些限制始终按用户分组匹配，即使 API Key 选择了不同的渠道分组。",
+    "Enable group rate limit": "启用分组限速",
+    "Turn off to inherit the global rate limits.": "关闭后继承全局限速。",
+    "Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.": "为每个模型选择渠道分组。没有规则时保持现有路由；选择为空时禁用该模型。",
+    "Values must be unique": "值不能重复",
+    "Select channel groups": "选择渠道分组",
+    "Must be ≥ 0": "必须大于等于 0",
+    "These policies apply to every user in group {{group}}. Assign an exclusive group before using this page for one customer.": "这些策略会应用于分组 {{group}} 下的所有用户。要为单个客户配置，请先分配独属分组。",
+    "Global model request rate limiting is disabled. These rules will take effect after it is enabled in system settings.": "全局模型请求限速当前已关闭。这些规则将在系统设置中启用限速后生效。"
   }
 }

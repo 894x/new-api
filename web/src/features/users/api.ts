@@ -29,6 +29,8 @@ import type {
   UserFormData,
   ManageUserAction,
   ManageUserQuotaPayload,
+  UserGroupConfig,
+  UpdateUserGroupConfigPayload,
   ApiResponse,
 } from './types'
 
@@ -161,6 +163,21 @@ export async function resetUserTwoFA(id: number): Promise<ApiResponse> {
  */
 export async function getGroups(): Promise<ApiResponse<string[]>> {
   const res = await api.get('/api/group/')
+  return res.data
+}
+
+export async function getUserGroupConfig(
+  id: number
+): Promise<ApiResponse<UserGroupConfig>> {
+  const res = await api.get(`/api/user/${id}/group-config`)
+  return res.data
+}
+
+export async function updateUserGroupConfig(
+  id: number,
+  data: UpdateUserGroupConfigPayload
+): Promise<ApiResponse<UserGroupConfig>> {
+  const res = await api.put(`/api/user/${id}/group-config`, data)
   return res.data
 }
 

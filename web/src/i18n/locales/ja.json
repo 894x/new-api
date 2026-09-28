@@ -7804,6 +7804,22 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Customer group configuration": "顧客グループ設定",
+    "Customer group configuration saved": "顧客グループ設定を保存しました",
+    "Configure policies for {{username}} using user group {{group}}.": "ユーザー {{username}} のユーザーグループ {{group}} に適用するポリシーを設定します。",
+    "Configure discounts, rate limits, and model channel pools.": "割引、レート制限、モデル別チャネルプールを設定します。",
+    "Discounts": "割引",
+    "Specified group discounts": "指定グループ割引",
+    "Set the ratio charged when this user group uses each billing group. Unconfigured billing groups keep their base ratio.": "このユーザーグループが各課金グループを使用するときの課金倍率を設定します。未設定の課金グループは基本倍率を使用します。",
+    "These limits match the user group, even when an API key selects a different channel group.": "API キーが別のチャネルグループを選択しても、この制限はユーザーグループに基づいて適用されます。",
+    "Enable group rate limit": "グループのレート制限を有効化",
+    "Turn off to inherit the global rate limits.": "無効にするとグローバルのレート制限を継承します。",
+    "Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.": "モデルごとにチャネルグループを選択します。ルールがなければ既存のルーティングを維持し、空の選択はそのモデルをブロックします。",
+    "Values must be unique": "値は重複できません",
+    "Select channel groups": "チャネルグループを選択",
+    "Must be ≥ 0": "0 以上である必要があります",
+    "These policies apply to every user in group {{group}}. Assign an exclusive group before using this page for one customer.": "これらのポリシーはグループ {{group}} の全ユーザーに適用されます。1 社専用に設定する前に専用グループを割り当ててください。",
+    "Global model request rate limiting is disabled. These rules will take effect after it is enabled in system settings.": "モデルリクエストのグローバルレート制限は無効です。システム設定で有効にすると、これらのルールが適用されます。"
   }
 }

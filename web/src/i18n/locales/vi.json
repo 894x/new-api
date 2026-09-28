@@ -7804,6 +7804,22 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Customer group configuration": "Cấu hình nhóm khách hàng",
+    "Customer group configuration saved": "Đã lưu cấu hình nhóm khách hàng",
+    "Configure policies for {{username}} using user group {{group}}.": "Cấu hình chính sách cho {{username}} theo nhóm người dùng {{group}}.",
+    "Configure discounts, rate limits, and model channel pools.": "Cấu hình chiết khấu, giới hạn tốc độ và nhóm kênh theo mô hình.",
+    "Discounts": "Chiết khấu",
+    "Specified group discounts": "Chiết khấu theo nhóm chỉ định",
+    "Set the ratio charged when this user group uses each billing group. Unconfigured billing groups keep their base ratio.": "Đặt hệ số tính phí khi nhóm người dùng này sử dụng từng nhóm thanh toán. Nhóm chưa cấu hình tiếp tục dùng hệ số cơ bản.",
+    "These limits match the user group, even when an API key selects a different channel group.": "Các giới hạn này luôn khớp theo nhóm người dùng, ngay cả khi khóa API chọn nhóm kênh khác.",
+    "Enable group rate limit": "Bật giới hạn tốc độ theo nhóm",
+    "Turn off to inherit the global rate limits.": "Tắt để kế thừa giới hạn tốc độ toàn cục.",
+    "Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.": "Chọn nhóm kênh cho từng mô hình. Không có quy tắc sẽ giữ định tuyến hiện tại; lựa chọn trống sẽ chặn mô hình đó.",
+    "Values must be unique": "Các giá trị phải là duy nhất",
+    "Select channel groups": "Chọn nhóm kênh",
+    "Must be ≥ 0": "Phải lớn hơn hoặc bằng 0",
+    "These policies apply to every user in group {{group}}. Assign an exclusive group before using this page for one customer.": "Các chính sách này áp dụng cho mọi người dùng trong nhóm {{group}}. Hãy gán nhóm riêng trước khi cấu hình cho một khách hàng.",
+    "Global model request rate limiting is disabled. These rules will take effect after it is enabled in system settings.": "Giới hạn tốc độ yêu cầu mô hình toàn cục đang tắt. Các quy tắc này sẽ có hiệu lực sau khi được bật trong cài đặt hệ thống."
   }
 }

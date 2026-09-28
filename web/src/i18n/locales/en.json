@@ -7804,6 +7804,22 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Customer group configuration": "Customer group configuration",
+    "Customer group configuration saved": "Customer group configuration saved",
+    "Configure policies for {{username}} using user group {{group}}.": "Configure policies for {{username}} using user group {{group}}.",
+    "Configure discounts, rate limits, and model channel pools.": "Configure discounts, rate limits, and model channel pools.",
+    "Discounts": "Discounts",
+    "Specified group discounts": "Specified group discounts",
+    "Set the ratio charged when this user group uses each billing group. Unconfigured billing groups keep their base ratio.": "Set the ratio charged when this user group uses each billing group. Unconfigured billing groups keep their base ratio.",
+    "These limits match the user group, even when an API key selects a different channel group.": "These limits match the user group, even when an API key selects a different channel group.",
+    "Enable group rate limit": "Enable group rate limit",
+    "Turn off to inherit the global rate limits.": "Turn off to inherit the global rate limits.",
+    "Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.": "Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.",
+    "Values must be unique": "Values must be unique",
+    "Select channel groups": "Select channel groups",
+    "Must be ≥ 0": "Must be ≥ 0",
+    "These policies apply to every user in group {{group}}. Assign an exclusive group before using this page for one customer.": "These policies apply to every user in group {{group}}. Assign an exclusive group before using this page for one customer.",
+    "Global model request rate limiting is disabled. These rules will take effect after it is enabled in system settings.": "Global model request rate limiting is disabled. These rules will take effect after it is enabled in system settings."
   }
 }

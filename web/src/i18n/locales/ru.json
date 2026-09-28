@@ -7804,6 +7804,22 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Customer group configuration": "Настройка группы клиента",
+    "Customer group configuration saved": "Настройка группы клиента сохранена",
+    "Configure policies for {{username}} using user group {{group}}.": "Настройте правила для {{username}} с группой пользователя {{group}}.",
+    "Configure discounts, rate limits, and model channel pools.": "Настройте скидки, ограничения скорости и пулы каналов для моделей.",
+    "Discounts": "Скидки",
+    "Specified group discounts": "Скидки для выбранных групп",
+    "Set the ratio charged when this user group uses each billing group. Unconfigured billing groups keep their base ratio.": "Задайте коэффициент списания для каждой платёжной группы. Для ненастроенных групп используется базовый коэффициент.",
+    "These limits match the user group, even when an API key selects a different channel group.": "Эти ограничения определяются группой пользователя, даже если API-ключ выбирает другую группу каналов.",
+    "Enable group rate limit": "Включить ограничения группы",
+    "Turn off to inherit the global rate limits.": "Отключите, чтобы наследовать глобальные ограничения.",
+    "Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.": "Выберите группы каналов для каждой модели. Без правила сохраняется текущая маршрутизация; пустой выбор блокирует модель.",
+    "Values must be unique": "Значения должны быть уникальными",
+    "Select channel groups": "Выберите группы каналов",
+    "Must be ≥ 0": "Должно быть не меньше 0",
+    "These policies apply to every user in group {{group}}. Assign an exclusive group before using this page for one customer.": "Эти правила применяются ко всем пользователям группы {{group}}. Для настройки одного клиента сначала назначьте ему отдельную группу.",
+    "Global model request rate limiting is disabled. These rules will take effect after it is enabled in system settings.": "Глобальное ограничение запросов к моделям отключено. Эти правила начнут действовать после его включения в системных настройках."
   }
 }

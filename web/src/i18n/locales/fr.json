@@ -7804,6 +7804,22 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Customer group configuration": "Configuration du groupe client",
+    "Customer group configuration saved": "Configuration du groupe client enregistrée",
+    "Configure policies for {{username}} using user group {{group}}.": "Configurez les règles de {{username}} avec le groupe utilisateur {{group}}.",
+    "Configure discounts, rate limits, and model channel pools.": "Configurez les remises, les limites de débit et les pools de canaux par modèle.",
+    "Discounts": "Remises",
+    "Specified group discounts": "Remises par groupe cible",
+    "Set the ratio charged when this user group uses each billing group. Unconfigured billing groups keep their base ratio.": "Définissez le ratio facturé lorsque ce groupe utilisateur emploie chaque groupe de facturation. Les groupes non configurés conservent leur ratio de base.",
+    "These limits match the user group, even when an API key selects a different channel group.": "Ces limites suivent le groupe utilisateur, même si une clé API sélectionne un autre groupe de canaux.",
+    "Enable group rate limit": "Activer la limite du groupe",
+    "Turn off to inherit the global rate limits.": "Désactivez pour hériter des limites globales.",
+    "Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.": "Choisissez les groupes de canaux pour chaque modèle. Sans règle, le routage actuel est conservé ; une sélection vide bloque le modèle.",
+    "Values must be unique": "Les valeurs doivent être uniques",
+    "Select channel groups": "Sélectionner des groupes de canaux",
+    "Must be ≥ 0": "Doit être supérieur ou égal à 0",
+    "These policies apply to every user in group {{group}}. Assign an exclusive group before using this page for one customer.": "Ces règles s’appliquent à tous les utilisateurs du groupe {{group}}. Attribuez un groupe exclusif avant de configurer un seul client.",
+    "Global model request rate limiting is disabled. These rules will take effect after it is enabled in system settings.": "La limitation globale des requêtes de modèle est désactivée. Ces règles prendront effet après son activation dans les paramètres système."
   }
 }
