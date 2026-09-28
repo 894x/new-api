@@ -97,10 +97,7 @@ func ResolveModelRequestTPMLimit(c *gin.Context) int {
 		return 0
 	}
 
-	group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
-	if group == "" {
-		group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-	}
+	group := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 	_, _, limit, _ := setting.ResolveGroupModelRateLimit(group, common.GetContextKeyString(c, constant.ContextKeyOriginalModel))
 	if limit < 0 {
 		return 0
@@ -121,10 +118,7 @@ func ReserveModelRequestTPM(c *gin.Context, userID, limit, estimatedTokens int) 
 
 	key := fmt.Sprintf("rateLimit:v2:user:%s:%d", modelRequestTPMRedisMark, userID)
 	if modelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel); modelName != "" {
-		group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
-		if group == "" {
-			group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-		}
+		group := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 		modelName = setting.ResolveGroupModelRateLimitIdentity(group, modelName)
 		key += fmt.Sprintf(":model:%x", sha256.Sum256([]byte(modelName)))
 	}

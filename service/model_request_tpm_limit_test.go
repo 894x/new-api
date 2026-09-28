@@ -84,12 +84,12 @@ func useModelRequestTPMMemory(t *testing.T) {
 	})
 }
 
-func TestResolveModelRequestTPMLimitUsesTokenGroupOverride(t *testing.T) {
+func TestResolveModelRequestTPMLimitUsesActualUserGroup(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	useModelRequestTPMSettings(t, true, 1000, `{"vip":[0,1000,60000]}`)
+	useModelRequestTPMSettings(t, true, 1000, `{"customer":[0,1000,60000],"token-group":[0,1000,20000]}`)
 	ctx := newModelRequestTPMTestContext()
-	common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "vip")
-	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "token-group")
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "customer")
 
 	assert.Equal(t, 60000, ResolveModelRequestTPMLimit(ctx))
 }
@@ -121,7 +121,8 @@ func TestModelTPMOverridesInheritPerField(t *testing.T) {
 		{"rpm-only", 60000}, {"limited", 100}, {"unlimited", 0}, {"unconfigured", 60000},
 	} {
 		ctx := newModelRequestTPMTestContext()
-		common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "vip")
+		common.SetContextKey(ctx, constant.ContextKeyUserGroup, "vip")
+		common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "token-group")
 		common.SetContextKey(ctx, constant.ContextKeyOriginalModel, test.model)
 		assert.Equal(t, test.want, ResolveModelRequestTPMLimit(ctx), test.model)
 	}
@@ -162,14 +163,16 @@ func TestModelModifiersShareTPMReservationAndSettlement(t *testing.T) {
 				useModelRequestTPMMemory(t)
 			}
 			first := newModelRequestTPMTestContext()
-			common.SetContextKey(first, constant.ContextKeyTokenGroup, "vip")
+			common.SetContextKey(first, constant.ContextKeyUserGroup, "vip")
+			common.SetContextKey(first, constant.ContextKeyTokenGroup, "token-group")
 			common.SetContextKey(first, constant.ContextKeyOriginalModel, "model-a@temperature:0.2")
 			require.Equal(t, 100, ResolveModelRequestTPMLimit(first))
 			allowed, _, err := ReserveModelRequestTPM(first, 503, 100, 60)
 			require.NoError(t, err)
 			require.True(t, allowed)
 			second := newModelRequestTPMTestContext()
-			common.SetContextKey(second, constant.ContextKeyTokenGroup, "vip")
+			common.SetContextKey(second, constant.ContextKeyUserGroup, "vip")
+			common.SetContextKey(second, constant.ContextKeyTokenGroup, "token-group")
 			common.SetContextKey(second, constant.ContextKeyOriginalModel, "model-a@temperature:0.3")
 			allowed, _, err = ReserveModelRequestTPM(second, 503, 100, 50)
 			require.NoError(t, err)

@@ -135,7 +135,8 @@ func groupModelRateLimitRouter() *gin.Engine {
 		_, _ = fmt.Sscan(c.GetHeader("Test-User"), &userID)
 		c.Set("id", userID)
 		c.Set("role", common.RoleCommonUser)
-		common.SetContextKey(c, constant.ContextKeyTokenGroup, "vip")
+		common.SetContextKey(c, constant.ContextKeyUserGroup, "vip")
+		common.SetContextKey(c, constant.ContextKeyTokenGroup, "token-group")
 	}, ModelRequestRateLimit(), func(c *gin.Context) {
 		// The limiter must leave the request body reusable for the relay.
 		var body struct {
