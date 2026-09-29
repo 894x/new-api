@@ -5,8 +5,47 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+func addChatUsageAliasesToResponsesBody(body []byte, path string, usage *dto.Usage) ([]byte, error) {
+	if len(body) == 0 || usage == nil {
+		return body, nil
+	}
+
+	clientUsage := *usage
+	clientUsage.FillOpenAIUsageAliases(types.RelayFormatOpenAIResponses)
+	var err error
+	body, err = sjson.SetBytes(body, path+".prompt_tokens", clientUsage.PromptTokens)
+	if err != nil {
+		return nil, err
+	}
+	body, err = sjson.SetBytes(body, path+".completion_tokens", clientUsage.CompletionTokens)
+	if err != nil {
+		return nil, err
+	}
+	if usage.InputTokensDetails != nil && usage.PromptTokensDetails == (dto.InputTokenDetails{}) {
+		details := gjson.GetBytes(body, path+".input_tokens_details")
+		if details.Exists() {
+			body, err = sjson.SetRawBytes(body, path+".prompt_tokens_details", []byte(details.Raw))
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if usage.OutputTokensDetails != nil && usage.CompletionTokenDetails == (dto.OutputTokenDetails{}) {
+		details := gjson.GetBytes(body, path+".output_tokens_details")
+		if details.Exists() {
+			body, err = sjson.SetRawBytes(body, path+".completion_tokens_details", []byte(details.Raw))
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return body, nil
+}
 
 func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {
 	if info == nil || usage == nil {

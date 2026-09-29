@@ -250,6 +250,45 @@ type Usage struct {
 	Cost any `json:"cost,omitempty"`
 }
 
+// FillOpenAIUsageAliases mirrors reported token usage into the other OpenAI
+// response format without replacing fields already reported by the provider.
+func (u *Usage) FillOpenAIUsageAliases(source types.RelayFormat) {
+	if u == nil {
+		return
+	}
+
+	switch source {
+	case types.RelayFormatOpenAI:
+		if u.InputTokens == 0 {
+			u.InputTokens = u.PromptTokens
+		}
+		if u.OutputTokens == 0 {
+			u.OutputTokens = u.CompletionTokens
+		}
+		if u.InputTokensDetails == nil && u.PromptTokensDetails != (InputTokenDetails{}) {
+			details := u.PromptTokensDetails.Clone()
+			u.InputTokensDetails = &details
+		}
+		if u.OutputTokensDetails == nil && u.CompletionTokenDetails != (OutputTokenDetails{}) {
+			details := u.CompletionTokenDetails
+			u.OutputTokensDetails = &details
+		}
+	case types.RelayFormatOpenAIResponses:
+		if u.PromptTokens == 0 {
+			u.PromptTokens = u.InputTokens
+		}
+		if u.CompletionTokens == 0 {
+			u.CompletionTokens = u.OutputTokens
+		}
+		if u.InputTokensDetails != nil && u.PromptTokensDetails == (InputTokenDetails{}) {
+			u.PromptTokensDetails = u.InputTokensDetails.Clone()
+		}
+		if u.OutputTokensDetails != nil && u.CompletionTokenDetails == (OutputTokenDetails{}) {
+			u.CompletionTokenDetails = *u.OutputTokensDetails
+		}
+	}
+}
+
 type OpenAIVideoResponse struct {
 	Id        string `json:"id" example:"file-abc123"`
 	Object    string `json:"object" example:"file"`

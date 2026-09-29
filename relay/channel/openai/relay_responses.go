@@ -38,6 +38,12 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 	info.ObserveResponseModel(responsesResponse.Model)
 	responseBody = rewriteSGLangResponsesCreatedAt(info, responseBody, "created_at", responsesResponse.CreatedAt)
+	if info.ChannelMeta != nil && info.ChannelSetting.ForceFormat && responsesResponse.Usage != nil {
+		responseBody, err = addChatUsageAliasesToResponsesBody(responseBody, "usage", responsesResponse.Usage)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+	}
 
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
@@ -92,6 +98,14 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 		if streamResponse.Response != nil {
 			clientData = string(rewriteSGLangResponsesCreatedAt(info, []byte(clientData), "response.created_at", streamResponse.Response.CreatedAt))
+			if info.ChannelMeta != nil && info.ChannelSetting.ForceFormat && !isStreamError && streamResponse.Response.Usage != nil {
+				clientDataBytes, err := addChatUsageAliasesToResponsesBody([]byte(clientData), "response.usage", streamResponse.Response.Usage)
+				if err != nil {
+					sr.ScannerError(err)
+					return
+				}
+				clientData = string(clientDataBytes)
+			}
 		}
 		accumulator.Observe(&streamResponse)
 		if err := sendResponsesStreamData(c, streamResponse, clientData); err != nil {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 const (
@@ -219,6 +220,12 @@ func usageFromResponsesUsage(src *dto.Usage, createBillingSnapshot bool) *dto.Us
 	}
 	if src.InputTokensDetails != nil {
 		usage.PromptTokensDetails = src.InputTokensDetails.Clone()
+		inputDetails := src.InputTokensDetails.Clone()
+		usage.InputTokensDetails = &inputDetails
+	}
+	if src.OutputTokensDetails != nil {
+		outputDetails := *src.OutputTokensDetails
+		usage.OutputTokensDetails = &outputDetails
 	}
 	if src.CompletionTokenDetails.ReasoningTokens != 0 ||
 		src.CompletionTokenDetails.TextTokens != 0 ||
@@ -231,6 +238,7 @@ func usageFromResponsesUsage(src *dto.Usage, createBillingSnapshot bool) *dto.Us
 	}
 	usage.ClaudeCacheCreation5mTokens = src.ClaudeCacheCreation5mTokens
 	usage.ClaudeCacheCreation1hTokens = src.ClaudeCacheCreation1hTokens
+	usage.FillOpenAIUsageAliases(types.RelayFormatOpenAIResponses)
 	return usage
 }
 
