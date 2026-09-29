@@ -92,3 +92,38 @@ func TestDecodeChannelTimingMarksErrorLogsAsFailed(t *testing.T) {
 	assert.Equal(t, int64(3000), sample.startMs)
 	assert.Equal(t, int64(5000), sample.endMs)
 }
+
+func TestChannelAnalyticsAggregatesErrorDimensions(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	old := model.LOG_DB
+	model.LOG_DB = db
+	t.Cleanup(func() { model.LOG_DB = old })
+
+	payload, err := common.Marshal(map[string]any{
+		"error_code":  "upstream_timeout",
+		"error_type":  "upstream",
+		"status_code": 504,
+		"admin_info": map[string]any{
+			"request_timing": common.RequestTimingSnapshot{
+				RequestReceivedAtMs: 1000, RequestCompletedAtMs: 3000,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&model.Log{
+		ChannelId: 15, Type: model.LogTypeError, CreatedAt: 3, Other: string(payload),
+	}).Error)
+
+	result, err := QueryChannelAnalytics(ChannelAnalyticsQueryParams{
+		ChannelId: 15, StartTs: 1, EndTs: 5, BucketSeconds: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.ErrorGroups, 1)
+	assert.Equal(t, "upstream_timeout", result.ErrorGroups[0].ErrorCode)
+	assert.Equal(t, "upstream", result.ErrorGroups[0].ErrorType)
+	assert.Equal(t, 504, result.ErrorGroups[0].StatusCode)
+	assert.Equal(t, int64(1), result.ErrorGroups[0].Count)
+	assert.Equal(t, int64(1), result.Summary.ErrorCount)
+}

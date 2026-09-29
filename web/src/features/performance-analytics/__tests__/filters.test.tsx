@@ -87,12 +87,14 @@ const emptyChannelAnalytics: ChannelAnalyticsData = {
   channel_id: 0,
   scanned_logs: 0,
   truncated: false,
+  error_groups: [],
   transport_groups: [],
   effective_start_timestamp: 100,
   effective_end_timestamp: 200,
   summary: {
     ts: 100,
     request_count: 0,
+    error_count: 0,
     success_rate: 0,
     active_concurrency: { average: 0, maximum: 0 },
     latency: {

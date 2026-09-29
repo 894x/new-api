@@ -19,8 +19,26 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatLatency } from '@/features/performance-metrics/lib/format'
+import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber } from '@/lib/format'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
@@ -39,16 +57,24 @@ const CHANNEL_RANGE_OPTIONS = [
   { seconds: 6 * 60 * 60, label: '6 Hours', bucket: 300 },
   { seconds: 24 * 60 * 60, label: '1 Day', bucket: 300 },
 ] as const
+const ALL_CHANNELS_VALUE = '__all_channels__'
+
+export type ChannelMonitoringOption = {
+  id: number
+  name: string
+  status: number
+}
 
 type ChannelRangeOption = (typeof CHANNEL_RANGE_OPTIONS)[number]
 
 export function ChannelPerformanceDiagnostics({
   formatTime,
+  channelOptions,
 }: {
   formatTime?: (ts: number) => string
+  channelOptions?: ChannelMonitoringOption[]
 }) {
   const { t, i18n } = useTranslation()
-  const [channelInput, setChannelInput] = useState('')
   const [channelId, setChannelId] = useState<number>()
   const [range, setRange] = useState<ChannelRangeOption>(
     CHANNEL_RANGE_OPTIONS[0]
@@ -71,6 +97,15 @@ export function ChannelPerformanceDiagnostics({
     staleTime: 15_000,
     retry: false,
   })
+  useEffect(() => {
+    if (
+      channelOptions &&
+      channelId &&
+      !channelOptions.some((channel) => channel.id === channelId)
+    ) {
+      setChannelId(undefined)
+    }
+  }, [channelId, channelOptions])
   const transportQuery = useQuery({
     queryKey: ['performance-analytics', 'transport'],
     queryFn: getHTTPTransportMetrics,
@@ -118,12 +153,13 @@ export function ChannelPerformanceDiagnostics({
     [formatTime, i18n.language, i18n.resolvedLanguage]
   )
 
-  const submitChannel = useCallback(() => {
-    const parsed = Number.parseInt(channelInput.trim(), 10)
-    setChannelId(Number.isInteger(parsed) && parsed > 0 ? parsed : undefined)
+  const updateChannel = useCallback((value: string | null) => {
+    setChannelId(
+      value && value !== ALL_CHANNELS_VALUE ? Number(value) : undefined
+    )
     setTransportHistory([])
     setRangeEnd(Math.floor(Date.now() / 1000))
-  }, [channelInput])
+  }, [])
 
   const changeRange = useCallback((value: string) => {
     const next = CHANNEL_RANGE_OPTIONS.find(
@@ -176,20 +212,50 @@ export function ChannelPerformanceDiagnostics({
           </CardDescription>
         </CardHeader>
         <CardContent className='flex flex-wrap items-end gap-2'>
-          <label className='w-36 space-y-1'>
-            <span className='text-muted-foreground block text-xs font-medium'>
-              {t('Channel ID')}
-            </span>
-            <Input
-              inputMode='numeric'
-              placeholder={t('All channels')}
-              value={channelInput}
-              onChange={(event) => setChannelInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') submitChannel()
-              }}
-            />
-          </label>
+          {channelOptions ? (
+            <label className='w-56 space-y-1'>
+              <span className='text-muted-foreground block text-xs font-medium'>
+                {t('Channel')}
+              </span>
+              <Select
+                value={channelId ? String(channelId) : ALL_CHANNELS_VALUE}
+                onValueChange={updateChannel}
+              >
+                <SelectTrigger className='w-full'>
+                  <SelectValue placeholder={t('All channels')} />
+                </SelectTrigger>
+                <SelectContent align='start'>
+                  <SelectGroup>
+                    <SelectItem value={ALL_CHANNELS_VALUE}>
+                      {t('All channels')}
+                    </SelectItem>
+                    {channelOptions.map((channel) => (
+                      <SelectItem key={channel.id} value={String(channel.id)}>
+                        {channel.name} (#{channel.id})
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </label>
+          ) : (
+            <label className='w-36 space-y-1'>
+              <span className='text-muted-foreground block text-xs font-medium'>
+                {t('Channel ID')}
+              </span>
+              <Input
+                inputMode='numeric'
+                placeholder={t('All channels')}
+                value={channelId ? String(channelId) : ''}
+                onChange={(event) => {
+                  const parsed = Number.parseInt(event.target.value, 10)
+                  setChannelId(
+                    Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
+                  )
+                }}
+              />
+            </label>
+          )}
           <div className='space-y-1'>
             <span className='text-muted-foreground block text-xs font-medium'>
               {t('Time range')}
@@ -244,14 +310,16 @@ function ChannelDiagnosticsContent({
     activeRequests: number
   }>
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const summary = data.summary
   const cards = [
-    [t('Requests'), summary.request_count.toLocaleString()],
+    [t('Requests'), formatNumber(summary.request_count, locale)],
+    [t('Errors'), formatNumber(summary.error_count, locale)],
     [t('Average concurrency'), summary.active_concurrency.average.toFixed(2)],
     [
       t('Peak concurrency'),
-      summary.active_concurrency.maximum.toLocaleString(),
+      formatNumber(summary.active_concurrency.maximum, locale),
     ],
     [t('Total p50'), formatLatency(summary.latency.total_ms.p50_ms)],
     [t('Total p95'), formatLatency(summary.latency.total_ms.p95_ms)],
@@ -272,7 +340,7 @@ function ChannelDiagnosticsContent({
           )}
         </p>
       )}
-      <div className='grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6'>
+      <div className='grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7'>
         {cards.map(([label, value]) => (
           <Card key={label} size='sm'>
             <CardContent>
@@ -286,6 +354,7 @@ function ChannelDiagnosticsContent({
           </Card>
         ))}
       </div>
+      <ChannelErrorSummary groups={data.error_groups} locale={locale} />
       <TransportPoolTable metrics={transport} />
       <TransportHistoryChart
         points={transportHistory}
@@ -294,6 +363,7 @@ function ChannelDiagnosticsContent({
       <TransportComparison groups={data.transport_groups ?? []} />
       <div className='grid gap-3 xl:grid-cols-2'>
         <ChannelConcurrencyChart points={data.series} formatTime={formatTime} />
+        <ChannelErrorChart points={data.series} formatTime={formatTime} />
         <ChannelLatencyChart
           title={t('Connection acquisition and write time')}
           points={data.series}
@@ -316,6 +386,94 @@ function ChannelDiagnosticsContent({
         />
       </div>
     </>
+  )
+}
+
+function ChannelErrorSummary({
+  groups,
+  locale,
+}: {
+  groups: ChannelAnalyticsData['error_groups']
+  locale?: Intl.LocalesArgument
+}) {
+  const { t } = useTranslation()
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('Error breakdown')}</CardTitle>
+        <CardDescription>
+          {t('Aggregated by error code, error type, and HTTP status.')}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {groups.length === 0 ? (
+          <div className='text-muted-foreground py-6 text-center text-sm'>
+            {t('No channel errors in this time range')}
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('Code')}</TableHead>
+                <TableHead>{t('Type')}</TableHead>
+                <TableHead>{t('Status Code')}</TableHead>
+                <TableHead className='text-right'>{t('Count')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {groups.map((group) => (
+                <TableRow
+                  key={`${group.error_code}-${group.error_type}-${group.status_code}`}
+                >
+                  <TableCell className='font-mono'>
+                    {group.error_code}
+                  </TableCell>
+                  <TableCell>{group.error_type}</TableCell>
+                  <TableCell>{group.status_code || '—'}</TableCell>
+                  <TableCell className='text-right'>
+                    {formatNumber(group.count, locale)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function ChannelErrorChart({
+  points,
+  formatTime,
+}: {
+  points: ChannelAnalyticsPoint[]
+  formatTime: (ts: number) => string
+}) {
+  const { t } = useTranslation()
+  const chart = useChannelChartTheme()
+  const values = points.map((point) => ({
+    time: point.ts,
+    label: formatTime(point.ts),
+    metric: t('Errors'),
+    value: point.error_count,
+  }))
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('Errors over time')}</CardTitle>
+        <CardDescription>
+          {t('Error count by completed request bucket.')}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className='h-80'>
+        <VChart
+          key={`channel-errors-${chart.resolvedTheme}`}
+          spec={lineSpec(values, chart, formatTime, true)}
+          option={VCHART_OPTION}
+        />
+      </CardContent>
+    </Card>
   )
 }
 
@@ -381,11 +539,11 @@ function TransportPoolTable({ metrics }: { metrics: HTTPTransportMetric[] }) {
         <table className='w-full min-w-[640px] text-sm'>
           <thead className='text-muted-foreground text-left text-xs'>
             <tr>
-              <th className='pb-2 pr-4'>{t('Pool')}</th>
-              <th className='pb-2 pr-4'>{t('Protocol')}</th>
-              <th className='pb-2 pr-4'>{t('Shard')}</th>
-              <th className='pb-2 pr-4'>{t('Connections')}</th>
-              <th className='pb-2 pr-4'>{t('Active requests')}</th>
+              <th className='pr-4 pb-2'>{t('Pool')}</th>
+              <th className='pr-4 pb-2'>{t('Protocol')}</th>
+              <th className='pr-4 pb-2'>{t('Shard')}</th>
+              <th className='pr-4 pb-2'>{t('Connections')}</th>
+              <th className='pr-4 pb-2'>{t('Active requests')}</th>
               <th className='pb-2'>{t('Last negotiated')}</th>
             </tr>
           </thead>

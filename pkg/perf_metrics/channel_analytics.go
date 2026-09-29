@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -46,6 +48,7 @@ type ChannelAnalyticsConcurrency struct {
 type ChannelAnalyticsPoint struct {
 	Ts                int64                       `json:"ts"`
 	RequestCount      int64                       `json:"request_count"`
+	ErrorCount        int64                       `json:"error_count"`
 	SuccessRate       float64                     `json:"success_rate"`
 	ActiveConcurrency ChannelAnalyticsConcurrency `json:"active_concurrency"`
 	Latency           ChannelAnalyticsLatency     `json:"latency"`
@@ -54,12 +57,20 @@ type ChannelAnalyticsPoint struct {
 type ChannelAnalyticsResult struct {
 	ScannedLogs      int                     `json:"scanned_logs"`
 	Truncated        bool                    `json:"truncated"`
+	ErrorGroups      []ChannelErrorGroup     `json:"error_groups"`
 	TransportGroups  []ChannelTransportGroup `json:"transport_groups"`
 	ChannelId        int                     `json:"channel_id"`
 	EffectiveStartTs int64                   `json:"effective_start_timestamp"`
 	EffectiveEndTs   int64                   `json:"effective_end_timestamp"`
 	Summary          ChannelAnalyticsPoint   `json:"summary"`
 	Series           []ChannelAnalyticsPoint `json:"series"`
+}
+
+type ChannelErrorGroup struct {
+	ErrorCode  string `json:"error_code"`
+	ErrorType  string `json:"error_type"`
+	StatusCode int    `json:"status_code"`
+	Count      int64  `json:"count"`
 }
 
 type channelTimingSample struct {
@@ -193,6 +204,7 @@ type channelLatencyAccumulator struct {
 type channelBucket struct {
 	requestCount int64
 	successCount int64
+	errorCount   int64
 	latency      channelLatencyAccumulator
 	concurrency  concurrencyAccumulator
 }
@@ -233,8 +245,13 @@ func QueryChannelAnalytics(params ChannelAnalyticsQueryParams) (ChannelAnalytics
 		buckets[ts] = &channelBucket{}
 	}
 	summary := &channelBucket{}
+	errorGroups := make(map[string]*ChannelErrorGroup)
 	groups := make(map[string]*channelTransportAccumulator)
 	count, truncated, err := model.VisitPerfChannelLogs(ctx, params.ChannelId, params.StartTs-3600, params.EndTs, func(row model.PerfChannelLog) {
+		if row.Type == model.LogTypeError && row.CreatedAt >= params.StartTs && row.CreatedAt < params.EndTs {
+			accumulateChannelError(errorGroups, row)
+			summary.errorCount++
+		}
 		sample, ok := decodeChannelTiming(row)
 		if !ok || sample.endMs <= params.StartTs*1000 || sample.endMs > params.EndTs*1000 || sample.startMs >= params.EndTs*1000 {
 			return
@@ -249,6 +266,9 @@ func QueryChannelAnalytics(params ChannelAnalyticsQueryParams) (ChannelAnalytics
 		bucket.requestCount++
 		if sample.success {
 			bucket.successCount++
+		}
+		if row.Type == model.LogTypeError {
+			bucket.errorCount++
 		}
 		mergeChannelLatency(&bucket.latency, &sample.latency)
 		mergeChannelLatency(&summary.latency, &sample.latency)
@@ -273,13 +293,91 @@ func QueryChannelAnalytics(params ChannelAnalyticsQueryParams) (ChannelAnalytics
 	sort.Slice(series, func(i, j int) bool { return series[i].Ts < series[j].Ts })
 
 	return ChannelAnalyticsResult{
-		ScannedLogs: count, Truncated: truncated, TransportGroups: channelTransportResults(groups),
+		ScannedLogs: count, Truncated: truncated, ErrorGroups: channelErrorResults(errorGroups), TransportGroups: channelTransportResults(groups),
 		ChannelId:        params.ChannelId,
 		EffectiveStartTs: params.StartTs,
 		EffectiveEndTs:   params.EndTs,
 		Summary:          buildChannelPoint(params.StartTs, summary, params.EndTs-params.StartTs),
 		Series:           series,
 	}, nil
+}
+
+func accumulateChannelError(groups map[string]*ChannelErrorGroup, row model.PerfChannelLog) {
+	if row.Type != model.LogTypeError {
+		return
+	}
+	var other map[string]any
+	if row.Other != "" {
+		_ = common.Unmarshal([]byte(row.Other), &other)
+	}
+	errorCode := channelErrorDimension(other["error_code"], "unknown")
+	errorType := channelErrorDimension(other["error_type"], "unknown")
+	statusCode := channelErrorStatusCode(other["status_code"])
+	key := fmt.Sprintf("%s/%s/%d", errorCode, errorType, statusCode)
+	group := groups[key]
+	if group == nil {
+		if len(groups) >= 128 {
+			key = "overflow"
+			group = groups[key]
+		}
+		if group == nil {
+			group = &ChannelErrorGroup{ErrorCode: errorCode, ErrorType: errorType, StatusCode: statusCode}
+			if key == "overflow" {
+				group.ErrorCode = "overflow"
+				group.ErrorType = "overflow"
+				group.StatusCode = 0
+			}
+			groups[key] = group
+		}
+	}
+	group.Count++
+}
+
+func channelErrorResults(groups map[string]*ChannelErrorGroup) []ChannelErrorGroup {
+	result := make([]ChannelErrorGroup, 0, len(groups))
+	for _, group := range groups {
+		result = append(result, *group)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Count != result[j].Count {
+			return result[i].Count > result[j].Count
+		}
+		return result[i].ErrorCode < result[j].ErrorCode
+	})
+	return result
+}
+
+func channelErrorDimension(value any, fallback string) string {
+	switch value := value.(type) {
+	case string:
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	case float64:
+		return strconv.FormatInt(int64(value), 10)
+	case int:
+		return strconv.Itoa(value)
+	case int64:
+		return strconv.FormatInt(value, 10)
+	}
+	return fallback
+}
+
+func channelErrorStatusCode(value any) int {
+	switch value := value.(type) {
+	case float64:
+		return int(value)
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case string:
+		statusCode, err := strconv.Atoi(strings.TrimSpace(value))
+		if err == nil {
+			return statusCode
+		}
+	}
+	return 0
 }
 
 func decodeChannelTiming(row model.PerfChannelLog) (channelTimingSample, bool) {
@@ -443,6 +541,7 @@ func buildChannelPoint(ts int64, bucket *channelBucket, bucketSeconds int64) Cha
 	return ChannelAnalyticsPoint{
 		Ts:                ts,
 		RequestCount:      bucket.requestCount,
+		ErrorCount:        bucket.errorCount,
 		SuccessRate:       channelSuccessRate(bucket),
 		ActiveConcurrency: ChannelAnalyticsConcurrency{Average: average, Maximum: maximum},
 		Latency:           channelLatencyResult(bucket.latency),

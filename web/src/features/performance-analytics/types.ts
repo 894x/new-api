@@ -112,6 +112,7 @@ export type ChannelAnalyticsConcurrency = {
 export type ChannelAnalyticsPoint = {
   ts: number
   request_count: number
+  error_count: number
   success_rate: number
   active_concurrency: ChannelAnalyticsConcurrency
   latency: ChannelAnalyticsLatency
@@ -120,12 +121,20 @@ export type ChannelAnalyticsPoint = {
 export type ChannelAnalyticsData = {
   scanned_logs: number
   truncated: boolean
+  error_groups: ChannelErrorGroup[]
   transport_groups: ChannelTransportGroup[]
   channel_id: number
   effective_start_timestamp: number
   effective_end_timestamp: number
   summary: ChannelAnalyticsPoint
   series: ChannelAnalyticsPoint[]
+}
+
+export type ChannelErrorGroup = {
+  error_code: string
+  error_type: string
+  status_code: number
+  count: number
 }
 
 export type ChannelTransportGroup = {

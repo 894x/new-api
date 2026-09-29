@@ -60,6 +60,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
   admin: {
     enabled: true,
     channel: true,
+    channel_monitoring: true,
     models: true,
     model_channel_matrix: true,
     redemption: true,
@@ -113,6 +114,10 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/profile': { section: 'personal', module: 'personal' },
   '/security': { section: 'personal', module: 'security' },
   '/channels': { section: 'admin', module: 'channel' },
+  '/channels/monitoring': {
+    section: 'admin',
+    module: 'channel_monitoring',
+  },
   '/model-channel-matrix': { section: 'admin', module: 'model_channel_matrix' },
   '/models': { section: 'admin', module: 'models' },
   '/models/metadata': { section: 'admin', module: 'models' },

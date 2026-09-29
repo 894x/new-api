@@ -38,6 +38,7 @@ import { Route as TokenCostIndexRouteImport } from './routes/token-cost/index'
 import { Route as authUserResetRouteImport } from './routes/(auth)/user/reset'
 import { Route as AuthenticatedAssetLibraryIndexRouteImport } from './routes/_authenticated/asset-library/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
+import { Route as AuthenticatedChannelsMonitoringRouteImport } from './routes/_authenticated/channels/monitoring'
 import { Route as AuthenticatedChatChatIdRouteImport } from './routes/_authenticated/chat/$chatId'
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
 import { Route as AuthenticatedDashboardSectionRouteImport } from './routes/_authenticated/dashboard/$section'
@@ -221,6 +222,12 @@ const AuthenticatedChannelsIndexRoute =
   AuthenticatedChannelsIndexRouteImport.update({
     id: '/channels/',
     path: '/channels/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedChannelsMonitoringRoute =
+  AuthenticatedChannelsMonitoringRouteImport.update({
+    id: '/channels/monitoring',
+    path: '/channels/monitoring',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedChatChatIdRoute = AuthenticatedChatChatIdRouteImport.update({
@@ -474,6 +481,7 @@ export interface FileRoutesByFullPath {
   '/setup/': typeof SetupIndexRoute
   '/token-cost/': typeof TokenCostIndexRoute
   '/user/reset': typeof authUserResetRoute
+  '/channels/monitoring': typeof AuthenticatedChannelsMonitoringRoute
   '/chat/$chatId': typeof AuthenticatedChatChatIdRoute
   '/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
@@ -540,6 +548,7 @@ export interface FileRoutesByTo {
   '/setup': typeof SetupIndexRoute
   '/token-cost': typeof TokenCostIndexRoute
   '/user/reset': typeof authUserResetRoute
+  '/channels/monitoring': typeof AuthenticatedChannelsMonitoringRoute
   '/chat/$chatId': typeof AuthenticatedChatChatIdRoute
   '/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
@@ -610,6 +619,7 @@ export interface FileRoutesById {
   '/setup/': typeof SetupIndexRoute
   '/token-cost/': typeof TokenCostIndexRoute
   '/(auth)/user/reset': typeof authUserResetRoute
+  '/_authenticated/channels/monitoring': typeof AuthenticatedChannelsMonitoringRoute
   '/_authenticated/chat/$chatId': typeof AuthenticatedChatChatIdRoute
   '/_authenticated/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
@@ -679,6 +689,7 @@ export interface FileRouteTypes {
     | '/setup/'
     | '/token-cost/'
     | '/user/reset'
+    | '/channels/monitoring'
     | '/chat/$chatId'
     | '/dashboard/$section'
     | '/errors/$error'
@@ -745,6 +756,7 @@ export interface FileRouteTypes {
     | '/setup'
     | '/token-cost'
     | '/user/reset'
+    | '/channels/monitoring'
     | '/chat/$chatId'
     | '/dashboard/$section'
     | '/errors/$error'
@@ -814,6 +826,7 @@ export interface FileRouteTypes {
     | '/setup/'
     | '/token-cost/'
     | '/(auth)/user/reset'
+    | '/_authenticated/channels/monitoring'
     | '/_authenticated/chat/$chatId'
     | '/_authenticated/dashboard/$section'
     | '/_authenticated/errors/$error'
@@ -1080,6 +1093,13 @@ declare module '@tanstack/react-router' {
       path: '/channels'
       fullPath: '/channels/'
       preLoaderRoute: typeof AuthenticatedChannelsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/channels/monitoring': {
+      id: '/_authenticated/channels/monitoring'
+      path: '/channels/monitoring'
+      fullPath: '/channels/monitoring'
+      preLoaderRoute: typeof AuthenticatedChannelsMonitoringRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/chat/$chatId': {
@@ -1443,6 +1463,7 @@ const AuthenticatedSystemSettingsRouteRouteWithChildren =
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedSystemSettingsRouteRoute: typeof AuthenticatedSystemSettingsRouteRouteWithChildren
   AuthenticatedChat2linkRoute: typeof AuthenticatedChat2linkRoute
+  AuthenticatedChannelsMonitoringRoute: typeof AuthenticatedChannelsMonitoringRoute
   AuthenticatedChatChatIdRoute: typeof AuthenticatedChatChatIdRoute
   AuthenticatedDashboardSectionRoute: typeof AuthenticatedDashboardSectionRoute
   AuthenticatedErrorsErrorRoute: typeof AuthenticatedErrorsErrorRoute
@@ -1471,6 +1492,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedSystemSettingsRouteRoute:
     AuthenticatedSystemSettingsRouteRouteWithChildren,
   AuthenticatedChat2linkRoute: AuthenticatedChat2linkRoute,
+  AuthenticatedChannelsMonitoringRoute: AuthenticatedChannelsMonitoringRoute,
   AuthenticatedChatChatIdRoute: AuthenticatedChatChatIdRoute,
   AuthenticatedDashboardSectionRoute: AuthenticatedDashboardSectionRoute,
   AuthenticatedErrorsErrorRoute: AuthenticatedErrorsErrorRoute,

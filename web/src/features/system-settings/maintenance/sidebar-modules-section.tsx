@@ -142,6 +142,12 @@ export function SidebarModulesSection({
         title: t('Channels'),
         description: t('Configure upstream providers and routing.'),
       },
+      channel_monitoring: {
+        title: t('Channel Monitoring'),
+        description: t(
+          'Monitor channel latency, concurrency, transport pools, and errors.'
+        ),
+      },
       models: {
         title: t('Models'),
         description: t('Manage catalog visibility and pricing.'),
