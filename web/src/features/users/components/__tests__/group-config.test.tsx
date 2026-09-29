@@ -11,13 +11,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
-import type { User, UserGroupConfig } from '../../types'
+import type {
+  User,
+  UserChannelRoutingConfig,
+  UserGroupConfig,
+} from '../../types'
 import { UserGroupConfigDrawer } from '../user-group-config-drawer'
 import { UsersMutateDrawer } from '../users-mutate-drawer'
 import { UsersProvider, useUsers } from '../users-provider'
 
 vi.mock('@/lib/api', () => ({
-  api: { get: vi.fn(), put: vi.fn(), post: vi.fn() },
+  api: { get: vi.fn(), patch: vi.fn(), put: vi.fn(), post: vi.fn() },
 }))
 
 const user: User = {
@@ -46,6 +50,25 @@ const sharedConfig: UserGroupConfig = {
   rate_limit: { limits: [10, 8, 1000], models: {} },
   model_channel_groups: { 'model-x': ['pool-a'] },
   available_group_ratios: { default: 1 },
+}
+
+const routingConfig: UserChannelRoutingConfig = {
+  model: 'model-x',
+  models: [],
+  revision: 'routing-revision-1',
+  channels: [
+    {
+      channel_id: 11,
+      channel_name: 'Pool Alpha',
+      default_priority: 100,
+      model_priority: null,
+      inherited_priority: 100,
+      priority_override: null,
+      effective_priority: 100,
+      enabled: true,
+      available: true,
+    },
+  ],
 }
 
 function renderGroupConfig() {
@@ -98,8 +121,11 @@ describe('User group quick configuration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
-    vi.mocked(api.get).mockResolvedValue({
-      data: { success: true, data: sharedConfig },
+    vi.mocked(api.get).mockImplementation(async (url) => {
+      if (url === '/api/user/42/channel-routing-overrides') {
+        return { data: { success: true, data: routingConfig } }
+      }
+      return { data: { success: true, data: sharedConfig } }
     })
   })
 
@@ -188,6 +214,33 @@ describe('User group quick configuration', () => {
     expect(
       await screen.findByText(/No enabled channels match this model/)
     ).toBeInTheDocument()
+  })
+
+  it('shows user priorities inline only for channels matched by the selected pools', async () => {
+    vi.mocked(api.post).mockResolvedValue({
+      data: {
+        success: true,
+        data: { 'model-x': { candidate_count: 1 } },
+      },
+    })
+    renderGroupConfig()
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Channels' }))
+    expect(screen.queryByText('Pool Alpha #11')).not.toBeInTheDocument()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Preview channel availability' })
+    )
+
+    expect(await screen.findByText('Pool Alpha #11')).toBeInTheDocument()
+    expect(api.get).toHaveBeenCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      {
+        params: {
+          model: 'model-x',
+          channel_groups: JSON.stringify(['pool-a']),
+        },
+      }
+    )
   })
 
   it('opens group configuration from the user editor without changing the user', async () => {

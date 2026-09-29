@@ -30,7 +30,7 @@ import {
   CreditCard,
   SlidersHorizontal,
 } from 'lucide-react'
-import { lazy, Suspense, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -64,12 +64,6 @@ import type { User, ManageUserAction } from '../types'
 import { UserBindingDialog } from './dialogs/user-binding-dialog'
 import { useUsers } from './users-provider'
 
-const UserChannelRoutingDialog = lazy(() =>
-  import('./user-channel-routing-dialog').then((module) => ({
-    default: module.UserChannelRoutingDialog,
-  }))
-)
-
 interface DataTableRowActionsProps {
   row: Row<User>
 }
@@ -82,7 +76,6 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
   const [subscriptionsDialogOpen, setSubscriptionsDialogOpen] = useState(false)
-  const [channelRoutingOpen, setChannelRoutingOpen] = useState(false)
   const currentUser = useAuthStore((state) => state.auth.user)
 
   const handleEdit = () => {
@@ -238,15 +231,6 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         </DropdownMenuItem>
 
         {currentUser?.role === ROLE.SUPER_ADMIN && (
-          <DropdownMenuItem onClick={() => setChannelRoutingOpen(true)}>
-            {t('User channel routing')}
-            <DropdownMenuShortcut>
-              <SlidersHorizontal size={16} />
-            </DropdownMenuShortcut>
-          </DropdownMenuItem>
-        )}
-
-        {currentUser?.role === ROLE.SUPER_ADMIN && (
           <DropdownMenuItem onClick={handleGroupConfig}>
             {t('Customer group configuration')}
             <DropdownMenuShortcut>
@@ -334,15 +318,6 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         user={{ id: user.id, username: user.username }}
         onSuccess={triggerRefresh}
       />
-      {channelRoutingOpen && (
-        <Suspense fallback={null}>
-          <UserChannelRoutingDialog
-            user={user}
-            open={channelRoutingOpen}
-            onOpenChange={setChannelRoutingOpen}
-          />
-        </Suspense>
-      )}
     </div>
   )
 }

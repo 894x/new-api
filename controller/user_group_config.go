@@ -33,6 +33,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -119,16 +120,10 @@ func PreviewUserGroupChannels(c *gin.Context) {
 	}
 	previews := make(map[string]channelPoolPreview, len(request.ModelChannelGroups))
 	for modelName, groups := range request.ModelChannelGroups {
-		candidates := make(map[int]struct{})
-		for _, group := range groups {
-			channels, err := model.ListChannelSelectionCandidates(group, modelName, model.ChannelSelectionFilters{})
-			if err != nil {
-				common.ApiError(c, err)
-				return
-			}
-			for _, channel := range channels {
-				candidates[channel.ChannelId] = struct{}{}
-			}
+		candidates, err := service.ChannelGroupsAllowedChannelIDs(groups, modelName)
+		if err != nil {
+			common.ApiError(c, err)
+			return
 		}
 		previews[modelName] = channelPoolPreview{CandidateCount: len(candidates)}
 	}

@@ -72,6 +72,7 @@ import {
 } from '../api'
 import { USER_ROLE } from '../constants'
 import type { User, UserGroupConfig } from '../types'
+import { UserChannelRoutingRuleEditor } from './user-channel-routing-dialog'
 import { useUsers } from './users-provider'
 
 const createSchema = (t: (key: string) => string) =>
@@ -184,6 +185,9 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
   const { setCurrentRow, triggerRefresh } = useUsers()
   const [confirmDedicatedOpen, setConfirmDedicatedOpen] = useState(false)
   const [previewKey, setPreviewKey] = useState('')
+  const [routingDirtyRows, setRoutingDirtyRows] = useState<Set<string>>(
+    () => new Set()
+  )
   const form = useForm<FormValues>({
     resolver: zodResolver(createSchema(t)),
     defaultValues: emptyValues,
@@ -205,8 +209,16 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
   const config = query.data?.data
 
   useEffect(() => {
-    if (open && config) form.reset(toFormValues(config))
-    if (!open) form.reset(emptyValues)
+    if (open && config) {
+      form.reset(toFormValues(config))
+      setPreviewKey('')
+      setRoutingDirtyRows(new Set())
+    }
+    if (!open) {
+      form.reset(emptyValues)
+      setPreviewKey('')
+      setRoutingDirtyRows(new Set())
+    }
   }, [config, form, open])
 
   const groupOptions = useMemo(() => {
@@ -301,6 +313,15 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
     onError: (error) =>
       handleServerError(error, t('Channel pool preview is unavailable.')),
   })
+
+  const setRoutingRowDirty = (rowID: string, dirty: boolean) => {
+    setRoutingDirtyRows((current) => {
+      const next = new Set(current)
+      if (dirty) next.add(rowID)
+      else next.delete(rowID)
+      return next
+    })
+  }
 
   return (
     <>
@@ -562,10 +583,24 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                           'Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.'
                         )}
                       />
+                      {channelRules.fields.length > 0 && (
+                        <>
+                          <p className='text-muted-foreground text-sm'>
+                            {t(
+                              'Drag channels to set priority. Higher values run first; equal values use channel weights. Switch off to pause a channel without losing its priority.'
+                            )}
+                          </p>
+                          <p className='text-muted-foreground text-xs'>
+                            {t(
+                              'User overrides take precedence over dynamic routing and session affinity. Group access, request compatibility, capacity limits, and fixed task channels still apply.'
+                            )}
+                          </p>
+                        </>
+                      )}
                       {channelRules.fields.map((item, index) => (
                         <div
                           key={item.id}
-                          className='space-y-3 rounded-lg border p-3'
+                          className='flex flex-col gap-3 rounded-lg border p-3'
                         >
                           <div className='flex items-start gap-2'>
                             <FormField
@@ -575,7 +610,11 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                                 <FormItem className='flex-1'>
                                   <FormLabel>{t('Model')}</FormLabel>
                                   <FormControl>
-                                    <Input {...field} placeholder='gpt-5' />
+                                    <Input
+                                      {...field}
+                                      placeholder='gpt-5'
+                                      disabled={routingDirtyRows.has(item.id)}
+                                    />
                                   </FormControl>
                                   <FormMessage />
                                 </FormItem>
@@ -587,6 +626,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                               size='icon'
                               className='mt-6'
                               aria-label={t('Remove')}
+                              disabled={routingDirtyRows.has(item.id)}
                               onClick={() => channelRules.remove(index)}
                             >
                               <Trash2 />
@@ -603,6 +643,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                                     options={groupOptions}
                                     selected={field.value}
                                     onChange={field.onChange}
+                                    disabled={routingDirtyRows.has(item.id)}
                                     allowCreate
                                     placeholder={t('Select channel groups')}
                                   />
@@ -611,11 +652,57 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                               </FormItem>
                             )}
                           />
+                          {previewKey === currentPreviewKey &&
+                            previewChannels.data?.data &&
+                            user && (
+                              <div className='flex flex-col gap-3'>
+                                <p className='text-muted-foreground text-sm'>
+                                  {t(
+                                    'Pool candidates for {{model}}: {{count}} (before token group filtering).',
+                                    {
+                                      model:
+                                        channelRulesValue[index]?.modelName ??
+                                        '',
+                                      count:
+                                        previewChannels.data.data[
+                                          channelRulesValue[index]?.modelName ??
+                                            ''
+                                        ]?.candidate_count ?? 0,
+                                    }
+                                  )}
+                                  {(channelRulesValue[index]?.groups.length ??
+                                    0) > 0 &&
+                                    previewChannels.data.data[
+                                      channelRulesValue[index]?.modelName ?? ''
+                                    ]?.candidate_count === 0 && (
+                                      <span className='text-destructive'>
+                                        {' '}
+                                        {t(
+                                          'No enabled channels match this model and its selected pools.'
+                                        )}
+                                      </span>
+                                    )}
+                                </p>
+                                <UserChannelRoutingRuleEditor
+                                  userId={user.id}
+                                  model={
+                                    channelRulesValue[index]?.modelName ?? ''
+                                  }
+                                  channelGroups={
+                                    channelRulesValue[index]?.groups ?? []
+                                  }
+                                  onDirtyChange={(dirty) =>
+                                    setRoutingRowDirty(item.id, dirty)
+                                  }
+                                />
+                              </div>
+                            )}
                         </div>
                       ))}
                       <Button
                         type='button'
                         variant='outline'
+                        disabled={routingDirtyRows.size > 0}
                         onClick={() =>
                           channelRules.append({ modelName: '', groups: [] })
                         }
@@ -623,51 +710,24 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                         <Plus /> {t('Add rule')}
                       </Button>
                       {channelRules.fields.length > 0 && (
-                        <>
-                          <Button
-                            type='button'
-                            variant='outline'
-                            disabled={previewChannels.isPending}
-                            onClick={async () => {
-                              if (!(await form.trigger('channelRules'))) return
-                              const rules = form.getValues('channelRules')
-                              previewChannels.mutate({
-                                rules,
-                                key: JSON.stringify(rules),
-                              })
-                            }}
-                          >
-                            {t('Preview channel availability')}
-                          </Button>
-                          {previewKey === currentPreviewKey &&
-                            previewChannels.data?.data &&
-                            channelRulesValue.map(({ modelName, groups }) => (
-                              <p
-                                key={modelName}
-                                className='text-muted-foreground text-sm'
-                              >
-                                {t(
-                                  'Pool candidates for {{model}}: {{count}} (before token group filtering).',
-                                  {
-                                    model: modelName,
-                                    count:
-                                      previewChannels.data?.data?.[modelName]
-                                        ?.candidate_count ?? 0,
-                                  }
-                                )}
-                                {groups.length > 0 &&
-                                  previewChannels.data?.data?.[modelName]
-                                    ?.candidate_count === 0 && (
-                                    <span className='text-destructive'>
-                                      {' '}
-                                      {t(
-                                        'No enabled channels match this model and its selected pools.'
-                                      )}
-                                    </span>
-                                  )}
-                              </p>
-                            ))}
-                        </>
+                        <Button
+                          type='button'
+                          variant='outline'
+                          disabled={
+                            previewChannels.isPending ||
+                            routingDirtyRows.size > 0
+                          }
+                          onClick={async () => {
+                            if (!(await form.trigger('channelRules'))) return
+                            const rules = form.getValues('channelRules')
+                            previewChannels.mutate({
+                              rules,
+                              key: JSON.stringify(rules),
+                            })
+                          }}
+                        >
+                          {t('Preview channel availability')}
+                        </Button>
                       )}
                     </SideDrawerSection>
                   </TabsContent>
@@ -683,7 +743,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
             <Button
               type='submit'
               form='user-group-config-form'
-              disabled={!config || save.isPending}
+              disabled={!config || save.isPending || routingDirtyRows.size > 0}
             >
               {save.isPending ? t('Saving...') : t('Save changes')}
             </Button>

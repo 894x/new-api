@@ -204,11 +204,7 @@ describe('user channel routing', () => {
       name: 'Priority for Beta #2',
     })
     fireEvent.change(input, { target: { value: '-1' } })
-    fireEvent.submit(
-      screen
-        .getByRole('button', { name: 'Save changes' })
-        .closest('form') as HTMLFormElement
-    )
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(input).toHaveAttribute('aria-invalid', 'true'))
     expect(api.patch).not.toHaveBeenCalled()
     fireEvent.change(input, { target: { value: '0' } })

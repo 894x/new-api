@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -20,6 +21,10 @@ import (
 )
 
 func userRoutingRequest(t *testing.T, userID int, method, body string, handler gin.HandlerFunc) *httptest.ResponseRecorder {
+	return userRoutingRequestAtURL(t, userID, method, "/api/user/1/channel-routing-overrides?model=gpt-5", body, handler)
+}
+
+func userRoutingRequestAtURL(t *testing.T, userID int, method, requestURL, body string, handler gin.HandlerFunc) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -27,7 +32,7 @@ func userRoutingRequest(t *testing.T, userID int, method, body string, handler g
 	c.Set("role", common.RoleRootUser)
 	c.Set("username", "routing-admin")
 	c.Params = gin.Params{{Key: "id", Value: strconv.Itoa(userID)}}
-	c.Request = httptest.NewRequest(method, "/api/user/1/channel-routing-overrides?model=gpt-5", strings.NewReader(body))
+	c.Request = httptest.NewRequest(method, requestURL, strings.NewReader(body))
 	handler(c)
 	return recorder
 }
@@ -35,6 +40,22 @@ func userRoutingRequest(t *testing.T, userID int, method, body string, handler g
 func readUserRouting(t *testing.T, userID int) userChannelRoutingResponse {
 	t.Helper()
 	recorder := userRoutingRequest(t, userID, http.MethodGet, "", GetUserChannelRouting)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var response struct {
+		Success bool                       `json:"success"`
+		Data    userChannelRoutingResponse `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success, recorder.Body.String())
+	return response.Data
+}
+
+func readUserRoutingForGroups(t *testing.T, userID int, groups []string) userChannelRoutingResponse {
+	t.Helper()
+	encoded, err := common.Marshal(groups)
+	require.NoError(t, err)
+	requestURL := "/api/user/1/channel-routing-overrides?model=gpt-5&channel_groups=" + url.QueryEscape(string(encoded))
+	recorder := userRoutingRequestAtURL(t, userID, http.MethodGet, requestURL, "", GetUserChannelRouting)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	var response struct {
 		Success bool                       `json:"success"`
@@ -66,8 +87,8 @@ func TestUserChannelRoutingDatabaseMatrix(t *testing.T) {
 			users := []model.User{{Username: "routing-a", Group: "default", AffCode: "routinga"}, {Username: "routing-b", Group: "default", AffCode: "routingb"}}
 			require.NoError(t, db.Create(&users).Error)
 			for _, channel := range []*model.Channel{
-				{Id: 9101, Name: "Global first", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "default", Priority: common.GetPointer(int64(100))},
-				{Id: 9102, Name: "User first", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "default", Priority: common.GetPointer(int64(10))},
+				{Id: 9101, Name: "Global first", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "default,pool-a", Priority: common.GetPointer(int64(100))},
+				{Id: 9102, Name: "User first", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "default,pool-b", Priority: common.GetPointer(int64(10))},
 				{Id: 9103, Name: "Other pool", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "private", Priority: common.GetPointer(int64(999))},
 			} {
 				require.NoError(t, db.Create(channel).Error)
@@ -79,6 +100,15 @@ func TestUserChannelRoutingDatabaseMatrix(t *testing.T) {
 			initial := readUserRouting(t, users[0].Id)
 			require.Len(t, initial.Channels, 2)
 			assert.EqualValues(t, 20, initial.Channels[1].InheritedPriority)
+			poolA := readUserRoutingForGroups(t, users[0].Id, []string{"pool-a"})
+			require.Len(t, poolA.Channels, 1)
+			assert.Equal(t, 9101, poolA.Channels[0].ChannelID)
+			poolB := readUserRoutingForGroups(t, users[0].Id, []string{"pool-b"})
+			require.Len(t, poolB.Channels, 1)
+			assert.Equal(t, 9102, poolB.Channels[0].ChannelID)
+			assert.Empty(t, readUserRoutingForGroups(t, users[0].Id, []string{}).Channels)
+			invalidGroups := userRoutingRequestAtURL(t, users[0].Id, http.MethodGet, "/api/user/1/channel-routing-overrides?model=gpt-5&channel_groups=%7B", "", GetUserChannelRouting)
+			assert.Equal(t, http.StatusBadRequest, invalidGroups.Code)
 			payload := fmt.Sprintf(`{"model":"gpt-5","revision":%q,"overrides":[{"channel_id":9101,"priority_override":0,"enabled":true},{"channel_id":9102,"priority_override":200,"enabled":true}]}`, initial.Revision)
 			saved := userRoutingRequest(t, users[0].Id, http.MethodPatch, payload, PatchUserChannelRouting)
 			require.Equal(t, http.StatusOK, saved.Code, saved.Body.String())
@@ -90,6 +120,9 @@ func TestUserChannelRoutingDatabaseMatrix(t *testing.T) {
 			require.Len(t, configured.Channels, 2)
 			assert.Equal(t, 9102, configured.Channels[0].ChannelID)
 			assert.EqualValues(t, 0, *configured.Channels[1].PriorityOverride)
+			configuredPoolA := readUserRoutingForGroups(t, users[0].Id, []string{"pool-a"})
+			require.Len(t, configuredPoolA.Channels, 1)
+			assert.Equal(t, 9101, configuredPoolA.Channels[0].ChannelID)
 			assert.Error(t, db.Create(&model.UserChannelRoutingOverride{UserId: users[0].Id, Model: "gpt-5", ChannelId: 9102, Priority: common.GetPointer(int64(1))}).Error)
 			for _, cache := range []bool{false, true} {
 				t.Run(fmt.Sprintf("cache_%t", cache), func(t *testing.T) {

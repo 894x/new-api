@@ -19,6 +19,13 @@ func GroupModelAllowedChannelIDs(userGroup, modelName string) (map[int]struct{},
 	if !configured {
 		return nil, nil
 	}
+	return ChannelGroupsAllowedChannelIDs(groups, modelName)
+}
+
+// ChannelGroupsAllowedChannelIDs resolves the union of enabled channels in the
+// selected channel groups for one public model. An empty, non-nil selection is
+// an explicit deny-all policy.
+func ChannelGroupsAllowedChannelIDs(groups []string, modelName string) (map[int]struct{}, error) {
 	allowed := make(map[int]struct{})
 	for _, group := range groups {
 		candidates, err := model.ListChannelSelectionCandidates(group, modelName, model.ChannelSelectionFilters{})

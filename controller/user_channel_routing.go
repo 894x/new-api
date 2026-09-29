@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -80,7 +81,26 @@ func GetUserChannelRouting(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	draftChannelGroups := false
 	allowed, err := service.GroupModelAllowedChannelIDs(user.Group, modelName)
+	if rawGroups, ok := c.GetQuery("channel_groups"); ok {
+		draftChannelGroups = true
+		var groups []string
+		if len(rawGroups) > 64<<10 || common.UnmarshalJsonStr(rawGroups, &groups) != nil || groups == nil || len(groups) > 1000 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid channel groups"})
+			return
+		}
+		encoded, marshalErr := common.Marshal(setting.GroupModelChannelGroups{"draft": map[string][]string{modelName: groups}})
+		if marshalErr != nil {
+			common.ApiError(c, marshalErr)
+			return
+		}
+		if _, parseErr := setting.ParseGroupModelChannelGroups(string(encoded)); parseErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid channel groups"})
+			return
+		}
+		allowed, err = service.ChannelGroupsAllowedChannelIDs(groups, modelName)
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -114,7 +134,7 @@ func GetUserChannelRouting(c *gin.Context) {
 		for _, route := range routes {
 			override, configured := overrideByID[route.ChannelId]
 			_, usable := available[route.ChannelId]
-			if seen[route.ChannelId] || (!usable && !configured) {
+			if seen[route.ChannelId] || (!usable && (draftChannelGroups || !configured)) {
 				continue
 			}
 			seen[route.ChannelId] = true
@@ -129,13 +149,15 @@ func GetUserChannelRouting(c *gin.Context) {
 		}
 	}
 	// Stale records remain visible and can be reset even after channel removal.
-	for _, override := range overrides {
-		if !seen[override.ChannelId] {
-			row := userChannelRoutingRow{ChannelID: override.ChannelId, PriorityOverride: override.Priority, Enabled: !override.Disabled}
-			if override.Priority != nil {
-				row.EffectivePriority = *override.Priority
+	if !draftChannelGroups {
+		for _, override := range overrides {
+			if !seen[override.ChannelId] {
+				row := userChannelRoutingRow{ChannelID: override.ChannelId, PriorityOverride: override.Priority, Enabled: !override.Disabled}
+				if override.Priority != nil {
+					row.EffectivePriority = *override.Priority
+				}
+				response.Channels = append(response.Channels, row)
 			}
-			response.Channels = append(response.Channels, row)
 		}
 	}
 	slices.SortStableFunc(response.Channels, func(a, b userChannelRoutingRow) int {

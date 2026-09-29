@@ -37,10 +37,21 @@ import type {
   UserChannelRoutingPatch,
 } from './types'
 
-export async function getUserChannelRouting(id: number, model = '') {
+export async function getUserChannelRouting(
+  id: number,
+  model = '',
+  channelGroups?: string[]
+) {
   const response = await api.get<ApiResponse<UserChannelRoutingConfig>>(
     `/api/user/${id}/channel-routing-overrides`,
-    { params: { model } }
+    {
+      params: {
+        model,
+        ...(channelGroups === undefined
+          ? {}
+          : { channel_groups: JSON.stringify(channelGroups) }),
+      },
+    }
   )
   return requireServerSuccess(response.data)
 }

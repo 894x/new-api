@@ -25,15 +25,12 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
-import { Dialog } from '@/components/dialog'
 import { EmptyState } from '@/components/empty-state'
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Combobox } from '@/components/ui/combobox'
-import { Field, FieldLabel } from '@/components/ui/field'
 import {
   Form,
   FormControl,
@@ -63,92 +60,43 @@ const schema = z.object({
 })
 type FormValues = z.infer<typeof schema>
 
-export function UserChannelRoutingDialog(props: {
-  user: { id: number; username: string }
-  open: boolean
-  onOpenChange: (open: boolean) => void
+export function UserChannelRoutingRuleEditor(props: {
+  userId: number
+  model: string
+  channelGroups: string[]
+  onDirtyChange?: (dirty: boolean) => void
 }) {
-  const { t } = useTranslation()
-  const [model, setModel] = useState('')
-  const [dirty, setDirty] = useState(false)
-  const models = useQuery({
-    queryKey: ['user-channel-routing', props.user.id, 'models'],
-    queryFn: () => getUserChannelRouting(props.user.id),
-    enabled: props.open,
-  })
   const query = useQuery({
-    queryKey: ['user-channel-routing', props.user.id, model],
-    queryFn: () => getUserChannelRouting(props.user.id, model),
-    enabled: props.open && model !== '',
+    queryKey: [
+      'user-channel-routing',
+      props.userId,
+      props.model,
+      props.channelGroups,
+    ],
+    queryFn: () =>
+      getUserChannelRouting(props.userId, props.model, props.channelGroups),
+    enabled: props.model !== '',
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   })
 
+  if (query.isPending) return <LoadingState />
+  if (query.isError) {
+    return <ErrorState onRetry={() => void query.refetch()} />
+  }
+  if (!query.data?.data) return null
+
   return (
-    <Dialog
-      open={props.open}
-      onOpenChange={props.onOpenChange}
-      title={t('User channel routing')}
-      description={t(
-        'Channel routing for {{username}}. Changes apply only to this user and the selected model.',
-        { username: props.user.username }
-      )}
-      contentClassName='sm:max-w-3xl'
-      bodyClassName='space-y-4'
-    >
-      <Field>
-        <FieldLabel htmlFor='user-routing-model'>{t('Model')}</FieldLabel>
-        <Combobox
-          id='user-routing-model'
-          value={model}
-          onValueChange={(value) => setModel(value ?? '')}
-          disabled={dirty}
-          options={(models.data?.data?.models ?? []).map((value) => ({
-            value,
-            label: value,
-          }))}
-          placeholder={t('Select model')}
-          allowCustomValue
-        />
-      </Field>
-      <p className='text-muted-foreground text-sm'>
-        {t(
-          'Drag channels to set priority. Higher values run first; equal values use channel weights. Switch off to pause a channel without losing its priority.'
-        )}
-      </p>
-      <p className='text-muted-foreground text-xs'>
-        {t(
-          'User overrides take precedence over dynamic routing and session affinity. Group access, request compatibility, capacity limits, and fixed task channels still apply.'
-        )}
-      </p>
-      {models.isError && (
-        <ErrorState
-          onRetry={() => {
-            void models.refetch()
-          }}
-        />
-      )}
-      {model && query.isPending && <LoadingState />}
-      {model && query.isError && (
-        <ErrorState
-          onRetry={() => {
-            void query.refetch()
-          }}
-        />
-      )}
-      {model && query.data?.data && !query.isError && (
-        <UserChannelRoutingEditor
-          key={`${props.user.id}:${model}:${query.dataUpdatedAt}`}
-          userId={props.user.id}
-          config={query.data.data}
-          onDirtyChange={setDirty}
-          onReload={() => {
-            setDirty(false)
-            void query.refetch()
-          }}
-        />
-      )}
-    </Dialog>
+    <UserChannelRoutingEditor
+      key={`${props.userId}:${props.model}:${query.dataUpdatedAt}`}
+      userId={props.userId}
+      config={query.data.data}
+      onDirtyChange={(dirty) => props.onDirtyChange?.(dirty)}
+      onReload={() => {
+        props.onDirtyChange?.(false)
+        void query.refetch()
+      }}
+    />
   )
 }
 
@@ -238,11 +186,11 @@ export function UserChannelRoutingEditor(props: {
 
   return (
     <Form {...form}>
-      <form
-        className='space-y-4'
-        onSubmit={form.handleSubmit((data) => save.mutate(data))}
-      >
-        <ol className='space-y-2' aria-label={t('Channel priority order')}>
+      <div className='flex flex-col gap-4'>
+        <ol
+          className='flex flex-col gap-2'
+          aria-label={t('Channel priority order')}
+        >
           {rows.fields.map((item, index) => {
             const original = originalById.get(item.channel_id)
             if (!original) return null
@@ -371,7 +319,7 @@ export function UserChannelRoutingEditor(props: {
                   </Button>
                 </div>
                 <div className='mt-3 grid items-end gap-3 sm:grid-cols-[1fr_9rem_auto]'>
-                  <div className='text-muted-foreground space-y-1 text-xs'>
+                  <div className='text-muted-foreground flex flex-col gap-1 text-xs'>
                     <p>
                       {t('Channel default')}:{' '}
                       {formatNumber(original.default_priority, locale)} ·{' '}
@@ -460,11 +408,17 @@ export function UserChannelRoutingEditor(props: {
           >
             {t('Reload')}
           </Button>
-          <Button type='submit' disabled={save.isPending || !dirty}>
+          <Button
+            type='button'
+            disabled={save.isPending || !dirty}
+            onClick={() =>
+              void form.handleSubmit((data) => save.mutate(data))()
+            }
+          >
             {save.isPending ? t('Saving...') : t('Save changes')}
           </Button>
         </div>
-      </form>
+      </div>
     </Form>
   )
 }
