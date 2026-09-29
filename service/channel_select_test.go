@@ -9,15 +9,107 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUserChannelRoutingOverridesAllSelectionPaths(t *testing.T) {
+	for _, cacheEnabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cache_%t", cacheEnabled), func(t *testing.T) {
+			db := setupChannelSelectAutoGroupsTest(t)
+			common.MemoryCacheEnabled = cacheEnabled
+			configureDynamicRoutingForTest(t, true)
+			require.NoError(t, db.AutoMigrate(&model.UserChannelRoutingOverride{}))
+			createPrioritizedChannelSelectFixture(t, db, 9501, "default", "gpt-5", 100)
+			createPrioritizedChannelSelectFixture(t, db, 9502, "default", "gpt-5", 10)
+			createPrioritizedChannelSelectFixture(t, db, 9503, "private", "gpt-5", 1000)
+			require.NoError(t, db.Create(&[]model.UserChannelRoutingOverride{
+				{UserId: 42, Model: "gpt-5", ChannelId: 9501, Priority: common.GetPointer(int64(0))},
+				{UserId: 42, Model: "gpt-5", ChannelId: 9502, Priority: common.GetPointer(int64(200))},
+				{UserId: 42, Model: "gpt-5", ChannelId: 9503, Priority: common.GetPointer(int64(9999))},
+			}).Error)
+			model.InitChannelCache()
+			affinity := operation_setting.GetChannelAffinitySetting()
+			previous := *affinity
+			t.Cleanup(func() { *affinity = previous })
+			rule := operation_setting.ChannelAffinityRule{Name: t.Name(), ModelRegex: []string{"^gpt-5$"}, SessionMode: "strict",
+				KeySources: []operation_setting.ChannelAffinityKeySource{{Type: "request_header", Key: "X-Affinity-Key"}}}
+			affinity.Enabled, affinity.Rules = true, []operation_setting.ChannelAffinityRule{rule}
+			cacheKey := buildChannelAffinityCacheKeySuffix(rule, "gpt-5", "default", t.Name())
+			affinityKey := t.Name()
+			require.NoError(t, getChannelAffinityCache().SetWithTTL(cacheKey, 9501, time.Minute))
+			t.Cleanup(func() { _, _ = getChannelAffinityCache().DeleteMany([]string{cacheKey}) })
+			originalPolicy := setting.GroupModelChannelGroupsJSON()
+			t.Cleanup(func() { require.NoError(t, setting.UpdateGroupModelChannelGroups(originalPolicy)) })
+			require.NoError(t, setting.UpdateGroupModelChannelGroups(`{}`))
+			for _, tc := range []struct {
+				name     string
+				retry    int
+				capacity bool
+				blocked  bool
+				allowed  map[int]struct{}
+				want     int
+			}{
+				{name: "strict_affinity_and_dynamic", want: 9502},
+				{name: "retry_next_priority", retry: 1, want: 9501},
+				{name: "capacity_uses_user_priority", capacity: true, want: 9502},
+				{name: "capacity_spillover", capacity: true, blocked: true, want: 9501},
+				{name: "asset_filter_before_priority", allowed: map[int]struct{}{9501: {}}, want: 9501},
+				{name: "deny_all_is_not_expanded", allowed: map[int]struct{}{}, want: 0},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					c, _ := gin.CreateTestContext(httptest.NewRecorder())
+					c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+					c.Request.Header.Set("X-Affinity-Key", affinityKey)
+					common.SetContextKey(c, constant.ContextKeyUserId, 42)
+					common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+					common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+					param := &RetryParam{Ctx: c, ModelName: "gpt-5", TokenGroup: "default", DynamicRoutingEligible: true, Retry: &tc.retry, AllowedChannelIds: tc.allowed}
+					if tc.capacity {
+						param.Capacity = &ChannelCapacityState{eligible: map[int]struct{}{}, blocked: map[int]struct{}{}}
+						if tc.blocked {
+							param.Capacity.blocked[9502] = struct{}{}
+						}
+					}
+					selected, _, selectErr := SelectChannelForRequest(c, "gpt-5", param)
+					if tc.want == 0 {
+						require.NotNil(t, selectErr)
+						assert.Nil(t, selected)
+						return
+					}
+					require.Nil(t, selectErr)
+					require.NotNil(t, selected)
+					assert.Equal(t, tc.want, selected.Id)
+				})
+			}
+			// Pausing is also enforced on fixed channels and post-selection checks.
+			require.NoError(t, db.Model(&model.UserChannelRoutingOverride{}).Where("user_id = ? AND channel_id = ?", 42, 9502).Update("disabled", true).Error)
+			c := newChannelSelectContext()
+			common.SetContextKey(c, constant.ContextKeyUserId, 42)
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+			GetChannelConstraints(c).AddPin(hostdto.ChannelPin{ChannelId: 9502, Source: hostdto.PinSourceOriginTask})
+			selected, _, selectErr := SelectChannelForRequest(c, "gpt-5", &RetryParam{Ctx: c, ModelName: "gpt-5", TokenGroup: "default"})
+			assert.Nil(t, selected)
+			require.NotNil(t, selectErr)
+			assert.Equal(t, "user_channel_disabled", selectErr.Message)
+			assert.ErrorIs(t, ValidateSelectedChannelGroupPolicy(c, 9502, "gpt-5"), ErrGroupModelChannelDenied)
+			// Even a huge user priority cannot escape an explicit group deny.
+			require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"default":{"gpt-5":[]}}`))
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+			selected, _, err := CacheGetRandomSatisfiedChannel(&RetryParam{Ctx: c, ModelName: "gpt-5", TokenGroup: "default"})
+			require.NoError(t, err)
+			assert.Nil(t, selected)
+		})
+	}
+}
 
 func TestVideoDeliveryPreferenceDoesNotOverrideStrictAffinity(t *testing.T) {
 	for _, mode := range []string{"prefer", "strict"} {

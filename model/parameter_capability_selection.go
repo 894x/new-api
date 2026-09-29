@@ -13,11 +13,12 @@ import (
 var ErrParameterCapabilityUnsupported = errors.New("request parameters are not supported by any eligible channel")
 
 type ChannelSelectionFilters struct {
-	Constraints       []hostdto.ChannelFilter
-	RequestPath       string
-	RequestBody       []byte
-	RequestBodySize   *int64
-	AllowedChannelIds map[int]struct{}
+	UserRoutingOverrides map[int]UserChannelRoutingOverride
+	Constraints          []hostdto.ChannelFilter
+	RequestPath          string
+	RequestBody          []byte
+	RequestBodySize      *int64
+	AllowedChannelIds    map[int]struct{}
 }
 
 type parameterCapabilityUnsupportedError struct {

@@ -33,7 +33,28 @@ import type {
   UpdateUserGroupConfigPayload,
   ChannelPoolPreview,
   ApiResponse,
+  UserChannelRoutingConfig,
+  UserChannelRoutingPatch,
 } from './types'
+
+export async function getUserChannelRouting(id: number, model = '') {
+  const response = await api.get<ApiResponse<UserChannelRoutingConfig>>(
+    `/api/user/${id}/channel-routing-overrides`,
+    { params: { model } }
+  )
+  return requireServerSuccess(response.data)
+}
+
+export async function patchUserChannelRouting(
+  id: number,
+  payload: UserChannelRoutingPatch
+) {
+  const response = await api.patch<ApiResponse<null>>(
+    `/api/user/${id}/channel-routing-overrides`,
+    payload
+  )
+  return requireServerSuccess(response.data)
+}
 
 // ============================================================================
 // User Management APIs

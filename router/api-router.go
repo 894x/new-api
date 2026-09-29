@@ -195,6 +195,8 @@ func SetApiRouter(router *gin.Engine) {
 			rootUserRoute.Use(middleware.RootAuth())
 			{
 				rootUserRoute.GET("/:id/group-config", middleware.DisableCache(), controller.GetUserGroupConfig)
+				rootUserRoute.GET("/:id/channel-routing-overrides", middleware.DisableCache(), controller.GetUserChannelRouting)
+				rootUserRoute.PATCH("/:id/channel-routing-overrides", middleware.DisableCache(), controller.PatchUserChannelRouting)
 				rootUserRoute.PUT("/:id/group-config", middleware.DisableCache(), controller.UpdateUserGroupConfig)
 				rootUserRoute.POST("/:id/group-config/dedicated", middleware.DisableCache(), controller.CreateDedicatedUserGroup)
 				rootUserRoute.POST("/:id/group-config/preview", middleware.DisableCache(), controller.PreviewUserGroupChannels)

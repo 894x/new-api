@@ -208,6 +208,20 @@ func listDBChannelCandidates(group, model string, filters ChannelSelectionFilter
 // applies request path and parameter constraints before
 // priority and weight selection.
 func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelectionFilters, model string) ([]Ability, int, int, error, error) {
+	if len(filters.UserRoutingOverrides) > 0 {
+		personalized := make([]Ability, 0, len(abilities))
+		for _, ability := range abilities {
+			override := filters.UserRoutingOverrides[ability.ChannelId]
+			if override.Disabled {
+				continue
+			}
+			if override.Priority != nil {
+				ability.Priority = common.GetPointer(*override.Priority)
+			}
+			personalized = append(personalized, ability)
+		}
+		abilities = personalized
+	}
 	if (len(filters.Constraints) == 0 && filters.RequestPath == "" && len(filters.RequestBody) == 0 && filters.RequestBodySize == nil) || len(abilities) == 0 {
 		return abilities, len(abilities), len(abilities), nil, nil
 	}

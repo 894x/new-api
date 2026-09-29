@@ -67,6 +67,13 @@ func filterVideoMediaChannels(param *RetryParam, group string) (*RetryParam, boo
 		return nil, true, errors.Join(model.ErrParameterCapabilityUnsupported, lastViolation)
 	}
 	copyParam := *param
+	if len(filters.UserRoutingOverrides) > 0 {
+		// Preserve media feasibility checks, but let the user's priority decide
+		// between native delivery and a supported conversion.
+		for id := range tiers[1] {
+			tiers[0][id] = struct{}{}
+		}
+	}
 	copyParam.AllowedChannelIds = tiers[0]
 	if len(tiers[0]) == 0 {
 		copyParam.AllowedChannelIds = tiers[1]

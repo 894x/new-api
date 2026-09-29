@@ -360,6 +360,7 @@ func migrateDB() error {
 		&Redemption{},
 		&Ability{},
 		&ChannelModelOverride{},
+		&UserChannelRoutingOverride{},
 		&Log{},
 		&Midjourney{},
 		&TopUp{},

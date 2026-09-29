@@ -124,6 +124,7 @@ func setupRelayRouterTestDB(t *testing.T) func(*testing.T) {
 		&model.User{},
 		&model.Token{},
 		&model.Ability{},
+		&model.UserChannelRoutingOverride{},
 		&model.BillingAdmissionReserveOperation{},
 		&model.BillingRefundOperation{},
 	))

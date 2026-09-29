@@ -167,6 +167,34 @@ export interface UserGroupRateLimit {
   >
 }
 
+export interface UserChannelRoutingRow {
+  channel_id: number
+  channel_name: string
+  default_priority: number
+  model_priority: number | null
+  inherited_priority: number
+  priority_override: number | null
+  effective_priority: number
+  enabled: boolean
+  available: boolean
+}
+
+export interface UserChannelRoutingConfig {
+  models: string[]
+  model: string
+  revision: string
+  channels: UserChannelRoutingRow[]
+}
+
+export interface UserChannelRoutingPatch {
+  model: string
+  revision: string
+  overrides: Pick<
+    UserChannelRoutingRow,
+    'channel_id' | 'priority_override' | 'enabled'
+  >[]
+}
+
 export interface UserGroupConfig {
   user_id: number
   username: string

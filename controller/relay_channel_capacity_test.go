@@ -37,7 +37,7 @@ func testRelayChannelCapacitySpillover(t *testing.T, dynamic bool) {
 	require.NoError(t, dynamic_routing_setting.ReplaceAndSync(configured))
 	t.Cleanup(func() { require.NoError(t, dynamic_routing_setting.ReplaceAndSync(previous)) })
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.UserSubscription{}))
+	require.NoError(t, db.AutoMigrate(&model.UserSubscription{}, &model.UserChannelRoutingOverride{}))
 	oldCache, oldRetry, oldRatio, oldCount := common.MemoryCacheEnabled, common.RetryTimes, ratio_setting.ModelRatio2JSONString(), constant.CountToken
 	server := miniredis.RunT(t)
 	oldRedis, oldRDB := common.RedisEnabled, common.RDB

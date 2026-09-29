@@ -42,6 +42,8 @@ func AppendTaskPluginIdentityFilter(c *gin.Context, pluginKey string) {
 }
 
 type RetryParam struct {
+	userRoutingLoaded      bool
+	userRouting            map[int]model.UserChannelRoutingOverride
 	Ctx                    *gin.Context
 	TokenGroup             string
 	ModelName              string
@@ -320,8 +322,15 @@ type ChannelSelectError struct {
 // filters. The group the channel was chosen from is returned for auto-group
 // callers. The caller still applies SetupContextForSelectedChannel.
 func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam) (*model.Channel, string, *ChannelSelectError) {
+	userRouting, routingErr := retry.UserChannelRouting()
+	if routingErr != nil {
+		return nil, "", &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: "user_channel_routing_unavailable"}
+	}
 	constraints := GetChannelConstraints(c)
 	if pin, found, overridden := constraints.ResolvedPin(); found {
+		if userRouting[pin.ChannelId].Disabled {
+			return nil, "", &ChannelSelectError{StatusCode: http.StatusForbidden, Message: "user_channel_disabled"}
+		}
 		for _, lost := range overridden {
 			logger.LogWarn(c, fmt.Sprintf(
 				"channel pin overridden: winning_source=%s winning_channel_id=%d overridden_source=%s overridden_channel_id=%d",
@@ -360,7 +369,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 	usingGroup := retry.TokenGroup
 	var channel *model.Channel
 	var selectGroup string
-	if retry.GetRetry() == 0 {
+	if retry.GetRetry() == 0 && len(userRouting) == 0 {
 		// Strict bindings must not be bypassed by dynamic routing. Best-effort
 		// affinity retains dynamic-routing and video-delivery tier precedence.
 		if preferredChannelID, found := GetPreferredChannelByAffinity(c, modelName, usingGroup); found &&

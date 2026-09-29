@@ -35,6 +35,10 @@ func GroupModelAllowedChannelIDs(userGroup, modelName string) (map[int]struct{},
 // SelectionFilters intersects user policy with asset constraints without
 // mutating either source. Each retry resolves the current policy again.
 func (p *RetryParam) SelectionFilters() (model.ChannelSelectionFilters, error) {
+	userRouting, err := p.UserChannelRouting()
+	if err != nil {
+		return model.ChannelSelectionFilters{}, err
+	}
 	allowed, err := GroupModelAllowedChannelIDs(common.GetContextKeyString(p.Ctx, constant.ContextKeyUserGroup), p.ModelName)
 	if err != nil {
 		return model.ChannelSelectionFilters{}, err
@@ -48,13 +52,22 @@ func (p *RetryParam) SelectionFilters() (model.ChannelSelectionFilters, error) {
 			}
 		}
 	}
-	return model.ChannelSelectionFilters{Constraints: GetChannelConstraints(p.Ctx).Filters, RequestPath: p.RequestPath, RequestBody: p.RequestBody, RequestBodySize: p.RequestBodySize, AllowedChannelIds: allowed}, nil
+	return model.ChannelSelectionFilters{UserRoutingOverrides: userRouting, Constraints: GetChannelConstraints(p.Ctx).Filters, RequestPath: p.RequestPath, RequestBody: p.RequestBody, RequestBodySize: p.RequestBodySize, AllowedChannelIds: allowed}, nil
 }
 
 // ValidateSelectedChannelGroupPolicy protects affinity hits, pinned channels
 // and task retries. Token-group membership is checked independently so policy
 // never grants access outside the token's own candidate groups.
 func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName string) error {
+	rows, err := model.ListUserChannelRoutingOverrides(common.GetContextKeyInt(c, constant.ContextKeyUserId), modelName)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.ChannelId == channelID && row.Disabled {
+			return ErrGroupModelChannelDenied
+		}
+	}
 	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 	allowed, err := GroupModelAllowedChannelIDs(userGroup, modelName)
 	if err != nil {
