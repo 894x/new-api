@@ -42,7 +42,7 @@ func ManagedVideoTaskReferences(c *gin.Context) *model.TaskAssetReferences {
 	return result
 }
 
-func prepareManagedVideoRequest(c *gin.Context, userID int) error {
+func prepareManagedVideoRequest(c *gin.Context, userID int, skipBase64Video ...bool) error {
 	config, err := system_setting.LoadAssetStorageConfig()
 	if err != nil {
 		return err
@@ -73,7 +73,7 @@ func prepareManagedVideoRequest(c *gin.Context, userID int) error {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 	defer cancel()
-	payload, err := service.StoreVideoAssetReferences(ctx, userID, prepared.original, prepared.references)
+	payload, err := service.StoreVideoAssetReferences(ctx, userID, prepared.original, prepared.references, skipBase64Video...)
 	if err != nil {
 		return err
 	}

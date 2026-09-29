@@ -7834,6 +7834,10 @@
     "Zhipu": "智谱",
     "Zhipu GLM": "智谱GLM",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Convert Seedance Base64 videos to public URLs": "将 Seedance Base64 视频转换为公网链接",
+    "Store input videos locally before importing them into the upstream asset library": "将输入视频保存到本机，再导入上游素材库",
+    "Local Seedance video storage limit (MB)": "Seedance 本地视频存储上限（MB）",
+    "When this limit is reached, the oldest converted videos are deleted.": "达到上限时，删除最早转换的视频。"
   }
 }

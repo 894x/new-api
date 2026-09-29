@@ -34,6 +34,9 @@ const OPERATIONS_SECTIONS = [
     build: (settings: OperationsSettings) => (
       <AssetStorageSection
         quotaMB={settings['asset_storage_setting.default_quota_mb'] ?? 1024}
+        seedanceVideoMaxMB={
+          settings['asset_storage_setting.seedance_video_max_mb'] ?? 1024
+        }
       />
     ),
   },

@@ -7834,6 +7834,10 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Convert Seedance Base64 videos to public URLs": "Chuyển video Base64 Seedance thành URL công khai",
+    "Store input videos locally before importing them into the upstream asset library": "Lưu video đầu vào trên máy chủ trước khi nhập vào thư viện tài nguyên thượng nguồn",
+    "Local Seedance video storage limit (MB)": "Giới hạn lưu trữ video Seedance cục bộ (MB)",
+    "When this limit is reached, the oldest converted videos are deleted.": "Khi đạt giới hạn, các video đã chuyển đổi cũ nhất sẽ bị xóa."
   }
 }

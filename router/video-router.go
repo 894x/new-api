@@ -8,6 +8,9 @@ import (
 )
 
 func SetVideoRouter(router *gin.Engine) {
+	router.GET("/v1/seedance-media/:name", controller.SeedanceMediaContent)
+	router.HEAD("/v1/seedance-media/:name", controller.SeedanceMediaContent)
+
 	miniMaxVideoV2Router := router.Group("/v2")
 	miniMaxVideoV2Router.Use(middleware.RouteTag("relay"))
 	miniMaxVideoV2Router.Use(middleware.MiniMaxVideoV2RequestConvert(), middleware.TokenAuth(), middleware.AssetLibraryRouting(), middleware.Distribute())

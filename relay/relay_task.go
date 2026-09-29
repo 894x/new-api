@@ -350,7 +350,14 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		info.BillingRequestInput = &input
 	}
 	if platform != constant.TaskPlatformSuno {
-		if err := prepareManagedVideoRequest(c, info.UserId); err != nil {
+		pluginKey := c.GetString("task_plugin_key")
+		if pinnedValue, exists := c.Get(jsplugin.ContextKeyPinnedPlugin); exists {
+			if pinned, ok := pinnedValue.(jsplugin.PinnedPlugin); ok && pinned.Plugin != nil {
+				pluginKey = pinned.Plugin.Meta.Key
+			}
+		}
+		seedanceChannel := info.ChannelType == constant.ChannelTypeSeedanceSLS || info.ChannelType == constant.ChannelTypeDoubaoVideo || pluginKey == "seedance-sls" || pluginKey == "doubao"
+		if err := prepareManagedVideoRequest(c, info.UserId, seedanceChannel); err != nil {
 			return nil, service.TaskErrorWrapperLocal(err, "asset_storage_failed", http.StatusBadRequest)
 		}
 	}

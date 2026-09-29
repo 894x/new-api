@@ -3589,6 +3589,40 @@ export function ChannelMutateDrawer({
 
   const connectionSection = (
     <div className='scroll-mt-4'>
+      {(currentType === 54 ||
+        currentType === 104 ||
+        currentTaskPluginKey === 'doubao' ||
+        currentTaskPluginKey === 'seedance-sls' ||
+        (currentType === 60 &&
+          currentTaskExtendPluginKeys?.some(
+            (key) => key === 'doubao' || key === 'seedance-sls'
+          ))) && (
+        <FormField
+          control={form.control}
+          name='seedance_base64_video_to_url'
+          render={({ field }) => (
+            <FormItem className='flex items-center justify-between gap-3 py-3'>
+              <div className='space-y-0.5'>
+                <FormLabel>
+                  {t('Convert Seedance Base64 videos to public URLs')}
+                </FormLabel>
+                <FormDescription>
+                  {t(
+                    'Store input videos locally before importing them into the upstream asset library'
+                  )}
+                </FormDescription>
+              </div>
+              <FormControl>
+                <Switch
+                  disabled={sensitiveLocked}
+                  checked={field.value !== false}
+                  onCheckedChange={field.onChange}
+                />
+              </FormControl>
+            </FormItem>
+          )}
+        />
+      )}
       {/* DoubaoVideo (type 54) */}
       {currentType === 54 && (
         <fieldset

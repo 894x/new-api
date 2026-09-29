@@ -306,6 +306,7 @@ export const channelFormSchema = z
     claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
     ollama_openai_chat: z.boolean().optional(), // Ollama: OpenAI-compatible /v1/chat/completions instead of native /api/chat
     disable_task_polling_sleep: z.boolean().optional(),
+    seedance_base64_video_to_url: z.boolean().optional(),
     // Upstream model update settings (stored in settings JSON)
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
@@ -548,6 +549,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   claude_beta_query: false,
   ollama_openai_chat: false,
   disable_task_polling_sleep: false,
+  seedance_base64_video_to_url: true,
   upstream_model_update_check_enabled: false,
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
@@ -634,6 +636,7 @@ export function transformChannelToFormDefaults(
   let claudeBetaQuery = false
   let ollamaOpenAIChat = false
   let disableTaskPollingSleep = false
+  let seedanceBase64VideoToURL = true
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
@@ -665,6 +668,7 @@ export function transformChannelToFormDefaults(
       claudeBetaQuery = parsed.claude_beta_query === true
       ollamaOpenAIChat = parsed.ollama_openai_chat === true
       disableTaskPollingSleep = parsed.disable_task_polling_sleep === true
+      seedanceBase64VideoToURL = parsed.seedance_base64_video_to_url !== false
       upstreamModelUpdateCheckEnabled =
         parsed.upstream_model_update_check_enabled === true
       upstreamModelUpdateAutoSyncEnabled =
@@ -737,6 +741,7 @@ export function transformChannelToFormDefaults(
     claude_beta_query: claudeBetaQuery,
     ollama_openai_chat: ollamaOpenAIChat,
     disable_task_polling_sleep: disableTaskPollingSleep,
+    seedance_base64_video_to_url: seedanceBase64VideoToURL,
     allow_safety_identifier: allowSafetyIdentifier,
     upstream_model_update_check_enabled: upstreamModelUpdateCheckEnabled,
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
@@ -855,6 +860,25 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     delete settingsObj.doubao_video_api_mode
     delete settingsObj.doubao_video_submit_path
     delete settingsObj.doubao_video_fetch_path
+  }
+
+  if (
+    formData.type === 54 ||
+    formData.type === 104 ||
+    (formData.type === 60 &&
+      formData.task_extend_plugin_keys?.some(
+        (key) => key === 'doubao' || key === 'seedance-sls'
+      )) ||
+    formData.task_plugin_key === 'doubao' ||
+    formData.task_plugin_key === 'seedance-sls'
+  ) {
+    if (formData.seedance_base64_video_to_url === false) {
+      settingsObj.seedance_base64_video_to_url = false
+    } else {
+      delete settingsObj.seedance_base64_video_to_url
+    }
+  } else {
+    delete settingsObj.seedance_base64_video_to_url
   }
 
   // Field passthrough controls:

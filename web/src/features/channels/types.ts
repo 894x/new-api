@@ -146,6 +146,7 @@ export interface ChannelOtherSettings {
   claude_beta_query?: boolean
   ollama_openai_chat?: boolean
   disable_task_polling_sleep?: boolean
+  seedance_base64_video_to_url?: boolean
   upstream_model_update_check_enabled?: boolean
   upstream_model_update_auto_sync_enabled?: boolean
   upstream_model_update_ignored_models?: string[]

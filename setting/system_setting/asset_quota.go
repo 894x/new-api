@@ -9,10 +9,11 @@ const AssetQuotaMB = int64(1_000_000)
 const MaxAssetQuotaMB = int64(1_000_000)
 
 type AssetStorageSetting struct {
-	DefaultQuotaMB int64 `json:"default_quota_mb"`
+	DefaultQuotaMB     int64 `json:"default_quota_mb"`
+	SeedanceVideoMaxMB int64 `json:"seedance_video_max_mb"`
 }
 
-var assetStorageSetting = AssetStorageSetting{DefaultQuotaMB: 1024}
+var assetStorageSetting = AssetStorageSetting{DefaultQuotaMB: 1024, SeedanceVideoMaxMB: 1024}
 
 func init() { config.GlobalConfig.Register("asset_storage_setting", &assetStorageSetting) }
 

@@ -7834,6 +7834,10 @@
     "Zhipu": "智譜",
     "Zhipu GLM": "智譜GLM",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Convert Seedance Base64 videos to public URLs": "將 Seedance Base64 影片轉換為公開連結",
+    "Store input videos locally before importing them into the upstream asset library": "先將輸入影片儲存於本機，再匯入上游素材庫",
+    "Local Seedance video storage limit (MB)": "Seedance 本機影片儲存上限（MB）",
+    "When this limit is reached, the oldest converted videos are deleted.": "達到上限時，刪除最早轉換的影片。"
   }
 }

@@ -270,6 +270,11 @@ func (a *TaskAdaptor) ValidateMappedRequest(c *gin.Context, info *relaycommon.Re
 		if _, err := a.plugin.Engine.Call(c.Request.Context(), "validatePreparedRequest", a.submitContext(c, info), prepared); err != nil {
 			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
 		}
+		convertVideo := info.ChannelOtherSettings.SeedanceBase64VideoToURL == nil || *info.ChannelOtherSettings.SeedanceBase64VideoToURL
+		prepared, err = service.ConvertSeedanceBase64Videos(c.Request.Context(), prepared, convertVideo)
+		if err != nil {
+			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+		}
 		requestContext, err := service.ValidateSeedanceMedia(c.Request.Context(), info.UserId, info.GetUpstreamModelName(), prepared)
 		if err != nil {
 			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
@@ -498,6 +503,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// driver builds the payload, but never receives asset-library credentials.
 	if a.plugin.Meta.Key == "doubao" || a.plugin.Meta.Key == "seedance-sls" {
 		if payload, ok := inlined.(map[string]any); ok {
+			if a.plugin.Meta.Key == "doubao" {
+				convertVideo := info.ChannelOtherSettings.SeedanceBase64VideoToURL == nil || *info.ChannelOtherSettings.SeedanceBase64VideoToURL
+				payload, err = service.ConvertSeedanceBase64Videos(c.Request.Context(), payload, convertVideo)
+				if err != nil {
+					return nil, err
+				}
+			}
 			inlined, err = service.PrepareAssetReferences(c.Request.Context(), info.UserId, info.ChannelId, payload)
 			if err != nil {
 				return nil, err

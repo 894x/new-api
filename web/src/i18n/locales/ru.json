@@ -7834,6 +7834,10 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Convert Seedance Base64 videos to public URLs": "Преобразовывать видео Seedance в Base64 в публичные URL",
+    "Store input videos locally before importing them into the upstream asset library": "Сохранять входные видео локально перед импортом в библиотеку ресурсов провайдера",
+    "Local Seedance video storage limit (MB)": "Лимит локального хранения видео Seedance (МБ)",
+    "When this limit is reached, the oldest converted videos are deleted.": "При достижении лимита самые старые преобразованные видео удаляются."
   }
 }

@@ -46,7 +46,7 @@ it('saves an integer MB quota and preserves unsaved values when the server rejec
   document.body.append(actions)
   const view = render(
     <SettingsPageProvider actionsContainer={actions}>
-      <AssetStorageSection quotaMB={1024} />
+      <AssetStorageSection quotaMB={1024} seedanceVideoMaxMB={1024} />
     </SettingsPageProvider>
   )
   const input = screen.getByRole('spinbutton', {
@@ -81,6 +81,30 @@ it('saves an integer MB quota and preserves unsaved values when the server rejec
     expect(mutateAsync).toHaveBeenLastCalledWith({
       key: 'asset_storage_setting.default_quota_mb',
       value: '0',
+    })
+  )
+  view.unmount()
+  actions.remove()
+})
+
+it('saves the local Seedance video storage limit', async () => {
+  const actions = document.createElement('div')
+  document.body.append(actions)
+  const view = render(
+    <SettingsPageProvider actionsContainer={actions}>
+      <AssetStorageSection quotaMB={1024} seedanceVideoMaxMB={1024} />
+    </SettingsPageProvider>
+  )
+  const input = screen.getByRole('spinbutton', {
+    name: 'Local Seedance video storage limit (MB)',
+  })
+  fireEvent.change(input, { target: { value: '2048' } })
+  mutateAsync.mockResolvedValueOnce({ success: true })
+  fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(mutateAsync).toHaveBeenCalledWith({
+      key: 'asset_storage_setting.seedance_video_max_mb',
+      value: '2048',
     })
   )
   view.unmount()

@@ -40,22 +40,41 @@ import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 
-const schema = z.object({ quotaMB: z.number().int().min(0).max(1_000_000) })
+const schema = z.object({
+  quotaMB: z.number().int().min(0).max(1_000_000),
+  seedanceVideoMaxMB: z.number().int().min(1).max(1_000_000),
+})
 
-export function AssetStorageSection({ quotaMB }: { quotaMB: number }) {
+export function AssetStorageSection({
+  quotaMB,
+  seedanceVideoMaxMB,
+}: {
+  quotaMB: number
+  seedanceVideoMaxMB: number
+}) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { quotaMB },
+    defaultValues: { quotaMB, seedanceVideoMaxMB },
   })
-  useResetForm(form, { quotaMB })
+  useResetForm(form, { quotaMB, seedanceVideoMaxMB })
   const onSave = form.handleSubmit(async (values) => {
-    const result = await updateOption.mutateAsync({
-      key: 'asset_storage_setting.default_quota_mb',
-      value: String(values.quotaMB),
-    })
-    if (result.success) form.reset(values)
+    if (values.quotaMB !== quotaMB) {
+      const result = await updateOption.mutateAsync({
+        key: 'asset_storage_setting.default_quota_mb',
+        value: String(values.quotaMB),
+      })
+      if (!result.success) return
+    }
+    if (values.seedanceVideoMaxMB !== seedanceVideoMaxMB) {
+      const result = await updateOption.mutateAsync({
+        key: 'asset_storage_setting.seedance_video_max_mb',
+        value: String(values.seedanceVideoMaxMB),
+      })
+      if (!result.success) return
+    }
+    form.reset(values)
   })
 
   return (
@@ -98,6 +117,36 @@ export function AssetStorageSection({ quotaMB }: { quotaMB: number }) {
                         'Reducing the quota keeps existing assets. A quota of 0 prevents new storage usage.'
                       )}
                     </span>
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='seedanceVideoMaxMB'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    {t('Local Seedance video storage limit (MB)')}
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      {...field}
+                      type='number'
+                      min={1}
+                      max={1_000_000}
+                      step={1}
+                      onChange={(event) =>
+                        field.onChange(event.target.valueAsNumber)
+                      }
+                      disabled={form.formState.isSubmitting}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'When this limit is reached, the oldest converted videos are deleted.'
+                    )}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

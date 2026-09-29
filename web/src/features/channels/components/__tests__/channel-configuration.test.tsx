@@ -1611,6 +1611,31 @@ test('an Ollama channel marks a saved OpenAI-compatible chat setting in Request 
   })
 })
 
+test('a Seedance channel enables local Base64 video conversion by default and saves an override', async () => {
+  editingChannel = {
+    ...editingChannel,
+    type: 104,
+  }
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = userEvent.setup()
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  const toggle = screen.getByRole('switch', {
+    name: 'Convert Seedance Base64 videos to public URLs',
+  })
+  expect(toggle).toBeChecked()
+  await user.click(toggle)
+  expect(toggle).not.toBeChecked()
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  const payload = put.mock.calls[0]?.[1] as { settings: string }
+  expect(JSON.parse(payload.settings)).toMatchObject({
+    seedance_base64_video_to_url: false,
+  })
+})
+
 test('an invalid edit switches categories and replaces configured styling with the field error', async () => {
   const user = userEvent.setup()
   render(<ConfigurationHarness currentRow={editingChannel} />)
@@ -2776,6 +2801,11 @@ test('a New API channel binds upstream task plugins and publishes their models',
     .mockResolvedValue({ data: { success: true } })
   const user = userEvent.setup()
   render(<ConfigurationHarness currentRow={channel} />)
+  expect(
+    screen.queryByRole('switch', {
+      name: 'Convert Seedance Base64 videos to public URLs',
+    })
+  ).not.toBeInTheDocument()
   const extensions = within(
     await screen.findByRole('group', { name: 'Plugin extensions' })
   )

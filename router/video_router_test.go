@@ -3,6 +3,9 @@ package router
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -13,6 +16,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSeedanceMediaRouteServesOnlyOpaqueVideoFiles(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("SEEDANCE_VIDEO_DIR", directory)
+	name := strings.Repeat("a", 32) + ".mp4"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, name), []byte("video-content"), 0600))
+	engine := gin.New()
+	SetVideoRouter(engine)
+	request := httptest.NewRequest(http.MethodGet, "/v1/seedance-media/"+name, nil)
+	request.Header.Set("Range", "bytes=0-4")
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, request)
+	assert.Equal(t, http.StatusPartialContent, recorder.Code)
+	assert.Equal(t, "video", recorder.Body.String())
+	assert.Equal(t, "video/mp4", recorder.Header().Get("Content-Type"))
+	assert.Equal(t, "nosniff", recorder.Header().Get("X-Content-Type-Options"))
+	request = httptest.NewRequest(http.MethodGet, "/v1/seedance-media/invalid.mp4", nil)
+	recorder = httptest.NewRecorder()
+	engine.ServeHTTP(recorder, request)
+	assert.Equal(t, http.StatusNotFound, recorder.Code)
+}
 
 func TestVideoContentRoutePreservesDashboardAndTokenAuthorization(t *testing.T) {
 	f := setupAssetStorageE2E(t)

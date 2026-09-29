@@ -18,8 +18,11 @@ import (
 // assets again rather than re-fetching mutable external URLs.
 type ManagedAssetReferences map[string]*model.UserAsset
 
-func StoreVideoAssetReferences(ctx context.Context, userID int, payload map[string]any, snapshot ManagedAssetReferences) (map[string]any, error) {
+func StoreVideoAssetReferences(ctx context.Context, userID int, payload map[string]any, snapshot ManagedAssetReferences, skipBase64Video ...bool) (map[string]any, error) {
 	resolved, err := walkVideoAssetReferences(payload, "", func(source, assetType string) (string, error) {
+		if len(skipBase64Video) > 0 && skipBase64Video[0] && assetType == "Video" && strings.HasPrefix(source, "data:") {
+			return source, nil
+		}
 		key := assetType + "\x00" + source
 		asset := snapshot[key]
 		if asset == nil {

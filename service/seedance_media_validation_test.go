@@ -4,11 +4,18 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -22,6 +29,146 @@ func seedanceTestMedia(field, source, role string) map[string]any {
 		item["role"] = role
 	}
 	return item
+}
+
+func TestSeedanceBase64VideoConvertsBeforeAssetImportAndPrunesOldFiles(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("SEEDANCE_VIDEO_DIR", directory)
+	previousAddress := system_setting.TaskPublicAddress
+	previousLimit := system_setting.GetAssetStorageSetting().SeedanceVideoMaxMB
+	system_setting.TaskPublicAddress = "https://media.example/gateway"
+	system_setting.GetAssetStorageSetting().SeedanceVideoMaxMB = 1
+	t.Cleanup(func() {
+		system_setting.TaskPublicAddress = previousAddress
+		system_setting.GetAssetStorageSetting().SeedanceVideoMaxMB = previousLimit
+	})
+	oldName := strings.Repeat("a", 32) + ".mp4"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, oldName), make([]byte, 1_000_000), 0600))
+	oldTime := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(filepath.Join(directory, oldName), oldTime, oldTime))
+	encoded := base64.StdEncoding.EncodeToString(buildAssetLibraryTestMP4("isom", 854, 480, 1000, 2000, 48))
+	source := "data:video/mp4;base64," + encoded
+	managed, err := StoreVideoAssetReferences(t.Context(), 7, map[string]any{
+		"content": []any{seedanceTestMedia("video_url", source, "reference_video")},
+	}, nil, true)
+	require.NoError(t, err)
+	assert.Equal(t, source, managed["content"].([]any)[0].(map[string]any)["video_url"].(map[string]any)["url"])
+	payload := map[string]any{"content": []any{
+		seedanceTestMedia("video_url", source, "reference_video"),
+		seedanceTestMedia("video_url", source, "reference_video"),
+		seedanceTestMedia("image_url", "https://example.com/image.png", ""),
+	}}
+	prepared, err := ConvertSeedanceBase64Videos(t.Context(), payload, true)
+	require.NoError(t, err)
+	content := prepared["content"].([]any)
+	first := content[0].(map[string]any)["video_url"].(map[string]any)["url"].(string)
+	second := content[1].(map[string]any)["video_url"].(map[string]any)["url"].(string)
+	assert.Equal(t, first, second)
+	assert.Contains(t, first, "https://media.example/gateway/v1/seedance-media/")
+	assert.Equal(t, source, payload["content"].([]any)[0].(map[string]any)["video_url"].(map[string]any)["url"])
+	assert.Equal(t, "https://example.com/image.png", content[2].(map[string]any)["image_url"].(map[string]any)["url"])
+	_, statErr := os.Stat(filepath.Join(directory, oldName))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+	assert.True(t, validSeedanceVideoName(entries[0].Name()))
+	_, err = ConvertSeedanceBase64Videos(t.Context(), payload, false)
+	require.ErrorContains(t, err, "disabled")
+	_, err = StoreSeedanceBase64Video(t.Context(), "data:video/mp4;base64,not-base64")
+	require.ErrorContains(t, err, "invalid video base64")
+	system_setting.GetAssetStorageSetting().SeedanceVideoMaxMB = 2
+	rawURL, err := StoreSeedanceBase64Video(t.Context(), encoded)
+	require.NoError(t, err)
+	assert.Contains(t, rawURL, "/v1/seedance-media/")
+	system_setting.TaskPublicAddress = "http://localhost:3000"
+	_, err = StoreSeedanceBase64Video(t.Context(), source)
+	require.ErrorContains(t, err, "publicly reachable")
+}
+
+func TestSeedanceBase64VideoIsFetchedByAssetLibraryAfterConversion(t *testing.T) {
+	db := setupAssetLibraryServiceTestDB(t)
+	t.Setenv("ASSET_STORAGE_ENABLED", "false")
+	t.Setenv("SEEDANCE_VIDEO_DIR", t.TempDir())
+	previousAddress := system_setting.TaskPublicAddress
+	previousFetch := *system_setting.GetFetchSetting()
+	system_setting.TaskPublicAddress = "http://media.example"
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	InitHttpClient()
+	t.Cleanup(func() {
+		system_setting.TaskPublicAddress = previousAddress
+		*system_setting.GetFetchSetting() = previousFetch
+		InitHttpClient()
+	})
+	mediaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		file, err := OpenSeedanceVideo(strings.TrimPrefix(r.URL.Path, seedanceVideoURLPath))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = io.Copy(w, file)
+	}))
+	defer mediaServer.Close()
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	dialer := (&net.Dialer{}).DialContext
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address == "media.example:80" {
+			address = mediaServer.Listener.Addr().String()
+		}
+		return dialer(ctx, network, address)
+	}
+	GetHttpClient().Transport = transport
+
+	video := buildAssetLibraryTestMP4("isom", 854, 480, 1000, 2000, 48)
+	var imports atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v1/volcengine/assets":
+			var input map[string]any
+			if err := common.DecodeJson(r.Body, &input); err != nil {
+				http.Error(w, "invalid asset request", http.StatusBadRequest)
+				return
+			}
+			url, _ := input["source_url"].(string)
+			if !strings.HasPrefix(url, system_setting.TaskPublicAddress+seedanceVideoURLPath) {
+				http.Error(w, "video was not converted before import", http.StatusBadRequest)
+				return
+			}
+			response, err := GetHttpClient().Get(url)
+			if err != nil {
+				http.Error(w, "public video is not readable", http.StatusBadGateway)
+				return
+			}
+			defer response.Body.Close()
+			data, err := io.ReadAll(response.Body)
+			if err != nil || response.StatusCode != http.StatusOK || !assert.Equal(t, video, data) {
+				http.Error(w, "public video bytes differ", http.StatusBadGateway)
+				return
+			}
+			imports.Add(1)
+			_, _ = io.WriteString(w, `{"success":true,"data":{"logical_id":"lass_video","logical_group_id":"lasg_video","status":"Processing"}}`)
+		case "GET /v1/volcengine/assets/lass_video":
+			_, _ = io.WriteString(w, `{"success":true,"data":{"logical_id":"lass_video","logical_group_id":"lasg_video","status":"Active","asset_type":"Video"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	require.NoError(t, db.Create(&model.Channel{Id: 11, Type: constant.ChannelTypeSeedanceSLS, Key: "test", Name: "SLS"}).Error)
+	require.NoError(t, db.Create(&model.ChannelAssetConfig{ChannelId: 11, Enabled: true, Backend: AssetLibraryBackendSeedanceSLS, BaseURL: upstream.URL, AuthType: AssetLibraryAuthBearer, APIKey: "test"}).Error)
+	source := "data:video/mp4;base64," + base64.StdEncoding.EncodeToString(video)
+	payload := map[string]any{"model": "doubao-seedance-2-5", "content": []any{seedanceTestMedia("video_url", source, "reference_video")}}
+	converted, err := ConvertSeedanceBase64Videos(t.Context(), payload, true)
+	require.NoError(t, err)
+	ctx, err := ValidateSeedanceMedia(t.Context(), 7, "doubao-seedance-2-5", converted)
+	require.NoError(t, err)
+	prepared, err := PrepareAssetReferences(ctx, 7, 11, converted)
+	require.NoError(t, err)
+	assert.Equal(t, "asset://lass_video", prepared["content"].([]any)[0].(map[string]any)["video_url"].(map[string]any)["url"])
+	assert.Equal(t, int32(1), imports.Load())
 }
 
 func TestSeedanceAudioDurationBoundaries(t *testing.T) {

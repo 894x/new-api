@@ -32,6 +32,47 @@ const parameterCapabilities = {
 }
 
 describe('channel form parameter capability persistence', () => {
+  it('defaults Seedance conversion on and stores an explicit channel opt-out', () => {
+    const base = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      type: 104,
+      name: 'SLS channel',
+      key: 'test-key',
+      models: 'doubao-seedance-2-0-260128',
+    }
+    const enabled = transformFormDataToCreatePayload(base)
+    expect(JSON.parse(enabled.channel.settings || '{}')).not.toHaveProperty(
+      'seedance_base64_video_to_url'
+    )
+    const disabled = transformFormDataToCreatePayload({
+      ...base,
+      seedance_base64_video_to_url: false,
+    })
+    expect(JSON.parse(disabled.channel.settings || '{}')).toHaveProperty(
+      'seedance_base64_video_to_url',
+      false
+    )
+    const unrelated = transformFormDataToCreatePayload({
+      ...base,
+      type: 60,
+      task_extend_plugin_keys: ['video-a'],
+      seedance_base64_video_to_url: false,
+    })
+    expect(JSON.parse(unrelated.channel.settings || '{}')).not.toHaveProperty(
+      'seedance_base64_video_to_url'
+    )
+    const extended = transformFormDataToCreatePayload({
+      ...base,
+      type: 60,
+      task_extend_plugin_keys: ['seedance-sls'],
+      seedance_base64_video_to_url: false,
+    })
+    expect(JSON.parse(extended.channel.settings || '{}')).toHaveProperty(
+      'seedance_base64_video_to_url',
+      false
+    )
+  })
+
   it('stores capability configuration in channel settings without discarding existing settings', () => {
     const payload = transformFormDataToCreatePayload({
       ...CHANNEL_FORM_DEFAULT_VALUES,
