@@ -17,14 +17,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Plus, Trash2 } from 'lucide-react'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useFieldArray, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   SideDrawerSection,
   SideDrawerSectionHeader,
@@ -63,7 +64,13 @@ import { MAX_REQUEST_RATE_LIMIT } from '@/features/system-settings/request-limit
 import { handleServerError } from '@/lib/handle-server-error'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
-import { getUserGroupConfig, updateUserGroupConfig } from '../api'
+import {
+  createDedicatedUserGroup,
+  getUserGroupConfig,
+  previewUserGroupChannels,
+  updateUserGroupConfig,
+} from '../api'
+import { USER_ROLE } from '../constants'
 import type { User, UserGroupConfig } from '../types'
 import { useUsers } from './users-provider'
 
@@ -173,7 +180,10 @@ type Props = {
 
 export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
   const { t } = useTranslation()
-  const { triggerRefresh } = useUsers()
+  const queryClient = useQueryClient()
+  const { setCurrentRow, triggerRefresh } = useUsers()
+  const [confirmDedicatedOpen, setConfirmDedicatedOpen] = useState(false)
+  const [previewKey, setPreviewKey] = useState('')
   const form = useForm<FormValues>({
     resolver: zodResolver(createSchema(t)),
     defaultValues: emptyValues,
@@ -213,6 +223,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
       if (!config) throw new Error('Configuration is required')
       const result = await updateUserGroupConfig(user.id, {
         group: config.group,
+        revision: config.revision,
         discounts: Object.fromEntries(
           values.discounts.map((item) => [item.targetGroup, item.ratio])
         ),
@@ -243,238 +254,198 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
     onError: (error) => handleServerError(error, t('Failed to save')),
   })
 
+  const createDedicated = useMutation({
+    mutationFn: async () => {
+      if (!user || !config) throw new Error('Configuration is required')
+      return requireServerSuccess(
+        await createDedicatedUserGroup(user.id, config.group, config.revision)
+      )
+    },
+    onSuccess: (result) => {
+      setConfirmDedicatedOpen(false)
+      if (result.data && user) {
+        const createdGroup = result.data.group
+        queryClient.setQueryData(['user-group-config', user.id], result)
+        setCurrentRow((current) =>
+          current?.id === user.id
+            ? { ...current, group: createdGroup }
+            : current
+        )
+      }
+      triggerRefresh()
+      toast.success(t('Dedicated customer group created'))
+    },
+    onError: (error) => handleServerError(error, t('Failed to create group')),
+  })
+
+  const isDedicatedGroup = config?.is_dedicated_group ?? false
+  const channelRulesValue = form.watch('channelRules')
+  const currentPreviewKey = JSON.stringify(channelRulesValue)
+  const previewChannels = useMutation({
+    mutationFn: async (input: {
+      rules: FormValues['channelRules']
+      key: string
+    }) => {
+      if (!user || !config) throw new Error('Configuration is required')
+      return requireServerSuccess(
+        await previewUserGroupChannels(
+          user.id,
+          config.group,
+          Object.fromEntries(
+            input.rules.map(({ modelName, groups }) => [modelName, groups])
+          )
+        )
+      )
+    },
+    onSuccess: (_result, input) => setPreviewKey(input.key),
+    onError: (error) =>
+      handleServerError(error, t('Channel pool preview is unavailable.')),
+  })
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className={sideDrawerContentClassName('sm:max-w-[760px]')}>
-        <SheetHeader className={sideDrawerHeaderClassName()}>
-          <SheetTitle>{t('Customer group configuration')}</SheetTitle>
-          <SheetDescription>
-            {config
-              ? t(
-                  'Configure policies for {{username}} using user group {{group}}.',
-                  {
-                    username: config.username,
-                    group: config.group,
-                  }
-                )
-              : t('Configure discounts, rate limits, and model channel pools.')}
-          </SheetDescription>
-        </SheetHeader>
-
-        {query.isPending && (
-          <div className='flex min-h-0 flex-1 items-center justify-center'>
-            <Loader2 className='text-muted-foreground size-6 animate-spin' />
-          </div>
-        )}
-        {query.isError && !query.isPending && (
-          <div className='flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6'>
-            <p className='text-destructive text-sm'>{t('Failed to load')}</p>
-            <Button variant='outline' onClick={() => query.refetch()}>
-              {t('Retry')}
-            </Button>
-          </div>
-        )}
-        {!query.isPending && !query.isError && (
-          <Form {...form}>
-            <form
-              id='user-group-config-form'
-              className={sideDrawerFormClassName()}
-              onSubmit={form.handleSubmit((values) => save.mutate(values))}
-            >
-              <Alert>
-                <AlertDescription>
-                  {t(
-                    'These policies apply to every user in group {{group}}. Assign an exclusive group before using this page for one customer.',
-                    { group: config?.group ?? user?.group ?? '' }
+    <>
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent
+          className={sideDrawerContentClassName('sm:max-w-[760px]')}
+        >
+          <SheetHeader className={sideDrawerHeaderClassName()}>
+            <SheetTitle>{t('Customer group configuration')}</SheetTitle>
+            <SheetDescription>
+              {config
+                ? t(
+                    'Configure policies for {{username}} using user group {{group}}.',
+                    {
+                      username: config.username,
+                      group: config.group,
+                    }
+                  )
+                : t(
+                    'Configure discounts, rate limits, and model channel pools.'
                   )}
-                </AlertDescription>
-              </Alert>
-              <Tabs defaultValue='discounts'>
-                <TabsList className='grid w-full grid-cols-3'>
-                  <TabsTrigger value='discounts'>{t('Discounts')}</TabsTrigger>
-                  <TabsTrigger value='rate-limits'>
-                    {t('Rate limits')}
-                  </TabsTrigger>
-                  <TabsTrigger value='channels'>{t('Channels')}</TabsTrigger>
-                </TabsList>
+            </SheetDescription>
+          </SheetHeader>
 
-                <TabsContent value='discounts' className='pt-5'>
-                  <SideDrawerSection>
-                    <SideDrawerSectionHeader
-                      title={t('Specified group discounts')}
-                      description={t(
-                        'Set the ratio charged when this user group uses each billing group. Unconfigured billing groups keep their base ratio.'
+          {query.isPending && (
+            <div className='flex min-h-0 flex-1 items-center justify-center'>
+              <Loader2 className='text-muted-foreground size-6 animate-spin' />
+            </div>
+          )}
+          {query.isError && !query.isPending && (
+            <div className='flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6'>
+              <p className='text-destructive text-sm'>{t('Failed to load')}</p>
+              <Button variant='outline' onClick={() => query.refetch()}>
+                {t('Retry')}
+              </Button>
+            </div>
+          )}
+          {!query.isPending && !query.isError && (
+            <Form {...form}>
+              <form
+                id='user-group-config-form'
+                className={sideDrawerFormClassName()}
+                onSubmit={form.handleSubmit((values) => save.mutate(values))}
+              >
+                {config && (
+                  <Alert>
+                    <AlertDescription>
+                      {t(
+                        'Group {{group}} is used by {{count}} user(s). Policy changes affect every user in this group.',
+                        { group: config.group, count: config.group_user_count }
                       )}
-                    />
-                    {discounts.fields.map((item, index) => (
-                      <div
-                        key={item.id}
-                        className='grid gap-3 rounded-lg border p-3 sm:grid-cols-[1fr_10rem_auto] sm:items-end'
+                    </AlertDescription>
+                  </Alert>
+                )}
+                {config &&
+                  user?.role === USER_ROLE.USER &&
+                  !isDedicatedGroup && (
+                    <div className='flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3'>
+                      <p className='text-muted-foreground text-sm'>
+                        {t(
+                          'Create a dedicated group named {{group}} and copy the current policies.',
+                          {
+                            group: config.dedicated_group_name,
+                          }
+                        )}
+                      </p>
+                      <Button
+                        type='button'
+                        variant='outline'
+                        disabled={
+                          form.formState.isDirty || createDedicated.isPending
+                        }
+                        onClick={() => setConfirmDedicatedOpen(true)}
                       >
-                        <FormField
-                          control={form.control}
-                          name={`discounts.${index}.targetGroup`}
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>{t('Billing group')}</FormLabel>
-                              <FormControl>
-                                <Combobox
-                                  options={groupOptions}
-                                  value={field.value || null}
-                                  onValueChange={(value) =>
-                                    field.onChange(value ?? '')
-                                  }
-                                  placeholder={t('Select a group')}
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={form.control}
-                          name={`discounts.${index}.ratio`}
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>{t('Ratio')}</FormLabel>
-                              <FormControl>
-                                <Input
-                                  type='number'
-                                  min={0}
-                                  step={0.0001}
-                                  {...field}
-                                  onChange={(event) =>
-                                    field.onChange(Number(event.target.value))
-                                  }
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <Button
-                          type='button'
-                          variant='ghost'
-                          size='icon'
-                          aria-label={t('Remove')}
-                          onClick={() => discounts.remove(index)}
-                        >
-                          <Trash2 />
-                        </Button>
-                      </div>
-                    ))}
-                    <Button
-                      type='button'
-                      variant='outline'
-                      onClick={() =>
-                        discounts.append({ targetGroup: '', ratio: 1 })
-                      }
-                    >
-                      <Plus /> {t('Add ratio override')}
-                    </Button>
-                  </SideDrawerSection>
-                </TabsContent>
-
-                <TabsContent value='rate-limits' className='pt-5'>
-                  <SideDrawerSection>
-                    <SideDrawerSectionHeader
-                      title={t('Group-based rate limits')}
-                      description={t(
-                        'These limits match the user group, even when an API key selects a different channel group.'
-                      )}
-                    />
-                    {config && !config.global_rate_limit_enabled && (
-                      <Alert>
-                        <AlertDescription>
+                        {t('Create dedicated group')}
+                      </Button>
+                      {form.formState.isDirty && (
+                        <p className='text-muted-foreground w-full text-xs'>
                           {t(
-                            'Global model request rate limiting is disabled. These rules will take effect after it is enabled in system settings.'
+                            'Save or discard policy changes before creating a dedicated group.'
                           )}
-                        </AlertDescription>
-                      </Alert>
-                    )}
-                    <FormField
-                      control={form.control}
-                      name='rateLimitEnabled'
-                      render={({ field }) => (
-                        <FormItem className='flex items-center justify-between gap-4 rounded-lg border p-3'>
-                          <div>
-                            <FormLabel>
-                              {t('Enable group rate limit')}
-                            </FormLabel>
-                            <FormDescription>
-                              {t('Turn off to inherit the global rate limits.')}
-                            </FormDescription>
-                          </div>
-                          <FormControl>
-                            <Switch
-                              checked={field.value}
-                              onCheckedChange={field.onChange}
-                            />
-                          </FormControl>
-                        </FormItem>
+                        </p>
                       )}
-                    />
-                    <div className='grid gap-4 sm:grid-cols-3'>
-                      {(
-                        [
-                          ['maxRequests', 'Max requests per period'],
-                          ['maxSuccess', 'Max successful requests'],
-                          ['maxTPM', 'Tokens per minute'],
-                        ] as const
-                      ).map(([name, label]) => (
-                        <FormField
-                          key={name}
-                          control={form.control}
-                          name={name}
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>{t(label)}</FormLabel>
-                              <FormControl>
-                                <Input
-                                  type='number'
-                                  min={name === 'maxSuccess' ? 1 : 0}
-                                  step={1}
-                                  disabled={!form.watch('rateLimitEnabled')}
-                                  {...field}
-                                  onChange={(event) =>
-                                    field.onChange(Number(event.target.value))
-                                  }
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      ))}
                     </div>
-                    <fieldset disabled={!form.watch('rateLimitEnabled')}>
-                      <RateLimitModelRulesEditor />
-                    </fieldset>
-                  </SideDrawerSection>
-                </TabsContent>
+                  )}
+                <Tabs defaultValue='discounts'>
+                  <TabsList className='grid w-full grid-cols-3'>
+                    <TabsTrigger value='discounts'>
+                      {t('Discounts')}
+                    </TabsTrigger>
+                    <TabsTrigger value='rate-limits'>
+                      {t('Rate limits')}
+                    </TabsTrigger>
+                    <TabsTrigger value='channels'>{t('Channels')}</TabsTrigger>
+                  </TabsList>
 
-                <TabsContent value='channels' className='pt-5'>
-                  <SideDrawerSection>
-                    <SideDrawerSectionHeader
-                      title={t('Model channel pools')}
-                      description={t(
-                        'Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.'
-                      )}
-                    />
-                    {channelRules.fields.map((item, index) => (
-                      <div
-                        key={item.id}
-                        className='space-y-3 rounded-lg border p-3'
-                      >
-                        <div className='flex items-start gap-2'>
+                  <TabsContent value='discounts' className='pt-5'>
+                    <SideDrawerSection>
+                      <SideDrawerSectionHeader
+                        title={t('Specified group discounts')}
+                        description={t(
+                          'Set the ratio charged when this user group uses each billing group. Unconfigured billing groups keep their base ratio.'
+                        )}
+                      />
+                      {discounts.fields.map((item, index) => (
+                        <div
+                          key={item.id}
+                          className='grid gap-3 rounded-lg border p-3 sm:grid-cols-[1fr_10rem_auto] sm:items-end'
+                        >
                           <FormField
                             control={form.control}
-                            name={`channelRules.${index}.modelName`}
+                            name={`discounts.${index}.targetGroup`}
                             render={({ field }) => (
-                              <FormItem className='flex-1'>
-                                <FormLabel>{t('Model')}</FormLabel>
+                              <FormItem>
+                                <FormLabel>{t('Billing group')}</FormLabel>
                                 <FormControl>
-                                  <Input {...field} placeholder='gpt-5' />
+                                  <Combobox
+                                    options={groupOptions}
+                                    value={field.value || null}
+                                    onValueChange={(value) =>
+                                      field.onChange(value ?? '')
+                                    }
+                                    placeholder={t('Select a group')}
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={form.control}
+                            name={`discounts.${index}.ratio`}
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>{t('Ratio')}</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type='number'
+                                    min={0}
+                                    step={0.0001}
+                                    {...field}
+                                    onChange={(event) =>
+                                      field.onChange(Number(event.target.value))
+                                    }
+                                  />
                                 </FormControl>
                                 <FormMessage />
                               </FormItem>
@@ -484,63 +455,253 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                             type='button'
                             variant='ghost'
                             size='icon'
-                            className='mt-6'
                             aria-label={t('Remove')}
-                            onClick={() => channelRules.remove(index)}
+                            onClick={() => discounts.remove(index)}
                           >
                             <Trash2 />
                           </Button>
                         </div>
-                        <FormField
-                          control={form.control}
-                          name={`channelRules.${index}.groups`}
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>{t('Channel groups')}</FormLabel>
-                              <FormControl>
-                                <MultiSelect
-                                  options={groupOptions}
-                                  selected={field.value}
-                                  onChange={field.onChange}
-                                  allowCreate
-                                  placeholder={t('Select channel groups')}
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </div>
-                    ))}
-                    <Button
-                      type='button'
-                      variant='outline'
-                      onClick={() =>
-                        channelRules.append({ modelName: '', groups: [] })
-                      }
-                    >
-                      <Plus /> {t('Add rule')}
-                    </Button>
-                  </SideDrawerSection>
-                </TabsContent>
-              </Tabs>
-            </form>
-          </Form>
-        )}
+                      ))}
+                      <Button
+                        type='button'
+                        variant='outline'
+                        onClick={() =>
+                          discounts.append({ targetGroup: '', ratio: 1 })
+                        }
+                      >
+                        <Plus /> {t('Add ratio override')}
+                      </Button>
+                    </SideDrawerSection>
+                  </TabsContent>
 
-        <SheetFooter className={sideDrawerFooterClassName()}>
-          <SheetClose render={<Button variant='outline' />}>
-            {t('Close')}
-          </SheetClose>
-          <Button
-            type='submit'
-            form='user-group-config-form'
-            disabled={!config || save.isPending}
-          >
-            {save.isPending ? t('Saving...') : t('Save changes')}
-          </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+                  <TabsContent value='rate-limits' className='pt-5'>
+                    <SideDrawerSection>
+                      <SideDrawerSectionHeader
+                        title={t('Group-based rate limits')}
+                        description={t(
+                          'These limits match the user group, even when an API key selects a different channel group.'
+                        )}
+                      />
+                      {config && !config.global_rate_limit_enabled && (
+                        <Alert>
+                          <AlertDescription>
+                            {t(
+                              'Global model request rate limiting is disabled. These rules will take effect after it is enabled in system settings.'
+                            )}
+                          </AlertDescription>
+                        </Alert>
+                      )}
+                      <FormField
+                        control={form.control}
+                        name='rateLimitEnabled'
+                        render={({ field }) => (
+                          <FormItem className='flex items-center justify-between gap-4 rounded-lg border p-3'>
+                            <div>
+                              <FormLabel>
+                                {t('Enable group rate limit')}
+                              </FormLabel>
+                              <FormDescription>
+                                {t(
+                                  'Turn off to inherit the global rate limits.'
+                                )}
+                              </FormDescription>
+                            </div>
+                            <FormControl>
+                              <Switch
+                                checked={field.value}
+                                onCheckedChange={field.onChange}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <div className='grid gap-4 sm:grid-cols-3'>
+                        {(
+                          [
+                            ['maxRequests', 'Max requests per period'],
+                            ['maxSuccess', 'Max successful requests'],
+                            ['maxTPM', 'Tokens per minute'],
+                          ] as const
+                        ).map(([name, label]) => (
+                          <FormField
+                            key={name}
+                            control={form.control}
+                            name={name}
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>{t(label)}</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type='number'
+                                    min={name === 'maxSuccess' ? 1 : 0}
+                                    step={1}
+                                    disabled={!form.watch('rateLimitEnabled')}
+                                    {...field}
+                                    onChange={(event) =>
+                                      field.onChange(Number(event.target.value))
+                                    }
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        ))}
+                      </div>
+                      <fieldset disabled={!form.watch('rateLimitEnabled')}>
+                        <RateLimitModelRulesEditor />
+                      </fieldset>
+                    </SideDrawerSection>
+                  </TabsContent>
+
+                  <TabsContent value='channels' className='pt-5'>
+                    <SideDrawerSection>
+                      <SideDrawerSectionHeader
+                        title={t('Model channel pools')}
+                        description={t(
+                          'Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.'
+                        )}
+                      />
+                      {channelRules.fields.map((item, index) => (
+                        <div
+                          key={item.id}
+                          className='space-y-3 rounded-lg border p-3'
+                        >
+                          <div className='flex items-start gap-2'>
+                            <FormField
+                              control={form.control}
+                              name={`channelRules.${index}.modelName`}
+                              render={({ field }) => (
+                                <FormItem className='flex-1'>
+                                  <FormLabel>{t('Model')}</FormLabel>
+                                  <FormControl>
+                                    <Input {...field} placeholder='gpt-5' />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                            <Button
+                              type='button'
+                              variant='ghost'
+                              size='icon'
+                              className='mt-6'
+                              aria-label={t('Remove')}
+                              onClick={() => channelRules.remove(index)}
+                            >
+                              <Trash2 />
+                            </Button>
+                          </div>
+                          <FormField
+                            control={form.control}
+                            name={`channelRules.${index}.groups`}
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>{t('Channel groups')}</FormLabel>
+                                <FormControl>
+                                  <MultiSelect
+                                    options={groupOptions}
+                                    selected={field.value}
+                                    onChange={field.onChange}
+                                    allowCreate
+                                    placeholder={t('Select channel groups')}
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </div>
+                      ))}
+                      <Button
+                        type='button'
+                        variant='outline'
+                        onClick={() =>
+                          channelRules.append({ modelName: '', groups: [] })
+                        }
+                      >
+                        <Plus /> {t('Add rule')}
+                      </Button>
+                      {channelRules.fields.length > 0 && (
+                        <>
+                          <Button
+                            type='button'
+                            variant='outline'
+                            disabled={previewChannels.isPending}
+                            onClick={async () => {
+                              if (!(await form.trigger('channelRules'))) return
+                              const rules = form.getValues('channelRules')
+                              previewChannels.mutate({
+                                rules,
+                                key: JSON.stringify(rules),
+                              })
+                            }}
+                          >
+                            {t('Preview channel availability')}
+                          </Button>
+                          {previewKey === currentPreviewKey &&
+                            previewChannels.data?.data &&
+                            channelRulesValue.map(({ modelName, groups }) => (
+                              <p
+                                key={modelName}
+                                className='text-muted-foreground text-sm'
+                              >
+                                {t(
+                                  'Pool candidates for {{model}}: {{count}} (before token group filtering).',
+                                  {
+                                    model: modelName,
+                                    count:
+                                      previewChannels.data?.data?.[modelName]
+                                        ?.candidate_count ?? 0,
+                                  }
+                                )}
+                                {groups.length > 0 &&
+                                  previewChannels.data?.data?.[modelName]
+                                    ?.candidate_count === 0 && (
+                                    <span className='text-destructive'>
+                                      {' '}
+                                      {t(
+                                        'No enabled channels match this model and its selected pools.'
+                                      )}
+                                    </span>
+                                  )}
+                              </p>
+                            ))}
+                        </>
+                      )}
+                    </SideDrawerSection>
+                  </TabsContent>
+                </Tabs>
+              </form>
+            </Form>
+          )}
+
+          <SheetFooter className={sideDrawerFooterClassName()}>
+            <SheetClose render={<Button variant='outline' />}>
+              {t('Close')}
+            </SheetClose>
+            <Button
+              type='submit'
+              form='user-group-config-form'
+              disabled={!config || save.isPending}
+            >
+              {save.isPending ? t('Saving...') : t('Save changes')}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+      <ConfirmDialog
+        open={confirmDedicatedOpen}
+        onOpenChange={setConfirmDedicatedOpen}
+        title={t('Create dedicated group')}
+        desc={t(
+          'Move this user to {{group}} and copy the current group policies. Existing user sessions will be signed out.',
+          { group: config?.dedicated_group_name ?? '' }
+        )}
+        confirmText={t('Create dedicated group')}
+        isLoading={createDedicated.isPending}
+        handleConfirm={() => createDedicated.mutate()}
+      />
+    </>
   )
 }

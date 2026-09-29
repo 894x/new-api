@@ -171,6 +171,10 @@ export interface UserGroupConfig {
   user_id: number
   username: string
   group: string
+  dedicated_group_name: string
+  is_dedicated_group: boolean
+  revision: string
+  group_user_count: number
   discounts: Record<string, number>
   rate_limit_enabled: boolean
   global_rate_limit_enabled: boolean
@@ -181,10 +185,15 @@ export interface UserGroupConfig {
 
 export interface UpdateUserGroupConfigPayload {
   group: string
+  revision: string
   discounts: Record<string, number>
   rate_limit_enabled: boolean
   rate_limit: UserGroupRateLimit
   model_channel_groups: Record<string, string[]>
+}
+
+export interface ChannelPoolPreview {
+  candidate_count: number
 }
 
 // ============================================================================

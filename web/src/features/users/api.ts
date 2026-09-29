@@ -31,6 +31,7 @@ import type {
   ManageUserQuotaPayload,
   UserGroupConfig,
   UpdateUserGroupConfigPayload,
+  ChannelPoolPreview,
   ApiResponse,
 } from './types'
 
@@ -178,6 +179,30 @@ export async function updateUserGroupConfig(
   data: UpdateUserGroupConfigPayload
 ): Promise<ApiResponse<UserGroupConfig>> {
   const res = await api.put(`/api/user/${id}/group-config`, data)
+  return res.data
+}
+
+export async function createDedicatedUserGroup(
+  id: number,
+  group: string,
+  revision: string
+): Promise<ApiResponse<UserGroupConfig>> {
+  const res = await api.post(`/api/user/${id}/group-config/dedicated`, {
+    group,
+    revision,
+  })
+  return res.data
+}
+
+export async function previewUserGroupChannels(
+  id: number,
+  group: string,
+  modelChannelGroups: Record<string, string[]>
+): Promise<ApiResponse<Record<string, ChannelPoolPreview>>> {
+  const res = await api.post(`/api/user/${id}/group-config/preview`, {
+    group,
+    model_channel_groups: modelChannelGroups,
+  })
   return res.data
 }
 

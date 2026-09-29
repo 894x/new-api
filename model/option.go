@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"strconv"
@@ -27,6 +28,14 @@ type Option struct {
 }
 
 var groupPricingOptionMutex sync.Mutex
+
+var ErrUserGroupChanged = errors.New("user group changed; reload the configuration")
+
+type UserGroupTransition struct {
+	UserID        int
+	ExpectedGroup string
+	NewGroup      string
+}
 
 func AllOption() ([]*Option, error) {
 	var options []*Option
@@ -403,8 +412,25 @@ func UpdateOption(key string, value string) error {
 // is touched — safe for callers that must commit a set of related options
 // atomically (e.g. payment gateway binding).
 func UpdateOptionsBulk(values map[string]string) error {
+	return updateOptionsBulk(values, nil)
+}
+
+// UpdateOptionsBulkWithUserGroupChange commits the option snapshot and the
+// user's new group together. The caller must prepare and validate the option
+// values before calling this function.
+func UpdateOptionsBulkWithUserGroupChange(values map[string]string, change UserGroupTransition) error {
+	if change.UserID <= 0 || change.ExpectedGroup == "" || change.NewGroup == "" || change.ExpectedGroup == change.NewGroup {
+		return fmt.Errorf("invalid user group transition")
+	}
+	return updateOptionsBulk(values, &change)
+}
+
+func updateOptionsBulk(values map[string]string, change *UserGroupTransition) error {
 	if len(values) == 0 {
-		return nil
+		if change == nil {
+			return nil
+		}
+		return fmt.Errorf("user group transition requires option updates")
 	}
 	for key := range values {
 		if IsPasskeyDomainOption(key) {
@@ -466,6 +492,19 @@ func UpdateOptionsBulk(values map[string]string) error {
 			}
 			option.Value = v
 			if err := tx.Save(&option).Error; err != nil {
+				return err
+			}
+		}
+		if change != nil {
+			var user User
+			if err := lockForUpdate(tx).First(&user, change.UserID).Error; err != nil {
+				return err
+			}
+			if user.Group != change.ExpectedGroup {
+				return ErrUserGroupChanged
+			}
+			user.Group = change.NewGroup
+			if err := user.EditWithTx(tx, false); err != nil {
 				return err
 			}
 		}

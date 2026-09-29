@@ -113,7 +113,7 @@ export function UsersMutateDrawer({
 }: UsersMutateDrawerProps) {
   const { t } = useTranslation()
   const isUpdate = !!currentRow
-  const { triggerRefresh } = useUsers()
+  const { setCurrentRow, setOpen, triggerRefresh } = useUsers()
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
@@ -129,6 +129,10 @@ export function UsersMutateDrawer({
   })
 
   const groups = groupsData?.data || []
+  const groupOptions =
+    currentRow?.group && !groups.includes(currentRow.group)
+      ? [...groups, currentRow.group]
+      : groups
 
   // Permission catalog is owned by the backend; fetched once and reused.
   const { data: permissionCatalog = EMPTY_PERMISSION_CATALOG } = useQuery({
@@ -171,7 +175,7 @@ export function UsersMutateDrawer({
   const selectedRole = form.watch('role')
   const targetRole = selectedRole ?? currentRow?.role ?? ROLE.USER
 
-  const onSubmit = async (data: UserFormValues) => {
+  const onSubmit = async (data: UserFormValues, openGroupConfig = false) => {
     if (!isUpdate || data.password) {
       if (!accountPasswordSchema.safeParse(data.password ?? '').success) {
         form.setError('password', {
@@ -199,7 +203,15 @@ export function UsersMutateDrawer({
             ? t(SUCCESS_MESSAGES.USER_UPDATED)
             : t(SUCCESS_MESSAGES.USER_CREATED)
         )
-        onOpenChange(false)
+        if (openGroupConfig && currentRow) {
+          setCurrentRow({
+            ...currentRow,
+            group: data.group || currentRow.group,
+          })
+          setOpen('group-config')
+        } else {
+          onOpenChange(false)
+        }
         triggerRefresh()
       } else {
         handleServerError(result, t(ERROR_MESSAGES.CREATE_FAILED))
@@ -251,7 +263,7 @@ export function UsersMutateDrawer({
           <Form {...form}>
             <form
               id='user-form'
-              onSubmit={form.handleSubmit(onSubmit)}
+              onSubmit={form.handleSubmit((values) => onSubmit(values))}
               className={sideDrawerFormClassName()}
             >
               {open && currentRow && isAdmin && (
@@ -382,7 +394,7 @@ export function UsersMutateDrawer({
                         <FormLabel>{t('Group')}</FormLabel>
                         <FormControl>
                           <Combobox
-                            options={groups.map((group) => ({
+                            options={groupOptions.map((group) => ({
                               value: group,
                               label: group,
                             }))}
@@ -396,6 +408,26 @@ export function UsersMutateDrawer({
                       </FormItem>
                     )}
                   />
+                  {canEditAdminPermissions && (
+                    <Button
+                      type='button'
+                      variant='outline'
+                      disabled={isSubmitting}
+                      onClick={() => {
+                        if (form.formState.isDirty) {
+                          void form.handleSubmit((values) =>
+                            onSubmit(values, true)
+                          )()
+                        } else {
+                          setOpen('group-config')
+                        }
+                      }}
+                    >
+                      {form.formState.isDirty
+                        ? t('Save and configure group policies')
+                        : t('Configure group policies')}
+                    </Button>
+                  )}
 
                   <FormField
                     control={form.control}
