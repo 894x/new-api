@@ -55,7 +55,7 @@ func PrepareRequestBilling(c *gin.Context, info *relaycommon.RelayInfo) *types.N
 		var err error
 		tokens, err = service.CountRequestToken(c, meta, info)
 		if err != nil {
-			return types.NewError(err, types.ErrorCodeCountTokenFailed)
+			return service.TokenCountAPIError(err)
 		}
 	}
 	info.SetEstimatePromptTokens(tokens)

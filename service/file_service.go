@@ -25,6 +25,22 @@ import (
 // FileService 统一的文件处理服务
 // 提供文件下载、解码、缓存等功能的统一入口
 
+// FileDownloadError retains the resource status without exposing signed URLs.
+// A media server failure is distinct from an invalid client-provided resource.
+type FileDownloadError struct {
+	StatusCode int
+	Err        error
+}
+
+func (e *FileDownloadError) Error() string {
+	if e.StatusCode != 0 {
+		return fmt.Sprintf("failed to download media file, status code: %d", e.StatusCode)
+	}
+	return "failed to download media file"
+}
+
+func (e *FileDownloadError) Unwrap() error { return e.Err }
+
 // getContextCacheKey 生成 URL context 缓存的 key
 func getContextCacheKey(url string) string {
 	return fmt.Sprintf("file_cache_%s", common.GenerateHMAC(url))
@@ -163,12 +179,12 @@ func loadFromURL(c *gin.Context, url string, reason ...string) (*types.CachedFil
 	}
 	resp, err := DoDownloadRequest(url, reason...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download file from %s: %w", url, err)
+		return nil, &FileDownloadError{Err: err}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to download file, status code: %d", resp.StatusCode)
+		return nil, &FileDownloadError{StatusCode: resp.StatusCode}
 	}
 
 	// 读取文件内容（限制大小）

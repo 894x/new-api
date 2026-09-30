@@ -119,7 +119,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	var (
 		newAPIError *types.NewAPIError
 		ws          *websocket.Conn
+		relayInfo   *relaycommon.RelayInfo
 	)
+	failureStage := "request_validation"
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
 		var err error
@@ -135,6 +137,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		if newAPIError != nil {
 			service.RecordRequestPolicyTermination(c, newAPIError)
+			channelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+			if relayInfo != nil && relayInfo.ChannelMeta != nil {
+				channelID = relayInfo.ChannelId
+			}
+			if c.GetInt("id") > 0 {
+				service.RecordRelayErrorLog(c, channelID, newAPIError, relayInfo, failureStage)
+			}
 			if newAPIError.GetErrorCode() == types.ErrorCodeClientGone {
 				return
 			}
@@ -170,7 +179,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
-	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
+	failureStage = "relay_info"
+	relayInfo, err = relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
@@ -208,11 +218,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		AllowedChannelIds:      assetAllowedChannelIds(c),
 		Retry:                  common.GetPointer(0),
 	}
+	failureStage = "channel_capacity"
 	capacityNeedsTokens, capacityErr := service.ConfigureChannelModelCapacity(retryParam, relayInfo)
 	if capacityErr != nil {
 		newAPIError = channelCapacityAPIError(c, capacityErr)
 		return
 	}
+	failureStage = "billing_preparation"
 	if newAPIError = relay.PrepareRequestBilling(c, relayInfo); newAPIError != nil {
 		return
 	}
@@ -227,7 +239,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if capacityNeedsTokens && !constant.CountToken && tpmLimit == 0 {
 			capacityPromptTokens, err = service.EstimateRequestTokenForCapacity(c, request.GetTokenCountMeta(), relayInfo)
 			if err != nil {
-				newAPIError = types.NewError(err, types.ErrorCodeCountTokenFailed)
+				newAPIError = service.TokenCountAPIError(err)
 				return
 			}
 		}
@@ -235,6 +247,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	if tpmLimit > 0 {
+		failureStage = "request_tpm"
 		allowed, retryAfter, limitErr := service.ReserveModelRequestTPM(c, relayInfo.UserId, tpmLimit, tokens)
 		if limitErr != nil {
 			newAPIError = types.NewError(limitErr, types.ErrorCodeModelRequestTPMCheckFailed, types.ErrOptionWithSkipRetry())
@@ -266,6 +279,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.PerformanceCacheReadTokens = 0
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		service.ResetUpstreamResponseMetadata(c)
+		failureStage = "channel_selection"
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
@@ -274,11 +288,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		service.AppendUsedChannel(c, channel.Id)
 		retryParam.MarkAttempted(channel.Id)
+		failureStage = "billing_preparation"
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			newAPIError = billingErr
 			break
 		}
 
+		failureStage = "request_body"
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
@@ -295,6 +311,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			relayInfo.BeginDynamicRoutingAttempt(channel.Id, channel.Type, publicModelName, true)
 		}
 
+		failureStage = "relay_attempt"
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
 			newAPIError = relay.WssHelper(c, relayInfo)

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -18,6 +19,19 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// TokenCountAPIError classifies unavailable client media separately from
+// tokenizer, network and media-server failures. Never retry invalid input.
+func TokenCountAPIError(err error) *types.NewAPIError {
+	var downloadErr *FileDownloadError
+	if errors.As(err, &downloadErr) {
+		switch downloadErr.StatusCode {
+		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusGone:
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+	}
+	return types.NewError(err, types.ErrorCodeCountTokenFailed)
+}
 
 func getImageToken(c *gin.Context, fileMeta *types.FileMeta, model string, stream bool) (int, error) {
 	if fileMeta == nil || fileMeta.Source == nil {
@@ -279,7 +293,7 @@ func estimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 			cachedData, err := LoadFileSource(c, file.Source, "token_counter")
 			if err != nil {
 				if shouldFetchFiles {
-					return 0, fmt.Errorf("error getting file type: %v", err)
+					return 0, fmt.Errorf("error getting file type: %w", err)
 				}
 				continue
 			}

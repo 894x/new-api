@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -87,43 +88,85 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		})
 	}
 
-	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
-		userId := c.GetInt("id")
-		tokenName := c.GetString("token_name")
-		modelName := c.GetString("original_model")
-		tokenId := c.GetInt("token_id")
-		userGroup := c.GetString("group")
-		other := model.NewLogOther()
-		if c.Request != nil && c.Request.URL != nil {
-			other.SetPublic("request_path", c.Request.URL.Path)
-		}
-		other.SetPublic("error_type", err.GetErrorType())
-		other.SetPublic("error_code", err.GetErrorCode())
-		other.SetPublic("status_code", err.StatusCode)
-		appendStreamStatus(relayInfo, other)
-		if c.Writer != nil && c.Writer.Written() {
-			other.SetPublic("client_status_code", c.Writer.Status())
-		}
-		AppendRelayLogAdminInfo(c, relayInfo, other)
-		AppendUpstreamResponseAdminInfo(c, other)
-		if relayInfo != nil && relayInfo.ChannelMeta != nil && relayInfo.UpstreamModelName != "" {
-			other.SetPublic("upstream_model_name", relayInfo.UpstreamModelName)
-		}
-		if timing := common.GetRequestTiming(c); timing != nil {
-			snapshot := timing.Snapshot()
-			snapshot.RequestCompletedAtMs = time.Now().UnixMilli()
-			other.SetAdmin("request_timing", snapshot)
-			if attempts := timing.UpstreamTransports(); len(attempts) > 0 {
-				other.SetAdmin("upstream_transport", attempts)
-			}
-		}
-		AppendResponseModelLogInfo(relayInfo, other)
-		AppendTaskPluginContextAuditInfo(c, other)
-		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
-		if startTime.IsZero() {
-			startTime = time.Now()
-		}
-		useTimeSeconds := int(time.Since(startTime).Seconds())
-		model.RecordErrorLog(c, userId, channelError.ChannelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+	RecordRelayErrorLog(c, channelError.ChannelId, err, relayInfo, "relay_attempt")
+}
+
+type relayErrorLogEvent struct {
+	ChannelID  int
+	Attempt    int
+	Code       types.ErrorCode
+	StatusCode int
+	Message    string
+}
+
+// RecordRelayErrorLog also covers failures before channel dispatch, without
+// applying channel-health side effects. Deduplication is request-local and
+// attempt-specific; a failed insert never marks the event as persisted.
+func RecordRelayErrorLog(c *gin.Context, channelID int, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo, stage string) {
+	if c == nil || err == nil || !constant.ErrorLogEnabled || !types.IsRecordErrorLog(err) {
+		return
 	}
+	const recordedErrorsKey = "relay_recorded_error_logs"
+	event := relayErrorLogEvent{ChannelID: channelID, Code: err.GetErrorCode(), StatusCode: err.StatusCode, Message: err.Error()}
+	if relayInfo != nil {
+		event.Attempt = relayInfo.RetryIndex
+	}
+	recorded, _ := common.GetContextKeyType[map[relayErrorLogEvent]struct{}](c, recordedErrorsKey)
+	if _, exists := recorded[event]; exists {
+		return
+	}
+	userId := c.GetInt("id")
+	tokenName := c.GetString("token_name")
+	modelName := c.GetString("original_model")
+	tokenId := c.GetInt("token_id")
+	userGroup := c.GetString("group")
+	other := model.NewLogOther()
+	if c.Request != nil && c.Request.URL != nil {
+		other.SetPublic("request_path", c.Request.URL.Path)
+	}
+	other.SetPublic("error_type", err.GetErrorType())
+	other.SetPublic("error_code", err.GetErrorCode())
+	other.SetPublic("status_code", err.StatusCode)
+	var downloadErr *FileDownloadError
+	if errors.As(err, &downloadErr) {
+		if stage == "billing_preparation" || err.GetErrorCode() == types.ErrorCodeCountTokenFailed {
+			stage = "token_count"
+		}
+		if downloadErr.StatusCode != 0 {
+			other.SetAdmin("media_download_status_code", downloadErr.StatusCode)
+		}
+	}
+	other.SetAdmin("failure_stage", stage)
+	appendStreamStatus(relayInfo, other)
+	if c.Writer != nil && c.Writer.Written() {
+		other.SetPublic("client_status_code", c.Writer.Status())
+	}
+	AppendRelayLogAdminInfo(c, relayInfo, other)
+	AppendUpstreamResponseAdminInfo(c, other)
+	if relayInfo != nil && relayInfo.ChannelMeta != nil && relayInfo.UpstreamModelName != "" {
+		other.SetPublic("upstream_model_name", relayInfo.UpstreamModelName)
+	}
+	if timing := common.GetRequestTiming(c); timing != nil {
+		snapshot := timing.Snapshot()
+		snapshot.RequestCompletedAtMs = time.Now().UnixMilli()
+		other.SetAdmin("request_timing", snapshot)
+		if attempts := timing.UpstreamTransports(); len(attempts) > 0 {
+			other.SetAdmin("upstream_transport", attempts)
+		}
+	}
+	AppendResponseModelLogInfo(relayInfo, other)
+	AppendTaskPluginContextAuditInfo(c, other)
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	useTimeSeconds := int(time.Since(startTime).Seconds())
+	if writeErr := model.RecordErrorLog(c, userId, channelID, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other); writeErr != nil {
+		return
+	}
+	if recorded == nil {
+		recorded = make(map[relayErrorLogEvent]struct{})
+	}
+	recorded[event] = struct{}{}
+	c.Set(recordedErrorsKey, recorded)
 }
