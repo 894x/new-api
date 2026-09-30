@@ -250,6 +250,14 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	}
 	streamErr := (*types.NewAPIError)(nil)
 	var clientWriteErr error
+	recordWriteError := func(err error) {
+		if helper.IsDownstreamWriteError(err) {
+			clientWriteErr = err
+			streamErr = types.NewClientGoneError(err)
+			return
+		}
+		streamErr = types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+	}
 
 	if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo == nil {
 		info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
@@ -265,8 +273,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return false
 		}
 		if err := helper.StringData(c, string(geminiResponseStr)); err != nil {
-			clientWriteErr = err
-			streamErr = types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+			recordWriteError(err)
 			return false
 		}
 		return true
@@ -279,8 +286,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				return true
 			}
 			if err := helper.ObjectData(c, &value); err != nil {
-				clientWriteErr = err
-				streamErr = types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+				recordWriteError(err)
 				return false
 			}
 			return true
@@ -289,15 +295,13 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				return true
 			}
 			if err := helper.ObjectData(c, value); err != nil {
-				clientWriteErr = err
-				streamErr = types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+				recordWriteError(err)
 				return false
 			}
 			return true
 		case dto.ClaudeResponse:
 			if err := helper.ClaudeData(c, value); err != nil {
-				clientWriteErr = err
-				streamErr = types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+				recordWriteError(err)
 				return false
 			}
 			return true
@@ -306,8 +310,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				return true
 			}
 			if err := helper.ClaudeData(c, *value); err != nil {
-				clientWriteErr = err
-				streamErr = types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+				recordWriteError(err)
 				return false
 			}
 			return true
@@ -343,6 +346,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if streamResp.Response != nil {
 			info.ObserveResponseModel(streamResp.Response.Model)
 		}
+		service.ObserveResponsesOutcome(info, &streamResp)
 		if streamResp.Type == "response.error" || streamResp.Type == "response.failed" {
 			streamErr = newResponsesStreamError(data, resp.StatusCode)
 			sr.Stop(streamErr)
@@ -365,16 +369,41 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				return
 			}
 		}
+		if streamResp.Type == "response.completed" || streamResp.Type == "response.done" {
+			sr.Done()
+		}
 	})
 
-	if streamErr != nil {
+	info.StreamStatus.RequireTerminal()
+	if streamErr != nil && streamErr.GetErrorCode() != types.ErrorCodeClientGone {
 		return nil, streamErr
 	}
 
+	endReason, endErr := info.StreamStatus.End()
+	clientGone := endReason == relaycommon.StreamEndReasonClientGone
 	usage := state.Usage()
+	hasObservedUsage := service.ValidUsage(usage) || state.UsageText() != ""
 	if usage == nil || usage.TotalTokens == 0 {
+		if clientGone && state.UsageText() == "" {
+			return nil, markStreamErrorIfCommitted(c, types.NewClientGoneError(endErr))
+		}
 		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		state.SetUsage(usage)
+	} else if clientGone && usage.CompletionTokens == 0 && state.UsageText() != "" {
+		partial := service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, usage.PromptTokens)
+		usage.CompletionTokens = partial.CompletionTokens
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		if usage.BillingUsage != nil {
+			usage.BillingUsage = dto.CloneBillingUsageWithEstimatedCompletion(usage.BillingUsage, usage.CompletionTokens)
+		}
+		state.SetUsage(usage)
+	}
+	if clientGone {
+		return usage, markStreamErrorIfCommitted(c, types.NewClientGoneError(endErr))
+	}
+	disconnectedUsage := usage
+	if !hasObservedUsage {
+		disconnectedUsage = nil
 	}
 
 	if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo != nil {
@@ -389,24 +418,26 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			if clientWriteErr != nil && info.StreamStatus != nil {
 				info.StreamStatus.SetClientGone(clientWriteErr)
 			}
-			return nil, streamErr
+			return disconnectedUsage, markStreamErrorIfCommitted(c, streamErr)
 		}
 	}
 	if info.RelayFormat == types.RelayFormatOpenAI && info.ShouldIncludeUsage && usage != nil {
 		if err := helper.ObjectData(c, helper.GenerateFinalUsageResponse(responseId, createAt, info.UpstreamModelName, *usage)); err != nil {
-			if info.StreamStatus != nil {
+			recordWriteError(err)
+			if clientWriteErr != nil {
 				info.StreamStatus.SetClientGone(err)
 			}
-			return nil, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+			return disconnectedUsage, markStreamErrorIfCommitted(c, streamErr)
 		}
 	}
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		if err := helper.Done(c); err != nil {
-			if info.StreamStatus != nil {
+			recordWriteError(err)
+			if clientWriteErr != nil {
 				info.StreamStatus.SetClientGone(err)
 			}
-			return nil, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+			return disconnectedUsage, markStreamErrorIfCommitted(c, streamErr)
 		}
 	}
 	return usage, nil

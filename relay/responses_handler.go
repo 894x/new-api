@@ -79,6 +79,14 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
 	if newAPIError != nil {
+		if newAPIError.GetErrorCode() == types.ErrorCodeClientGone {
+			partialUsage, _ := usage.(*dto.Usage)
+			if canSettleDisconnectedStream(info, partialUsage, newAPIError) {
+				ConsumeResponsesQuota(c, info, partialUsage)
+				return nil
+			}
+			return newAPIError
+		}
 		if partialUsage, ok := usage.(*dto.Usage); ok && partialUsage != nil && types.IsResponseCommittedError(newAPIError) {
 			ConsumeResponsesQuota(c, info, partialUsage)
 		}

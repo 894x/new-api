@@ -24,15 +24,15 @@ func ClassifyRelayOutcome(ctx context.Context, info *relaycommon.RelayInfo, apiE
 	if info == nil || info.PerformanceBusinessRejection {
 		return OutcomeIgnored
 	}
+	stream := info.StreamStatus.OutcomeSnapshot()
+	if stream.Response == relaycommon.ResponseOutcomeFailed {
+		return classifyFailure(false, stream.ErrorCode, stream.ErrorType, stream.ErrorStatus)
+	}
 	if ctx != nil && ctx.Err() == context.Canceled {
 		return OutcomeIgnored
 	}
 	if apiErr != nil && errors.Is(apiErr, context.Canceled) {
 		return OutcomeIgnored
-	}
-	stream := info.StreamStatus.OutcomeSnapshot()
-	if stream.Response == relaycommon.ResponseOutcomeFailed {
-		return classifyFailure(false, stream.ErrorCode, stream.ErrorType, stream.ErrorStatus)
 	}
 	if apiErr != nil {
 		root := rootAPIError(apiErr)
@@ -91,7 +91,8 @@ func classifyFailure(local bool, code, errorType string, status int) Outcome {
 		switch types.ErrorCode(code) {
 		case types.ErrorCodeInvalidRequest, types.ErrorCodeSensitiveWordsDetected, types.ErrorCodeReadRequestBodyFailed,
 			types.ErrorCodeConvertRequestFailed, types.ErrorCodeAccessDenied, types.ErrorCodeBadRequestBody,
-			types.ErrorCodeInsufficientUserQuota, types.ErrorCodePreConsumeTokenQuotaFailed, types.ErrorCodePromptBlocked:
+			types.ErrorCodeInsufficientUserQuota, types.ErrorCodePreConsumeTokenQuotaFailed, types.ErrorCodePromptBlocked,
+			types.ErrorCodeClientGone:
 			return OutcomeIgnored
 		}
 		return OutcomeFailure

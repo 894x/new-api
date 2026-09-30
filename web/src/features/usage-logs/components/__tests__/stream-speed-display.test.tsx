@@ -21,7 +21,7 @@ import assert from 'node:assert/strict'
 import { createInstance } from 'i18next'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
-import { describe, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 
 import { StreamTpsCell } from '../timing-metrics-cell'
 
@@ -40,6 +40,21 @@ await i18n.use(initReactI18next).init({
 })
 
 describe('stream speed display', () => {
+  test('shows client_gone directly when the downstream disconnected', () => {
+    const markup = renderToStaticMarkup(
+      <I18nextProvider i18n={i18n}>
+        <StreamTpsCell
+          isStream
+          completionTokens={20}
+          useTimeSec={10}
+          streamStatus={{ status: 'error', end_reason: 'client_gone' }}
+        />
+      </I18nextProvider>
+    )
+    expect(markup).toContain('client_gone')
+    expect(markup).not.toContain('text-destructive')
+  })
+
   test('adds generation speed without replacing the existing stream rate', () => {
     const markup = renderToStaticMarkup(
       <I18nextProvider i18n={i18n}>
@@ -55,5 +70,24 @@ describe('stream speed display', () => {
 
     assert.equal(markup.includes('8 t/s'), true)
     assert.equal(markup.includes('Generation 10 t/s'), true)
+  })
+
+  test('preserves upstream failure display when cancellation happened at the same time', () => {
+    const markup = renderToStaticMarkup(
+      <I18nextProvider i18n={i18n}>
+        <StreamTpsCell
+          isStream
+          completionTokens={0}
+          useTimeSec={10}
+          streamStatus={{
+            status: 'error',
+            end_reason: 'client_gone',
+            response_status: 'failed',
+          }}
+        />
+      </I18nextProvider>
+    )
+    expect(markup).not.toContain('Stream · client_gone')
+    expect(markup).toContain('text-destructive')
   })
 })

@@ -1,6 +1,7 @@
 package types
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,6 +89,7 @@ const (
 	ErrorCodeReadRequestBodyFailed ErrorCode = "read_request_body_failed"
 	ErrorCodeConvertRequestFailed  ErrorCode = "convert_request_failed"
 	ErrorCodeAccessDenied          ErrorCode = "access_denied"
+	ErrorCodeClientGone            ErrorCode = "client_gone"
 
 	// request error
 	ErrorCodeBadRequestBody ErrorCode = "bad_request_body"
@@ -265,6 +267,16 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 }
 
 type NewAPIErrorOptions func(*NewAPIError)
+
+// NewClientGoneError carries a downstream cancellation through relay callers.
+// 499 is a diagnostic classification; an already committed HTTP response keeps
+// its original status on the wire.
+func NewClientGoneError(err error) *NewAPIError {
+	if err == nil {
+		err = context.Canceled
+	}
+	return &NewAPIError{Err: err, errorType: ErrorTypeNewAPIError, errorCode: ErrorCodeClientGone, StatusCode: 499, skipRetry: true}
+}
 
 func NewError(err error, errorCode ErrorCode, ops ...NewAPIErrorOptions) *NewAPIError {
 	var newErr *NewAPIError

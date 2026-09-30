@@ -126,6 +126,8 @@ export interface RequestTimingInfo {
 }
 
 export interface LogOtherData {
+  /** HTTP status committed to the downstream, independent of the relay error. */
+  client_status_code?: number
   admin_info?: {
     request_policy?: PolicyEvent[]
     is_multi_key?: boolean
@@ -272,6 +274,7 @@ export interface LogOtherData {
   stream_status?: {
     status?: string
     end_reason?: string
+    response_status?: string
     error_count?: number
     end_error?: string
     errors?: string[]

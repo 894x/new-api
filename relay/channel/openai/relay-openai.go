@@ -135,19 +135,21 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	seenStreamToolCalls := make(map[string]struct{})
 	var streamFunctionCallNames []string
 	var streamErr *types.NewAPIError
+	var usageFrame string
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if lastStreamData != "" {
 			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
 				common.SysLog("error handling stream format: " + err.Error())
 				if helper.IsDownstreamWriteError(err) {
-					streamErr = markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
-					lastStreamData = ""
+					streamErr = markStreamErrorIfCommitted(c, types.NewClientGoneError(err))
 					sr.ClientGone(err)
 				} else {
 					sr.Stop(err)
+					return
 				}
-				return
+				// The current event has already arrived from upstream. Account
+				// for it even if delivery of the preceding event disconnected.
 			}
 		}
 		if len(data) > 0 {
@@ -159,6 +161,11 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			var errorResponse dto.OpenAITextResponse
 			if err := common.UnmarshalJsonStr(data, &errorResponse); err != nil {
 				lastStreamData = ""
+				if streamErr != nil && streamErr.GetErrorCode() == types.ErrorCodeClientGone {
+					streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+					sr.Stop(streamErr)
+					return
+				}
 				sr.ScannerError(fmt.Errorf("unmarshal upstream OpenAI stream event: %w", err))
 				return
 			}
@@ -188,13 +195,20 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				clientData = string(clientDataWithCachedTokens)
 			}
 			lastStreamData = clientData
+			if service.ValidUsage(&errorResponse.Usage) {
+				usage = dto.MergeUsageNonZero(usage, &errorResponse.Usage)
+				containStreamUsage = true
+				usageFrame = clientData
+			}
 			if err := processTokenData(info, clientData, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.ScannerError(err)
 			}
 		}
 	})
-	if streamErr != nil {
+	endReason, endErr := info.StreamStatus.End()
+	clientGone := endReason == relaycommon.StreamEndReasonClientGone
+	if streamErr != nil && (!clientGone || !helper.IsDownstreamWriteError(streamErr.Err)) {
 		return nil, markStreamErrorIfCommitted(c, streamErr)
 	}
 
@@ -212,7 +226,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	// 部分兼容网关把完整的累计usage附在倒数第二个事件上，随后发送一个空的最后事件。
 	// 仅当最后一个事件没有有效usage时，回退到倒数第二个事件的完整快照。
-	usageFrame := lastStreamData
+	if usageFrame == "" {
+		usageFrame = lastStreamData
+	}
 	if !containStreamUsage && secondLastStreamData != "" {
 		var streamResp struct {
 			Usage *dto.Usage `json:"usage"`
@@ -233,20 +249,23 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 	}
 
-	if info.RelayFormat == types.RelayFormatOpenAI {
-		if shouldSendLastResp {
-			if err := sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-				if helper.IsDownstreamWriteError(err) && info.StreamStatus != nil {
-					info.StreamStatus.SetClientGone(err)
-				}
-				return nil, markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
-			}
-		}
-	}
-
 	if !containStreamUsage {
+		// A role-only or empty event does not establish billable output.
+		if clientGone && responseTextBuilder.Len() == 0 && toolCount == 0 {
+			if streamErr == nil {
+				streamErr = types.NewClientGoneError(endErr)
+			}
+			return nil, markStreamErrorIfCommitted(c, streamErr)
+		}
 		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		usage.CompletionTokens += toolCount * 7
+	}
+	if clientGone && containStreamUsage && usage.CompletionTokens == 0 && (responseTextBuilder.Len() > 0 || toolCount > 0) {
+		// A provider may report input usage before it reports output usage.
+		// Preserve its cache facts and estimate only the missing output.
+		partial := service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, usage.PromptTokens)
+		usage.CompletionTokens = partial.CompletionTokens + toolCount*7
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(usageFrame))
@@ -255,9 +274,32 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		info.CountBillableToolCall(dto.BuildInCallFunctionCall, name)
 	}
 
+	if clientGone {
+		if streamErr == nil {
+			streamErr = types.NewClientGoneError(endErr)
+		}
+		return usage, markStreamErrorIfCommitted(c, streamErr)
+	}
+	// Late writes can discover the disconnect only after usage estimation.
+	// Apply the same no-output rule as cancellation inside the scanner.
+	disconnectedUsage := usage
+	if !containStreamUsage && responseTextBuilder.Len() == 0 && toolCount == 0 {
+		disconnectedUsage = nil
+	}
+	if info.RelayFormat == types.RelayFormatOpenAI && shouldSendLastResp {
+		if err := sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+			if helper.IsDownstreamWriteError(err) {
+				info.StreamStatus.SetClientGone(err)
+				return disconnectedUsage, markStreamErrorIfCommitted(c, types.NewClientGoneError(err))
+			}
+			return usage, markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
+		}
+	}
+
 	if err := HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage); err != nil {
 		if helper.IsDownstreamWriteError(err) && info.StreamStatus != nil {
 			info.StreamStatus.SetClientGone(err)
+			return disconnectedUsage, markStreamErrorIfCommitted(c, types.NewClientGoneError(err))
 		}
 		return usage, markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
 	}

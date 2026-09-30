@@ -108,25 +108,42 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 		accumulator.Observe(&streamResponse)
+		if isStreamError || streamResponse.Type == "response.failed" || streamResponse.Type == "response.error" {
+			// Classify the upstream event before attempting delivery: a failed
+			// write must not replace a known provider failure with client_gone.
+			streamErr = newResponsesStreamError(data, resp.StatusCode)
+		}
 		if err := sendResponsesStreamData(c, streamResponse, clientData); err != nil {
-			streamErr = markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
+			if streamErr != nil {
+				streamErr = markStreamErrorIfCommitted(c, streamErr)
+				// Observe already recorded the provider's precise code. The
+				// transport wrapper must not overwrite it with bad_response.
+				sr.Stop(nil)
+				return
+			}
+			if !helper.IsDownstreamWriteError(err) {
+				streamErr = types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+				sr.Stop(streamErr)
+				return
+			}
+			streamErr = markStreamErrorIfCommitted(c, types.NewClientGoneError(err))
 			sr.ClientGone(err)
 			return
 		}
-		if isStreamError {
-			// Keep upstream usage for settlement; only the client copy is redacted.
-			streamErr = markStreamErrorIfCommitted(c, newResponsesStreamError(data, resp.StatusCode))
+		if streamErr != nil {
+			streamErr = markStreamErrorIfCommitted(c, streamErr)
 			sr.Stop(nil)
 			return
 		}
-		if streamResponse.Type == "response.failed" || streamResponse.Type == "response.error" {
-			streamErr = markStreamErrorIfCommitted(c, newResponsesStreamError(data, resp.StatusCode))
-			sr.Stop(nil)
-			return
+		if streamResponse.Type == "response.completed" || streamResponse.Type == "response.done" {
+			sr.Done()
 		}
 	})
 	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
 	info.StreamStatus.RequireTerminal()
+	if reason, err := info.StreamStatus.End(); streamErr == nil && reason == relaycommon.StreamEndReasonClientGone {
+		streamErr = markStreamErrorIfCommitted(c, types.NewClientGoneError(err))
+	}
 	if streamErr != nil {
 		return accumulator.Finish(), streamErr
 	}

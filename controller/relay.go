@@ -135,6 +135,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		if newAPIError != nil {
 			service.RecordRequestPolicyTermination(c, newAPIError)
+			if newAPIError.GetErrorCode() == types.ErrorCodeClientGone {
+				return
+			}
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			if types.IsResponseCommittedError(newAPIError) || c.Writer.Written() {
 				return

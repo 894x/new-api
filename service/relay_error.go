@@ -22,6 +22,9 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 	if err == nil {
 		return PolicyDecision{Action: "stop", Reason: "request_completed", Source: "system"}
 	}
+	if err.GetErrorCode() == types.ErrorCodeClientGone {
+		return PolicyDecision{Action: "stop", Reason: "client_gone", Source: "client"}
+	}
 	if c.Writer.Written() || types.IsResponseCommittedError(err) {
 		return PolicyDecision{Action: "stop", Reason: "response_committed", Source: "system"}
 	}
@@ -71,8 +74,13 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	if err == nil {
 		return
 	}
-	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.MaskSensitiveErrorWithStatusCode())))
-	if ShouldDisableChannel(err) && channelError.AutoBan {
+	clientGone := err.GetErrorCode() == types.ErrorCodeClientGone
+	if clientGone {
+		logger.LogInfo(c, fmt.Sprintf("client_gone (channel #%d): %s", channelError.ChannelId, common.LocalLogPreview(err.Error())))
+	} else {
+		logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.MaskSensitiveErrorWithStatusCode())))
+	}
+	if !clientGone && ShouldDisableChannel(err) && channelError.AutoBan {
 		reason := err.MaskSensitiveErrorWithStatusCode()
 		gopool.Go(func() {
 			DisableChannel(channelError, reason)
@@ -92,6 +100,10 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		other.SetPublic("error_type", err.GetErrorType())
 		other.SetPublic("error_code", err.GetErrorCode())
 		other.SetPublic("status_code", err.StatusCode)
+		appendStreamStatus(relayInfo, other)
+		if c.Writer != nil && c.Writer.Written() {
+			other.SetPublic("client_status_code", c.Writer.Status())
+		}
 		AppendRelayLogAdminInfo(c, relayInfo, other)
 		AppendUpstreamResponseAdminInfo(c, other)
 		if relayInfo != nil && relayInfo.ChannelMeta != nil && relayInfo.UpstreamModelName != "" {

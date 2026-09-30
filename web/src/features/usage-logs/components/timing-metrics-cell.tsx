@@ -177,6 +177,9 @@ interface StreamTpsCellProps {
 
 export function StreamTpsCell(props: StreamTpsCellProps) {
   const { t } = useTranslation()
+  const clientGone =
+    props.streamStatus?.end_reason === 'client_gone' &&
+    props.streamStatus.response_status !== 'failed'
   const showStreamError =
     props.isStream && props.streamStatus && props.streamStatus.status !== 'ok'
   const tpsLabel =
@@ -198,6 +201,8 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
   let streamLabel = props.isStream ? t('Stream') : t('Non-stream')
   if (props.isTask) {
     streamLabel = props.isSyncTask ? t('Sync') : t('Async')
+  } else if (props.isStream && clientGone) {
+    streamLabel = `${t('Stream')} · client_gone`
   }
 
   return (
@@ -219,12 +224,20 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger
-                render={<CircleAlert className='text-destructive size-3' />}
+                render={
+                  <CircleAlert
+                    className={cn(
+                      'size-3',
+                      clientGone ? 'text-warning' : 'text-destructive'
+                    )}
+                  />
+                }
               />
               <TooltipContent>
                 <div className='space-y-0.5 text-xs'>
                   <p>
-                    {t('Stream Status')}: {t('Error')}
+                    {t('Stream Status')}:{' '}
+                    {clientGone ? 'client_gone' : t('Error')}
                   </p>
                   <p>{props.streamStatus?.end_reason || 'unknown'}</p>
                   {(props.streamStatus?.error_count ?? 0) > 0 && (

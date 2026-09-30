@@ -101,6 +101,14 @@ func RecordPolicyFailure(c *gin.Context, channelID int, err *types.NewAPIError, 
 	if c == nil || err == nil {
 		return
 	}
+	if err.GetErrorCode() == types.ErrorCodeClientGone {
+		state := RequestPolicy(c)
+		if !state.OutcomeRecorded {
+			state.OutcomeRecorded = true
+			state.AddEvent(PolicyEvent{ChannelID: channelID, Status: err.StatusCode, ErrorCode: string(err.GetErrorCode()), ErrorSource: "client", Decision: decision, Health: "unchanged"})
+		}
+		return
+	}
 	source := "upstream"
 	switch {
 	case types.IsChannelError(err):
@@ -136,6 +144,9 @@ func MarkRequestPolicySuccess(c *gin.Context, stream *relaycommon.StreamStatus) 
 	decision := PolicyDecision{Action: "success", Reason: "request_completed", Source: "upstream"}
 	if !state.Successful {
 		decision = PolicyDecision{Action: "stop", Reason: "stream_not_successful", Source: "system"}
+		if reason, _ := stream.End(); reason == relaycommon.StreamEndReasonClientGone && !stream.ResponseFailed() {
+			decision = PolicyDecision{Action: "stop", Reason: "client_gone", Source: "client"}
+		}
 	}
 	channelID := 0
 	if c != nil {

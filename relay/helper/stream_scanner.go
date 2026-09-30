@@ -463,7 +463,11 @@ func StreamScannerHandlerWithVisibleText(c *gin.Context, resp *http.Response, in
 
 	cleanup()
 	if requestErr := c.Request.Context().Err(); requestErr != nil {
-		info.StreamStatus.SetClientGone(requestErr)
+		// Cancellation during cleanup cannot undo a processed terminal. An
+		// explicit failed write already overrides done through SetClientGone.
+		if reason, _ := info.StreamStatus.End(); reason != relaycommon.StreamEndReasonDone {
+			info.StreamStatus.SetClientGone(requestErr)
+		}
 	}
 	if info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() {
 		logger.LogInfo(c, fmt.Sprintf("stream ended: %s", info.StreamStatus.Summary()))

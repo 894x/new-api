@@ -127,6 +127,18 @@ function renderPreview(other: LogOtherData, isAdmin = true) {
   return screen.getByRole('button', { name: /./ })
 }
 
+test('shows client_gone as the stream status and preserves the committed HTTP status', async () => {
+  const trigger = renderPreview({
+    model_price: 0.25,
+    client_status_code: 200,
+    stream_status: { status: 'error', end_reason: 'client_gone' },
+  })
+  fireEvent.click(trigger)
+  const dialog = await screen.findByRole('dialog')
+  expect(within(dialog).getAllByText('client_gone')).toHaveLength(2)
+  expect(within(dialog).getByText('HTTP 200')).toBeVisible()
+})
+
 test('keeps log details open when the parent refreshes with unchanged data', async () => {
   const other = { model_price: 0.25 }
   const wrapper = ({ children }: { children: React.ReactNode }) => (

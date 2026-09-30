@@ -483,6 +483,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const { t } = useTranslation()
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const other = parseLogOther(props.log.other)
+  const clientGone =
+    other?.stream_status?.end_reason === 'client_gone' &&
+    other.stream_status.response_status !== 'failed'
   const typeConfig = getLogTypeConfig(props.log.type)
 
   const isViolation = isViolationFeeLog(other)
@@ -1264,12 +1267,22 @@ export function DetailsDialog(props: DetailsDialogProps) {
         {/* Stream status details */}
         {other?.stream_status && other.stream_status.status !== 'ok' && (
           <DetailSection label={t('Stream Status')}>
+            {other.client_status_code != null && (
+              <DetailRow
+                label={t('Status Code')}
+                value={`HTTP ${other.client_status_code}`}
+              />
+            )}
             <DetailRow
               label={t('Status')}
               value={
                 <StatusBadge
-                  label={other.stream_status.status || t('Error')}
-                  variant='red'
+                  label={
+                    clientGone
+                      ? 'client_gone'
+                      : other.stream_status.status || t('Error')
+                  }
+                  variant={clientGone ? 'orange' : 'red'}
                   size='sm'
                   copyable={false}
                 />

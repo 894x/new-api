@@ -87,7 +87,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
 		applySystemPromptIfNeeded(c, info, request)
 		usage, newApiErr := textRequestViaResponses(c, info, adaptor, request)
-		if newApiErr != nil {
+		if newApiErr != nil && !canSettleDisconnectedStream(info, usage, newApiErr) {
 			return newApiErr
 		}
 
@@ -193,9 +193,16 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	usage, newApiErr := adaptor.DoResponse(c, httpResp, info)
 	if newApiErr != nil {
-		// reset status code 重置状态码
-		service.ResetStatusCode(newApiErr, statusCodeMappingStr)
-		return newApiErr
+		if newApiErr.GetErrorCode() != types.ErrorCodeClientGone {
+			service.ResetStatusCode(newApiErr, statusCodeMappingStr)
+			return newApiErr
+		}
+		// A disconnected client does not erase observed upstream usage. Settle
+		// through the same billing session; a settled session cannot be refunded.
+		partialUsage, ok := usage.(*dto.Usage)
+		if !ok || !canSettleDisconnectedStream(info, partialUsage, newApiErr) {
+			return newApiErr
+		}
 	}
 
 	var containAudioTokens = usage.(*dto.Usage).CompletionTokenDetails.AudioTokens > 0 || usage.(*dto.Usage).PromptTokensDetails.AudioTokens > 0
@@ -206,5 +213,18 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	} else {
 		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	}
+	// The consume log already records client_gone, just as scanner-side
+	// cancellation does. Do not add a second channel-error log after settlement.
 	return nil
+}
+
+// canSettleDisconnectedStream accepts observed usage only for a downstream
+// disconnect. Provider failures retain their existing error settlement policy.
+func canSettleDisconnectedStream(info *relaycommon.RelayInfo, usage *dto.Usage, apiErr *types.NewAPIError) bool {
+	if apiErr == nil || apiErr.GetErrorCode() != types.ErrorCodeClientGone ||
+		!info.IsStream || info.StreamStatus == nil || info.StreamStatus.ResponseFailed() {
+		return false
+	}
+	reason, _ := info.StreamStatus.End()
+	return reason == relaycommon.StreamEndReasonClientGone && service.ValidUsage(usage)
 }
