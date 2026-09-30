@@ -144,25 +144,42 @@ func TestBuildTaskPluginViewOmitsPrivatePollState(t *testing.T) {
 }
 
 func TestAddWanTaskIDOnlyExposesWan3ProviderIDs(t *testing.T) {
-	wanTask := &model.Task{
-		TaskID:      "task_public",
-		Properties:  model.Properties{UpstreamModelName: "wan3.0-video"},
-		PrivateData: model.TaskPrivateData{UpstreamTaskID: "wan-provider-task"},
+	for _, tc := range []struct {
+		name, plugin, originModel, upstreamModel string
+		wantWanTaskID                            bool
+	}{
+		{name: "Alibaba Wan3", plugin: "alibaba", upstreamModel: "wan3.0-video", wantWanTaskID: true},
+		{name: "Alibaba Wan3 Prime alias", plugin: "alibaba", originModel: "customer-prime", upstreamModel: "wan3.0-video-prime", wantWanTaskID: true},
+		{name: "Moyu Wan3", plugin: "moyu-wan3", wantWanTaskID: true},
+		{name: "Alibaba Wan2 public Wan3 alias", plugin: "alibaba", originModel: "wan3.0-video", upstreamModel: "wan2.7-t2v"},
+		{name: "SLS", plugin: "seedance-sls", upstreamModel: "doubao-seedance-2-0-260128"},
+		{name: "other plugin with Wan3 model name", plugin: "hailuo", upstreamModel: "wan3.0-video"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &model.Task{
+				TaskID: "task_public",
+				Properties: model.Properties{
+					OriginModelName: tc.originModel, UpstreamModelName: tc.upstreamModel,
+				},
+				PrivateData: model.TaskPrivateData{UpstreamTaskID: "provider-task"},
+			}
+			body := AddWanTaskID(map[string]any{"task_id": task.TaskID}, tc.plugin, task)
+			fields, ok := body.(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, task.TaskID, fields["task_id"])
+			if tc.wantWanTaskID {
+				assert.Equal(t, task.PrivateData.UpstreamTaskID, fields["wan_task_id"])
+			} else {
+				assert.NotContains(t, fields, "wan_task_id")
+			}
+
+			view, err := BuildTaskPluginView(task)
+			require.NoError(t, err)
+			encoded, err := common.Marshal(view)
+			require.NoError(t, err)
+			var viewFields map[string]any
+			require.NoError(t, common.Unmarshal(encoded, &viewFields))
+			assert.NotContains(t, viewFields, "wan_task_id", "generic task views must not expose the native Wan3 field")
+		})
 	}
-
-	body := AddWanTaskID(map[string]any{"task_id": "task_public"}, "alibaba", wanTask)
-	assert.Equal(t, "wan-provider-task", body.(map[string]any)["wan_task_id"])
-
-	body = AddWanTaskID(map[string]any{"task_id": "task_public"}, "moyu-wan3", &model.Task{
-		TaskID:      "task_public",
-		PrivateData: model.TaskPrivateData{UpstreamTaskID: "moyu-provider-task"},
-	})
-	assert.Equal(t, "moyu-provider-task", body.(map[string]any)["wan_task_id"])
-
-	body = AddWanTaskID(map[string]any{"task_id": "task_public"}, "alibaba", &model.Task{
-		TaskID:      "task_public",
-		Properties:  model.Properties{UpstreamModelName: "wan2.7-t2v"},
-		PrivateData: model.TaskPrivateData{UpstreamTaskID: "other-provider-task"},
-	})
-	assert.NotContains(t, body, "wan_task_id")
 }

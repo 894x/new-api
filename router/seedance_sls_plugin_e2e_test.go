@@ -147,6 +147,7 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &receipt))
 			require.NotEmpty(t, receipt.ID)
 			assert.NotContains(t, recorder.Body.String(), "upstream-")
+			assert.NotContains(t, recorder.Body.String(), `"wan_task_id"`)
 			wire := <-requests
 			assert.Equal(t, "doubao-seedance-2-5-260628", wire["model"])
 			assert.Equal(t, "1080p", wire["resolution"])

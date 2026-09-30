@@ -68,7 +68,15 @@ func TestAlibabaHistoricalResultURLsRemainDownloadable(t *testing.T) {
 					recorder := httptest.NewRecorder()
 					engine.ServeHTTP(recorder, request)
 					require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-					assert.JSONEq(t, `{"output":{"task_id":"`+task.TaskID+`","task_status":"SUCCEEDED","video_url":"`+media.URL+`/video.mp4"}}`, recorder.Body.String())
+					expected := map[string]any{"output": map[string]any{
+						"task_id": task.TaskID, "task_status": "SUCCEEDED", "video_url": media.URL + "/video.mp4",
+					}}
+					if prefix == "/ali" && modelName == "wan3.0-video" {
+						expected["wan_task_id"] = task.PrivateData.UpstreamTaskID
+					}
+					encoded, err := common.Marshal(expected)
+					require.NoError(t, err)
+					assert.JSONEq(t, string(encoded), recorder.Body.String())
 				}
 				request := httptest.NewRequest(http.MethodGet, "/v1/videos/"+task.TaskID, nil)
 				request.Header.Set("Authorization", "Bearer wanhistorical")

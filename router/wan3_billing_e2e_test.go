@@ -238,9 +238,14 @@ func testWan3ChannelBillingLifecycle(t *testing.T, historical bool, prefix strin
 		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &completeResponse))
 		assert.Equal(t, false, completeResponse["future_field"])
 		assert.Equal(t, float64(0), completeResponse["output"].(map[string]any)["queue_position"])
-		assert.NotContains(t, recorder.Body.String(), "-upstream")
 		var task model.Task
 		require.NoError(t, model.DB.Where("task_id = ?", response.Output.TaskID).First(&task).Error)
+		assert.NotEqual(t, task.PrivateData.UpstreamTaskID, response.Output.TaskID)
+		assert.Equal(t, task.PrivateData.UpstreamTaskID, completeResponse["wan_task_id"])
+		delete(completeResponse, "wan_task_id")
+		publicResponse, err := common.Marshal(completeResponse)
+		require.NoError(t, err)
+		assert.NotContains(t, string(publicResponse), task.PrivateData.UpstreamTaskID)
 		return task
 	}
 
