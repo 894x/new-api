@@ -142,3 +142,27 @@ func TestBuildTaskPluginViewOmitsPrivatePollState(t *testing.T) {
 	assert.NotContains(t, payload, "poll_failures")
 	assert.NotContains(t, payload, "private_data")
 }
+
+func TestAddWanTaskIDOnlyExposesWan3ProviderIDs(t *testing.T) {
+	wanTask := &model.Task{
+		TaskID:      "task_public",
+		Properties:  model.Properties{UpstreamModelName: "wan3.0-video"},
+		PrivateData: model.TaskPrivateData{UpstreamTaskID: "wan-provider-task"},
+	}
+
+	body := AddWanTaskID(map[string]any{"task_id": "task_public"}, "alibaba", wanTask)
+	assert.Equal(t, "wan-provider-task", body.(map[string]any)["wan_task_id"])
+
+	body = AddWanTaskID(map[string]any{"task_id": "task_public"}, "moyu-wan3", &model.Task{
+		TaskID:      "task_public",
+		PrivateData: model.TaskPrivateData{UpstreamTaskID: "moyu-provider-task"},
+	})
+	assert.Equal(t, "moyu-provider-task", body.(map[string]any)["wan_task_id"])
+
+	body = AddWanTaskID(map[string]any{"task_id": "task_public"}, "alibaba", &model.Task{
+		TaskID:      "task_public",
+		Properties:  model.Properties{UpstreamModelName: "wan2.7-t2v"},
+		PrivateData: model.TaskPrivateData{UpstreamTaskID: "other-provider-task"},
+	})
+	assert.NotContains(t, body, "wan_task_id")
+}

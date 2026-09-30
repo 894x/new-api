@@ -57,6 +57,22 @@ func BuildTaskPluginViewForClient(c *gin.Context, task *model.Task) (dto.TaskVie
 	return view, nil
 }
 
+// AddWanTaskID adds the provider task ID to the root of a native Wan3
+// response while keeping it out of the generic plugin TaskView.
+func AddWanTaskID(body any, pluginKey string, task *model.Task) any {
+	if task == nil || task.PrivateData.UpstreamTaskID == "" {
+		return body
+	}
+	if pluginKey != "moyu-wan3" && !(pluginKey == "alibaba" &&
+		(task.Properties.UpstreamModelName == "wan3.0-video" || task.Properties.UpstreamModelName == "wan3.0-video-prime")) {
+		return body
+	}
+	if object, ok := body.(map[string]any); ok {
+		object["wan_task_id"] = task.PrivateData.UpstreamTaskID
+	}
+	return body
+}
+
 // replacePrivateTaskID rewrites exact private IDs only in known task-ID fields.
 // Map keys and opaque strings, including URLs containing the ID, are preserved.
 func replacePrivateTaskID(value any, privateTaskID, publicTaskID string) any {

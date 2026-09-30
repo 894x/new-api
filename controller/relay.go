@@ -1008,6 +1008,7 @@ func presentTaskSubmission(c *gin.Context, outcome *taskSubmissionOutcome) {
 				viewValue, valueErr := taskPluginProtocolJSONValue(view)
 				if valueErr == nil {
 					if body, callErr := pinned.Plugin.Engine.CallPath(c.Request.Context(), "native", []string{pinned.Route.Render}, requestContext.JSValue(), viewValue); callErr == nil {
+						body = service.AddWanTaskID(body, pinned.Plugin.Meta.Key, outcome.Task)
 						diagnostics.present(outcome.Task, "native_presenter")
 						c.JSON(http.StatusOK, body)
 						return
@@ -1034,13 +1035,14 @@ func presentTaskSubmission(c *gin.Context, outcome *taskSubmissionOutcome) {
 		createdAt = outcome.Task.SubmitTime
 	}
 	diagnostics.present(outcome.Task, "host_fallback")
-	c.JSON(http.StatusOK, map[string]any{
+	body := map[string]any{
 		"id":         outcome.Task.TaskID,
 		"task_id":    outcome.Task.TaskID,
 		"status":     "queued",
 		"model":      outcome.RelayInfo.OriginModelName,
 		"created_at": createdAt,
-	})
+	}
+	c.JSON(http.StatusOK, service.AddWanTaskID(body, string(outcome.Task.Platform), outcome.Task))
 }
 
 func respondTaskSubmissionError(c *gin.Context, taskErr *taskdto.TaskError) {

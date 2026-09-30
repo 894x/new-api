@@ -1226,6 +1226,9 @@ func renderTaskPluginQuery(
 		abortTaskPluginRouteError(c, http.StatusInternalServerError)
 		return
 	}
+	if !multiple && len(tasks) == 1 {
+		result = service.AddWanTaskID(result, pinned.Plugin.Meta.Key, tasks[0])
+	}
 	logger.LogDebug(
 		c,
 		"task_plugin subsystem=query event=render_complete generation=%d plugin=%q renderer=%q task_count=%d elapsed_ms=%d",

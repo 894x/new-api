@@ -103,6 +103,20 @@ func TestMoyuWan3ParsesMoyuTaskAndRendersWanStatus(t *testing.T) {
 	assert.JSONEq(t, `{"request_id":"","output":{"task_id":"public-task","task_status":"SUCCEEDED","video_url":"https://cdn.moyu.info/video/result.mp4"}}`, string(status))
 }
 
+func TestMoyuWan3UsesOfficialTaskIDFromDataEnvelope(t *testing.T) {
+	plugin := moyuWan3Plugin(t)
+	var submit map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(`{"code":"success","message":"","data":{"task_id":"dc153518-99ab-4185-980a-e9baf7cf0ba2","action":"textGenerate","status":"IN_PROGRESS","fail_reason":"","submit_time":1787558977,"start_time":1787558980,"finish_time":0,"progress":"30%"}}`, &submit))
+
+	value, err := plugin.Engine.Call(t.Context(), "parseSubmitResponse", map[string]any{}, map[string]any{"body": submit})
+	require.NoError(t, err)
+	assert.Equal(t, "dc153518-99ab-4185-980a-e9baf7cf0ba2", value.(map[string]any)["taskId"])
+
+	publicValue, err := plugin.Engine.Call(t.Context(), "sanitizeTaskData", submit, "task_public")
+	require.NoError(t, err)
+	assert.Equal(t, "task_public", publicValue.(map[string]any)["data"].(map[string]any)["task_id"])
+}
+
 func TestMoyuWan3RejectsUnsupportedMediaAndBounds(t *testing.T) {
 	plugin := moyuWan3Plugin(t)
 	for _, request := range []map[string]any{

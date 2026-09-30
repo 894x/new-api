@@ -93,6 +93,28 @@ export function buildSubmitRequest(){return {}} export function parseSubmitRespo
 	assert.JSONEq(t, `{"seconds":5}`, recorder.Header().Get("X-New-Api-Other-Ratios"))
 }
 
+func TestPresentTaskSubmissionAddsWanTaskIDForWan3(t *testing.T) {
+	plugin, err := pluginruntime.CompilePlugin(`
+export const meta = {apiVersion:1,key:"moyu-wan3",name:"Moyu Wan3",version:"1.0.0",author:{name:"Test"},models:["wan3.0-video"],fetchMode:"per_task",routes:[{method:"POST",path:"/moyu/jobs",type:"submit",decode:"decode",render:"created"}]};
+export const native = {decode:function(ctx){return {kind:"submit",model:"wan3.0-video",requestBody:ctx.body.value};},created:function(_ctx,task){return {task_id:task.task_id};}};
+export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {taskId:"upstream"}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {status:"SUCCESS"}}
+`, pluginruntime.Options{})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/moyu/jobs", strings.NewReader(`{"model":"wan3.0-video"}`))
+	c.Set(pluginruntime.ContextKeyPinnedRoute, pluginruntime.PinnedRoute{Plugin: plugin, Route: plugin.Meta.Routes[0]})
+	c.Set(pluginruntime.ContextKeyRouteRequest, pluginruntime.RouteRequestContext{Path: "/moyu/jobs", Method: http.MethodPost, Body: map[string]any{"kind": "json", "value": map[string]any{"model": "wan3.0-video"}}})
+
+	presentTaskSubmission(c, &taskSubmissionOutcome{
+		Result:    &relay.TaskSubmitResult{},
+		Task:      &model.Task{TaskID: "task_public", PrivateData: model.TaskPrivateData{UpstreamTaskID: "wan-provider-task"}},
+		RelayInfo: &relaycommon.RelayInfo{},
+	})
+
+	assert.JSONEq(t, `{"task_id":"task_public","wan_task_id":"wan-provider-task"}`, recorder.Body.String())
+}
+
 func TestPresentTaskSubmissionFallbackUsesPersistedPublicID(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
