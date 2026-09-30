@@ -80,7 +80,11 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 			if strings.HasSuffix(r.URL.Path, "2") || strings.HasSuffix(r.URL.Path, "4") || strings.HasSuffix(r.URL.Path, "6") || strings.HasSuffix(r.URL.Path, "8") {
 				_, _ = io.WriteString(w, `{"code":"success","data":{"task_id":"gateway-id","status":"FAILURE","fail_reason":"generation failed","result_url":"provider safety detail"}}`)
 			} else {
-				_, _ = fmt.Fprintf(w, `{"code":"success","data":{"task_id":"gateway-id","status":"SUCCESS","progress":100,"seed":0,"generate_audio":false,"data":{"code":"success","data":{"task_id":"nested-provider-id","upstream_task_id":"inner-id","total_tokens":1070,"result_url":%q,"last_frame_url":"https://cdn.example/frame.png"}}}}`, media.URL+"/video.mp4")
+				usage := `"total_tokens":1070`
+				if strings.HasSuffix(r.URL.Path, "1") || strings.HasSuffix(r.URL.Path, "5") {
+					usage = `"total_tokens":0,"usage":{"total_tokens":1070,"completion_tokens":1070}`
+				}
+				_, _ = fmt.Fprintf(w, `{"code":"success","data":{"task_id":"gateway-id","status":"SUCCESS","progress":100,"seed":0,"generate_audio":false,"data":{"code":"success","data":{"task_id":"nested-provider-id","upstream_task_id":"inner-id",%s,"result_url":%q,"last_frame_url":"https://cdn.example/frame.png"}}}}`, usage, media.URL+"/video.mp4")
 			}
 			return
 		}
@@ -111,17 +115,17 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 		historical  bool
 		expression  bool
 	}{
-		{"/v1/videos", "doubao-seedance-2-5-260628", false, false},
+		{"/v1/videos", "sls-alias", false, false},
 		{"/v1/video/generations", "doubao-seedance-2-5-260628", false, false},
 		{"/api/v3/contents/generations/tasks", "doubao-seedance-2-5-260628", true, false},
 		{"/seedance-sls/api/v3/contents/generations/tasks", "sls-alias", true, false},
-		{"/v1/videos", "doubao-seedance-2-5-260628", false, true},
+		{"/v1/videos", "sls-alias", false, true},
 		{"/v1/video/generations", "doubao-seedance-2-5-260628", false, true},
 		{"/api/v3/contents/generations/tasks", "doubao-seedance-2-5-260628", true, true},
 		{"/seedance-sls/api/v3/contents/generations/tasks", "sls-alias", true, true},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
-			expression := `tier("base", u("tokens") / 1000) * (param("resolution") == "480p" ? 2 : 1) * (header("X-Billing-Plan") == "premium" ? 3 : 1)`
+			expression := `(u("video_input") == "none" ? tier("base", u("tokens") / 1000) : tier("video", u("tokens") * 0.6 / 1000)) * (param("resolution") == "480p" ? 2 : 1) * (header("X-Billing-Plan") == "premium" ? 3 : 1)`
 			if tc.expression {
 				encoded, err := common.Marshal(map[string]string{tc.model: expression})
 				require.NoError(t, err)
@@ -155,6 +159,10 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 			assert.NotContains(t, string(task.Data), "nested-provider-id")
 			require.NotNil(t, task.PrivateData.BillingContext)
 			assert.Positive(t, task.Quota)
+			if !tc.expression {
+				assert.Equal(t, 546, task.Quota, "mapped aliases must reserve the final 1080p multiplier")
+				assert.InDelta(t, 11.7/10.7, task.PrivateData.BillingContext.OtherRatios["video_input_ratio"], 1e-12)
+			}
 			if tc.expression {
 				snap := task.PrivateData.BillingContext.TieredSnapshot
 				require.NotNil(t, snap)
@@ -163,6 +171,7 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 				assert.Equal(t, map[string]string{"x-billing-plan": "premium"}, snap.RequestInput.Headers)
 				assert.Empty(t, snap.RequestInput.Body)
 				assert.Equal(t, "1080p", snap.UsageFacts["resolution"])
+				assert.Equal(t, "none", snap.UsageFacts["video_input"])
 				assert.Equal(t, float64(task.Quota), snap.UsageFacts["tokens"].(float64)*6)
 				require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{"billing_setting.billing_expr": fmt.Sprintf(`{%q:"9999"}`, tc.model)}))
 			}
@@ -172,6 +181,7 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 				if !tc.expression && tc.model == "doubao-seedance-2-5-260628" {
 					// Old tasks keep the old 2.5 price frozen at submit time,
 					// even though new tasks use the approved rc27 multiplier.
+					delete(task.PrivateData.BillingContext.OtherRatios, "video_input_ratio")
 					task.PrivateData.BillingContext.OtherRatios["video_input"] = 77.0 / 70.0
 				}
 				require.NoError(t, model.DB.Save(&task).Error)

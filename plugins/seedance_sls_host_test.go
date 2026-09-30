@@ -45,7 +45,7 @@ func TestSeedanceSLSPluginMappedPoliciesFreezeBillingAndWirePayload(t *testing.T
 	require.Nil(t, adaptor.ValidateMappedRequest(c, info))
 	ratios, err := adaptor.EstimateBillingValidated(c, info)
 	require.NoError(t, err)
-	assert.InDelta(t, 11.7/10.7, ratios["video_input"], 1e-12)
+	assert.InDelta(t, 11.7/10.7, ratios["video_input_ratio"], 1e-12)
 	facts, err := adaptor.ExtractUsageFactsValidated(c, info)
 	require.NoError(t, err)
 	assert.Equal(t, float64(243000), facts["tokens"])

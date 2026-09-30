@@ -2,7 +2,7 @@ export const meta = {
   apiVersion: 1,
   key: "seedance-sls",
   name: "Seedance SLS",
-  version: "1.0.0",
+  version: "1.0.1",
   author: { name: "QuantumNous" },
   channelTypes: [104],
   models: [
@@ -20,14 +20,19 @@ export const meta = {
     tokens: {
       type: "number",
       unit: "token",
-      description: { en: "Upstream billing tokens; estimated at submission, measured on completion.", zh: "上游计费 token：提交时预估，完成后使用实际值。" },
+      description: { en: "Billing token unit price", zh: "计费 Token 单价" },
     },
-    resolution: { enum: ["480p", "720p", "1080p", "4k"], description: { en: "Output video resolution.", zh: "输出视频分辨率。" } },
+    resolution: { enum: ["480p", "720p", "1080p", "4k"], description: { en: "Output video resolution", zh: "输出视频分辨率" } },
+    video_input: {
+      enum: ["none", "video"],
+      enumLabels: { none: { en: "No reference video", zh: "无参考视频" }, video: { en: "With reference video", zh: "有参考视频" } },
+      description: { en: "Reference video input", zh: "参考视频输入" },
+    },
   },
   usageExamples: [
-    { label: "480p · 5s", facts: { tokens: 48038, resolution: "480p" } },
-    { label: "720p · 5s", facts: { tokens: 108000, resolution: "720p" } },
-    { label: "1080p · 5s", facts: { tokens: 243000, resolution: "1080p" } },
+    { label: "480p · 5s", facts: { tokens: 48038, resolution: "480p", video_input: "none" } },
+    { label: "720p · 5s", facts: { tokens: 108000, resolution: "720p", video_input: "none" } },
+    { label: "1080p · 5s", facts: { tokens: 243000, resolution: "1080p", video_input: "none" } },
   ],
   routes: [
     { method: "POST", path: "/seedance-sls/api/v3/contents/generations/tasks", type: "submit", decode: "createTask", render: "taskCreated" },
@@ -145,7 +150,16 @@ export function sanitizeTaskData(body, publicTaskId) {
 
 export function extractUsage(ctx) {
   const body = providerPayload(ctx);
-  const model = ctx.model;
+  // SLS documents short names as well as accepting versioned model names.
+  // Known mapped models own the rate; opaque deployment IDs retain the public rate.
+  const aliases = {
+    "doubao-seedance-2-0": "doubao-seedance-2-0-260128",
+    "doubao-seedance-2-0-fast": "doubao-seedance-2-0-fast-260128",
+    "doubao-seedance-2-0-mini": "doubao-seedance-2-0-mini-260615",
+    "doubao-seedance-2-5": "doubao-seedance-2-5-260628",
+  };
+  const mappedModel = aliases[ctx.upstreamModel] || ctx.upstreamModel;
+  const model = meta.models.includes(mappedModel) ? mappedModel : aliases[ctx.model] || ctx.model;
   const resolution = String(body.resolution || "720p")
     .trim()
     .toLowerCase();
@@ -162,11 +176,21 @@ export function extractUsage(ctx) {
     if (model === "doubao-seedance-2-0-fast-260128") ratio = video ? 22 / 37 : 1;
     if (model === "doubao-seedance-2-0-mini-260615") ratio = video ? 14 / 23 : 1;
   }
-  if (ctx.usagePurpose === "billing_ratios") return ratio === 1 ? null : { video_input: ratio };
-  const seconds = Number(body.duration) > 0 ? Number(body.duration) : 15;
+  // Keep numeric legacy multipliers separate from expression enum facts.
+  // Historical tasks retain their frozen OtherRatios, including the old video_input key.
+  if (ctx.usagePurpose === "billing_ratios") return ratio === 1 ? null : { video_input_ratio: ratio };
+  validatePayload(body);
+  // Omitted duration uses SLS's documented 5-second default. Only automatic
+  // duration reserves 15 seconds; completion replaces this estimate with actual tokens.
+  let seconds = Number(body.duration);
+  if (!(seconds > 0)) seconds = seconds === -1 ? 15 : Number(body.frames) > 0 ? Number(body.frames) / 24 : 5;
   const dimensions = { "480p": [854, 480], "720p": [1280, 720], "1080p": [1920, 1080], "4k": [3840, 2160] };
   const size = dimensions[resolution] || dimensions["1080p"];
-  return { tokens: Math.min((seconds * size[0] * size[1] * 24) / 1024, 2147483647), resolution: dimensions[resolution] ? resolution : "1080p" };
+  return {
+    tokens: Math.min((seconds * size[0] * size[1] * 24) / 1024, 2147483647),
+    resolution: dimensions[resolution] ? resolution : "1080p",
+    video_input: video ? "video" : "none",
+  };
 }
 
 export function buildQueryRequest(ctx) {
@@ -188,9 +212,21 @@ function taskData(body, depth) {
     for (const key of ["task_id", "status", "fail_reason", "result_url", "last_frame_url", "resolution", "ratio"]) if (!result[key]) result[key] = nested[key];
     for (const key of ["duration", "seed", "frames", "framespersecond", "generate_audio", "progress"])
       if (result[key] == null || result[key] === "") result[key] = nested[key];
-    if (!result.total_tokens) result.total_tokens = nested.total_tokens;
+    if (!billingTokens(result)) result.total_tokens = billingTokens(nested);
   }
   return result;
+}
+
+function billingTokens(data) {
+  // The default SLS envelope reports total_tokens. Volcengine-format responses
+  // report usage.* instead. Never treat the upstream gateway's quota as usage.
+  const usage = data.usage || {};
+  for (const value of [data.total_tokens, usage.total_tokens, usage.completion_tokens]) {
+    if (typeof value !== "number" && typeof value !== "string") continue;
+    const tokens = Number(value);
+    if (Number.isFinite(tokens) && tokens >= 1) return Math.min(Math.floor(tokens), 2147483647);
+  }
+  return 0;
 }
 
 export function parseTaskResult(_ctx, body) {
@@ -225,14 +261,14 @@ export function parseTaskResult(_ctx, body) {
   if (typeof progress === "number" && Number.isFinite(progress)) progress = progress + "%";
   if (typeof progress !== "string" || !progress)
     progress = { SUCCESS: "100%", FAILURE: "100%", IN_PROGRESS: "30%", SUBMITTED: "10%", QUEUED: "20%" }[status] || "";
-  const tokens = Number(data.total_tokens);
+  const tokens = billingTokens(data);
   return {
     taskId: data.task_id || "",
     status: status,
     progress: progress,
     reason: reason,
     url: url,
-    totalTokens: Number.isFinite(tokens) && tokens > 0 ? Math.min(Math.floor(tokens), 2147483647) : 0,
+    totalTokens: tokens,
   };
 }
 
@@ -258,8 +294,8 @@ export const native = {
     };
     for (const key of ["seed", "resolution", "ratio", "duration", "frames", "framespersecond", "generate_audio"])
       if (data[key] != null && data[key] !== "") result[key] = data[key];
-    const tokens = Number(data.total_tokens);
-    if (Number.isFinite(tokens) && tokens > 0) result.usage = { completion_tokens: Math.min(tokens, 2147483647), total_tokens: Math.min(tokens, 2147483647) };
+    const tokens = billingTokens(data);
+    if (tokens > 0) result.usage = { completion_tokens: tokens, total_tokens: tokens };
     if (task.status === "SUCCESS") {
       result.content = { video_url: data.result_url || task.result_url || "" };
       if (data.last_frame_url) result.content.last_frame_url = data.last_frame_url;

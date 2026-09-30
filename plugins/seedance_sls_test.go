@@ -1,11 +1,14 @@
 package plugins_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	builtinplugins "github.com/QuantumNous/new-api/plugins"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,7 +47,7 @@ func TestSeedanceSLSPluginAutomaticDurationAndWireContract(t *testing.T) {
 	require.NoError(t, err)
 	usage, err := common.Marshal(value)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"tokens":324000,"resolution":"720p"}`, string(usage))
+	assert.JSONEq(t, `{"tokens":324000,"resolution":"720p","video_input":"none"}`, string(usage))
 	unchanged, err := common.Marshal(request)
 	require.NoError(t, err)
 	assert.JSONEq(t, raw, string(unchanged))
@@ -131,18 +134,106 @@ func TestSeedanceSLSPluginPreservesResolutionAndVideoRatios(t *testing.T) {
 		if tc.video {
 			content = append(content, map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://cdn.example/ref.mp4"}})
 		}
-		value, err := plugin.Engine.Call(t.Context(), "extractUsage", map[string]any{
-			"model": tc.model, "usagePurpose": "billing_ratios",
-			"preparedRequestBody": map[string]any{"content": content, "resolution": tc.resolution},
-		})
-		require.NoError(t, err)
-		if tc.want == 1 {
-			assert.Nil(t, value, tc.model)
-			continue
+		for _, identities := range [][2]string{
+			{tc.model, ""},
+			{"public-alias", tc.model},
+			{tc.model, "deployment-id"},
+			{"public-alias", strings.TrimSuffix(strings.TrimSuffix(tc.model, "-260128"), "-260615")},
+		} {
+			// SLS also accepts the documented unversioned 2.5 name.
+			identities[1] = strings.TrimSuffix(identities[1], "-260628")
+			value, err := plugin.Engine.Call(t.Context(), "extractUsage", map[string]any{
+				"model": identities[0], "upstreamModel": identities[1], "usagePurpose": "billing_ratios",
+				"preparedRequestBody": map[string]any{"content": content, "resolution": tc.resolution},
+			})
+			require.NoError(t, err)
+			if tc.want == 1 {
+				assert.Nil(t, value, identities)
+				continue
+			}
+			ratios, ok := value.(map[string]any)
+			require.True(t, ok, "%v", identities)
+			assert.InDelta(t, tc.want, ratios["video_input_ratio"], 1e-12, "%v", identities)
+			assert.NotContains(t, ratios, "video_input", "enum facts must not double as numeric multipliers")
 		}
-		ratios, ok := value.(map[string]any)
-		require.True(t, ok)
-		assert.InDelta(t, tc.want, ratios["video_input"], 1e-12)
+	}
+}
+
+func TestSeedanceSLSPluginUsageEstimationAndMeasuredSettlement(t *testing.T) {
+	plugin := seedanceSLSPlugin(t)
+	for _, tc := range []struct {
+		name   string
+		fields map[string]any
+		video  bool
+		tokens float64
+	}{
+		{"documented default duration", nil, false, 108000},
+		{"explicit duration", map[string]any{"duration": 4}, false, 86400},
+		{"frame-only request", map[string]any{"frames": 96}, false, 86400},
+		{"automatic duration reservation", map[string]any{"duration": -1}, true, 324000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := map[string]any{"content": []any{map[string]any{"type": "text", "text": "a fox"}}}
+			for key, value := range tc.fields {
+				body[key] = value
+			}
+			videoInput := "none"
+			if tc.video {
+				body["content"] = append(body["content"].([]any), map[string]any{"type": "video_url", "video_url": map[string]any{"url": "asset://reference-video"}})
+				videoInput = "video"
+			}
+			value, err := plugin.Engine.Call(t.Context(), "extractUsage", map[string]any{"preparedRequestBody": body, "usagePurpose": "facts"})
+			require.NoError(t, err)
+			facts, ok := value.(map[string]any)
+			require.True(t, ok)
+			assert.EqualValues(t, tc.tokens, facts["tokens"])
+			assert.Equal(t, "720p", facts["resolution"])
+			assert.Equal(t, videoInput, facts["video_input"])
+
+			expression := `u("video_input") == "video" ? tier("video", u("tokens") * 42 / 1000000) : tier("text", u("tokens") * 70 / 1000000)`
+			require.NoError(t, billing_setting.SmokeTestTaskExpr(expression, plugin.Meta.UsageSchema))
+			snapshot := &billingexpr.BillingSnapshot{ExprString: expression, ExprHash: billingexpr.ExprHashString(expression), ExprVersion: 1, TaskUsageBilling: true, QuotaPerUnit: 500000, GroupRatio: 1, UsageFacts: facts}
+			value, err = plugin.Engine.Call(t.Context(), "extractUsageOnComplete", nil, nil, map[string]any{"code": "success", "data": map[string]any{"status": "SUCCESS", "total_tokens": 108900}})
+			require.NoError(t, err)
+			result, err := billingexpr.ComputeTaskUsageQuota(snapshot, value.(map[string]any))
+			require.NoError(t, err)
+			wantQuota, wantTier := 3811500, "text"
+			if tc.video {
+				wantQuota, wantTier = 2286900, "video"
+			}
+			assert.Equal(t, wantQuota, result.ActualQuotaAfterGroup)
+			assert.Equal(t, wantTier, result.MatchedTier)
+			assert.Equal(t, videoInput, snapshot.UsageFacts["video_input"], "measured token overlay must preserve the input-price tier")
+		})
+	}
+
+	for _, tc := range []struct {
+		name, body string
+		tokens     int
+	}{
+		{"documented gateway tokens", `{"code":"success","data":{"task_id":"provider","status":"SUCCESS","total_tokens":108900,"quota":17500000}}`, 108900},
+		{"nested Volcengine usage", `{"code":"success","data":{"status":"SUCCESS","total_tokens":0,"data":{"status":"succeeded","usage":{"total_tokens":87300,"completion_tokens":87300}}}}`, 87300},
+		{"completion tokens only", `{"status":"SUCCESS","usage":{"completion_tokens":87300}}`, 87300},
+		{"gateway tokens take priority", `{"status":"SUCCESS","total_tokens":108900,"usage":{"total_tokens":87300}}`, 108900},
+		{"boolean is not usage", `{"status":"SUCCESS","total_tokens":true}`, 0},
+		{"invalid usage retains reservation", `{"status":"SUCCESS","total_tokens":-1,"usage":{"total_tokens":"invalid"}}`, 0},
+		{"missing usage is not guessed from duration", `{"status":"SUCCESS","duration":5,"resolution":"720p"}`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(tc.body, &body))
+			value, err := plugin.Engine.Call(t.Context(), "parseTaskResult", nil, body)
+			require.NoError(t, err)
+			assert.EqualValues(t, tc.tokens, value.(map[string]any)["totalTokens"])
+			value, err = plugin.Engine.Call(t.Context(), "extractUsageOnComplete", nil, nil, body)
+			require.NoError(t, err)
+			facts := value.(map[string]any)
+			if tc.tokens > 0 {
+				assert.EqualValues(t, tc.tokens, facts["tokens"])
+			} else {
+				assert.Empty(t, facts)
+			}
+		})
 	}
 }
 
