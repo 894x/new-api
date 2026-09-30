@@ -270,8 +270,8 @@ func (a *TaskAdaptor) ValidateMappedRequest(c *gin.Context, info *relaycommon.Re
 		if _, err := a.plugin.Engine.Call(c.Request.Context(), "validatePreparedRequest", a.submitContext(c, info), prepared); err != nil {
 			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
 		}
-		convertVideo := info.ChannelOtherSettings.SeedanceBase64VideoToURL == nil || *info.ChannelOtherSettings.SeedanceBase64VideoToURL
-		prepared, err = service.ConvertSeedanceBase64Videos(c.Request.Context(), prepared, convertVideo)
+		convertMedia := info.ChannelOtherSettings.SeedanceBase64VideoToURL == nil || *info.ChannelOtherSettings.SeedanceBase64VideoToURL
+		prepared, err = service.ConvertSeedanceBase64Media(c.Request.Context(), prepared, convertMedia)
 		if err != nil {
 			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
 		}
@@ -504,8 +504,8 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if a.plugin.Meta.Key == "doubao" || a.plugin.Meta.Key == "seedance-sls" {
 		if payload, ok := inlined.(map[string]any); ok {
 			if a.plugin.Meta.Key == "doubao" {
-				convertVideo := info.ChannelOtherSettings.SeedanceBase64VideoToURL == nil || *info.ChannelOtherSettings.SeedanceBase64VideoToURL
-				payload, err = service.ConvertSeedanceBase64Videos(c.Request.Context(), payload, convertVideo)
+				convertMedia := info.ChannelOtherSettings.SeedanceBase64VideoToURL == nil || *info.ChannelOtherSettings.SeedanceBase64VideoToURL
+				payload, err = service.ConvertSeedanceBase64Media(c.Request.Context(), payload, convertMedia)
 				if err != nil {
 					return nil, err
 				}

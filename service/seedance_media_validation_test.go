@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"image/color"
 	"io"
 	"net"
 	"net/http"
@@ -101,13 +102,13 @@ func TestSeedanceBase64VideoIsFetchedByAssetLibraryAfterConversion(t *testing.T)
 		InitHttpClient()
 	})
 	mediaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		file, err := OpenSeedanceVideo(strings.TrimPrefix(r.URL.Path, seedanceVideoURLPath))
+		file, contentType, err := OpenSeedanceMedia(strings.TrimPrefix(r.URL.Path, seedanceVideoURLPath))
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
 		defer file.Close()
-		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Type", contentType)
 		_, _ = io.Copy(w, file)
 	}))
 	defer mediaServer.Close()
@@ -123,6 +124,7 @@ func TestSeedanceBase64VideoIsFetchedByAssetLibraryAfterConversion(t *testing.T)
 	GetHttpClient().Transport = transport
 
 	video := buildAssetLibraryTestMP4("isom", 854, 480, 1000, 2000, 48)
+	image := storedAssetPNG(t, color.RGBA{R: 80, G: 140, B: 220, A: 255})
 	var imports atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
@@ -144,14 +146,25 @@ func TestSeedanceBase64VideoIsFetchedByAssetLibraryAfterConversion(t *testing.T)
 			}
 			defer response.Body.Close()
 			data, err := io.ReadAll(response.Body)
-			if err != nil || response.StatusCode != http.StatusOK || !assert.Equal(t, video, data) {
+			want := video
+			logicalID := "lass_video"
+			if strings.HasSuffix(url, ".png") {
+				want = image
+				logicalID = "lass_image"
+			}
+			if err != nil || response.StatusCode != http.StatusOK || !assert.Equal(t, want, data) {
 				http.Error(w, "public video bytes differ", http.StatusBadGateway)
 				return
 			}
 			imports.Add(1)
-			_, _ = io.WriteString(w, `{"success":true,"data":{"logical_id":"lass_video","logical_group_id":"lasg_video","status":"Processing"}}`)
-		case "GET /v1/volcengine/assets/lass_video":
-			_, _ = io.WriteString(w, `{"success":true,"data":{"logical_id":"lass_video","logical_group_id":"lasg_video","status":"Active","asset_type":"Video"}}`)
+			_, _ = fmt.Fprintf(w, `{"success":true,"data":{"logical_id":"%s","logical_group_id":"lasg_%s","status":"Processing"}}`, logicalID, strings.TrimPrefix(logicalID, "lass_"))
+		case "GET /v1/volcengine/assets/lass_video", "GET /v1/volcengine/assets/lass_image":
+			logicalID := strings.TrimPrefix(r.URL.Path, "/v1/volcengine/assets/")
+			assetType := "Video"
+			if logicalID == "lass_image" {
+				assetType = "Image"
+			}
+			_, _ = fmt.Fprintf(w, `{"success":true,"data":{"logical_id":"%s","logical_group_id":"lasg_%s","status":"Active","asset_type":"%s"}}`, logicalID, strings.TrimPrefix(logicalID, "lass_"), assetType)
 		default:
 			http.NotFound(w, r)
 		}
@@ -159,16 +172,21 @@ func TestSeedanceBase64VideoIsFetchedByAssetLibraryAfterConversion(t *testing.T)
 	defer upstream.Close()
 	require.NoError(t, db.Create(&model.Channel{Id: 11, Type: constant.ChannelTypeSeedanceSLS, Key: "test", Name: "SLS"}).Error)
 	require.NoError(t, db.Create(&model.ChannelAssetConfig{ChannelId: 11, Enabled: true, Backend: AssetLibraryBackendSeedanceSLS, BaseURL: upstream.URL, AuthType: AssetLibraryAuthBearer, APIKey: "test"}).Error)
-	source := "data:video/mp4;base64," + base64.StdEncoding.EncodeToString(video)
-	payload := map[string]any{"model": "doubao-seedance-2-5", "content": []any{seedanceTestMedia("video_url", source, "reference_video")}}
-	converted, err := ConvertSeedanceBase64Videos(t.Context(), payload, true)
+	videoSource := "data:video/mp4;base64," + base64.StdEncoding.EncodeToString(video)
+	imageSource := "data:image/png;base64," + base64.StdEncoding.EncodeToString(image)
+	payload := map[string]any{"model": "doubao-seedance-2-5", "content": []any{
+		seedanceTestMedia("video_url", videoSource, "reference_video"),
+		seedanceTestMedia("image_url", imageSource, "reference_image"),
+	}}
+	converted, err := ConvertSeedanceBase64Media(t.Context(), payload, true)
 	require.NoError(t, err)
 	ctx, err := ValidateSeedanceMedia(t.Context(), 7, "doubao-seedance-2-5", converted)
 	require.NoError(t, err)
 	prepared, err := PrepareAssetReferences(ctx, 7, 11, converted)
 	require.NoError(t, err)
 	assert.Equal(t, "asset://lass_video", prepared["content"].([]any)[0].(map[string]any)["video_url"].(map[string]any)["url"])
-	assert.Equal(t, int32(1), imports.Load())
+	assert.Equal(t, "asset://lass_image", prepared["content"].([]any)[1].(map[string]any)["image_url"].(map[string]any)["url"])
+	assert.Equal(t, int32(2), imports.Load())
 }
 
 func TestSeedanceAudioDurationBoundaries(t *testing.T) {

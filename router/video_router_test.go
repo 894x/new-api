@@ -17,11 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSeedanceMediaRouteServesOnlyOpaqueVideoFiles(t *testing.T) {
+func TestSeedanceMediaRouteServesOnlyOpaqueMediaFiles(t *testing.T) {
 	directory := t.TempDir()
 	t.Setenv("SEEDANCE_VIDEO_DIR", directory)
 	name := strings.Repeat("a", 32) + ".mp4"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, name), []byte("video-content"), 0600))
+	imageName := strings.Repeat("b", 32) + ".png"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, imageName), []byte("image-content"), 0600))
 	engine := gin.New()
 	SetVideoRouter(engine)
 	request := httptest.NewRequest(http.MethodGet, "/v1/seedance-media/"+name, nil)
@@ -32,6 +34,12 @@ func TestSeedanceMediaRouteServesOnlyOpaqueVideoFiles(t *testing.T) {
 	assert.Equal(t, "video", recorder.Body.String())
 	assert.Equal(t, "video/mp4", recorder.Header().Get("Content-Type"))
 	assert.Equal(t, "nosniff", recorder.Header().Get("X-Content-Type-Options"))
+	request = httptest.NewRequest(http.MethodGet, "/v1/seedance-media/"+imageName, nil)
+	recorder = httptest.NewRecorder()
+	engine.ServeHTTP(recorder, request)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "image-content", recorder.Body.String())
+	assert.Equal(t, "image/png", recorder.Header().Get("Content-Type"))
 	request = httptest.NewRequest(http.MethodGet, "/v1/seedance-media/invalid.mp4", nil)
 	recorder = httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)

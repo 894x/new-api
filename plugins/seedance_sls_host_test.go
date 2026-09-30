@@ -168,11 +168,19 @@ func TestSeedanceSLSPluginPollingPreservesNestedUsageAndFailures(t *testing.T) {
 func TestSeedanceSLSPluginTransformsMediaBeforeValidation(t *testing.T) {
 	previousLimit := constant.MaxFileDownloadMB
 	constant.MaxFileDownloadMB = 64
+	previousAddress := system_setting.TaskPublicAddress
+	system_setting.TaskPublicAddress = "https://media.example/gateway"
+	t.Setenv("SEEDANCE_VIDEO_DIR", t.TempDir())
 	fetch := system_setting.GetFetchSetting()
 	previousFetch := *fetch
 	fetch.EnableSSRFProtection = false
 	service.InitHttpClient()
-	t.Cleanup(func() { constant.MaxFileDownloadMB = previousLimit; *fetch = previousFetch; service.InitHttpClient() })
+	t.Cleanup(func() {
+		constant.MaxFileDownloadMB = previousLimit
+		system_setting.TaskPublicAddress = previousAddress
+		*fetch = previousFetch
+		service.InitHttpClient()
+	})
 	var content bytes.Buffer
 	require.NoError(t, png.Encode(&content, image.NewRGBA(image.Rect(0, 0, 400, 400))))
 	downloads := make(chan struct{}, 2)
@@ -202,7 +210,7 @@ func TestSeedanceSLSPluginTransformsMediaBeforeValidation(t *testing.T) {
 	require.NoError(t, common.DecodeJson(body, &payload))
 	media := payload["content"].([]any)[1].(map[string]any)
 	assert.Equal(t, "first_frame", media["role"])
-	assert.Contains(t, media["image_url"].(map[string]any)["url"], "data:image/png;base64,")
+	assert.Contains(t, media["image_url"].(map[string]any)["url"], "/v1/seedance-media/")
 	assert.Len(t, downloads, 1)
 	require.Len(t, info.ParameterCapabilityAudit, 1)
 	assert.Equal(t, "image_url_to_base64", info.ParameterCapabilityAudit[0].Action)
