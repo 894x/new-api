@@ -458,6 +458,39 @@ func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int, contexts ...
 			}
 		}
 		item := relay.TaskModel2Dto(c, task)
+		parameters := task.Properties.RequestParameters
+		if task.Status == model.TaskStatusSuccess && (parameters == nil || parameters.Resolution == "" || parameters.Duration == 0 || parameters.Ratio == "") {
+			// Historical plugins retained display parameters in the response,
+			// rather than the request snapshot. Recover only the safe fields
+			// before hiding raw provider data from the user task list.
+			var response map[string]any
+			if err := common.Unmarshal(task.Data, &response); err == nil {
+				var display model.TaskRequestParameters
+				if parameters != nil {
+					display = *parameters
+				}
+				for _, candidate := range []any{response["task"], response["data"], response} {
+					fallback := taskRequestParametersFromRequest(candidate)
+					if fallback == nil {
+						continue
+					}
+					if display.Resolution == "" {
+						display.Resolution = fallback.Resolution
+					}
+					if display.Duration == 0 {
+						display.Duration = fallback.Duration
+					}
+					if display.Ratio == "" {
+						display.Ratio = fallback.Ratio
+					}
+				}
+				if display.Resolution != "" || display.Duration != 0 || display.Ratio != "" {
+					properties := task.Properties
+					properties.RequestParameters = &display
+					item.Properties = properties
+				}
+			}
+		}
 		if viewerRole < common.RoleAdminUser {
 			item.Data = nil
 		}

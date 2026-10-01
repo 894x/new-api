@@ -75,8 +75,9 @@ func taskRequestParametersFromRequest(request any) *model.TaskRequestParameters 
 	}
 	nested, _ := body["parameters"].(map[string]any)
 	metadataNested, _ := metadata["parameters"].(map[string]any)
+	payload, _ := body["payload"].(map[string]any)
 	parameters := &model.TaskRequestParameters{}
-	for _, values := range []map[string]any{body, metadata, nested, metadataNested} {
+	for _, values := range []map[string]any{body, metadata, nested, metadataNested, payload} {
 		if parameters.Resolution == "" {
 			parameters.Resolution, _ = values["size"].(string)
 			if parameters.Resolution == "" {

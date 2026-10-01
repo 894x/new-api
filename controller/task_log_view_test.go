@@ -139,3 +139,68 @@ func TestTaskLogDTOKeepsFailureReasonAndDoesNotMarkPluginTaskLegacy(t *testing.T
 	assert.Empty(t, pluginView.ResultURL)
 	assert.Empty(t, pluginView.FailReason)
 }
+
+func TestTaskRequestParametersReadCanonicalPluginPayload(t *testing.T) {
+	parameters := taskRequestParametersFromRequest(map[string]any{
+		"model": "doubao-seedance-2-0-fast-260128",
+		"payload": map[string]any{
+			"resolution": "480P", "duration": 5, "ratio": "adaptive",
+			"api_key": "private-key", "content": []any{"private-prompt"},
+		},
+	})
+	require.NotNil(t, parameters)
+	assert.Equal(t, &model.TaskRequestParameters{Resolution: "480P", Duration: 5, Ratio: "adaptive"}, parameters)
+	encoded, err := common.Marshal(model.Properties{RequestParameters: parameters})
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "private-key")
+	assert.NotContains(t, string(encoded), "private-prompt")
+}
+
+func TestTaskLogDTORecoversHistoricalDisplayParametersWithoutExposingRawData(t *testing.T) {
+	response, err := common.Marshal(map[string]any{
+		"code": 0,
+		"data": map[string]any{
+			"resolution": "720p", "duration": 10, "ratio": "16:9",
+			"video_url": "https://private.invalid/video?signature=secret",
+			"prompt":    "private-prompt",
+		},
+	})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name      string
+		persisted *model.TaskRequestParameters
+		data      []byte
+		want      *model.TaskRequestParameters
+	}{
+		{"missing snapshot", nil, response, &model.TaskRequestParameters{Resolution: "720p", Duration: 10, Ratio: "16:9"}},
+		{"partial snapshot", &model.TaskRequestParameters{Ratio: "adaptive"}, response, &model.TaskRequestParameters{Resolution: "720p", Duration: 10, Ratio: "adaptive"}},
+		{"original request wins", &model.TaskRequestParameters{Resolution: "480P", Duration: 5, Ratio: "adaptive"}, response, &model.TaskRequestParameters{Resolution: "480P", Duration: 5, Ratio: "adaptive"}},
+		{"missing provider parameters", nil, []byte(`{"code":0,"data":null}`), nil},
+		{"malformed historical data", nil, []byte(`{"data":`), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &model.Task{
+				TaskID: "task_sls_parameters", Platform: "seedance-sls", Status: model.TaskStatusSuccess,
+				Properties: model.Properties{RequestParameters: tc.persisted}, Data: tc.data,
+			}
+			before, err := common.Marshal(task.Properties)
+			require.NoError(t, err)
+			for _, role := range []int{common.RoleCommonUser, common.RoleAdminUser} {
+				view := tasksToDto([]*model.Task{task}, false, role)[0]
+				properties, ok := view.Properties.(model.Properties)
+				require.True(t, ok)
+				assert.Equal(t, tc.want, properties.RequestParameters)
+				if role == common.RoleCommonUser {
+					assert.Empty(t, view.Data)
+					encoded, err := common.Marshal(view)
+					require.NoError(t, err)
+					assert.NotContains(t, string(encoded), "private.invalid")
+					assert.NotContains(t, string(encoded), "private-prompt")
+				}
+			}
+			after, err := common.Marshal(task.Properties)
+			require.NoError(t, err)
+			assert.JSONEq(t, string(before), string(after))
+		})
+	}
+}

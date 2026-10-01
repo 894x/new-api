@@ -123,7 +123,8 @@ function resolveTaskRequestParameters(
   const persisted = parseRecord(properties?.request_parameters)
   const data = parseRecord(log.data)
   const nestedTask = parseRecord(data?.task)
-  const fallback = nestedTask ?? data
+  const nestedData = parseRecord(data?.data)
+  const fallback = nestedTask ?? nestedData ?? data
 
   const resolution = persisted?.resolution ?? fallback?.resolution
   const duration = persisted?.duration ?? fallback?.duration

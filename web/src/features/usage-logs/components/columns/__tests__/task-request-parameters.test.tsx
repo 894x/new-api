@@ -21,7 +21,7 @@ import assert from 'node:assert/strict'
 import type { CellContext, Row } from '@tanstack/react-table'
 import { Window } from 'happy-dom'
 import type React from 'react'
-import { afterAll, afterEach, describe, test } from 'vitest'
+import { afterAll, afterEach, describe, expect, test } from 'vitest'
 
 import type { TaskLog } from '../../../types'
 
@@ -172,6 +172,38 @@ describe('task request parameters column', () => {
     assert.match(container.textContent || '', /Duration\s*4s/)
     assert.match(container.textContent || '', /Ratio\s*16:9/)
 
+    await act(async () => root.unmount())
+  })
+
+  test('shows parameters from a historical SLS response envelope', async () => {
+    const log = {
+      platform: 'seedance-sls',
+      status: 'SUCCESS',
+      data: {
+        code: 0,
+        data: { resolution: '720p', duration: 10, ratio: '16:9' },
+      },
+    } as TaskLog
+
+    const { container, root } = await renderRequestParameters(log)
+    expect(container.textContent).toMatch(/Resolution\s*720p/)
+    expect(container.textContent).toMatch(/Duration\s*10s/)
+    expect(container.textContent).toMatch(/Ratio\s*16:9/)
+    await act(async () => root.unmount())
+  })
+
+  test('keeps requested adaptive ratio and fills missing values from SLS data', async () => {
+    const log = {
+      platform: 'seedance-sls',
+      status: 'SUCCESS',
+      properties: { request_parameters: { ratio: 'adaptive' } },
+      data: { data: { resolution: '480p', duration: 5, ratio: '16:9' } },
+    } as TaskLog
+
+    const { container, root } = await renderRequestParameters(log)
+    expect(container.textContent).toMatch(/Resolution\s*480p/)
+    expect(container.textContent).toMatch(/Duration\s*5s/)
+    expect(container.textContent).toMatch(/Ratio\s*adaptive/)
     await act(async () => root.unmount())
   })
 })
