@@ -437,6 +437,7 @@ export type BillingSettings = {
 export type OperationsSettings = {
   'asset_storage_setting.default_quota_mb'?: number
   'asset_storage_setting.seedance_video_max_mb'?: number
+  'asset_storage_setting.seedance_media_max_mb'?: number
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean

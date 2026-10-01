@@ -43,22 +43,25 @@ import { useUpdateOption } from '../hooks/use-update-option'
 const schema = z.object({
   quotaMB: z.number().int().min(0).max(1_000_000),
   seedanceVideoMaxMB: z.number().int().min(1).max(1_000_000),
+  seedanceMediaMaxMB: z.number().int().min(1).max(1_000_000),
 })
 
 export function AssetStorageSection({
   quotaMB,
   seedanceVideoMaxMB,
+  seedanceMediaMaxMB = 2000,
 }: {
   quotaMB: number
   seedanceVideoMaxMB: number
+  seedanceMediaMaxMB?: number
 }) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { quotaMB, seedanceVideoMaxMB },
+    defaultValues: { quotaMB, seedanceVideoMaxMB, seedanceMediaMaxMB },
   })
-  useResetForm(form, { quotaMB, seedanceVideoMaxMB })
+  useResetForm(form, { quotaMB, seedanceVideoMaxMB, seedanceMediaMaxMB })
   const onSave = form.handleSubmit(async (values) => {
     if (values.quotaMB !== quotaMB) {
       const result = await updateOption.mutateAsync({
@@ -71,6 +74,13 @@ export function AssetStorageSection({
       const result = await updateOption.mutateAsync({
         key: 'asset_storage_setting.seedance_video_max_mb',
         value: String(values.seedanceVideoMaxMB),
+      })
+      if (!result.success) return
+    }
+    if (values.seedanceMediaMaxMB !== seedanceMediaMaxMB) {
+      const result = await updateOption.mutateAsync({
+        key: 'asset_storage_setting.seedance_media_max_mb',
+        value: String(values.seedanceMediaMaxMB),
       })
       if (!result.success) return
     }
@@ -128,7 +138,7 @@ export function AssetStorageSection({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    {t('Local Seedance video storage limit (MB)')}
+                    {t('Seedance Base64 video size limit (MB)')}
                   </FormLabel>
                   <FormControl>
                     <Input
@@ -145,7 +155,37 @@ export function AssetStorageSection({
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'When this limit is reached, the oldest converted videos are deleted.'
+                      'Maximum decoded size of a single Base64 video. Provider media limits still apply.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='seedanceMediaMaxMB'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    {t('Local Seedance media storage limit (MB)')}
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      {...field}
+                      type='number'
+                      min={1}
+                      max={1_000_000}
+                      step={1}
+                      onChange={(event) =>
+                        field.onChange(event.target.valueAsNumber)
+                      }
+                      disabled={form.formState.isSubmitting}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Shared by converted images and videos. Default: 2 GB (2000 MB). Oldest files are deleted when the limit is reached; files uploaded within the last 15 minutes are retained.'
                     )}
                   </FormDescription>
                   <FormMessage />

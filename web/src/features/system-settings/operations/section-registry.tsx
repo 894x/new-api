@@ -37,6 +37,9 @@ const OPERATIONS_SECTIONS = [
         seedanceVideoMaxMB={
           settings['asset_storage_setting.seedance_video_max_mb'] ?? 1024
         }
+        seedanceMediaMaxMB={
+          settings['asset_storage_setting.seedance_media_max_mb'] ?? 2000
+        }
       />
     ),
   },

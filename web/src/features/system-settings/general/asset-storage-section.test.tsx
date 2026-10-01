@@ -87,7 +87,7 @@ it('saves an integer MB quota and preserves unsaved values when the server rejec
   actions.remove()
 })
 
-it('saves the local Seedance video storage limit', async () => {
+it('saves the Seedance Base64 video size limit', async () => {
   const actions = document.createElement('div')
   document.body.append(actions)
   const view = render(
@@ -96,7 +96,7 @@ it('saves the local Seedance video storage limit', async () => {
     </SettingsPageProvider>
   )
   const input = screen.getByRole('spinbutton', {
-    name: 'Local Seedance video storage limit (MB)',
+    name: 'Seedance Base64 video size limit (MB)',
   })
   fireEvent.change(input, { target: { value: '2048' } })
   mutateAsync.mockResolvedValueOnce({ success: true })
@@ -107,6 +107,51 @@ it('saves the local Seedance video storage limit', async () => {
       value: '2048',
     })
   )
+  view.unmount()
+  actions.remove()
+})
+
+it('defaults the shared media directory capacity to 2 GB and saves a custom limit', async () => {
+  const actions = document.createElement('div')
+  document.body.append(actions)
+  const view = render(
+    <SettingsPageProvider actionsContainer={actions}>
+      <AssetStorageSection quotaMB={1024} seedanceVideoMaxMB={1024} />
+    </SettingsPageProvider>
+  )
+  const input = screen.getByRole('spinbutton', {
+    name: 'Local Seedance media storage limit (MB)',
+  })
+  expect(input).toHaveValue(2000)
+  fireEvent.change(input, { target: { value: '4000' } })
+  mutateAsync.mockResolvedValueOnce({ success: false })
+  fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(mutateAsync).toHaveBeenCalledWith({
+      key: 'asset_storage_setting.seedance_media_max_mb',
+      value: '4000',
+    })
+  )
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled()
+  )
+  expect(input).toHaveValue(4000)
+  mutateAsync.mockResolvedValueOnce({ success: true })
+  fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeDisabled()
+  )
+  expect(mutateAsync).toHaveBeenCalledTimes(2)
+  view.rerender(
+    <SettingsPageProvider actionsContainer={actions}>
+      <AssetStorageSection
+        quotaMB={1024}
+        seedanceVideoMaxMB={1024}
+        seedanceMediaMaxMB={3000}
+      />
+    </SettingsPageProvider>
+  )
+  await waitFor(() => expect(input).toHaveValue(3000))
   view.unmount()
   actions.remove()
 })

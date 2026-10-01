@@ -1,9 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"image"
 	"image/color"
 	"io"
 	"net"
@@ -19,9 +21,11 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/image/bmp"
 )
 
 func seedanceTestMedia(field, source, role string) map[string]any {
@@ -32,16 +36,69 @@ func seedanceTestMedia(field, source, role string) map[string]any {
 	return item
 }
 
+func TestSeedanceBase64MediaUsesSharedConfigurableDirectoryCapacity(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("SEEDANCE_VIDEO_DIR", directory)
+	previousAddress := system_setting.TaskPublicAddress
+	previousSetting := *system_setting.GetAssetStorageSetting()
+	assert.Equal(t, int64(2000), previousSetting.SeedanceMediaMaxMB, "the default directory capacity is 2 GB")
+	system_setting.TaskPublicAddress = "https://media.example"
+	t.Cleanup(func() {
+		system_setting.TaskPublicAddress = previousAddress
+		*system_setting.GetAssetStorageSetting() = previousSetting
+	})
+	// A recent video must not lower the directory capacity to the image limit.
+	videoName := strings.Repeat("a", 32) + ".mp4"
+	video, err := os.Create(filepath.Join(directory, videoName))
+	require.NoError(t, err)
+	require.NoError(t, video.Truncate(40_000_000))
+	require.NoError(t, video.Close())
+	var imageBytes bytes.Buffer
+	require.NoError(t, bmp.Encode(&imageBytes, image.NewRGBA(image.Rect(0, 0, 2400, 2400))))
+	source := "data:image/bmp;base64," + base64.StdEncoding.EncodeToString(imageBytes.Bytes())
+	for range 2 {
+		_, err := StoreSeedanceBase64Image(t.Context(), source)
+		require.NoError(t, err, "multiple legal images must coexist with a recent video")
+	}
+	_, err = os.Stat(filepath.Join(directory, videoName))
+	require.NoError(t, err)
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	// A lowered global capacity must protect recent files, then evict old media.
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{"asset_storage_setting.seedance_media_max_mb": "1"}))
+	smallSource := "data:image/png;base64," + base64.StdEncoding.EncodeToString(storedAssetPNG(t, color.RGBA{R: 80, A: 255}))
+	_, err = StoreSeedanceBase64Image(t.Context(), smallSource)
+	require.ErrorContains(t, err, "storage limit")
+	videoSource := "data:video/mp4;base64," + base64.StdEncoding.EncodeToString(buildAssetLibraryTestMP4("isom", 854, 480, 1000, 2000, 48))
+	_, err = StoreSeedanceBase64Video(t.Context(), videoSource)
+	require.ErrorContains(t, err, "storage limit", "videos must use the same configured directory capacity")
+	oldTime := time.Now().Add(-time.Hour)
+	for _, entry := range entries {
+		require.NoError(t, os.Chtimes(filepath.Join(directory, entry.Name()), oldTime, oldTime))
+	}
+	_, err = StoreSeedanceBase64Video(t.Context(), videoSource)
+	require.NoError(t, err)
+	_, err = StoreSeedanceBase64Image(t.Context(), smallSource)
+	require.NoError(t, err)
+	entries, err = os.ReadDir(directory)
+	require.NoError(t, err)
+	assert.Len(t, entries, 2)
+}
+
 func TestSeedanceBase64VideoConvertsBeforeAssetImportAndPrunesOldFiles(t *testing.T) {
 	directory := t.TempDir()
 	t.Setenv("SEEDANCE_VIDEO_DIR", directory)
 	previousAddress := system_setting.TaskPublicAddress
 	previousLimit := system_setting.GetAssetStorageSetting().SeedanceVideoMaxMB
+	previousStorageLimit := system_setting.GetAssetStorageSetting().SeedanceMediaMaxMB
 	system_setting.TaskPublicAddress = "https://media.example/gateway"
 	system_setting.GetAssetStorageSetting().SeedanceVideoMaxMB = 1
+	system_setting.GetAssetStorageSetting().SeedanceMediaMaxMB = 1
 	t.Cleanup(func() {
 		system_setting.TaskPublicAddress = previousAddress
 		system_setting.GetAssetStorageSetting().SeedanceVideoMaxMB = previousLimit
+		system_setting.GetAssetStorageSetting().SeedanceMediaMaxMB = previousStorageLimit
 	})
 	oldName := strings.Repeat("a", 32) + ".mp4"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, oldName), make([]byte, 1_000_000), 0600))

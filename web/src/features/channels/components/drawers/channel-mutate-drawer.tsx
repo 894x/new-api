@@ -3604,11 +3604,13 @@ export function ChannelMutateDrawer({
             <FormItem className='flex items-center justify-between gap-3 py-3'>
               <div className='space-y-0.5'>
                 <FormLabel>
-                  {t('Convert Seedance Base64 videos to public URLs')}
+                  {t(
+                    'Convert Seedance Base64 images and videos to public URLs'
+                  )}
                 </FormLabel>
                 <FormDescription>
                   {t(
-                    'Store input videos locally before importing them into the upstream asset library'
+                    'Controls both images and videos. Store Base64 inputs locally before importing them into the upstream asset library.'
                   )}
                 </FormDescription>
               </div>

@@ -1611,7 +1611,7 @@ test('an Ollama channel marks a saved OpenAI-compatible chat setting in Request 
   })
 })
 
-test('a Seedance channel enables local Base64 video conversion by default and saves an override', async () => {
+test('a Seedance channel enables local Base64 image and video conversion by default and saves an override', async () => {
   editingChannel = {
     ...editingChannel,
     type: 104,
@@ -1623,7 +1623,7 @@ test('a Seedance channel enables local Base64 video conversion by default and sa
   render(<ConfigurationHarness currentRow={editingChannel} />)
   await screen.findByDisplayValue('Existing channel')
   const toggle = screen.getByRole('switch', {
-    name: 'Convert Seedance Base64 videos to public URLs',
+    name: 'Convert Seedance Base64 images and videos to public URLs',
   })
   expect(toggle).toBeChecked()
   await user.click(toggle)
@@ -2803,7 +2803,7 @@ test('a New API channel binds upstream task plugins and publishes their models',
   render(<ConfigurationHarness currentRow={channel} />)
   expect(
     screen.queryByRole('switch', {
-      name: 'Convert Seedance Base64 videos to public URLs',
+      name: 'Convert Seedance Base64 images and videos to public URLs',
     })
   ).not.toBeInTheDocument()
   const extensions = within(

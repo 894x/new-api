@@ -107,9 +107,13 @@ func StoreSeedanceBase64Media(ctx context.Context, source, assetType string) (st
 	if err != nil {
 		return "", err
 	}
-	maxBytes, strictMaximum, maxMB, err := seedanceBase64MediaLimit(assetType)
+	maxBytes, strictMaximum, err := seedanceBase64MediaLimit(assetType)
 	if err != nil {
 		return "", err
+	}
+	storageMB := system_setting.GetAssetStorageSetting().SeedanceMediaMaxMB
+	if storageMB < 1 || storageMB > system_setting.MaxAssetQuotaMB {
+		return "", errors.New("Seedance media storage limit is invalid")
 	}
 	if encoded == "" || int64(len(encoded)) > (maxBytes+2)/3*4+4 {
 		return "", fmt.Errorf("%s exceeds the configured storage limit", strings.ToLower(assetType))
@@ -182,7 +186,7 @@ func StoreSeedanceBase64Media(ctx context.Context, source, assetType string) (st
 	if err := os.Rename(temporary.Name(), filepath.Join(directory, name)); err != nil {
 		return "", fmt.Errorf("could not publish Seedance %s", strings.ToLower(assetType))
 	}
-	if err := pruneSeedanceMedia(directory, maxMB*system_setting.AssetQuotaMB, name); err != nil {
+	if err := pruneSeedanceMedia(directory, storageMB*system_setting.AssetQuotaMB, name); err != nil {
 		_ = os.Remove(filepath.Join(directory, name))
 		return "", err
 	}
@@ -221,19 +225,19 @@ func parseSeedanceBase64Media(source, assetType string) (string, string, error) 
 	return encoded, contentType, nil
 }
 
-func seedanceBase64MediaLimit(assetType string) (int64, bool, int64, error) {
+func seedanceBase64MediaLimit(assetType string) (int64, bool, error) {
 	if assetType == "Image" {
-		return assetLibraryImageMaxBytes, true, assetLibraryImageMaxBytes / system_setting.AssetQuotaMB, nil
+		return assetLibraryImageMaxBytes, true, nil
 	}
 	maxMB := system_setting.GetAssetStorageSetting().SeedanceVideoMaxMB
 	if maxMB < 1 || maxMB > system_setting.MaxAssetQuotaMB {
-		return 0, false, 0, errors.New("Seedance video storage limit is invalid")
+		return 0, false, errors.New("Seedance video storage limit is invalid")
 	}
 	limit := maxMB * system_setting.AssetQuotaMB
 	if limit > assetLibraryVideoMaxBytes {
 		limit = assetLibraryVideoMaxBytes
 	}
-	return limit, false, maxMB, nil
+	return limit, false, nil
 }
 
 func seedanceDeclaredMediaMatches(contentType, assetType, format string) bool {

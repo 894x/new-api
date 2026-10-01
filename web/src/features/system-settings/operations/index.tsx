@@ -29,6 +29,7 @@ import {
 const defaultOperationsSettings: OperationsSettings = {
   'asset_storage_setting.default_quota_mb': 1024,
   'asset_storage_setting.seedance_video_max_mb': 1024,
+  'asset_storage_setting.seedance_media_max_mb': 2000,
   DefaultCollapseSidebar: false,
   DemoSiteEnabled: false,
   SelfUseModeEnabled: false,

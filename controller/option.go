@@ -274,6 +274,12 @@ func UpdateOption(c *gin.Context) {
 			common.ApiErrorMsg(c, "Seedance video storage limit must be between 1 and 1000000 MB")
 			return
 		}
+	case "asset_storage_setting.seedance_media_max_mb":
+		mb, err := strconv.ParseInt(common.Interface2String(option.Value), 10, 64)
+		if err != nil || mb < 1 || mb > system_setting.MaxAssetQuotaMB {
+			common.ApiErrorMsg(c, "Seedance media storage limit must be an integer between 1 and 1000000 MB")
+			return
+		}
 	case "GitHubOAuthEnabled":
 		if option.Value == "true" && common.GitHubClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
