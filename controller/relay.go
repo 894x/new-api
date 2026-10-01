@@ -1025,7 +1025,7 @@ func presentTaskSubmission(c *gin.Context, outcome *taskSubmissionOutcome) {
 			if err == nil {
 				viewValue, valueErr := taskPluginProtocolJSONValue(view)
 				if valueErr == nil {
-					if body, callErr := pinned.Plugin.Engine.CallPath(c.Request.Context(), "native", []string{pinned.Route.Render}, requestContext.JSValue(), viewValue); callErr == nil {
+					if body, callErr := pinned.Route.CallHook(c.Request.Context(), pinned.Plugin.Engine, pinned.Route.Render, requestContext.JSValue(), viewValue); callErr == nil {
 						body = service.AddWanTaskID(body, pinned.Plugin.Meta.Key, outcome.Task)
 						diagnostics.present(outcome.Task, "native_presenter")
 						c.JSON(http.StatusOK, body)

@@ -12,20 +12,38 @@ import (
 
 func SetTaskPluginProtocolRouter(router *gin.Engine) {
 	for _, protocol := range pluginruntime.HostProtocols() {
-		for _, operation := range protocol.Operations {
-			for _, method := range operation.Methods {
-				handlers, err := taskPluginProtocolHandlers(protocol.Name, operation.Name)
-				if err != nil {
-					panic(err)
-				}
-				router.Handle(method, operation.Path, handlers...)
+		// Protocols using the existing task relay are registered by SetVideoRouter.
+		if protocol.TaskResponseFormat != "" {
+			continue
+		}
+		registerTaskPluginProtocol(router, protocol)
+	}
+}
+
+func registerTaskPluginProtocol(router *gin.Engine, protocol pluginruntime.HostProtocolDefinition) {
+	for _, operation := range protocol.Operations {
+		for _, method := range operation.Methods {
+			handlers, err := taskPluginProtocolHandlers(protocol.Name, operation.Name)
+			if err != nil {
+				panic(err)
 			}
+			router.Handle(method, operation.Path, handlers...)
 		}
 	}
 }
 
 func taskPluginProtocolHandlers(protocol, operation string) ([]gin.HandlerFunc, error) {
 	switch protocol + "." + operation {
+	case "wan_video.create":
+		return []gin.HandlerFunc{
+			middleware.RouteTag("relay"), middleware.AliVideoRequestConvert(), middleware.TokenAuth(),
+			middleware.AssetLibraryRouting(), middleware.Distribute(), controller.RelayTask,
+		}, nil
+	case "wan_video.retrieve":
+		return []gin.HandlerFunc{
+			middleware.RouteTag("relay"), middleware.AliVideoRequestConvert(), middleware.TokenAuth(),
+			middleware.AssetLibraryRouting(), middleware.Distribute(), controller.RelayTaskFetch,
+		}, nil
 	case "openai_responses.create":
 		return []gin.HandlerFunc{
 			middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenAuth(),

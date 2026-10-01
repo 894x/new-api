@@ -3,6 +3,7 @@ package jsplugin
 import (
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -15,8 +16,28 @@ import (
 )
 
 func (a *TaskAdaptor) nativeCompatibilityRoute(format, method string) (pluginruntime.Route, bool) {
-	// Compatibility URLs are gateway-owned. A plugin cannot claim another
-	// provider's protocol merely by declaring arbitrary native route hooks.
+	// Shared task protocols are declared by the plugin and their paths and
+	// required hooks are defined and validated by the host.
+	for _, claim := range a.plugin.Meta.Protocols {
+		definition, ok := pluginruntime.HostProtocol(claim.Name)
+		if !ok || definition.TaskResponseFormat == "" || definition.TaskResponseFormat != format {
+			continue
+		}
+		for _, operation := range definition.Operations {
+			if !slices.Contains(operation.Methods, method) {
+				continue
+			}
+			route := pluginruntime.Route{Protocol: claim.Name, Method: method, Path: operation.Path}
+			if operation.ModelField != "" {
+				route.Type, route.Decode, route.Render = pluginruntime.RouteTypeSubmit, "decodeRequest", "renderSubmitted"
+			} else {
+				route.Type, route.Render, route.TaskIDParam = pluginruntime.RouteTypeQuery, "render", "task_id"
+			}
+			return route, true
+		}
+	}
+	// Legacy compatibility bridges predate meta.protocols. Keep their native
+	// route lookup until those plugins declare a shared host protocol too.
 	var path string
 	switch {
 	case format == constant.TaskResponseFormatDoubaoVideo && (a.plugin.Meta.Key == "doubao" || a.plugin.Meta.Key == "seedance-sls"):
@@ -29,14 +50,10 @@ func (a *TaskAdaptor) nativeCompatibilityRoute(format, method string) (pluginrun
 		if method == http.MethodGet {
 			path = "/hailuo/v2/query/video_generation/:task_id"
 		}
-	case format == constant.TaskResponseFormatAliVideo && (a.plugin.Meta.Key == "alibaba" || a.plugin.Meta.Key == "moyu-wan3"):
-		prefix := "/ali"
-		if a.plugin.Meta.Key == "moyu-wan3" {
-			prefix = "/moyu-wan3"
-		}
-		path = prefix + "/api/v1/services/aigc/video-generation/video-synthesis"
+	case format == constant.TaskResponseFormatAliVideo && a.plugin.Meta.Key == "alibaba":
+		path = "/ali/api/v1/services/aigc/video-generation/video-synthesis"
 		if method == http.MethodGet {
-			path = prefix + "/api/v1/tasks/:task_id"
+			path = "/ali/api/v1/tasks/:task_id"
 		}
 	default:
 		return pluginruntime.Route{}, false
@@ -60,6 +77,23 @@ func (a *TaskAdaptor) prepareNativeCompatibilityRequest(c *gin.Context, info *re
 	if !supported {
 		return service.TaskErrorWrapperLocal(fmt.Errorf("unsupported native task protocol"), "invalid_api_platform", http.StatusBadRequest)
 	}
+	pinnedValue, _ := c.Get(pluginruntime.ContextKeyPinnedPlugin)
+	pinned, ok := pinnedValue.(pluginruntime.PinnedPlugin)
+	if !ok || pinned.Plugin != a.plugin {
+		return service.TaskErrorWrapperLocal(fmt.Errorf("native task plugin is not pinned"), "plugin_request_invalid", http.StatusBadRequest)
+	}
+	if route.Protocol != "" {
+		modelName, declared := pinned.Generation.CanonicalModel(info.OriginModelName)
+		if !declared {
+			modelName, _ = pinned.Generation.CanonicalModel(info.GetUpstreamModelName())
+		}
+		bindings := pinned.Generation.LookupEndpointCandidates(route.Method, route.Path, modelName)
+		if !slices.ContainsFunc(bindings, func(binding pluginruntime.ProtocolBinding) bool {
+			return binding.Plugin == a.plugin && binding.Protocol == route.Protocol
+		}) {
+			return service.TaskErrorWrapperLocal(fmt.Errorf("selected plugin does not claim the model on this task protocol"), "invalid_api_platform", http.StatusBadRequest)
+		}
+	}
 	var envelope map[string]any
 	if err := common.UnmarshalBodyReusable(c, &envelope); err != nil {
 		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
@@ -74,7 +108,13 @@ func (a *TaskAdaptor) prepareNativeCompatibilityRequest(c *gin.Context, info *re
 		Method: c.Request.Method, Path: c.Request.URL.Path,
 		Body: map[string]any{"kind": "json", "value": body}, RequestBody: body,
 	}
-	value, err := a.plugin.Engine.CallMember(c.Request.Context(), "native", route.Decode, request.JSValue())
+	decodeContext := request.JSValue()
+	if route.Protocol != "" {
+		decodeContext["protocol"], decodeContext["operation"] = route.Protocol, "create"
+		decodeContext["model"], decodeContext["stream"] = info.OriginModelName, false
+		decodeContext["upstreamModel"] = info.GetUpstreamModelName()
+	}
+	value, err := route.CallHook(c.Request.Context(), a.plugin.Engine, route.Decode, decodeContext)
 	resolved, valid := value.(map[string]any)
 	if err != nil || !valid || resolved["kind"] != "submit" || resolved["model"] != info.OriginModelName {
 		return service.TaskErrorWrapperLocal(fmt.Errorf("native task decoder rejected the request: %v", err), "plugin_request_invalid", http.StatusBadRequest)
@@ -88,11 +128,6 @@ func (a *TaskAdaptor) prepareNativeCompatibilityRequest(c *gin.Context, info *re
 	if action, ok := resolved["action"].(string); ok {
 		info.Action = action
 		c.Set("task_action", action)
-	}
-	pinnedValue, _ := c.Get(pluginruntime.ContextKeyPinnedPlugin)
-	pinned, ok := pinnedValue.(pluginruntime.PinnedPlugin)
-	if !ok || pinned.Plugin != a.plugin {
-		return service.TaskErrorWrapperLocal(fmt.Errorf("native task plugin is not pinned"), "plugin_request_invalid", http.StatusBadRequest)
 	}
 	c.Set(pluginruntime.ContextKeyPinnedRoute, pluginruntime.PinnedRoute{Generation: pinned.Generation, Plugin: a.plugin, Route: route})
 	c.Set(pluginruntime.ContextKeyRouteRequest, request)
@@ -110,7 +145,7 @@ func (a *TaskAdaptor) RenderNativeTask(c *gin.Context, format string, task *mode
 		return nil, err
 	}
 	request := pluginruntime.RouteRequestContext{Method: c.Request.Method, Path: c.Request.URL.Path, Params: map[string]string{"task_id": task.TaskID}}
-	value, err := a.plugin.Engine.CallMember(c.Request.Context(), "native", route.Render, request.JSValue(), jsonValue(view))
+	value, err := route.CallHook(c.Request.Context(), a.plugin.Engine, route.Render, request.JSValue(), jsonValue(view))
 	if err != nil {
 		return nil, err
 	}

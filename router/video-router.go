@@ -3,11 +3,17 @@ package router
 import (
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
+	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 
 	"github.com/gin-gonic/gin"
 )
 
 func SetVideoRouter(router *gin.Engine) {
+	for _, protocol := range pluginruntime.HostProtocols() {
+		if protocol.TaskResponseFormat != "" {
+			registerTaskPluginProtocol(router, protocol)
+		}
+	}
 	router.GET("/v1/seedance-media/:name", controller.SeedanceMediaContent)
 	router.HEAD("/v1/seedance-media/:name", controller.SeedanceMediaContent)
 
@@ -17,14 +23,6 @@ func SetVideoRouter(router *gin.Engine) {
 	{
 		miniMaxVideoV2Router.POST("/video_generation", controller.RelayTask)
 		miniMaxVideoV2Router.GET("/query/video_generation/:task_id", controller.RelayTaskFetch)
-	}
-
-	aliVideoRouter := router.Group("/api/v1")
-	aliVideoRouter.Use(middleware.RouteTag("relay"))
-	aliVideoRouter.Use(middleware.AliVideoRequestConvert(), middleware.TokenAuth(), middleware.AssetLibraryRouting(), middleware.Distribute())
-	{
-		aliVideoRouter.POST("/services/aigc/video-generation/video-synthesis", controller.RelayTask)
-		aliVideoRouter.GET("/tasks/:task_id", controller.RelayTaskFetch)
 	}
 
 	doubaoVideoRouter := router.Group("/api/v3/contents/generations")

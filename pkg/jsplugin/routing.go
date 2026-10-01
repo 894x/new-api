@@ -1,6 +1,7 @@
 package jsplugin
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"net/http"
@@ -23,6 +24,9 @@ const (
 )
 
 type Route struct {
+	// Protocol is set only by the host when bridging a shared task protocol
+	// through the task relay. Plugin-owned routes always call native hooks.
+	Protocol    string    `json:"-"`
 	Method      string    `json:"method"`
 	Path        string    `json:"path"`
 	Type        RouteType `json:"type"`
@@ -39,6 +43,13 @@ type Route struct {
 	// canonical top-level "model" body field before any JS hook runs; empty
 	// means unrestricted. Must be a subset of meta.models.
 	Models []string `json:"models,omitempty"`
+}
+
+func (r Route) CallHook(ctx context.Context, engine *Engine, member string, args ...any) (any, error) {
+	if r.Protocol != "" {
+		return engine.CallPath(ctx, "protocols", []string{r.Protocol, member}, args...)
+	}
+	return engine.CallMember(ctx, "native", member, args...)
 }
 
 // ProtocolClaim is one entry of meta.protocols. Models narrows the protocol's
@@ -80,11 +91,18 @@ type HostProtocolOperation struct {
 }
 
 type HostProtocolDefinition struct {
-	Name       string
-	Operations []HostProtocolOperation
+	Name string
+	// TaskResponseFormat binds a shared asynchronous task protocol to the
+	// gateway's existing task relay and its decodeRequest/renderSubmitted/render hooks.
+	TaskResponseFormat string
+	Operations         []HostProtocolOperation
 }
 
 var hostProtocols = []HostProtocolDefinition{
+	{Name: ProtocolWanVideo, TaskResponseFormat: constant.TaskResponseFormatAliVideo, Operations: []HostProtocolOperation{
+		{Name: "create", Methods: []string{http.MethodPost}, Path: "/api/v1/services/aigc/video-generation/video-synthesis", BodyKinds: []BodyKind{BodyJSON}, ModelField: "model", RequiredProtocolMembers: []string{"decodeRequest", "renderSubmitted"}},
+		{Name: "retrieve", Methods: []string{http.MethodGet}, Path: "/api/v1/tasks/:task_id", BodyKinds: []BodyKind{BodyNone}, RequiredProtocolMembers: []string{"render"}},
+	}},
 	{Name: "openai_responses", Operations: []HostProtocolOperation{
 		{Name: "create", Methods: []string{http.MethodPost}, Path: "/v1/responses", BodyKinds: []BodyKind{BodyJSON}, ModelField: "model", RequiredProtocolMembers: []string{"decodeRequest"}, Modes: []ProtocolMode{{Name: "stream", Hook: "renderEvents"}, {Name: "sync", Hook: "renderFinal"}, {Name: "background", Hook: "renderFinal"}}},
 		{Name: "retrieve", Methods: []string{http.MethodGet}, Path: "/v1/responses/:response_id", BodyKinds: []BodyKind{BodyNone}},
@@ -106,6 +124,9 @@ var hostProtocols = []HostProtocolDefinition{
 // ProtocolOpenAIImage is the host protocol that serves the OpenAI Images API
 // (`POST /v1/images/generations` and `POST /v1/images/edits`) from a plugin.
 const ProtocolOpenAIImage = "openai_image"
+
+// ProtocolWanVideo serves the official Wan video submit and task query API.
+const ProtocolWanVideo = "wan_video"
 
 func HostProtocol(name string) (HostProtocolDefinition, bool) {
 	for _, definition := range hostProtocols {

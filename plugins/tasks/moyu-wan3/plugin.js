@@ -6,14 +6,15 @@ export const meta = {
   key: "moyu-wan3",
   name: "Moyu Wan3",
   description: {
-    en: "Translate the official Wan3 video API to Moyu's asynchronous video API.",
-    zh: "将官方 Wan3 视频接口转换为魔芋异步视频接口。",
+    en: "Translate the official Wan3 video API to Moyu's asynchronous video API",
+    zh: "将官方 Wan3 视频接口转换为魔芋异步视频接口",
   },
-  version: "1.0.0",
+  version: "1.0.1",
   author: { name: "QuantumNous" },
   baseUrl: "https://www.moyu.info",
   models: ["wan3.0-video", "wan3.0-video-prime"],
   fetchMode: "per_task",
+  protocols: ["wan_video"],
   usageSchema: {
     seconds: {
       type: "number",
@@ -25,21 +26,6 @@ export const meta = {
       description: { en: "Output video resolution", zh: "输出视频分辨率" },
     },
   },
-  routes: [
-    {
-      method: "POST",
-      path: "/moyu-wan3/api/v1/services/aigc/video-generation/video-synthesis",
-      type: "submit",
-      decode: "createVideoTask",
-      render: "taskCreated",
-    },
-    {
-      method: "GET",
-      path: "/moyu-wan3/api/v1/tasks/:task_id",
-      type: "query",
-      render: "taskStatus",
-    },
-  ],
 };
 
 function own(value, key) {
@@ -279,6 +265,14 @@ export const native = {
   },
   error: function (_ctx, error) {
     return { request_id: "", code: error.code, message: error.message };
+  },
+};
+
+export const protocols = {
+  wan_video: {
+    decodeRequest: createVideoTask,
+    renderSubmitted: native.taskCreated,
+    render: native.taskStatus,
   },
 };
 

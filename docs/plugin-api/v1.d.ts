@@ -33,9 +33,11 @@ export type SubmitIntent = {kind: "submit"; model: string; action?: string; requ
 export type QueryIntent = {kind: "query"; taskIds: readonly string[]};
 export type TaskIntent = SubmitIntent | QueryIntent;
 export interface NativeRoute {method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; path: string; type: "submit" | "query" | "dynamic"; action?: string; taskIdParam?: string; decode?: string; render: string; models?: readonly string[]; retainResult?: boolean}
-export type ProtocolName = "openai_responses" | "openai_video" | "openai_image";
+export type ProtocolName = "openai_responses" | "openai_video" | "openai_image" | "wan_video";
 export type ResponsesMode = "stream" | "sync" | "background";
 export type ProtocolClaim =
+  | "wan_video"
+  | {name: "wan_video"; models?: readonly string[]}
   | "openai_video"
   | "openai_image"
   | {name: "openai_responses"; supports: readonly ResponsesMode[]; models?: readonly string[]}
@@ -68,6 +70,7 @@ export interface TaskArtifact {key: string; type: "video" | "audio" | "image" | 
 export declare const meta: Meta;
 export declare const native: Record<string, ((ctx: NativeDecodeContext) => TaskIntent) | ((ctx: NativeDecodeContext, task: TaskView | readonly TaskView[]) => unknown)> & {error?: (ctx: NativeDecodeContext, error: {code: string; message: string; httpStatus: number; retryable: boolean}) => unknown};
 export declare const protocols: {
+  wan_video?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; renderSubmitted(ctx: NativeDecodeContext, task: TaskView): unknown; render(ctx: NativeDecodeContext, task: TaskView): unknown};
   openai_responses?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; renderEvents?(ctx: unknown, task: TaskView, previousState: unknown): unknown; renderFinal?(ctx: unknown, task: TaskView): unknown};
   openai_video?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; render(ctx: unknown, task: TaskView): unknown};
   /** render returns the OpenAI ImageResponse; the host adds `created` when absent and resolves response_format b64_json. */

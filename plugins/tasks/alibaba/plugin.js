@@ -222,7 +222,7 @@ export const meta = {
     en: "Alibaba Cloud Bailian image and video generation (Wan, Qwen-Image, Z-Image)",
     zh: "阿里云百炼图片与视频生成（万相、千问图像、Z-Image）",
   },
-  version: "1.4.1",
+  version: "1.4.2",
   author: { name: "QuantumNous" },
   channelTypes: [17],
   // Literal metadata also supports the dashboard's static script preview.
@@ -330,6 +330,7 @@ export const meta = {
     { method: "GET", path: "/ali/api/v1/tasks/:task_id", type: "query", render: "taskStatus" },
   ],
   protocols: [
+    { name: "wan_video", models: Object.keys(WAN_MODELS).concat(["wan2.7-t2v-2026-04-25", "wan2.7-t2v-2026-06-12", "wan2.7-i2v-2026-04-25"]) },
     { name: "openai_responses", supports: ["stream", "sync", "background"] },
     { name: "openai_video", models: Object.keys(WAN_MODELS).concat(["wan2.7-t2v-2026-04-25", "wan2.7-t2v-2026-06-12", "wan2.7-i2v-2026-04-25"]) },
     { name: "openai_image", models: Object.keys(IMAGE_MODELS).concat(IMAGE_MODEL_SNAPSHOTS) },
@@ -1303,6 +1304,11 @@ export const native = {
 };
 
 export const protocols = {
+  wan_video: {
+    decodeRequest: native.createVideoTask,
+    renderSubmitted: native.taskCreated,
+    render: native.taskStatus,
+  },
   openai_responses: {
     decodeRequest: function (ctx) {
       if (!ctx.body || ctx.body.kind !== "json") throw new Error("JSON body required");
