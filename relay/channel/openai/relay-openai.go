@@ -34,8 +34,7 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 	}
 
 	if forceFormat && lastStreamResponse.Usage != nil {
-		clientUsage := *lastStreamResponse.Usage
-		clientUsage.FillOpenAIUsageAliases(types.RelayFormatOpenAI)
+		clientUsage := clientUsageWithAliases(*lastStreamResponse.Usage, types.RelayFormatOpenAI)
 		lastStreamResponse.Usage = &clientUsage
 	}
 	if !thinkToContent {
@@ -450,7 +449,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		}
 		if forceFormat {
 			clientResponse := simpleResponse
-			clientResponse.Usage.FillOpenAIUsageAliases(types.RelayFormatOpenAI)
+			clientResponse.Usage = clientUsageWithAliases(clientResponse.Usage, types.RelayFormatOpenAI)
 			responseBody, err = common.Marshal(clientResponse)
 			if err != nil {
 				return nil, types.NewError(err, types.ErrorCodeBadResponseBody)

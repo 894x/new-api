@@ -10,13 +10,26 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+func clientUsageWithAliases(usage dto.Usage, source types.RelayFormat) dto.Usage {
+	usage.FillOpenAIUsageAliases(source)
+	if usage.PromptTokensDetails.CachedCreationTokens == 0 && usage.PromptTokensDetails.CacheWriteTokens > 0 {
+		usage.PromptTokensDetails.CachedCreationTokens = usage.PromptTokensDetails.CacheWriteTokens
+	}
+	if usage.InputTokensDetails != nil && usage.InputTokensDetails.CachedCreationTokens == 0 && usage.InputTokensDetails.CacheWriteTokens > 0 {
+		// Detach the client details from the settlement usage before filling.
+		details := usage.InputTokensDetails.Clone()
+		details.CachedCreationTokens = details.CacheWriteTokens
+		usage.InputTokensDetails = &details
+	}
+	return usage
+}
+
 func addChatUsageAliasesToResponsesBody(body []byte, path string, usage *dto.Usage) ([]byte, error) {
 	if len(body) == 0 || usage == nil {
 		return body, nil
 	}
 
-	clientUsage := *usage
-	clientUsage.FillOpenAIUsageAliases(types.RelayFormatOpenAIResponses)
+	clientUsage := clientUsageWithAliases(*usage, types.RelayFormatOpenAIResponses)
 	var err error
 	body, err = sjson.SetBytes(body, path+".prompt_tokens", clientUsage.PromptTokens)
 	if err != nil {
@@ -42,6 +55,19 @@ func addChatUsageAliasesToResponsesBody(body []byte, path string, usage *dto.Usa
 			if err != nil {
 				return nil, err
 			}
+		}
+	}
+	// Patch only the compatibility field so provider-specific details survive.
+	for _, detailName := range []string{"input_tokens_details", "prompt_tokens_details"} {
+		detailPath := path + "." + detailName
+		details := gjson.GetBytes(body, detailPath)
+		cacheWriteTokens := details.Get("cache_write_tokens").Int()
+		if details.Get("cached_creation_tokens").Int() != 0 || cacheWriteTokens <= 0 {
+			continue
+		}
+		body, err = sjson.SetBytes(body, detailPath+".cached_creation_tokens", cacheWriteTokens)
+		if err != nil {
+			return nil, err
 		}
 	}
 	return body, nil

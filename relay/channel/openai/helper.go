@@ -202,7 +202,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		if info.ShouldIncludeUsage && !containStreamUsage {
 			clientUsage := *usage
 			if info.ChannelSetting.ForceFormat {
-				clientUsage.FillOpenAIUsageAliases(types.RelayFormatOpenAI)
+				clientUsage = clientUsageWithAliases(clientUsage, types.RelayFormatOpenAI)
 			}
 			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, clientUsage)
 			response.SetSystemFingerprint(systemFingerprint)
