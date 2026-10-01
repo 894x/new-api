@@ -7868,6 +7868,20 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Cache billing policy": "Politique de facturation du cache",
+    "Enable cache billing policy": "Activer la politique de facturation du cache",
+    "Random target minimum (%)": "Minimum de la cible aléatoire (%)",
+    "Random target maximum (%)": "Maximum de la cible aléatoire (%)",
+    "Minimum must not exceed maximum": "Le minimum ne doit pas dépasser le maximum",
+    "Today (Beijing time)": "Aujourd’hui (heure de Pékin)",
+    "Policy input tokens today": "Tokens d’entrée concernés aujourd’hui",
+    "Real cache hit rate": "Taux réel de succès du cache",
+    "Billed cache hit rate": "Taux de cache facturé",
+    "Cache reads converted to ordinary input": "Tokens de cache convertis en entrée ordinaire",
+    "Cache billing fallback": "Repli de facturation du cache",
+    "Daily statistics unavailable; cache billing uses real usage when Redis is unavailable": "Statistiques quotidiennes indisponibles ; utilisation réelle facturée si Redis est indisponible",
+    "Random daily cache ceiling; lower real hits stay unchanged. Removed cache reads are billed as ordinary input. Cache writes stay unchanged.": "Plafond de cache quotidien aléatoire ; les taux réels inférieurs restent inchangés. Les lectures retirées sont facturées comme entrée ordinaire. Les écritures restent inchangées.",
+    "Applies to text usage in Chat Completions, Messages and Responses. Multimodal cache breakdowns retain real usage.": "S’applique aux tokens texte de Chat Completions, Messages et Responses. Les détails de cache multimodaux conservent l’utilisation réelle."
   }
 }

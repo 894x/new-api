@@ -7868,6 +7868,20 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Cache billing policy": "Политика оплаты кеша",
+    "Enable cache billing policy": "Включить политику оплаты кеша",
+    "Random target minimum (%)": "Минимум случайной цели (%)",
+    "Random target maximum (%)": "Максимум случайной цели (%)",
+    "Minimum must not exceed maximum": "Минимум не должен превышать максимум",
+    "Today (Beijing time)": "Сегодня (пекинское время)",
+    "Policy input tokens today": "Входные токены по политике за сегодня",
+    "Real cache hit rate": "Реальная доля попаданий в кеш",
+    "Billed cache hit rate": "Оплачиваемая доля попаданий в кеш",
+    "Cache reads converted to ordinary input": "Токены кеша, переведённые в обычный ввод",
+    "Cache billing fallback": "Резервный режим оплаты кеша",
+    "Daily statistics unavailable; cache billing uses real usage when Redis is unavailable": "Дневная статистика недоступна; при недоступности Redis оплата по реальному использованию",
+    "Random daily cache ceiling; lower real hits stay unchanged. Removed cache reads are billed as ordinary input. Cache writes stay unchanged.": "Случайный дневной потолок кеша; меньшая реальная доля сохраняется. Уменьшение чтений оплачивается как обычный ввод. Записи в кеш не меняются.",
+    "Applies to text usage in Chat Completions, Messages and Responses. Multimodal cache breakdowns retain real usage.": "Применяется к текстовым токенам Chat Completions, Messages и Responses. Мультимодальные данные кеша сохраняют реальное использование."
   }
 }

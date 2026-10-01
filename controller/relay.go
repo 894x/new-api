@@ -201,6 +201,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
+	service.BeginUserCacheHitPolicy(c, relayInfo)
+	defer service.FinishUserCacheHitPolicy(c)
 	publicModelName := relayInfo.OriginModelName
 	selectionRequestBody, _ := common.GetContextKeyType[[]byte](c, constant.ContextKeySelectionRequestBody)
 	selectionRequestBodySize, selectionRequestBodySizeRecorded := common.GetContextKeyType[int64](c, constant.ContextKeySelectionBodySize)

@@ -229,3 +229,20 @@ export interface ChannelPoolPreview {
 // ============================================================================
 
 export type UsersDialogType = 'create' | 'update' | 'delete' | 'group-config'
+export interface UserCacheHitPolicy {
+  enabled: boolean
+  min_bps: number
+  max_bps: number
+}
+
+export interface UserCacheHitPolicyConfig {
+  policies: Record<string, UserCacheHitPolicy>
+  revision: string
+  daily: {
+    day: string
+    input_tokens: number
+    real_cache_tokens: number
+    bill_cache_tokens: number
+  }
+  statistics_error: string
+}

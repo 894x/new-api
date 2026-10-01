@@ -7868,6 +7868,20 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Cache billing policy": "Chính sách tính phí bộ nhớ đệm",
+    "Enable cache billing policy": "Bật chính sách tính phí bộ nhớ đệm",
+    "Random target minimum (%)": "Cận dưới mục tiêu ngẫu nhiên (%)",
+    "Random target maximum (%)": "Cận trên mục tiêu ngẫu nhiên (%)",
+    "Minimum must not exceed maximum": "Cận dưới không được vượt cận trên",
+    "Today (Beijing time)": "Hôm nay (giờ Bắc Kinh)",
+    "Policy input tokens today": "Token đầu vào áp dụng chính sách hôm nay",
+    "Real cache hit rate": "Tỷ lệ trúng bộ nhớ đệm thực tế",
+    "Billed cache hit rate": "Tỷ lệ trúng bộ nhớ đệm tính phí",
+    "Cache reads converted to ordinary input": "Token bộ nhớ đệm chuyển thành đầu vào thông thường",
+    "Cache billing fallback": "Chế độ dự phòng tính phí bộ nhớ đệm",
+    "Daily statistics unavailable; cache billing uses real usage when Redis is unavailable": "Không có thống kê ngày; khi Redis không khả dụng, tính phí theo mức sử dụng thực tế",
+    "Random daily cache ceiling; lower real hits stay unchanged. Removed cache reads are billed as ordinary input. Cache writes stay unchanged.": "Giới hạn trúng bộ nhớ đệm ngẫu nhiên theo ngày; giữ nguyên tỷ lệ thực tế thấp hơn cận dưới. Phần đọc giảm được tính phí như đầu vào thông thường. Giữ nguyên phần ghi bộ nhớ đệm.",
+    "Applies to text usage in Chat Completions, Messages and Responses. Multimodal cache breakdowns retain real usage.": "Áp dụng cho token văn bản của Chat Completions, Messages và Responses. Giữ nguyên mức sử dụng thực tế khi có chi tiết bộ nhớ đệm đa phương thức."
   }
 }

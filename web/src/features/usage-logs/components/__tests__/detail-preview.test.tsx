@@ -127,6 +127,36 @@ function renderPreview(other: LogOtherData, isAdmin = true) {
   return screen.getByRole('button', { name: /./ })
 }
 
+test.each([true, false])(
+  'real cache billing details are visible only in admin scope (%s)',
+  (isAdmin) => {
+    const trigger = renderPreview(
+      {
+        model_price: 0.25,
+        admin_info: {
+          cache_hit_policy: {
+            day: '2026-10-01',
+            request_input_tokens: 1000,
+            real_cached_tokens: 900,
+            billed_cached_tokens: 500,
+            gap_tokens: 400,
+          },
+        },
+      },
+      isAdmin
+    )
+    if (isAdmin) {
+      expect(trigger).toHaveAccessibleName(/Real cache hit rate: 90%/)
+      expect(trigger).toHaveAccessibleName(/Billed cache hit rate: 50%/)
+      expect(trigger).toHaveAccessibleName(
+        /Cache reads converted to ordinary input: 400/
+      )
+    } else {
+      expect(trigger).not.toHaveAccessibleName(/Real cache hit rate/)
+    }
+  }
+)
+
 test('shows client_gone as the stream status and preserves the committed HTTP status', async () => {
   const trigger = renderPreview({
     model_price: 0.25,

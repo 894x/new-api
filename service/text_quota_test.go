@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,15 +22,141 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/go-redis/redis/v8"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+func setupCacheHitPolicyTestRedis(t *testing.T) {
+	t.Helper()
+	previousRDB, previousEnabled := common.RDB, common.RedisEnabled
+	address := os.Getenv("TEST_CACHE_POLICY_REDIS_ADDR")
+	if address == "" {
+		address = miniredis.RunT(t).Addr()
+	}
+	common.RDB = redis.NewClient(&redis.Options{Addr: address})
+	common.RedisEnabled = true
+	require.NoError(t, common.RDB.Ping(context.Background()).Err())
+	t.Cleanup(func() {
+		require.NoError(t, common.RDB.Close())
+		common.RDB, common.RedisEnabled = previousRDB, previousEnabled
+	})
+}
+
+func TestUserCacheHitPolicyDailyLedgerAndBilling(t *testing.T) {
+	setupCacheHitPolicyTestRedis(t)
+	modelName := "daily-test-" + common.NewRequestId()
+	for _, tc := range []struct{ real, billed int }{{900, 500}, {100, 100}, {900, 900}} {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Set(cacheHitPolicyContextKey, &cacheHitPolicyState{userID: 1, model: modelName, request: common.NewRequestId(), day: time.Now().In(cacheHitPolicyDayZone).Format("2006-01-02"), policy: model.UserCacheHitPolicy{Enabled: true, MinBPS: 5000, MaxBPS: 5000}})
+		usage := &dto.Usage{PromptTokens: 1000, CompletionTokens: 10, TotalTokens: 1010, InputTokens: 1000, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: tc.real}}
+		adjusted := applyUserCacheHitBilling(ctx, nil, usage)
+		assert.Equal(t, tc.billed, adjusted.PromptTokensDetails.CachedTokens)
+		assert.Equal(t, tc.real, usage.PromptTokensDetails.CachedTokens)
+		assert.Equal(t, 1000, adjusted.PromptTokens)
+		assert.Equal(t, adjusted, applyUserCacheHitBilling(ctx, nil, usage), "billing retries reuse the decision")
+		tokens := BuildTieredTokenParams(adjusted, false, map[string]bool{"cr": true})
+		assert.Equal(t, float64(1000-tc.billed), tokens.P)
+		assert.Equal(t, float64(1000), tokens.Len)
+		markUserCacheHitPolicySettled(ctx)
+		FinishUserCacheHitPolicy(ctx)
+	}
+	daily, err := GetUserCacheHitDailyUsage(1, modelName)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3000), daily.InputTokens)
+	assert.Equal(t, int64(1900), daily.RealCacheTokens)
+	assert.Equal(t, int64(1500), daily.BillCacheTokens)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set(cacheHitPolicyContextKey, &cacheHitPolicyState{userID: 1, model: "fallback", request: common.NewRequestId(), day: daily.Day, policy: model.UserCacheHitPolicy{Enabled: true, MinBPS: 5000, MaxBPS: 5000}})
+	common.RedisEnabled = false
+	usage := &dto.Usage{PromptTokens: 1000, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 900}}
+	assert.Same(t, usage, applyUserCacheHitBilling(ctx, nil, usage))
+	other := model.NewLogOther()
+	appendUserCacheHitPolicyLog(ctx, nil, other, usage)
+	encoded, err := common.Marshal(other)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), "redis_unavailable")
+}
+
+func TestUserCacheHitPolicyLegacyAnthropicAndOpenRouterInputSemantics(t *testing.T) {
+	setupCacheHitPolicyTestRedis(t)
+	for _, tc := range []struct {
+		name       string
+		info       *relaycommon.RelayInfo
+		prompt     int
+		semantic   string
+		wantPrompt int
+	}{
+		{"legacy Anthropic", &relaycommon.RelayInfo{FinalRequestRelayFormat: types.RelayFormatClaude}, 50, "", 450},
+		{"OpenRouter inclusive", &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenRouter}}, 1000, "anthropic", 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Set(cacheHitPolicyContextKey, &cacheHitPolicyState{userID: 1, model: common.NewRequestId(), request: common.NewRequestId(), day: time.Now().In(cacheHitPolicyDayZone).Format("2006-01-02"), policy: model.UserCacheHitPolicy{MinBPS: 5000, MaxBPS: 5000}})
+			usage := &dto.Usage{PromptTokens: tc.prompt, UsageSemantic: tc.semantic, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 900, CachedCreationTokens: 50}, ClaudeCacheCreation5mTokens: 50}
+			adjusted := applyUserCacheHitBilling(ctx, tc.info, usage)
+			assert.Equal(t, 500, adjusted.PromptTokensDetails.CachedTokens)
+			assert.Equal(t, tc.wantPrompt, adjusted.PromptTokens)
+			assert.Equal(t, 50, adjusted.PromptTokensDetails.CacheCreationTokensTotal())
+			assert.Equal(t, tc.prompt, usage.PromptTokens)
+			_, exclusive := cacheHitPolicyInputTokens(tc.info, usage)
+			tokens := BuildTieredTokenParams(adjusted, exclusive, map[string]bool{"cr": true, "cc": true})
+			assert.Equal(t, float64(450), tokens.P)
+			assert.Equal(t, float64(1000), tokens.Len)
+		})
+	}
+}
+
+func TestUserCacheHitPolicyConcurrentReservationsAndRevisedUsage(t *testing.T) {
+	setupCacheHitPolicyTestRedis(t)
+	day := time.Now().In(cacheHitPolicyDayZone).Format("2006-01-02")
+	modelName := "concurrent-" + common.NewRequestId()
+	requestID := common.NewRequestId()
+	states := []*cacheHitPolicyState{
+		{userID: 1, model: modelName, request: requestID, day: day, policy: model.UserCacheHitPolicy{MinBPS: 5000, MaxBPS: 5000}},
+		{userID: 1, model: modelName, request: requestID, day: day, policy: model.UserCacheHitPolicy{MinBPS: 5000, MaxBPS: 5000}},
+		{userID: 1, model: modelName, request: common.NewRequestId(), day: day, policy: model.UserCacheHitPolicy{MinBPS: 5000, MaxBPS: 5000}},
+	}
+	results := make(chan *CacheHitPolicyDecision, len(states))
+	var group sync.WaitGroup
+	for _, state := range states {
+		group.Go(func() { results <- state.allocate(1000, 900) })
+	}
+	group.Wait()
+	close(results)
+	for result := range results {
+		require.NotNil(t, result)
+		assert.Equal(t, 500, result.BilledCachedTokens)
+	}
+	daily, err := GetUserCacheHitDailyUsage(1, modelName)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2000), daily.InputTokens, "a repeated request ID advances the shared cursor once")
+	assert.Equal(t, int64(1000), daily.BillCacheTokens)
+	updated := states[0].allocate(2000, 1800)
+	require.NotNil(t, updated)
+	assert.Equal(t, 1000, updated.BilledCachedTokens)
+	daily, err = GetUserCacheHitDailyUsage(1, modelName)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3000), daily.InputTokens, "revised usage replaces the old contribution")
+	assert.Equal(t, int64(2700), daily.RealCacheTokens)
+	assert.Equal(t, int64(1500), daily.BillCacheTokens)
+
+	yesterday := time.Now().In(cacheHitPolicyDayZone).AddDate(0, 0, -1).Format("2006-01-02")
+	previousDay := &cacheHitPolicyState{userID: 1, model: modelName, request: common.NewRequestId(), day: yesterday, policy: model.UserCacheHitPolicy{MinBPS: 5000, MaxBPS: 5000}}
+	require.NotNil(t, previousDay.allocate(1000, 900))
+	today, err := GetUserCacheHitDailyUsage(1, modelName)
+	require.NoError(t, err)
+	assert.Equal(t, daily, today, "Beijing days have separate cursors")
+}
 
 func TestPerformanceTokenUsagePrefersNormalizedTotalsAndCacheSignals(t *testing.T) {
 	usage := &dto.Usage{
@@ -140,6 +268,7 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		want                                      int
 		unit                                      billingexpr.BillingUnit
 		requestedImages, actualImages             int
+		cachePolicy                               bool
 	}{
 		{name: "missing usage charges once", expression: flat, want: 5000, unit: billingexpr.BillingUnitRequest},
 		{name: "zero usage charges once", expression: flat, usage: &dto.Usage{}, want: 5000, unit: billingexpr.BillingUnitRequest},
@@ -151,6 +280,7 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		{name: "missing usage uses estimated token fallback", expression: mixed, estimate: 50000, want: 50000, unit: billingexpr.BillingUnitToken},
 		{name: "evaluation error retains fixed reservation metadata", expression: `p == 50 ? tier("error", param("missing") * p + img_cr * 2) : tier("request", fixed(0.01))`, estimate: 100, usage: &dto.Usage{PromptTokens: 50, TotalTokens: 50}, want: 5000, unit: billingexpr.BillingUnitRequest},
 		{name: "explicit zero remains free", expression: `tier("free", fixed(0))`, usage: &dto.Usage{PromptTokens: 100, TotalTokens: 100}, unit: billingexpr.BillingUnitRequest},
+		{name: "cache policy moves reads to ordinary input and retains 1h writes", expression: `tier("tokens", p * 2 + cr * 0.2 + cc * 2 + cc1h * 4 + c * 6)`, estimate: 1000, cachePolicy: true, usage: &dto.Usage{UsageSemantic: dto.BillingUsageSemanticAnthropic, PromptTokens: 50, InputTokens: 1000, CompletionTokens: 10, TotalTokens: 60, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 900, CachedCreationTokens: 50}, ClaudeCacheCreation5mTokens: 25, ClaudeCacheCreation1hTokens: 25}, want: 605, unit: billingexpr.BillingUnitToken},
 		{name: "multipliers and separate tool surcharge", expression: flat + ` * (param("fast") == true ? 2 : 1)`, groupRatio: 1.5, tool: true, want: 18000, unit: billingexpr.BillingUnitRequest},
 		{name: "failed request refunds exactly once", expression: flat, refund: true},
 		{name: "insufficient wallet never reserves tokens", expression: flat, insufficient: true},
@@ -202,6 +332,9 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 			snapshot.EstimatedImageCount = trace.ImageCount
 			info := &relaycommon.RelayInfo{UserId: user.Id, TokenId: token.Id, TokenKey: token.Key, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id}, OriginModelName: "fixed-test", UsingGroup: "default", UserGroup: "default", UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, ForcePreConsume: true, StartTime: time.Now(), IsStream: tc.stream, RelayFormat: types.RelayFormatOpenAI, PriceData: hosttypes.PriceData{GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: group}}, TieredBillingSnapshot: snapshot, BillingRequestInput: request}
 			info.SetEstimatePromptTokens(tc.estimate)
+			if tc.cachePolicy {
+				info.OriginModelName += "-" + common.NewRequestId()
+			}
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 			if tc.expression == imageExpression {
@@ -259,7 +392,23 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 					} else if tc.audio {
 						PostAudioConsumeQuota(ctx, info, tc.usage, "")
 					} else {
+						if tc.cachePolicy {
+							setupCacheHitPolicyTestRedis(t)
+							ctx.Set(cacheHitPolicyContextKey, &cacheHitPolicyState{userID: user.Id, model: info.OriginModelName, request: common.NewRequestId(), day: time.Now().In(cacheHitPolicyDayZone).Format("2006-01-02"), policy: model.UserCacheHitPolicy{Enabled: true, MinBPS: 5000, MaxBPS: 5000}})
+							body := TransformUserCacheHitResponse(ctx, []byte(`{"usage":{"input_tokens":50,"cache_read_input_tokens":900,"cache_creation_input_tokens":50}}`))
+							assert.Equal(t, int64(500), gjson.GetBytes(body, "usage.cache_read_input_tokens").Int())
+							assert.Equal(t, int64(450), gjson.GetBytes(body, "usage.input_tokens").Int())
+							assert.Equal(t, int64(50), gjson.GetBytes(body, "usage.cache_creation_input_tokens").Int())
+						}
 						PostTextConsumeQuota(ctx, info, tc.usage, nil)
+						if tc.cachePolicy {
+							assert.Equal(t, 900, tc.usage.PromptTokensDetails.CachedTokens, "upstream facts remain real")
+							FinishUserCacheHitPolicy(ctx)
+							day, err := GetUserCacheHitDailyUsage(user.Id, info.OriginModelName)
+							require.NoError(t, err)
+							assert.Equal(t, int64(500), day.BillCacheTokens)
+							common.RedisEnabled = false
+						}
 					}
 					require.NoError(t, info.Billing.Settle(tc.want), "a repeated settlement must not charge again")
 					var log model.Log
@@ -270,6 +419,12 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 					var other map[string]any
 					require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
 					assert.Equal(t, string(tc.unit), other["billing_unit"])
+					if tc.cachePolicy {
+						assert.Equal(t, float64(500), other["cache_tokens"])
+						assert.Equal(t, float64(25), other["cache_creation_tokens_5m"])
+						assert.Equal(t, float64(25), other["cache_creation_tokens_1h"])
+						assert.Equal(t, float64(900), other["admin_info"].(map[string]any)["cache_hit_policy"].(map[string]any)["real_cached_tokens"])
+					}
 					if tc.requestedImages > 0 {
 						count := tc.actualImages
 						if count == 0 {

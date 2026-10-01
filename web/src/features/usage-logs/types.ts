@@ -129,6 +129,15 @@ export interface LogOtherData {
   /** HTTP status committed to the downstream, independent of the relay error. */
   client_status_code?: number
   admin_info?: {
+    cache_hit_policy?: {
+      day: string
+      request_input_tokens?: number
+      real_cached_tokens?: number
+      billed_cached_tokens?: number
+      gap_tokens?: number
+      target_bps?: number
+      fallback_reason?: string
+    }
     request_policy?: PolicyEvent[]
     is_multi_key?: boolean
     multi_key_index?: number

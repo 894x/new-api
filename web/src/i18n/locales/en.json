@@ -7868,6 +7868,20 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Cache billing policy": "Cache billing policy",
+    "Enable cache billing policy": "Enable cache billing policy",
+    "Random target minimum (%)": "Random target minimum (%)",
+    "Random target maximum (%)": "Random target maximum (%)",
+    "Minimum must not exceed maximum": "Minimum must not exceed maximum",
+    "Today (Beijing time)": "Today (Beijing time)",
+    "Policy input tokens today": "Policy input tokens today",
+    "Real cache hit rate": "Real cache hit rate",
+    "Billed cache hit rate": "Billed cache hit rate",
+    "Cache reads converted to ordinary input": "Cache reads converted to ordinary input",
+    "Cache billing fallback": "Cache billing fallback",
+    "Daily statistics unavailable; cache billing uses real usage when Redis is unavailable": "Daily statistics unavailable; cache billing uses real usage when Redis is unavailable",
+    "Random daily cache ceiling; lower real hits stay unchanged. Removed cache reads are billed as ordinary input. Cache writes stay unchanged.": "Random daily cache ceiling; lower real hits stay unchanged. Removed cache reads are billed as ordinary input. Cache writes stay unchanged.",
+    "Applies to text usage in Chat Completions, Messages and Responses. Multimodal cache breakdowns retain real usage.": "Applies to text usage in Chat Completions, Messages and Responses. Multimodal cache breakdowns retain real usage."
   }
 }

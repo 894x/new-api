@@ -7868,6 +7868,20 @@
     "Zhipu": "智譜",
     "Zhipu GLM": "智譜GLM",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Cache billing policy": "快取計費策略",
+    "Enable cache billing policy": "啟用快取計費策略",
+    "Random target minimum (%)": "隨機目標起點（%）",
+    "Random target maximum (%)": "隨機目標上限（%）",
+    "Minimum must not exceed maximum": "起點不能超過上限",
+    "Today (Beijing time)": "今日（北京時間）",
+    "Policy input tokens today": "今日策略涵蓋的輸入 Token",
+    "Real cache hit rate": "真實快取命中率",
+    "Billed cache hit rate": "計費快取命中率",
+    "Cache reads converted to ordinary input": "轉為一般輸入的快取 Token",
+    "Cache billing fallback": "快取計費策略降級",
+    "Daily statistics unavailable; cache billing uses real usage when Redis is unavailable": "日統計暫不可用；Redis 無法使用時依真實用量計費",
+    "Random daily cache ceiling; lower real hits stay unchanged. Removed cache reads are billed as ordinary input. Cache writes stay unchanged.": "按日累計，隨機選取命中率上限；真實命中率低於範圍起點時保留真實值。減少的快取讀取依一般輸入計費，快取寫入維持原值。",
+    "Applies to text usage in Chat Completions, Messages and Responses. Multimodal cache breakdowns retain real usage.": "適用於 Chat Completions、Messages 與 Responses 的文字用量；含多模態快取明細時保留真實用量。"
   }
 }

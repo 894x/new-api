@@ -47,9 +47,14 @@ import {
 import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
 import { taskUsageUnitLabel } from '@/features/pricing/lib/task-price-display'
 import type { BillingUsageSchema } from '@/features/pricing/types'
+import { toIntlLocale } from '@/i18n/languages'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatTimestampToDate,
+  formatNumber,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
@@ -125,6 +130,23 @@ function buildDetailSegments(
   // defense in depth so the marker never leaks if that changes.
   if (isAdmin && other?.admin_info?.quota_saturation) {
     adminSegments.push({ text: t('Quota clamped'), danger: true })
+  }
+  const cachePolicy = other?.admin_info?.cache_hit_policy
+  if (isAdmin && cachePolicy) {
+    const locale = toIntlLocale(language)
+    const input = cachePolicy.request_input_tokens ?? 0
+    if (input > 0) {
+      adminSegments.push({
+        text: `${t('Real cache hit rate')}: ${formatNumber((100 * (cachePolicy.real_cached_tokens ?? 0)) / input, locale)}% · ${t('Billed cache hit rate')}: ${formatNumber((100 * (cachePolicy.billed_cached_tokens ?? 0)) / input, locale)}% · ${t('Cache reads converted to ordinary input')}: ${formatNumber(cachePolicy.gap_tokens ?? 0, locale)}`,
+        muted: true,
+      })
+    }
+    if (cachePolicy.fallback_reason) {
+      adminSegments.push({
+        text: `${t('Cache billing fallback')}: ${cachePolicy.fallback_reason}`,
+        danger: true,
+      })
+    }
   }
   return [...adminSegments, ...segments]
 }

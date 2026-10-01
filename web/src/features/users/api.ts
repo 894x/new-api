@@ -35,7 +35,28 @@ import type {
   ApiResponse,
   UserChannelRoutingConfig,
   UserChannelRoutingPatch,
+  UserCacheHitPolicy,
+  UserCacheHitPolicyConfig,
 } from './types'
+
+export async function getUserCacheHitPolicy(id: number, model = '') {
+  const response = await api.get<ApiResponse<UserCacheHitPolicyConfig>>(
+    `/api/user/${id}/cache-hit-policy`,
+    { params: { model } }
+  )
+  return requireServerSuccess(response.data)
+}
+
+export async function putUserCacheHitPolicy(
+  id: number,
+  payload: UserCacheHitPolicy & { model: string; revision: string }
+) {
+  const response = await api.put<ApiResponse<null>>(
+    `/api/user/${id}/cache-hit-policy`,
+    payload
+  )
+  return requireServerSuccess(response.data)
+}
 
 export async function getUserChannelRouting(
   id: number,

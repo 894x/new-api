@@ -62,6 +62,7 @@ import {
 import { getUserActionMessage } from '../lib'
 import type { User, ManageUserAction } from '../types'
 import { UserBindingDialog } from './dialogs/user-binding-dialog'
+import { UserCacheHitPolicyDialog } from './user-cache-hit-policy-dialog'
 import { useUsers } from './users-provider'
 
 interface DataTableRowActionsProps {
@@ -76,6 +77,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
   const [subscriptionsDialogOpen, setSubscriptionsDialogOpen] = useState(false)
+  const [cachePolicyOpen, setCachePolicyOpen] = useState(false)
   const currentUser = useAuthStore((state) => state.auth.user)
 
   const handleEdit = () => {
@@ -241,6 +243,12 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
 
         <DropdownMenuSeparator />
 
+        {currentUser?.role === ROLE.SUPER_ADMIN && (
+          <DropdownMenuItem onClick={() => setCachePolicyOpen(true)}>
+            {t('Cache billing policy')}
+          </DropdownMenuItem>
+        )}
+
         <DropdownMenuItem
           onSelect={(event) => {
             event.preventDefault()
@@ -318,6 +326,14 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         user={{ id: user.id, username: user.username }}
         onSuccess={triggerRefresh}
       />
+      {cachePolicyOpen && (
+        <UserCacheHitPolicyDialog
+          userId={user.id}
+          username={user.username}
+          open={cachePolicyOpen}
+          onOpenChange={setCachePolicyOpen}
+        />
+      )}
     </div>
   )
 }

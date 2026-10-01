@@ -7868,6 +7868,20 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Cache billing policy": "キャッシュ課金ポリシー",
+    "Enable cache billing policy": "キャッシュ課金ポリシーを有効化",
+    "Random target minimum (%)": "ランダム目標の下限 (%)",
+    "Random target maximum (%)": "ランダム目標の上限 (%)",
+    "Minimum must not exceed maximum": "下限は上限以下にしてください",
+    "Today (Beijing time)": "今日（北京時間）",
+    "Policy input tokens today": "本日のポリシー対象入力トークン",
+    "Real cache hit rate": "実際のキャッシュヒット率",
+    "Billed cache hit rate": "課金上のキャッシュヒット率",
+    "Cache reads converted to ordinary input": "通常入力に変更したキャッシュトークン",
+    "Cache billing fallback": "キャッシュ課金のフォールバック",
+    "Daily statistics unavailable; cache billing uses real usage when Redis is unavailable": "日次統計を取得できません。Redis が利用できない場合は実際の使用量で課金します",
+    "Random daily cache ceiling; lower real hits stay unchanged. Removed cache reads are billed as ordinary input. Cache writes stay unchanged.": "日次累計にランダムなヒット率上限を適用します。実際の率が範囲の下限より低い場合は維持します。減らしたキャッシュ読み取りは通常入力として課金し、書き込みは維持します。",
+    "Applies to text usage in Chat Completions, Messages and Responses. Multimodal cache breakdowns retain real usage.": "Chat Completions、Messages、Responses のテキスト使用量が対象です。マルチモーダルのキャッシュ内訳は実際の使用量を維持します。"
   }
 }

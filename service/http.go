@@ -104,6 +104,7 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 		logger.LogError(c, fmt.Sprintf("failed to normalize response id: %s", err.Error()))
 		return
 	}
+	normalizedData = TransformUserCacheHitResponse(c, normalizedData)
 	bodyChanged := !bytes.Equal(data, normalizedData)
 	data = normalizedData
 

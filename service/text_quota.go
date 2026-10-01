@@ -417,15 +417,29 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
+	realBillingUsage := billingUsage
 	if usage == nil {
 		extraContent = append(extraContent, "上游无计费信息")
 	}
 	if originUsage != nil {
 		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, billingUsage, relayInfo.GetFinalRequestRelayFormat())
 	}
+	billingUsage = applyUserCacheHitBilling(ctx, relayInfo, billingUsage)
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
+	tieredClaudeUsage := summary.IsClaudeUsageSemantic
+	// Cache billing policy changes discounts, not the request's limiter usage.
+	tpmPromptTokens, tpmCompletionTokens := summary.PromptTokens, summary.CompletionTokens
+	if realBillingUsage != nil && billingUsage != realBillingUsage {
+		_, exclusive := cacheHitPolicyInputTokens(relayInfo, realBillingUsage)
+		tieredClaudeUsage = exclusive
+		if exclusive {
+			tpmPromptTokens -= billingUsage.PromptTokens - realBillingUsage.PromptTokens
+		} else if summary.IsClaudeUsageSemantic && relayInfo.ChannelMeta != nil && relayInfo.ChannelType == constant.ChannelTypeOpenRouter {
+			tpmPromptTokens -= realBillingUsage.PromptTokensDetails.CachedTokens - billingUsage.PromptTokensDetails.CachedTokens
+		}
+	}
 	recordAttemptVisibleCompletionTokens(relayInfo)
 
 	var tieredResult *billingexpr.TieredResult
@@ -443,7 +457,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 			tieredUsedVars = billingexpr.UsedVarsByHash(snap.ExprString, snap.ExprHash)
 		}
-		tieredTokens = BuildTieredTokenParams(billingUsage, summary.IsClaudeUsageSemantic, tieredUsedVars)
+		tieredTokens = BuildTieredTokenParams(billingUsage, tieredClaudeUsage, tieredUsedVars)
 		tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, tieredTokens)
 		if tieredOk {
 			tieredBillingApplied = true
@@ -513,11 +527,12 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		return
 	}
 	summary.Quota = groupDiscountDecision.ChargedQuota
+	markUserCacheHitPolicySettled(ctx)
 	if groupDiscountDecision.Reused {
-		if err := SettleModelRequestTPM(ctx, summary.PromptTokens, summary.CompletionTokens); err != nil {
+		if err := SettleModelRequestTPM(ctx, tpmPromptTokens, tpmCompletionTokens); err != nil {
 			logger.LogError(ctx, "error settling model request TPM: "+err.Error())
 		}
-		captureRelayPerformanceUsage(relayInfo, billingUsage)
+		captureRelayPerformanceUsage(relayInfo, realBillingUsage)
 		return
 	}
 	if summary.hasBillableUsage() && !groupDiscountDecision.Applied {
@@ -550,6 +565,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
+	appendUserCacheHitPolicyLog(ctx, relayInfo, other, realBillingUsage)
 	if adminRejectReason != "" {
 		other.SetAdmin("reject_reason", adminRejectReason)
 	}
@@ -597,7 +613,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	InjectGroupModelDiscountInfo(other, groupDiscountDecision)
 
 	attachQuotaSaturation(ctx, relayInfo, other)
-	if err := SettleModelRequestTPM(ctx, summary.PromptTokens, summary.CompletionTokens); err != nil {
+	if err := SettleModelRequestTPM(ctx, tpmPromptTokens, tpmCompletionTokens); err != nil {
 		logger.LogError(ctx, "error settling model request TPM: "+err.Error())
 	}
 
@@ -615,7 +631,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
-	captureRelayPerformanceUsage(relayInfo, billingUsage)
+	captureRelayPerformanceUsage(relayInfo, realBillingUsage)
 }
 
 // recordAttemptVisibleCompletionTokens keeps the TPOT denominator in the same

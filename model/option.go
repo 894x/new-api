@@ -311,6 +311,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if strings.HasPrefix(key, UserCacheHitPolicyOptionPrefix) {
+		return fmt.Errorf("user cache hit policies must be updated through the user policy endpoint")
+	}
 	if key == setting.GroupModelChannelGroupsOptionKey {
 		_, err := setting.ParseGroupModelChannelGroups(value)
 		return err
