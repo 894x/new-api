@@ -1,19 +1,82 @@
 package jsplugin
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/plugins"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWanVideoCompatibilitySupportsMoyu(t *testing.T) {
+	source, err := plugins.Source("moyu-wan3")
+	require.NoError(t, err)
+	registry := pluginruntime.NewRegistry()
+	plugin, err := registry.RegisterFactory(source, pluginruntime.Options{Key: "moyu-wan3"})
+	require.NoError(t, err)
+	adaptor := New(plugin)
+	require.True(t, adaptor.SupportsNativeTaskFormat(constant.TaskResponseFormatAliVideo))
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "wan3.0-video",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl: "https://www.moyu.info", ApiKey: "test-key",
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+	}
+	adaptor.Init(info)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/services/aigc/video-generation/video-synthesis", strings.NewReader(`{
+		"model":"wan3.0-video","prompt":"a tracking shot",
+		"metadata":{"model":"wan3.0-video","input":{"prompt":"a tracking shot"},
+		"parameters":{"resolution":"720P","ratio":"16:9","duration":5,"seed":0,"watermark":false}}
+	}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(ctx, constant.ContextKeyTaskResponseFormat, constant.TaskResponseFormatAliVideo)
+	ctx.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: registry.Generation(), Plugin: plugin})
+	require.Nil(t, adaptor.ValidateRequestAndSetAction(ctx, info))
+	requestURL, err := adaptor.BuildRequestURL(info)
+	require.NoError(t, err)
+	assert.Equal(t, "https://www.moyu.info/v1/video/generations", requestURL)
+	reader, err := adaptor.BuildRequestBody(ctx, info)
+	require.NoError(t, err)
+	body, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"model":"wan3.0-video","prompt":"a tracking shot","resolution":"720P","ratio":"16:9","duration":5,"seed":0,"watermark":false}`, string(body))
+
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/tasks/public-task", nil)
+	rendered, err := adaptor.RenderNativeTask(ctx, constant.TaskResponseFormatAliVideo, &model.Task{
+		TaskID: "public-task", Platform: "moyu-wan3", Status: model.TaskStatusSuccess,
+		PrivateData: model.TaskPrivateData{UpstreamTaskID: "provider-task"},
+		Data:        []byte(`{"code":"success","data":{"task_id":"provider-task","status":"SUCCESS","result_url":"https://cdn.example/video.mp4"}}`),
+	})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"request_id":"","output":{"task_id":"public-task","task_status":"SUCCEEDED","video_url":"https://cdn.example/video.mp4"}}`, string(rendered))
+
+	ctx, _ = gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/services/aigc/video-generation/video-synthesis", strings.NewReader(`{
+		"model":"wan3.0-video","metadata":{"model":"wan3.0-video","input":{"prompt":"x"},"parameters":{"duration":31}}
+	}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(ctx, constant.ContextKeyTaskResponseFormat, constant.TaskResponseFormatAliVideo)
+	ctx.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: registry.Generation(), Plugin: plugin})
+	taskErr := New(plugin).ValidateRequestAndSetAction(ctx, info)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+}
 
 func TestOpenAIVideoCompatibilityUsesHostArtifactAccess(t *testing.T) {
 	previousSecret, previousAddress := common.CryptoSecret, system_setting.TaskPublicAddress

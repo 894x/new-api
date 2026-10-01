@@ -29,10 +29,14 @@ func (a *TaskAdaptor) nativeCompatibilityRoute(format, method string) (pluginrun
 		if method == http.MethodGet {
 			path = "/hailuo/v2/query/video_generation/:task_id"
 		}
-	case format == constant.TaskResponseFormatAliVideo && a.plugin.Meta.Key == "alibaba":
-		path = "/ali/api/v1/services/aigc/video-generation/video-synthesis"
+	case format == constant.TaskResponseFormatAliVideo && (a.plugin.Meta.Key == "alibaba" || a.plugin.Meta.Key == "moyu-wan3"):
+		prefix := "/ali"
+		if a.plugin.Meta.Key == "moyu-wan3" {
+			prefix = "/moyu-wan3"
+		}
+		path = prefix + "/api/v1/services/aigc/video-generation/video-synthesis"
 		if method == http.MethodGet {
-			path = "/ali/api/v1/tasks/:task_id"
+			path = prefix + "/api/v1/tasks/:task_id"
 		}
 	default:
 		return pluginruntime.Route{}, false
