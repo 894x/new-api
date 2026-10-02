@@ -9,14 +9,126 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/jinzhu/copier"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTextRequestAttemptCloneNativeChat(t *testing.T) {
+	settings := model_setting.GetGlobalSettings()
+	previousSettings := *settings
+	t.Cleanup(func() { *settings = previousSettings })
+	settings.PassThroughRequestEnabled = false
+	for _, upstreamModel := range []string{"kimi-k3", "gpt-5"} {
+		t.Run(upstreamModel, func(t *testing.T) {
+			var source dto.GeneralOpenAIRequest
+			require.NoError(t, common.UnmarshalJsonStr(`{
+				"model":"client-model","stream":false,"max_tokens":128,"temperature":0,"top_p":0,"n":0,
+				"reasoning_effort":"low","stream_options":{"include_usage":false},
+				"messages":[
+					{"role":"system","content":[{"type":"text","text":"original instruction"},{"type":"image_url","image_url":{"url":"data:image/png;base64,YQ==","detail":"low"}}]},
+					{"role":"system","tools":[{"type":"function","function":{"name":"dynamic_tool","parameters":{"type":"object"}}}]},
+					{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}
+				],
+				"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object","properties":{"count":{"type":"integer"}}}}}],
+				"response_format":{"type":"json_schema","json_schema":{"strict":false}},
+				"metadata":{"tag":"original"}
+			}`, &source))
+			originalJSON, err := common.Marshal(&source)
+			require.NoError(t, err)
+			for _, systemPrompt := range []string{"first attempt", "retry attempt"} {
+				info := &relaycommon.RelayInfo{
+					RelayMode: relayconstant.RelayModeChatCompletions,
+					ChannelMeta: &relaycommon.ChannelMeta{
+						ChannelType: constant.ChannelTypeOpenAI, ApiType: constant.APITypeOpenAI,
+					},
+				}
+				clone, err := cloneTextRequestForAttempt(&source, info, false)
+				require.NoError(t, err)
+				baseline, err := common.DeepCopy(&source)
+				require.NoError(t, err)
+				var encoded [][]byte
+				for _, request := range []*dto.GeneralOpenAIRequest{clone, baseline} {
+					c, _ := gin.CreateTestContext(httptest.NewRecorder())
+					c.Set("model_mapping", fmt.Sprintf(`{"client-model":%q}`, upstreamModel))
+					attempt := &relaycommon.RelayInfo{
+						OriginModelName: source.Model, Request: request,
+						ChannelMeta: &relaycommon.ChannelMeta{
+							ChannelType: constant.ChannelTypeOpenAI, ApiType: constant.APITypeOpenAI,
+							ChannelSetting: dto.ChannelSettings{SystemPrompt: systemPrompt, SystemPromptOverride: true},
+						},
+					}
+					require.NoError(t, helper.ModelMappedHelper(c, attempt, request))
+					require.NoError(t, helper.ApplyReasoningModelSuffix(c, attempt, request))
+					request.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
+					adaptor := &openai.Adaptor{}
+					adaptor.Init(attempt)
+					converted, err := adaptor.ConvertOpenAIRequest(c, attempt, request)
+					require.NoError(t, err)
+					require.Same(t, request, converted)
+					applySystemPromptIfNeeded(c, attempt, request)
+					data, err := common.Marshal(converted)
+					require.NoError(t, err)
+					encoded = append(encoded, data)
+				}
+				assert.Equal(t, encoded[1], encoded[0], "preserve the fully adapted outbound JSON")
+				assert.Equal(t, 0, *clone.N)
+				assert.False(t, *clone.Stream)
+				sourceJSON, err := common.Marshal(&source)
+				require.NoError(t, err)
+				assert.Equal(t, originalJSON, sourceJSON, "a retry must start from the unmodified request")
+			}
+		})
+	}
+}
+
+func TestTextRequestAttemptCloneFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		channelType  int
+		apiType      int
+		relayMode    int
+		useResponses bool
+	}{
+		{"other provider", constant.ChannelTypeAnthropic, constant.APITypeAnthropic, relayconstant.RelayModeChatCompletions, false},
+		{"other adaptor", constant.ChannelTypeOpenAI, constant.APITypeAnthropic, relayconstant.RelayModeChatCompletions, false},
+		{"other relay mode", constant.ChannelTypeOpenAI, constant.APITypeOpenAI, relayconstant.RelayModeCompletions, false},
+		{"Chat to Responses", constant.ChannelTypeOpenAI, constant.APITypeOpenAI, relayconstant.RelayModeChatCompletions, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var source dto.GeneralOpenAIRequest
+			require.NoError(t, common.UnmarshalJsonStr(`{
+				"model":"client-model","max_tokens":0,"stream":false,
+				"messages":[{"role":"assistant","content":[{"type":"text","text":"original"}],"tool_calls":[{"id":"call_1"}]}],
+				"response_format":{"type":"json_schema","json_schema":{"strict":false}}
+			}`, &source))
+			originalJSON, err := common.Marshal(&source)
+			require.NoError(t, err)
+			info := &relaycommon.RelayInfo{
+				RelayMode:   tc.relayMode,
+				ChannelMeta: &relaycommon.ChannelMeta{ChannelType: tc.channelType, ApiType: tc.apiType},
+			}
+			clone, err := cloneTextRequestForAttempt(&source, info, tc.useResponses)
+			require.NoError(t, err)
+			clone.Messages[0].ToolCalls[0] = '!'
+			clone.Messages[0].Content.([]any)[0].(map[string]any)["text"] = "changed"
+			clone.ResponseFormat.JsonSchema[0] = '!'
+			*clone.MaxTokens = 1
+			*clone.Stream = true
+			sourceJSON, err := common.Marshal(&source)
+			require.NoError(t, err)
+			assert.Equal(t, originalJSON, sourceJSON)
+		})
+	}
+}
 
 func TestRequestDeepCopyResponses(t *testing.T) {
 	t.Run("nil source", func(t *testing.T) {

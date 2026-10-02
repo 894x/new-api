@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -31,7 +32,12 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		return types.NewErrorWithStatusCode(fmt.Errorf("invalid request type, expected dto.GeneralOpenAIRequest, got %T", info.Request), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
 
-	request, err := common.DeepCopy(textReq)
+	passThroughGlobal := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	useResponses := info.RelayMode == relayconstant.RelayModeChatCompletions &&
+		!passThroughGlobal &&
+		!info.ChannelSetting.PassThroughBodyEnabled &&
+		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName)
+	request, err := cloneTextRequestForAttempt(textReq, info, useResponses)
 	if err != nil {
 		return types.NewError(fmt.Errorf("failed to copy request to GeneralOpenAIRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
@@ -79,12 +85,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	adaptor.Init(info)
 	chatCompletionsOnly := relaychannel.IsChatCompletionsOnly(adaptor)
 
-	passThroughGlobal := model_setting.GetGlobalSettings().PassThroughRequestEnabled
-	if info.RelayMode == relayconstant.RelayModeChatCompletions &&
-		!chatCompletionsOnly &&
-		!passThroughGlobal &&
-		!info.ChannelSetting.PassThroughBodyEnabled &&
-		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
+	if useResponses && !chatCompletionsOnly {
 		applySystemPromptIfNeeded(c, info, request)
 		usage, newApiErr := textRequestViaResponses(c, info, adaptor, request)
 		if newApiErr != nil && !canSettleDisconnectedStream(info, usage, newApiErr) {
@@ -216,6 +217,21 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	// The consume log already records client_gone, just as scanner-side
 	// cancellation does. Do not add a second channel-error log after settlement.
 	return nil
+}
+
+// The native OpenAI Chat adaptor replaces top-level fields and message entries;
+// nested content, tool definitions and raw JSON are read-only until encoding.
+// Keep those payloads shared, while isolating the fields changed by an attempt.
+// Other adaptors and protocol conversions retain a fully independent request.
+func cloneTextRequestForAttempt(request *dto.GeneralOpenAIRequest, info *relaycommon.RelayInfo, useResponses bool) (*dto.GeneralOpenAIRequest, error) {
+	if request == nil || info == nil || info.ChannelMeta == nil ||
+		info.ChannelType != constant.ChannelTypeOpenAI || info.ApiType != constant.APITypeOpenAI ||
+		info.RelayMode != relayconstant.RelayModeChatCompletions || useResponses {
+		return common.DeepCopy(request)
+	}
+	clone := *request
+	clone.Messages = slices.Clone(request.Messages)
+	return &clone, nil
 }
 
 // canSettleDisconnectedStream accepts observed usage only for a downstream
