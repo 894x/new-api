@@ -104,6 +104,30 @@ func (bucket *atomicDetailBucket) drain(seal bool) (detailCounters, bool) {
 	return counters, true
 }
 
+func (bucket *atomicDetailBucket) snapshot() detailCounters {
+	bucket.mu.Lock()
+	defer bucket.mu.Unlock()
+	if bucket.sealed {
+		return detailCounters{}
+	}
+
+	counters := detailCounters{
+		requestCount:    bucket.requestCount.Load(),
+		successCount:    bucket.successCount.Load(),
+		ttftCount:       bucket.ttftCount.Load(),
+		tpotCount:       bucket.tpotCount.Load(),
+		inputTokens:     bucket.inputTokens.Load(),
+		outputTokens:    bucket.outputTokens.Load(),
+		totalTokens:     bucket.totalTokens.Load(),
+		cacheReadTokens: bucket.cacheReadTokens.Load(),
+	}
+	for i := range histogramUpperBoundsMs {
+		counters.ttftBuckets[i] = bucket.ttftBuckets[i].Load()
+		counters.tpotBuckets[i] = bucket.tpotBuckets[i].Load()
+	}
+	return counters
+}
+
 func (bucket *atomicDetailBucket) addCounters(counters detailCounters) bool {
 	bucket.mu.Lock()
 	defer bucket.mu.Unlock()

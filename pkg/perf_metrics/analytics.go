@@ -1,9 +1,11 @@
 package perfmetrics
 
 import (
+	"context"
 	"errors"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
@@ -21,6 +23,7 @@ var histogramUpperBoundsMs = [...]int64{
 }
 
 type AnalyticsQueryParams struct {
+	Context context.Context
 	Model   string
 	UserId  int
 	TokenId int
@@ -37,6 +40,7 @@ type AnalyticsPercentiles struct {
 
 type AnalyticsSummary struct {
 	RequestCount int64                `json:"request_count"`
+	ErrorCount   int64                `json:"error_count"`
 	SuccessRate  float64              `json:"success_rate"`
 	Rpm          float64              `json:"rpm"`
 	Tpm          float64              `json:"tpm"`
@@ -48,6 +52,7 @@ type AnalyticsSummary struct {
 type AnalyticsPoint struct {
 	Ts           int64                `json:"ts"`
 	RequestCount int64                `json:"request_count"`
+	ErrorCount   int64                `json:"error_count"`
 	SuccessRate  float64              `json:"success_rate"`
 	Rpm          float64              `json:"rpm"`
 	Tpm          float64              `json:"tpm"`
@@ -57,11 +62,14 @@ type AnalyticsPoint struct {
 }
 
 type AnalyticsResult struct {
-	ModelName        string           `json:"model_name"`
-	EffectiveStartTs int64            `json:"effective_start_timestamp"`
-	EffectiveEndTs   int64            `json:"effective_end_timestamp"`
-	Summary          AnalyticsSummary `json:"summary"`
-	Series           []AnalyticsPoint `json:"series"`
+	ModelName        string              `json:"model_name"`
+	ScannedLogs      int                 `json:"scanned_logs"`
+	Truncated        bool                `json:"truncated"`
+	ErrorGroups      []ChannelErrorGroup `json:"error_groups"`
+	EffectiveStartTs int64               `json:"effective_start_timestamp"`
+	EffectiveEndTs   int64               `json:"effective_end_timestamp"`
+	Summary          AnalyticsSummary    `json:"summary"`
+	Series           []AnalyticsPoint    `json:"series"`
 }
 
 type detailBucketKey struct {
@@ -86,6 +94,7 @@ type detailCounters struct {
 
 type analyticsAccumulator struct {
 	requestCount    int64
+	errorCount      int64
 	successCount    int64
 	inputTokens     int64
 	totalTokens     int64
@@ -98,6 +107,7 @@ func QueryAnalytics(params AnalyticsQueryParams) (AnalyticsResult, error) {
 	if params.Model == "" || params.StartTs <= 0 || params.EndTs <= params.StartTs {
 		return AnalyticsResult{}, errors.New("invalid performance analytics query")
 	}
+	requestedStartTs := params.StartTs
 	params.StartTs = bucketStart(params.StartTs)
 	storageBucketSeconds := int64(perf_metrics_setting.GetBucketSeconds())
 	effectiveEndTs := bucketStart(params.EndTs) + storageBucketSeconds - 1
@@ -115,8 +125,12 @@ func QueryAnalytics(params AnalyticsQueryParams) (AnalyticsResult, error) {
 		EndTs:         params.EndTs,
 		BucketSeconds: bucketSeconds,
 	}
+	// Read persisted and active counters under the flush lock so a drain cannot
+	// move samples between the two sources while the query is assembling them.
+	flushMu.Lock()
 	details, histograms, err := model.GetPerfAnalyticsBuckets(filter)
 	if err != nil {
+		flushMu.Unlock()
 		return AnalyticsResult{}, err
 	}
 
@@ -132,6 +146,14 @@ func QueryAnalytics(params AnalyticsQueryParams) (AnalyticsResult, error) {
 	for _, histogram := range histograms {
 		point := analyticsPointAccumulator(series, histogram.BucketTs)
 		addHistogramCount(point, histogram.Metric, histogram.UpperBoundMs, histogram.Count)
+	}
+	mergeActiveDetailBuckets(series, params, bucketSeconds)
+	flushMu.Unlock()
+	errorParams := params
+	errorParams.StartTs = requestedStartTs
+	scannedLogs, truncated, errorGroups, err := queryAnalyticsErrors(errorParams, series, bucketSeconds)
+	if err != nil {
+		return AnalyticsResult{}, err
 	}
 
 	timestamps := make([]int64, 0, len(series))
@@ -151,11 +173,76 @@ func QueryAnalytics(params AnalyticsQueryParams) (AnalyticsResult, error) {
 
 	return AnalyticsResult{
 		ModelName:        params.Model,
+		ScannedLogs:      scannedLogs,
+		Truncated:        truncated,
+		ErrorGroups:      errorGroups,
 		EffectiveStartTs: params.StartTs,
 		EffectiveEndTs:   effectiveEndTs,
 		Summary:          buildAnalyticsSummary(effectiveDurationSeconds, summary),
 		Series:           points,
 	}, nil
+}
+
+func mergeActiveDetailBuckets(series map[int64]*analyticsAccumulator, params AnalyticsQueryParams, bucketSeconds int64) {
+	detailHotBuckets.Range(func(key, value any) bool {
+		bucketKey := key.(detailBucketKey)
+		if bucketKey.model != params.Model || bucketKey.bucketTs < params.StartTs || bucketKey.bucketTs > params.EndTs {
+			return true
+		}
+		if params.UserId > 0 && bucketKey.userId != params.UserId {
+			return true
+		}
+		if params.TokenId > 0 && bucketKey.tokenId != params.TokenId {
+			return true
+		}
+		bucketTs := bucketKey.bucketTs - bucketKey.bucketTs%bucketSeconds
+		addDetailCounters(analyticsPointAccumulator(series, bucketTs), value.(*atomicDetailBucket).snapshot())
+		return true
+	})
+}
+
+func addDetailCounters(target *analyticsAccumulator, source detailCounters) {
+	target.requestCount += source.requestCount
+	target.successCount += source.successCount
+	target.inputTokens += source.inputTokens
+	target.totalTokens += source.totalTokens
+	target.cacheReadTokens += source.cacheReadTokens
+	for i, count := range source.ttftBuckets {
+		if count > 0 {
+			target.ttft[histogramUpperBoundsMs[i]] += count
+		}
+	}
+	for i, count := range source.tpotBuckets {
+		if count > 0 {
+			target.tpot[histogramUpperBoundsMs[i]] += count
+		}
+	}
+}
+
+func queryAnalyticsErrors(params AnalyticsQueryParams, series map[int64]*analyticsAccumulator, bucketSeconds int64) (int, bool, []ChannelErrorGroup, error) {
+	if params.UserId <= 0 || model.LOG_DB == nil {
+		return 0, false, nil, nil
+	}
+	ctx := params.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	groups := make(map[string]*ChannelErrorGroup)
+	scanned, truncated, err := model.VisitPerfUserLogs(ctx, params.UserId, params.Model, params.TokenId, params.StartTs, params.EndTs, func(row model.PerfChannelLog) {
+		if row.Type != model.LogTypeError {
+			return
+		}
+		bucketTs := row.CreatedAt - row.CreatedAt%bucketSeconds
+		point := analyticsPointAccumulator(series, bucketTs)
+		point.errorCount++
+		accumulateChannelError(groups, row)
+	})
+	if err != nil {
+		return scanned, truncated, nil, err
+	}
+	return scanned, truncated, channelErrorResults(groups), nil
 }
 
 func analyticsBucketSeconds(startTs int64, endTs int64, storageBucketSeconds int64) int64 {
@@ -202,6 +289,7 @@ func addHistogramCount(accumulator *analyticsAccumulator, metric string, upperBo
 
 func mergeAnalyticsAccumulator(target *analyticsAccumulator, source *analyticsAccumulator) {
 	target.requestCount += source.requestCount
+	target.errorCount += source.errorCount
 	target.successCount += source.successCount
 	target.inputTokens += source.inputTokens
 	target.totalTokens += source.totalTokens
@@ -218,6 +306,7 @@ func buildAnalyticsPoint(ts int64, bucketSeconds int64, accumulator *analyticsAc
 	return AnalyticsPoint{
 		Ts:           ts,
 		RequestCount: accumulator.requestCount,
+		ErrorCount:   accumulator.errorCount,
 		SuccessRate:  analyticsSuccessRate(accumulator),
 		Rpm:          analyticsPerMinute(accumulator.requestCount, bucketSeconds),
 		Tpm:          analyticsPerMinute(accumulator.totalTokens, bucketSeconds),
@@ -230,6 +319,7 @@ func buildAnalyticsPoint(ts int64, bucketSeconds int64, accumulator *analyticsAc
 func buildAnalyticsSummary(durationSeconds int64, accumulator *analyticsAccumulator) AnalyticsSummary {
 	return AnalyticsSummary{
 		RequestCount: accumulator.requestCount,
+		ErrorCount:   accumulator.errorCount,
 		SuccessRate:  analyticsSuccessRate(accumulator),
 		Rpm:          analyticsPerMinute(accumulator.requestCount, durationSeconds),
 		Tpm:          analyticsPerMinute(accumulator.totalTokens, durationSeconds),

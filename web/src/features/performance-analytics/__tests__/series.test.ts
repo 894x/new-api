@@ -115,6 +115,7 @@ describe('performance analytics chart series', () => {
       {
         ts: 1_700_000_000,
         request_count: 8,
+        error_count: 0,
         success_rate: 100,
         rpm: 1.6,
         tpm: 2400,

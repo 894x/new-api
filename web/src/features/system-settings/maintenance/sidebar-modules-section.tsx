@@ -166,6 +166,12 @@ export function SidebarModulesSection({
         title: t('Users'),
         description: t('Administer user accounts and roles.'),
       },
+      user_monitoring: {
+        title: t('User Monitoring'),
+        description: t(
+          'Monitor live user throughput, latency percentiles, and errors.'
+        ),
+      },
       setting: {
         title: t('System settings'),
         description: t('Advanced platform configuration.'),

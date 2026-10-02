@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/glebarez/sqlite"
@@ -112,7 +113,7 @@ func TestFlushPersistsActiveDetailBucketForDashboardDiscovery(t *testing.T) {
 	assert.Equal(t, int64(1), detailCount)
 }
 
-func TestQueryAnalyticsOnlyReturnsPersistedBuckets(t *testing.T) {
+func TestQueryAnalyticsIncludesActiveDetailBucket(t *testing.T) {
 	previousDB := model.DB
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -138,12 +139,74 @@ func TestQueryAnalyticsOnlyReturnsPersistedBuckets(t *testing.T) {
 
 	result, err := QueryAnalytics(params)
 	require.NoError(t, err)
-	assert.Zero(t, result.Summary.RequestCount)
+	assert.Equal(t, int64(1), result.Summary.RequestCount)
+	assert.Equal(t, 100.0, result.Summary.SuccessRate)
 
 	flushDetailBuckets()
 	result, err = QueryAnalytics(params)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), result.Summary.RequestCount)
+	assert.Equal(t, int64(1), result.Summary.Ttft.SampleCount)
+
+	Record(Sample{
+		Model: "gpt-test", Group: "default", UserId: 7, TokenId: 11,
+		LatencyMs: 700, TtftMs: 200, HasTtft: true, Success: false,
+	})
+	result, err = QueryAnalytics(params)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), result.Summary.RequestCount)
+	assert.Equal(t, 50.0, result.Summary.SuccessRate)
+	assert.Equal(t, AnalyticsPercentiles{P50Ms: 100, P90Ms: 250, P99Ms: 250, SampleCount: 2}, result.Summary.Ttft)
+
+	flushDetailBuckets()
+	result, err = QueryAnalytics(params)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), result.Summary.RequestCount)
+	assert.Equal(t, 50.0, result.Summary.SuccessRate)
+	assert.Equal(t, int64(2), result.Summary.Ttft.SampleCount)
+}
+
+func TestQueryAnalyticsAggregatesErrorsForSelectedUser(t *testing.T) {
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	logDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PerfMetricDetail{}, &model.PerfMetricHistogram{}))
+	require.NoError(t, logDB.AutoMigrate(&model.Log{}))
+	model.DB, model.LOG_DB = db, logDB
+	detailHotBuckets = sync.Map{}
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		detailHotBuckets = sync.Map{}
+	})
+
+	payload, err := common.Marshal(map[string]any{
+		"error_code":  "upstream_timeout",
+		"error_type":  "upstream",
+		"status_code": 504,
+	})
+	require.NoError(t, err)
+	now := int64(1_000_120)
+	require.NoError(t, logDB.Create(&[]model.Log{
+		{UserId: 7, TokenId: 11, ModelName: "gpt-test", Type: model.LogTypeError, CreatedAt: now - 70, Other: string(payload)},
+		{UserId: 7, TokenId: 11, ModelName: "gpt-test", Type: model.LogTypeError, CreatedAt: now - 20, Other: string(payload)},
+		{UserId: 7, TokenId: 11, ModelName: "gpt-test", Type: model.LogTypeError, CreatedAt: now - 10, Other: string(payload)},
+		{UserId: 8, TokenId: 11, ModelName: "gpt-test", Type: model.LogTypeError, CreatedAt: now - 10, Other: string(payload)},
+		{UserId: 7, TokenId: 11, ModelName: "gpt-test", Type: model.LogTypeConsume, CreatedAt: now - 10, Other: string(payload)},
+	}).Error)
+
+	result, err := QueryAnalytics(AnalyticsQueryParams{
+		Model: "gpt-test", UserId: 7, TokenId: 11,
+		StartTs: now - 60, EndTs: now + 1,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.ScannedLogs)
+	assert.Equal(t, int64(2), result.Summary.ErrorCount)
+	require.Len(t, result.ErrorGroups, 1)
+	assert.Equal(t, int64(2), result.ErrorGroups[0].Count)
+	assert.Equal(t, "upstream_timeout", result.ErrorGroups[0].ErrorCode)
+	assert.Equal(t, 504, result.ErrorGroups[0].StatusCode)
 }
 
 func TestCleanupCapsUnlimitedDetailRetentionAtThirtyDays(t *testing.T) {

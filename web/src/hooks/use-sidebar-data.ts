@@ -71,6 +71,13 @@ export function useSidebarData(): SidebarData {
     ADMIN_PERMISSION_RESOURCES.USER,
     ADMIN_PERMISSION_ACTIONS.READ
   )
+  const canReadUserMonitoring =
+    (user?.role ?? 0) >= ROLE.ADMIN &&
+    hasPermission(
+      user,
+      ADMIN_PERMISSION_RESOURCES.USER,
+      ADMIN_PERMISSION_ACTIONS.READ
+    )
 
   return {
     navGroups: [
@@ -202,6 +209,15 @@ export function useSidebarData(): SidebarData {
             url: '/users',
             icon: Users,
           },
+          ...(canReadUserMonitoring
+            ? [
+                {
+                  title: t('User Monitoring'),
+                  url: '/users/monitoring',
+                  icon: Activity,
+                },
+              ]
+            : []),
           {
             title: t('Redemption Codes'),
             url: '/redemption-codes',

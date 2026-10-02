@@ -25,6 +25,7 @@ export type PerformancePercentiles = {
 
 export type PerformanceAnalyticsSummary = {
   request_count: number
+  error_count: number
   success_rate: number
   rpm: number
   tpm: number
@@ -39,10 +40,20 @@ export type PerformanceAnalyticsPoint = PerformanceAnalyticsSummary & {
 
 export type PerformanceAnalyticsData = {
   model_name: string
+  scanned_logs: number
+  truncated: boolean
+  error_groups: PerformanceAnalyticsErrorGroup[]
   effective_start_timestamp: number
   effective_end_timestamp: number
   summary: PerformanceAnalyticsSummary
   series: PerformanceAnalyticsPoint[]
+}
+
+export type PerformanceAnalyticsErrorGroup = {
+  error_code: string
+  error_type: string
+  status_code: number
+  count: number
 }
 
 export type PerformanceAnalyticsUserOption = {
@@ -76,7 +87,7 @@ export type PerformanceChartDatum = {
   value: number
 }
 
-export type PerformanceMetric = 'rpm' | 'tpm' | 'cache_hit_rate'
+export type PerformanceMetric = 'rpm' | 'tpm' | 'cache_hit_rate' | 'error_count'
 
 export type PerformanceMetricChartDatum = {
   ts: number

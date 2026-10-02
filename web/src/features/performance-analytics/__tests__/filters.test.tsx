@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
 
@@ -68,10 +68,14 @@ const allOptions: PerformanceAnalyticsOptions = {
 
 const emptyAnalytics: PerformanceAnalyticsData = {
   model_name: 'gpt-test',
+  scanned_logs: 0,
+  truncated: false,
+  error_groups: [],
   effective_start_timestamp: 100,
   effective_end_timestamp: 200,
   summary: {
     request_count: 0,
+    error_count: 0,
     success_rate: 0,
     rpm: 0,
     tpm: 0,
@@ -116,13 +120,13 @@ function response<T>(data: T): PerformanceAnalyticsResponse<T> {
   return { success: true, data }
 }
 
-function renderAnalytics() {
+function renderAnalytics(standalone = false) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <PerformanceAnalytics isAdmin />
+      <PerformanceAnalytics isAdmin standalone={standalone} />
     </QueryClientProvider>
   )
 }
@@ -180,4 +184,40 @@ test('offers a one-hour range and sends an hour-wide query', async () => {
       true
     )
   )
+})
+
+test('moves the monitoring window forward on each automatic refresh', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(1_800_000_000_000)
+  getPerformanceAnalyticsOptions.mockResolvedValue(response(allOptions))
+  const view = renderAnalytics(true)
+
+  try {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(getPerformanceAnalytics).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user_id: 1,
+        start_timestamp: 1_799_999_400,
+        end_timestamp: 1_800_000_000,
+      }),
+      true
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(getPerformanceAnalytics).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        user_id: 1,
+        start_timestamp: 1_799_999_415,
+        end_timestamp: 1_800_000_015,
+      }),
+      true
+    )
+  } finally {
+    view.unmount()
+    vi.useRealTimers()
+  }
 })

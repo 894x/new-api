@@ -7,6 +7,7 @@ import "context"
 // intentionally selects only the fields needed for aggregation.
 type PerfChannelLog struct {
 	Id        int64  `gorm:"column:id"`
+	UserId    int    `gorm:"column:user_id"`
 	ChannelId int    `gorm:"column:channel_id"`
 	CreatedAt int64  `gorm:"column:created_at"`
 	Type      int    `gorm:"column:type"`
@@ -17,15 +18,61 @@ type PerfChannelLog struct {
 // VisitPerfChannelLogs caps both rows and decoded payload bytes; pagination never
 // retains a full day's Other payloads in memory. Truncation is explicit to callers.
 func VisitPerfChannelLogs(ctx context.Context, channelID int, startTs, endTs int64, visit func(PerfChannelLog)) (int, bool, error) {
+	return visitPerfLogs(ctx, perfLogFilter{
+		ChannelId: channelID,
+		StartTs:   startTs,
+		EndTs:     endTs,
+	}, visit)
+}
+
+// VisitPerfUserLogs applies the same bounded scan used by channel diagnostics
+// to one user's error logs. It is intentionally read-only and suitable for
+// short-window monitoring queries.
+func VisitPerfUserLogs(ctx context.Context, userID int, modelName string, tokenID int, startTs, endTs int64, visit func(PerfChannelLog)) (int, bool, error) {
+	return visitPerfLogs(ctx, perfLogFilter{
+		UserId:    userID,
+		ModelName: modelName,
+		TokenId:   tokenID,
+		StartTs:   startTs,
+		EndTs:     endTs,
+		ErrorOnly: true,
+	}, visit)
+}
+
+type perfLogFilter struct {
+	ChannelId int
+	UserId    int
+	ModelName string
+	TokenId   int
+	StartTs   int64
+	EndTs     int64
+	ErrorOnly bool
+}
+
+func visitPerfLogs(ctx context.Context, filter perfLogFilter, visit func(PerfChannelLog)) (int, bool, error) {
 	var cursor int64
 	count, payloadBytes := 0, 0
 	for {
 		query := LOG_DB.WithContext(ctx).Model(&Log{}).
-			Select("id, channel_id, created_at, type, use_time, other").
-			Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
-			Where("created_at >= ? AND created_at <= ?", startTs, endTs)
-		if channelID > 0 {
-			query = query.Where("channel_id = ?", channelID)
+			Select("id, user_id, channel_id, created_at, type, use_time, other")
+		if filter.ErrorOnly {
+			query = query.Where("type = ?", LogTypeError)
+		} else {
+			query = query.Where("type IN ?", []int{LogTypeConsume, LogTypeError})
+		}
+		query = query.
+			Where("created_at >= ? AND created_at <= ?", filter.StartTs, filter.EndTs)
+		if filter.ChannelId > 0 {
+			query = query.Where("channel_id = ?", filter.ChannelId)
+		}
+		if filter.UserId > 0 {
+			query = query.Where("user_id = ?", filter.UserId)
+		}
+		if filter.ModelName != "" {
+			query = query.Where("model_name = ?", filter.ModelName)
+		}
+		if filter.TokenId > 0 {
+			query = query.Where("token_id = ?", filter.TokenId)
 		}
 		if cursor > 0 {
 			query = query.Where("id < ?", cursor)

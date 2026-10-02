@@ -92,6 +92,7 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
     model_channel_matrix: true,
     redemption: true,
     user: true,
+    user_monitoring: true,
     setting: true,
     subscription: true,
   },

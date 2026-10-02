@@ -126,7 +126,8 @@ func getPerfAnalytics(c *gin.Context, userId int, admin bool) {
 	}
 
 	result, err := perfmetrics.QueryAnalytics(perfmetrics.AnalyticsQueryParams{
-		Model: modelName, UserId: userId, TokenId: tokenId, StartTs: startTs, EndTs: endTs,
+		Context: c.Request.Context(),
+		Model:   modelName, UserId: userId, TokenId: tokenId, StartTs: startTs, EndTs: endTs,
 	})
 	if err != nil {
 		perfAnalyticsInternalError(c, "failed to query analytics", err)

@@ -52,12 +52,22 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { buildPerformanceAnalyticsParams } from '@/features/dashboard/lib/filters'
 import {
   formatLatency,
   formatUptimePct,
 } from '@/features/performance-metrics/lib/format'
+import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber } from '@/lib/format'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
@@ -71,6 +81,7 @@ import {
   getPerformanceFilterLabel,
 } from './lib'
 import type {
+  PerformanceAnalyticsData,
   PerformanceAnalyticsPoint,
   PerformanceAnalyticsSummary,
   PerformanceMetric,
@@ -84,17 +95,29 @@ const RANGE_OPTIONS = [
   { seconds: 7 * 24 * 60 * 60, label: '7 Days' },
   { seconds: 29 * 24 * 60 * 60, label: '29 Days' },
 ] as const
+const USER_MONITORING_RANGE_OPTIONS = [
+  { seconds: 10 * 60, label: '10 Minutes' },
+  { seconds: 60 * 60, label: '1 Hour' },
+  { seconds: 6 * 60 * 60, label: '6 Hours' },
+  { seconds: 24 * 60 * 60, label: '1 Day' },
+] as const
 
 type PerformanceAnalyticsProps = {
   isAdmin: boolean
+  standalone?: boolean
 }
 
-export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
+export function PerformanceAnalytics({
+  isAdmin,
+  standalone = false,
+}: PerformanceAnalyticsProps) {
   const { t, i18n } = useTranslation()
   const [modelName, setModelName] = useState('')
   const [userId, setUserId] = useState<number>()
   const [tokenId, setTokenId] = useState<number>()
-  const [rangeSeconds, setRangeSeconds] = useState(24 * 60 * 60)
+  const [rangeSeconds, setRangeSeconds] = useState(
+    standalone ? 10 * 60 : 24 * 60 * 60
+  )
   const [rangeEnd, setRangeEnd] = useState(() => Math.floor(Date.now() / 1000))
 
   const optionsQuery = useQuery({
@@ -115,6 +138,12 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
   const models = useMemo(() => options?.models ?? [], [options?.models])
   const users = useMemo(() => options?.users ?? [], [options?.users])
   const tokens = useMemo(() => options?.tokens ?? [], [options?.tokens])
+
+  useEffect(() => {
+    if (standalone && userId === undefined && users.length > 0) {
+      setUserId(users[0].id)
+    }
+  }, [standalone, userId, users])
 
   useEffect(() => {
     if (models.length === 0) {
@@ -154,10 +183,25 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
       isAdmin ? 'admin' : 'self',
       queryParams,
     ],
-    queryFn: () => getPerformanceAnalytics(queryParams, isAdmin),
+    queryFn: () => {
+      if (!standalone) {
+        return getPerformanceAnalytics(queryParams, isAdmin)
+      }
+      const endTimestamp = Math.floor(Date.now() / 1000)
+      return getPerformanceAnalytics(
+        {
+          ...queryParams,
+          start_timestamp: endTimestamp - rangeSeconds,
+          end_timestamp: endTimestamp,
+        },
+        isAdmin
+      )
+    },
     select: (response) => response.data,
-    enabled: modelName.length > 0,
+    enabled: modelName.length > 0 && (!standalone || userId !== undefined),
     staleTime: 30_000,
+    refetchInterval: standalone ? 15_000 : false,
+    refetchIntervalInBackground: false,
     retry: false,
   })
 
@@ -184,11 +228,17 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
       formatPerformanceTimestamp(ts, i18n.resolvedLanguage || i18n.language),
     [i18n.language, i18n.resolvedLanguage]
   )
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
 
   const data = analyticsQuery.data
   const loading = optionsQuery.isLoading || analyticsQuery.isLoading
   const fetching = optionsQuery.isFetching || analyticsQuery.isFetching
-  const hasData = Boolean(data && data.summary.request_count > 0)
+  const hasData = Boolean(
+    data &&
+    (data.summary.request_count > 0 ||
+      data.summary.error_count > 0 ||
+      data.series.some((point) => point.error_count > 0))
+  )
   let analyticsContent: ReactNode = null
 
   if (loading && !data) {
@@ -228,7 +278,7 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
           {t('Time range')}: {formatTime(data.effective_start_timestamp)} –{' '}
           {formatTime(data.effective_end_timestamp)}
         </div>
-        <SummaryCards summary={data.summary} />
+        <SummaryCards summary={data.summary} locale={locale} />
         <div className='grid gap-3 xl:grid-cols-2'>
           <LatencyChart
             title='TTFT'
@@ -262,7 +312,7 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
             metric='rpm'
             points={data.series}
             formatTime={formatTime}
-            formatValue={formatThroughput}
+            formatValue={(value) => formatThroughput(value, locale)}
           />
           <MetricChart
             className='xl:col-span-2'
@@ -271,11 +321,36 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
             metric='tpm'
             points={data.series}
             formatTime={formatTime}
-            formatValue={formatThroughput}
+            formatValue={(value) => formatThroughput(value, locale)}
+          />
+          <MetricChart
+            className='xl:col-span-2'
+            title='Errors'
+            description={t('Errors recorded for this user and model')}
+            metric='error_count'
+            points={data.series}
+            formatTime={formatTime}
+            formatValue={(value) => formatNumber(value, locale)}
           />
         </div>
+        {(!isAdmin || userId !== undefined) && (
+          <UserErrorSummary
+            groups={data.error_groups ?? []}
+            scannedLogs={data.scanned_logs}
+            truncated={data.truncated}
+            locale={locale}
+          />
+        )}
       </>
     )
+  }
+
+  let userFilterValue: string | null = ALL_VALUE
+  if (standalone) {
+    userFilterValue = null
+  }
+  if (userId) {
+    userFilterValue = String(userId)
   }
 
   return (
@@ -314,11 +389,14 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
           {isAdmin && (
             <FilterSelect
               label={t('User')}
-              value={userId ? String(userId) : ALL_VALUE}
+              value={userFilterValue}
               placeholder={t('All users')}
+              disabled={standalone && users.length === 0}
               onValueChange={handleUserChange}
               options={[
-                { value: ALL_VALUE, label: t('All users') },
+                ...(standalone
+                  ? []
+                  : [{ value: ALL_VALUE, label: t('All users') }]),
                 ...users.map((user) => ({
                   value: String(user.id),
                   label: user.username,
@@ -354,7 +432,10 @@ export function PerformanceAnalytics({ isAdmin }: PerformanceAnalyticsProps) {
               onValueChange={(value) => handleRangeChange(Number(value))}
             >
               <TabsList>
-                {RANGE_OPTIONS.map((option) => (
+                {(standalone
+                  ? USER_MONITORING_RANGE_OPTIONS
+                  : RANGE_OPTIONS
+                ).map((option) => (
                   <TabsTrigger
                     key={option.seconds}
                     value={String(option.seconds)}
@@ -420,16 +501,26 @@ function FilterSelect(props: {
   )
 }
 
-function SummaryCards({ summary }: { summary: PerformanceAnalyticsSummary }) {
+function SummaryCards({
+  summary,
+  locale,
+}: {
+  summary: PerformanceAnalyticsSummary
+  locale: Intl.LocalesArgument
+}) {
   const { t } = useTranslation()
   const cards = [
     {
       label: t('Requests'),
-      value: summary.request_count.toLocaleString(),
+      value: formatNumber(summary.request_count, locale),
     },
     {
       label: t('Success rate'),
       value: formatUptimePct(summary.success_rate),
+    },
+    {
+      label: t('Errors'),
+      value: formatNumber(summary.error_count, locale),
     },
     {
       label: t('Cache hit rate'),
@@ -437,19 +528,19 @@ function SummaryCards({ summary }: { summary: PerformanceAnalyticsSummary }) {
     },
     {
       label: t('Average RPM'),
-      value: formatThroughput(summary.rpm),
+      value: formatThroughput(summary.rpm, locale),
     },
     {
       label: t('Average TPM'),
-      value: formatThroughput(summary.tpm),
+      value: formatThroughput(summary.tpm, locale),
     },
     {
       label: t('TTFT samples'),
-      value: summary.ttft.sample_count.toLocaleString(),
+      value: formatNumber(summary.ttft.sample_count, locale),
     },
     {
       label: t('TPOT samples'),
-      value: summary.tpot.sample_count.toLocaleString(),
+      value: formatNumber(summary.tpot.sample_count, locale),
     },
   ]
 
@@ -471,8 +562,78 @@ function SummaryCards({ summary }: { summary: PerformanceAnalyticsSummary }) {
   )
 }
 
-function formatThroughput(value: number): string {
-  return value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+function formatThroughput(
+  value: number,
+  locale?: Intl.LocalesArgument
+): string {
+  return formatNumber(value, locale)
+}
+
+function UserErrorSummary({
+  groups,
+  scannedLogs,
+  truncated,
+  locale,
+}: {
+  groups: PerformanceAnalyticsData['error_groups']
+  scannedLogs: number
+  truncated: boolean
+  locale: Intl.LocalesArgument
+}) {
+  const { t } = useTranslation()
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('User error breakdown')}</CardTitle>
+        <CardDescription>
+          {t('Errors grouped by code, type, and HTTP status.')}
+          {scannedLogs > 0 &&
+            ` ${t('Scanned logs')}: ${formatNumber(scannedLogs, locale)}.`}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {truncated && (
+          <p role='alert' className='text-destructive mb-3 text-sm'>
+            {t(
+              'The error log scan reached its limit; these results are partial.'
+            )}
+          </p>
+        )}
+        {groups.length === 0 ? (
+          <div className='text-muted-foreground py-6 text-center text-sm'>
+            {t('No user errors in this time range')}
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('Code')}</TableHead>
+                <TableHead>{t('Type')}</TableHead>
+                <TableHead>{t('Status Code')}</TableHead>
+                <TableHead className='text-right'>{t('Count')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {groups.map((group) => (
+                <TableRow
+                  key={`${group.error_code}-${group.error_type}-${group.status_code}`}
+                >
+                  <TableCell className='font-mono'>
+                    {group.error_code}
+                  </TableCell>
+                  <TableCell>{group.error_type}</TableCell>
+                  <TableCell>{group.status_code || '—'}</TableCell>
+                  <TableCell className='text-right'>
+                    {formatNumber(group.count, locale)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
 function LatencyChart(props: {
