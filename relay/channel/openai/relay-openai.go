@@ -135,20 +135,38 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var streamFunctionCallNames []string
 	var streamErr *types.NewAPIError
 	var usageFrame string
+	reasoningUsage := emptyK3ReasoningStreamUsage{}
+	if info.RelayFormat == types.RelayFormatOpenAI && isKimiK3Model(info.UpstreamModelName) {
+		reasoningUsage.model = info.UpstreamModelName
+	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		// Observe upstream fields before any thinking-to-content conversion.
+		reasoningUsage.Observe(data)
 		if lastStreamData != "" {
-			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-				common.SysLog("error handling stream format: " + err.Error())
-				if helper.IsDownstreamWriteError(err) {
-					streamErr = markStreamErrorIfCommitted(c, types.NewClientGoneError(err))
-					sr.ClientGone(err)
-				} else {
-					sr.Stop(err)
+			frames := []string{lastStreamData}
+			if reasoningUsage.model != "" {
+				var err error
+				frames, err = reasoningUsage.Prepare(lastStreamData)
+				if err != nil {
+					sr.ScannerError(err)
 					return
 				}
-				// The current event has already arrived from upstream. Account
-				// for it even if delivery of the preceding event disconnected.
+			}
+			for _, frame := range frames {
+				if err := HandleStreamFormat(c, info, frame, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+					common.SysLog("error handling stream format: " + err.Error())
+					if helper.IsDownstreamWriteError(err) {
+						// Account for the current upstream event even if delivery
+						// of a preceding event disconnected the client.
+						streamErr = markStreamErrorIfCommitted(c, types.NewClientGoneError(err))
+						sr.ClientGone(err)
+						break
+					} else {
+						sr.Stop(err)
+						return
+					}
+				}
 			}
 		}
 		if len(data) > 0 {
@@ -208,6 +226,11 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	endReason, endErr := info.StreamStatus.End()
 	clientGone := endReason == relaycommon.StreamEndReasonClientGone
 	if streamErr != nil && (!clientGone || !helper.IsDownstreamWriteError(streamErr.Err)) {
+		if !clientGone {
+			// Preserve buffered provider usage on failure; retain the original
+			// upstream error even if its downstream delivery also fails.
+			_ = reasoningUsage.Flush(c, info, false)
+		}
 		return nil, markStreamErrorIfCommitted(c, streamErr)
 	}
 
@@ -286,13 +309,33 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		disconnectedUsage = nil
 	}
 	if info.RelayFormat == types.RelayFormatOpenAI && shouldSendLastResp {
-		if err := sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-			if helper.IsDownstreamWriteError(err) {
-				info.StreamStatus.SetClientGone(err)
-				return disconnectedUsage, markStreamErrorIfCommitted(c, types.NewClientGoneError(err))
+		frames := []string{lastStreamData}
+		if reasoningUsage.model != "" {
+			var err error
+			frames, err = reasoningUsage.Prepare(lastStreamData)
+			if err != nil {
+				return usage, markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
 			}
-			return usage, markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
 		}
+		for _, frame := range frames {
+			if err := sendStreamData(c, info, frame, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+				if helper.IsDownstreamWriteError(err) {
+					info.StreamStatus.SetClientGone(err)
+					return disconnectedUsage, markStreamErrorIfCommitted(c, types.NewClientGoneError(err))
+				}
+				return usage, markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
+			}
+		}
+	}
+	if err := reasoningUsage.Flush(c, info, endReason == relaycommon.StreamEndReasonDone &&
+		resp.StatusCode >= 200 && resp.StatusCode < 300 &&
+		!info.StreamStatus.HasErrors() && !info.PerformanceBusinessRejection &&
+		shouldNormalizeEmptyK3ReasoningUsage(info.UpstreamModelName, false, common.StringToByteSlice(usageFrame))); err != nil {
+		if helper.IsDownstreamWriteError(err) {
+			info.StreamStatus.SetClientGone(err)
+			return disconnectedUsage, markStreamErrorIfCommitted(c, types.NewClientGoneError(err))
+		}
+		return usage, markStreamErrorIfCommitted(c, types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry()))
 	}
 
 	if err := HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage); err != nil {
@@ -434,6 +477,18 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
+		hasReasoningContent := false
+		complete := len(simpleResponse.Choices) > 0 && resp.StatusCode >= 200 && resp.StatusCode < 300
+		for _, choice := range simpleResponse.Choices {
+			if choice.FinishReason == "" || choice.FinishReason == constant.FinishReasonContentFilter {
+				complete = false
+			}
+			if (choice.Message.ReasoningContent != nil && *choice.Message.ReasoningContent != "") ||
+				(choice.Message.Reasoning != nil && *choice.Message.Reasoning != "") {
+				hasReasoningContent = true
+			}
+		}
+		normalizeReasoning := complete && shouldNormalizeEmptyK3ReasoningUsage(info.UpstreamModelName, hasReasoningContent, responseBody)
 		if usageModified {
 			var bodyMap map[string]any
 			err = common.Unmarshal(responseBody, &bodyMap)
@@ -454,8 +509,14 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 			if err != nil {
 				return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 			}
-		} else {
-			break
+		}
+		if normalizeReasoning {
+			// Patch the serialized client response, leaving settlement usage and
+			// its pointer details unchanged even when ForceFormat is disabled.
+			responseBody, err = clearClientReasoningUsage(responseBody, false)
+			if err != nil {
+				return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+			}
 		}
 	case types.RelayFormatClaude:
 		convertResult, err := service.ConvertResponse(c, info, types.RelayFormatClaude, &simpleResponse)
