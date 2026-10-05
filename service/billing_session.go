@@ -557,6 +557,11 @@ func (s *BillingSession) reserveLocked(targetQuota int, strictWallet bool) error
 				s.requiresReconciliation = true
 				return errors.Join(tokenErr, ErrBillingSessionRequiresReconciliation, fmt.Errorf("compensate rejected billing admission token action: %w", reconcileErr))
 			}
+			if funding, ok := s.funding.(*WalletFunding); ok {
+				// Compensation already returned this top-up. Keep the session's
+				// later failure refund limited to funding still reserved.
+				funding.consumed -= delta
+			}
 			return tokenErr
 		}
 		s.requiresReconciliation = true

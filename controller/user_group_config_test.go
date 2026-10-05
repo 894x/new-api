@@ -36,6 +36,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm/clause"
 )
 
 func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
@@ -46,6 +47,7 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	t.Cleanup(func() { common.MemoryCacheEnabled = previousMemoryCacheEnabled })
 
 	originalDiscounts := ratio_setting.GroupGroupRatio2JSONString()
+	originalModelDiscounts := ratio_setting.GroupGroupModelRatio2JSONString()
 	originalRateLimits := setting.ModelRequestRateLimitGroup2JSONString()
 	originalChannels := setting.GroupModelChannelGroupsJSON()
 	originalSpecialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.MarshalJSONString()
@@ -55,6 +57,7 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	common.OptionMapRWMutex.Unlock()
 	t.Cleanup(func() {
 		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(originalDiscounts))
+		require.NoError(t, ratio_setting.UpdateGroupGroupModelRatioByJSONString(originalModelDiscounts))
 		require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(originalRateLimits))
 		require.NoError(t, setting.UpdateGroupModelChannelGroups(originalChannels))
 		require.NoError(t, types.LoadFromJsonString(ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup, originalSpecialGroups))
@@ -64,6 +67,7 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	})
 
 	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{"other":{"default":0.95},"customer":{"old":0.8}}`))
+	require.NoError(t, ratio_setting.UpdateGroupGroupModelRatioByJSONString(`{"other":{"default":{"gpt-5":0.9}},"customer":{"old":{"public-old":0.8}}}`))
 	require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(`{"other":[1,1,1],"customer":[2,2,2]}`))
 	require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"other":{"model-x":["pool-x"]},"customer":{"old-model":["old-pool"]}}`))
 	require.NoError(t, types.LoadFromJsonString(ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup, `{"customer":{"+:vip":"VIP"}}`))
@@ -105,6 +109,7 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
   "group":"customer",
   "revision":%q,
   "discounts":{"default":0.7,"vip":0.6},
+  "model_discounts":{"default":{"public-a":0.25,"public-free":0},"vip":{"public-a":0.75}},
   "rate_limit_enabled":true,
   "rate_limit":{"limits":[10,8,5000],"models":{"gpt-5":{"rpm":3,"tpm":1000}}},
   "model_channel_groups":{"gpt-5":["pool-a","pool-b"],"blocked":[]}
@@ -120,8 +125,8 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	assert.JSONEq(t, `{"other":{"model-x":["pool-x"]},"customer":{"gpt-5":["pool-a","pool-b"],"blocked":[]}}`, setting.GroupModelChannelGroupsJSON())
 
 	var options []model.Option
-	require.NoError(t, db.Where("key IN ?", []string{"GroupGroupRatio", "ModelRequestRateLimitGroup", setting.GroupModelChannelGroupsOptionKey}).Find(&options).Error)
-	require.Len(t, options, 3)
+	require.NoError(t, db.Where(clause.IN{Column: clause.Column{Name: "key"}, Values: []any{"GroupGroupRatio", "ModelRequestRateLimitGroup", setting.GroupModelChannelGroupsOptionKey, ratio_setting.GroupGroupModelRatioOptionKey}}).Find(&options).Error)
+	require.Len(t, options, 4)
 	stored := make(map[string]string, len(options))
 	for _, option := range options {
 		stored[option.Key] = option.Value
@@ -129,6 +134,7 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	assert.JSONEq(t, ratio_setting.GroupGroupRatio2JSONString(), stored["GroupGroupRatio"])
 	assert.JSONEq(t, setting.ModelRequestRateLimitGroup2JSONString(), stored["ModelRequestRateLimitGroup"])
 	assert.JSONEq(t, setting.GroupModelChannelGroupsJSON(), stored[setting.GroupModelChannelGroupsOptionKey])
+	assert.JSONEq(t, `{"other":{"default":{"gpt-5":0.9}},"customer":{"default":{"public-a":0.25,"public-free":0},"vip":{"public-a":0.75}}}`, stored[ratio_setting.GroupGroupModelRatioOptionKey])
 
 	configured, err := buildUserGroupConfig(target.Id)
 	require.NoError(t, err)
@@ -157,6 +163,12 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	createdConfig, err := buildUserGroupConfig(target.Id)
 	require.NoError(t, err)
 	assert.True(t, createdConfig.IsDedicatedGroup)
+	assert.Equal(t, configured.ModelDiscounts, createdConfig.ModelDiscounts)
+	assert.Equal(t, map[string]map[string]float64{"default": {"public-a": 0.25, "public-free": 0}, "vip": {"public-a": 0.75}}, createdConfig.ModelDiscounts)
+	cloned := ratio_setting.GetUserGroupModelRatios(updatedUser.Group)
+	cloned["default"]["public-a"] = 9
+	assert.Equal(t, 0.25, ratio_setting.GetUserGroupModelRatios(updatedUser.Group)["default"]["public-a"], "returned maps must not mutate persisted contracts")
+	assert.Equal(t, 0.25, ratio_setting.GetUserGroupModelRatios("customer")["default"]["public-a"])
 	assert.Greater(t, updatedUser.AuthVersion, previousAuthVersion)
 	var session model.UserSession
 	require.NoError(t, db.First(&session, "sid = ?", "customer-config-session").Error)
@@ -195,4 +207,93 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	rootContext.Request = httptest.NewRequest(http.MethodPost, "/api/user/group-config/dedicated", strings.NewReader(fmt.Sprintf(`{"group":"default","revision":%q}`, rootConfig.Revision)))
 	CreateDedicatedUserGroup(rootContext)
 	assert.Equal(t, http.StatusBadRequest, rootRecorder.Code)
+}
+
+func TestUserGroupModelDiscountConfigurationContracts(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.Ability{}))
+	oldDiscounts := ratio_setting.GroupGroupRatio2JSONString()
+	oldModels := ratio_setting.GroupGroupModelRatio2JSONString()
+	oldRates := setting.ModelRequestRateLimitGroup2JSONString()
+	oldChannels := setting.GroupModelChannelGroupsJSON()
+	common.OptionMapRWMutex.Lock()
+	oldOptions := common.OptionMap
+	common.OptionMap = map[string]string{}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(oldDiscounts))
+		require.NoError(t, ratio_setting.UpdateGroupGroupModelRatioByJSONString(oldModels))
+		require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(oldRates))
+		require.NoError(t, setting.UpdateGroupModelChannelGroups(oldChannels))
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = oldOptions
+		common.OptionMapRWMutex.Unlock()
+	})
+	baseline := `{"customer":{"default":{"public-a":0.123456789,"public-free":0}},"other":{"default":{"public-a":0.9}}}`
+	require.NoError(t, model.UpdateOption(ratio_setting.GroupGroupModelRatioOptionKey, baseline))
+	user := model.User{Username: "discount-contract", Group: "customer", Status: common.UserStatusEnabled, Quota: 1_000}
+	require.NoError(t, db.Create(&user).Error)
+	initial, err := buildUserGroupConfig(user.Id)
+	require.NoError(t, err)
+	for _, invalid := range []string{
+		`{"default":{"public-a":-0.1}}`, `{"default":{"public-a":null}}`, `{"default":null}`,
+		`{"":{"public-a":0.2}}`, `{"default":{" public-a":0.2}}`, `{"default":{"__proto__":0.2}}`,
+		`{"default":{"public-a":1e309}}`, fmt.Sprintf(`{"default":{%q:0.2}}`, strings.Repeat("m", 256)),
+	} {
+		t.Run("reject-"+invalid, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(user.Id)}}
+			ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/group-config", strings.NewReader(fmt.Sprintf(`{"group":"customer","revision":%q,"discounts":{},"model_discounts":%s,"rate_limit_enabled":false,"model_channel_groups":{}}`, initial.Revision, invalid)))
+			UpdateUserGroupConfig(ctx)
+			assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+			assert.JSONEq(t, baseline, ratio_setting.GroupGroupModelRatio2JSONString())
+			var stored model.Option
+			require.NoError(t, db.Where(&model.Option{Key: ratio_setting.GroupGroupModelRatioOptionKey}).First(&stored).Error)
+			assert.JSONEq(t, baseline, stored.Value)
+			assert.JSONEq(t, oldDiscounts, ratio_setting.GroupGroupRatio2JSONString(), "invalid model policy must not partially save other discounts")
+		})
+	}
+	for _, raw := range []string{`null`, `{"customer":null}`, `{"customer":{"default":null}}`, `{"customer":{"default":{"public-a":null}}}`} {
+		require.Error(t, model.UpdateOption(ratio_setting.GroupGroupModelRatioOptionKey, raw))
+		assert.JSONEq(t, baseline, ratio_setting.GroupGroupModelRatio2JSONString())
+	}
+	// An older client may omit model_discounts. Only an explicit empty object
+	// clears this user's group; unrelated groups remain untouched.
+	for _, step := range []struct{ name, modelField, want string }{
+		{"old-client", "", baseline},
+		{"replace", `,"model_discounts":{"default":{"public-a":0.25,"public-free":0},"vip":{"public-a":0.75}}`, `{"customer":{"default":{"public-a":0.25,"public-free":0},"vip":{"public-a":0.75}},"other":{"default":{"public-a":0.9}}}`},
+		{"clear", `,"model_discounts":{}`, `{"other":{"default":{"public-a":0.9}}}`},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			current, err := buildUserGroupConfig(user.Id)
+			require.NoError(t, err)
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(user.Id)}}
+			ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/group-config", strings.NewReader(fmt.Sprintf(`{"group":"customer","revision":%q,"discounts":{},"rate_limit_enabled":false,"model_channel_groups":{}%s}`, current.Revision, step.modelField)))
+			UpdateUserGroupConfig(ctx)
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			assert.JSONEq(t, step.want, ratio_setting.GroupGroupModelRatio2JSONString())
+			var stored model.Option
+			require.NoError(t, db.Where(&model.Option{Key: ratio_setting.GroupGroupModelRatioOptionKey}).First(&stored).Error)
+			assert.JSONEq(t, step.want, stored.Value)
+			var response struct {
+				Success bool                    `json:"success"`
+				Data    userGroupConfigResponse `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			assert.True(t, response.Success)
+			expected, err := ratio_setting.ParseGroupGroupModelRatios(step.want)
+			require.NoError(t, err)
+			if step.name == "clear" {
+				assert.Empty(t, response.Data.ModelDiscounts)
+			} else {
+				assert.Equal(t, expected["customer"], response.Data.ModelDiscounts)
+			}
+			if step.name == "replace" {
+				assert.NotEqual(t, current.Revision, response.Data.Revision, "model policy must participate in optimistic concurrency")
+			}
+		})
+	}
 }

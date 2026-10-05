@@ -31,7 +31,9 @@ type PriceData struct {
 	OriginalQuota             int // 按次计费在分组折扣前的原始额度
 	QuotaToPreConsume         int // 按量计费的预消耗额度
 	OriginalQuotaToPreConsume int // 按量计费在分组折扣前的预估额度
-	GroupRatioInfo            GroupRatioInfo
+	// QuotaToPreConsumeBeforeGroup preserves the unrounded legacy estimate for group retries.
+	QuotaToPreConsumeBeforeGroup float64
+	GroupRatioInfo               GroupRatioInfo
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {

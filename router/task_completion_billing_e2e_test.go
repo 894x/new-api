@@ -28,23 +28,33 @@ func TestPluginTerminalBillingEndToEnd(t *testing.T) {
 		immediate, expression, monthly, failure bool
 		retryChange                             string
 		inherited                               bool
+		modelDiscount                           *float64
 	}{
-		{"immediate expression", true, true, false, false, "", false},
-		{"immediate expression failure", true, true, false, true, "", false},
-		{"immediate monthly expression", true, true, true, false, "", false},
-		{"immediate monthly expression failure", true, true, true, true, "", false},
-		{"polled monthly expression", false, true, true, false, "", false},
-		{"polled monthly expression failure", false, true, true, true, "", false},
-		{"immediate ratio", true, false, false, false, "", false},
-		{"immediate ratio failure", true, false, false, true, "", false},
-		{"immediate monthly ratio", true, false, true, false, "", false},
-		{"retry retains expression and quota unit", true, true, false, false, "expression", false},
-		{"retry retains expression mode", false, true, false, false, "mode", false},
-		{"retry retains deleted expression through monthly polling", false, true, true, false, "deleted", false},
-		{"mapped expression overrides existing alias per-call price", true, true, false, false, "", true},
-		{"retry freezes inherited expression and quota unit", true, true, false, false, "expression", true},
-		{"retry retains inherited expression mode", false, true, false, false, "mode", true},
-		{"retry retains deleted inherited expression through monthly polling", false, true, true, false, "deleted", true},
+		{"immediate expression", true, true, false, false, "", false, nil},
+		{"immediate expression failure", true, true, false, true, "", false, nil},
+		{"immediate monthly expression", true, true, true, false, "", false, nil},
+		{"immediate monthly expression failure", true, true, true, true, "", false, nil},
+		{"polled monthly expression", false, true, true, false, "", false, nil},
+		{"polled monthly expression failure", false, true, true, true, "", false, nil},
+		{"immediate ratio", true, false, false, false, "", false, nil},
+		{"immediate ratio failure", true, false, false, true, "", false, nil},
+		{"immediate monthly ratio", true, false, true, false, "", false, nil},
+		{"polled monthly ratio failure with usage", false, false, true, true, "", false, nil},
+		{"retry retains expression and quota unit", true, true, false, false, "expression", false, nil},
+		{"retry retains expression mode", false, true, false, false, "mode", false, nil},
+		{"retry retains deleted expression through monthly polling", false, true, true, false, "deleted", false, nil},
+		{"mapped expression overrides existing alias per-call price", true, true, false, false, "", true, nil},
+		{"retry freezes inherited expression and quota unit", true, true, false, false, "expression", true, nil},
+		{"retry retains inherited expression mode", false, true, false, false, "mode", true, nil},
+		{"retry retains deleted inherited expression through monthly polling", false, true, true, false, "deleted", true, nil},
+		{"immediate public model contract expression", true, true, true, false, "", true, common.GetPointer(0.6)},
+		{"immediate public model contract expression failure", true, true, true, true, "", true, common.GetPointer(0.6)},
+		{"polled public model contract freezes expression discount", false, true, true, false, "", true, common.GetPointer(0.6)},
+		{"polled public model contract expression failure", false, true, true, true, "", true, common.GetPointer(0.6)},
+		{"immediate model contract ratio", true, false, true, false, "", false, common.GetPointer(0.6)},
+		{"polled model contract freezes ratio discount", false, false, true, false, "", false, common.GetPointer(0.6)},
+		{"polled model contract ratio failure", false, false, true, true, "", false, common.GetPointer(0.6)},
+		{"polled zero model contract", false, true, true, false, "", true, common.GetPointer(0.0)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setupRelayRouterTestDB(t)
@@ -67,7 +77,14 @@ func TestPluginTerminalBillingEndToEnd(t *testing.T) {
 			common.QuotaPerUnit, common.LogConsumeEnabled, common.BatchUpdateEnabled, common.MemoryCacheEnabled = 1000, true, false, true
 			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
 			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"billing-fixture":2}`))
-			settings := map[string]string{"billing_setting.billing_mode": `{}`, "group_ratio_setting.group_ratio": `{"default":0.25}`, "group_ratio_setting.model_tiered_ratios": `{}`}
+			settings := map[string]string{"billing_setting.billing_mode": `{}`, "group_ratio_setting.group_ratio": `{"default":0.25,"task-pool":0.4}`, "group_ratio_setting.model_tiered_ratios": `{}`, "group_ratio_setting.group_group_ratio": `{}`, "group_ratio_setting.group_group_model_ratio": `{}`}
+			usingGroup := "default"
+			if tc.modelDiscount != nil {
+				usingGroup = "task-pool"
+				settings["group_ratio_setting.group_special_usable_group"] = `{"default":{"task-pool":"Task pool"}}`
+				settings["group_ratio_setting.group_group_ratio"] = `{"default":{"task-pool":0.8}}`
+				settings["group_ratio_setting.group_group_model_ratio"] = fmt.Sprintf(`{"default":{"task-pool":{"billing-fixture":%g,"billing-target":9}}}`, *tc.modelDiscount)
+			}
 			expressionModel := "billing-fixture"
 			if tc.inherited {
 				expressionModel = "billing-target"
@@ -81,12 +98,12 @@ func TestPluginTerminalBillingEndToEnd(t *testing.T) {
 				}
 			}
 			if tc.monthly {
-				settings["group_ratio_setting.model_tiered_ratios"] = `{"default":{"billing-fixture":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":1},{"min_monthly_original_quota":10000,"ratio":0.5}]}}}`
+				settings["group_ratio_setting.model_tiered_ratios"] = fmt.Sprintf(`{%q:{"billing-fixture":{"enabled":true,"effective_from":0,"effective_until":null,"timezone":"UTC","tiers":[{"min_monthly_original_quota":0,"ratio":1},{"min_monthly_original_quota":10000,"ratio":0.5}]}}}`, usingGroup)
 			}
 			require.NoError(t, config.GlobalConfig.LoadFromDB(settings))
 			pluginruntime.DefaultRegistry = pluginruntime.NewRegistry()
 			_, err := pluginruntime.DefaultRegistry.RegisterFactory(`
-export const meta = {apiVersion:1,key:"billing-fixture",name:"Billing fixture",version:"1.0.0",author:{name:"Test"},models:["billing-fixture","billing-target"],fetchMode:"per_task",usageSchema:{seconds:{type:"number",unit:"second",description:"Video duration"}},routes:[{method:"POST",path:"/billing-fixture/jobs",type:"submit",decode:"decode",render:"created"}]};
+export const meta = {apiVersion:1,key:"billing-fixture",name:"Billing fixture",version:"1.0.0",author:{name:"Test"},models:["billing-fixture","billing-target"],fetchMode:"per_task",usageSchema:{seconds:{type:"number",unit:"second",description:{en:"Video generation unit price",zh:"视频生成单价"}}},routes:[{method:"POST",path:"/billing-fixture/jobs",type:"submit",decode:"decode",render:"created"}]};
 export const native = {decode(ctx){return {kind:"submit",model:ctx.body.value.model,action:"text_to_video",requestBody:ctx.body.value};},created(ctx,task){return {id:task.task_id,status:task.status};}};
 export function buildSubmitRequest(ctx){return {url:ctx.baseUrl+"/submit",method:"POST",body:ctx.requestBody};}
 export function extractUsage(ctx){return {seconds:ctx.requestBody.seconds};}
@@ -139,10 +156,10 @@ export function extractUsageOnComplete(task,result,b){return {seconds:b.seconds}
 			t.Cleanup(upstream.Close)
 			user := model.User{Username: "terminal-billing", Group: "default", Status: common.UserStatusEnabled, Quota: 100000}
 			require.NoError(t, model.DB.Create(&user).Error)
-			token := model.Token{UserId: user.Id, Key: "terminalbilling", Status: common.TokenStatusEnabled, ExpiredTime: -1, RemainQuota: 100000}
+			token := model.Token{UserId: user.Id, Key: "terminalbilling", Group: usingGroup, Status: common.TokenStatusEnabled, ExpiredTime: -1, RemainQuota: 100000}
 			require.NoError(t, model.DB.Create(&token).Error)
 			channelSettings := `{"task_plugin_key":"billing-fixture"}`
-			ch := model.Channel{Type: constant.ChannelTypeTaskPlugin, Name: "billing-fixture", Key: "provider-key", Models: "billing-fixture", Group: "default", Status: common.ChannelStatusEnabled, BaseURL: &upstream.URL, Setting: &channelSettings, AutoBan: common.GetPointer(0), Priority: common.GetPointer(int64(10))}
+			ch := model.Channel{Type: constant.ChannelTypeTaskPlugin, Name: "billing-fixture", Key: "provider-key", Models: "billing-fixture", Group: usingGroup, Status: common.ChannelStatusEnabled, BaseURL: &upstream.URL, Setting: &channelSettings, AutoBan: common.GetPointer(0), Priority: common.GetPointer(int64(10))}
 			if tc.inherited {
 				ch.ModelMapping = common.GetPointer(`{"billing-fixture":"billing-target"}`)
 			}
@@ -193,14 +210,25 @@ export function extractUsageOnComplete(task,result,b){return {seconds:b.seconds}
 				}
 			}
 			if !tc.immediate {
+				if tc.modelDiscount != nil {
+					require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{"group_ratio_setting.group_group_model_ratio": `{"default":{"task-pool":{"billing-fixture":0.9,"billing-target":9}}}`}))
+				}
 				require.NoError(t, service.UpdateVideoTasks(context.Background(), task.Platform, map[int][]string{ch.Id: {task.GetUpstreamTaskID()}}, map[string]*model.Task{task.GetUpstreamTaskID(): &task}))
 				require.NoError(t, model.DB.First(&task, task.ID).Error)
+				if tc.modelDiscount != nil {
+					// A repeated terminal observation must neither charge nor
+					// refund the same task again.
+					require.NoError(t, service.UpdateVideoTasks(context.Background(), task.Platform, map[int][]string{ch.Id: {task.GetUpstreamTaskID()}}, map[string]*model.Task{task.GetUpstreamTaskID(): &task}))
+					require.NoError(t, model.DB.First(&task, task.ID).Error)
+				}
 			}
 			wantOriginal, wantCharge := 8000, 2000
 			if tc.expression {
 				wantOriginal, wantCharge = 16000, 4000
 			}
-			if tc.monthly {
+			if tc.modelDiscount != nil {
+				wantCharge = int(float64(wantOriginal) * *tc.modelDiscount)
+			} else if tc.monthly {
 				wantCharge = wantOriginal
 				if wantOriginal > 10000 {
 					wantCharge = 10000 + (wantOriginal-10000)/2
@@ -216,10 +244,32 @@ export function extractUsageOnComplete(task,result,b){return {seconds:b.seconds}
 			require.NoError(t, model.DB.First(&ch, ch.Id).Error)
 			assert.Equal(t, 100000-wantCharge, user.Quota)
 			assert.Equal(t, 100000-wantCharge, token.RemainQuota)
+			assert.Equal(t, wantCharge, token.UsedQuota)
 			assert.Equal(t, wantCharge, user.UsedQuota)
 			assert.Equal(t, int64(wantCharge), ch.UsedQuota)
 			assert.Equal(t, 1, user.RequestCount)
-			if tc.monthly {
+			var logs []model.Log
+			require.NoError(t, model.LOG_DB.Where("token_id = ? AND type IN ?", token.Id, []int{model.LogTypeConsume, model.LogTypeRefund}).Find(&logs).Error)
+			require.NotEmpty(t, logs)
+			loggedCharge := 0
+			for _, log := range logs {
+				assert.Equal(t, "billing-fixture", log.ModelName)
+				assert.Equal(t, usingGroup, log.Group)
+				assert.Equal(t, ch.Id, log.ChannelId)
+				if log.Type == model.LogTypeRefund {
+					loggedCharge -= log.Quota
+				} else {
+					loggedCharge += log.Quota
+				}
+			}
+			assert.Equal(t, wantCharge, loggedCharge, "consume minus refund logs must equal the final wallet and token charge")
+			if tc.modelDiscount != nil {
+				var monthlyUsage, monthlySettlements int64
+				require.NoError(t, model.DB.Model(&model.UserGroupModelMonthlyUsage{}).Count(&monthlyUsage).Error)
+				require.NoError(t, model.DB.Model(&model.GroupModelDiscountSettlement{}).Count(&monthlySettlements).Error)
+				assert.Zero(t, monthlyUsage, "model contracts must not advance monthly discount accounting")
+				assert.Zero(t, monthlySettlements)
+			} else if tc.monthly {
 				var usage model.UserGroupModelMonthlyUsage
 				query := model.DB.Find(&usage)
 				require.NoError(t, query.Error)
@@ -239,7 +289,11 @@ export function extractUsageOnComplete(task,result,b){return {seconds:b.seconds}
 			if tc.immediate {
 				assert.Zero(t, polls.Load())
 			} else {
-				assert.Equal(t, int32(1), polls.Load())
+				wantPolls := int32(1)
+				if tc.modelDiscount != nil {
+					wantPolls = 2
+				}
+				assert.Equal(t, wantPolls, polls.Load())
 			}
 		})
 	}

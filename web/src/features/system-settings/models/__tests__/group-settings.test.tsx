@@ -44,6 +44,7 @@ const defaults = {
   TopupGroupRatio: '{"vip":1.2}',
   UserUsableGroups: '{"default":"Standard access","vip":"Premium access"}',
   GroupGroupRatio: '{}',
+  GroupGroupModelRatio: '{}',
   AutoGroups: '["default","vip"]',
   MaxTokenAutoGroups: 5,
   DefaultUseAutoGroup: false,
@@ -57,6 +58,7 @@ const schema = z.object({
   TopupGroupRatio: z.string(),
   UserUsableGroups: z.string(),
   GroupGroupRatio: z.string(),
+  GroupGroupModelRatio: z.string().optional(),
   AutoGroups: z.string(),
   MaxTokenAutoGroups: positiveIntegerSchema('Enter a positive integer'),
   DefaultUseAutoGroup: z.boolean(),
@@ -66,7 +68,7 @@ const schema = z.object({
 })
 
 function Fixture(props: {
-  onSave?: (values: typeof defaults) => Promise<void>
+  onSave?: (values: z.infer<typeof schema>) => Promise<void>
   initial?: Partial<typeof defaults>
   isSaving?: boolean
 }) {
@@ -77,7 +79,7 @@ function Fixture(props: {
         defaultOptions: { queries: { retry: false } },
       })
   )
-  const form = useForm({
+  const form = useForm<z.infer<typeof schema>>({
     defaultValues: { ...defaults, ...props.initial },
     resolver: zodResolver(schema),
   })
@@ -96,6 +98,41 @@ function Fixture(props: {
 }
 
 describe('group settings workspace', () => {
+  it('preserves user and billing group model rules and applies zero without submitting the outer form', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: z.infer<typeof schema>) => {})
+    render(
+      <Fixture
+        onSave={onSave}
+        initial={{
+          GroupGroupModelRatio:
+            '{"default":{"default":{"public-a":0.123456789}},"vip":{"vip":{"public-a":0.75}}}',
+        }}
+      />
+    )
+    await user.click(screen.getByRole('tab', { name: 'Special ratio rules' }))
+    expect(screen.getByText('0.123456789')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Edit model ratio' }))
+    const dialog = screen.getByRole('dialog')
+    const ratio = within(dialog).getByRole('spinbutton', { name: 'Ratio' })
+    await user.clear(ratio)
+    await user.type(ratio, '-1')
+    expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled()
+    await user.clear(ratio)
+    await user.type(ratio, '0')
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }))
+    expect(onSave).not.toHaveBeenCalled()
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    expect(
+      JSON.parse(onSave.mock.calls[0][0].GroupGroupModelRatio ?? '{}')
+    ).toEqual({
+      default: { default: { 'public-a': 0 } },
+      vip: { vip: { 'public-a': 0.75 } },
+    })
+  })
   it('filters by description and clears search without discarding edits', async () => {
     const user = userEvent.setup()
     render(<Fixture />)
@@ -165,7 +202,7 @@ describe('group settings workspace', () => {
 
   it('reorders and removes auto groups with named controls and saves across sections', async () => {
     const user = userEvent.setup()
-    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    const onSave = vi.fn(async (_values: z.infer<typeof schema>) => {})
     render(<Fixture onSave={onSave} />)
     await user.click(screen.getByRole('tab', { name: 'Auto group order' }))
     const list = screen.getByRole('list', { name: 'Auto group order' })
@@ -196,7 +233,7 @@ describe('group settings workspace', () => {
 
   it('reorders from the drag handle with arrow keys, preserves unknown groups and saves the new order', async () => {
     const user = userEvent.setup()
-    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    const onSave = vi.fn(async (_values: z.infer<typeof schema>) => {})
     render(
       <Fixture
         onSave={onSave}
@@ -261,7 +298,7 @@ describe('group settings workspace', () => {
 
   it('opens the auto section and focuses its invalid limit when saving from another section', async () => {
     const user = userEvent.setup()
-    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    const onSave = vi.fn(async (_values: z.infer<typeof schema>) => {})
     render(<Fixture onSave={onSave} />)
     await user.click(screen.getByRole('tab', { name: 'Auto group order' }))
     fireEvent.change(

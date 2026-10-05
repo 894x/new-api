@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
@@ -118,6 +119,50 @@ function renderUserEditor() {
 }
 
 describe('User group quick configuration', () => {
+  it('saves public model ratios under each key group and keeps edits local until the drawer is saved', async () => {
+    const operator = userEvent.setup()
+    const configured = {
+      ...sharedConfig,
+      model_discounts: {
+        default: { 'public-a': 0.2 },
+        vip: { 'public-a': 0.8 },
+      },
+    }
+    vi.mocked(api.get).mockImplementation(async (url) => ({
+      data: {
+        success: true,
+        data: url === '/api/channel/models_enabled' ? [] : configured,
+      },
+    }))
+    vi.mocked(api.put).mockResolvedValue({
+      data: { success: true, data: configured },
+    })
+    renderGroupConfig()
+    await screen.findByText('Model special ratio rules')
+    await operator.click(
+      screen.getAllByRole('button', { name: 'Edit model ratio' })[0]
+    )
+    const dialog = screen.getByRole('dialog', { name: 'Edit model ratio' })
+    const ratio = within(dialog).getByRole('spinbutton', { name: 'Ratio' })
+    await operator.clear(ratio)
+    await operator.type(ratio, '0')
+    await operator.click(within(dialog).getByRole('button', { name: 'Apply' }))
+    expect(api.put).not.toHaveBeenCalled()
+    await operator.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith(
+        '/api/user/42/group-config',
+        expect.objectContaining({
+          group: 'default',
+          revision: 'revision-1',
+          model_discounts: {
+            default: { 'public-a': 0 },
+            vip: { 'public-a': 0.8 },
+          },
+        })
+      )
+    )
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })

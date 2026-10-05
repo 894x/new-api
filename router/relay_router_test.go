@@ -2,8 +2,10 @@ package router
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -13,8 +15,11 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
+	sqlmysql "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -117,7 +122,52 @@ func setupRelayRouterTestDB(t *testing.T) func(*testing.T) {
 	common.RedisEnabled = false
 	common.SQLitePath = fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
-	require.NoError(t, os.Setenv("SQL_DSN", "local"))
+	testDSN := "local"
+	if dialect := os.Getenv("TEST_RELAY_DIALECT"); dialect != "" && dialect != "sqlite" {
+		name := fmt.Sprintf("newapi_discount_relay_%d", time.Now().UnixNano())
+		var driver gorm.Dialector
+		switch dialect {
+		case "mysql":
+			dsn := os.Getenv("TEST_MYSQL_DSN")
+			require.NotEmpty(t, dsn)
+			parsed, err := sqlmysql.ParseDSN(dsn)
+			require.NoError(t, err)
+			require.Equal(t, "tcp", parsed.Net)
+			host, _, err := net.SplitHostPort(parsed.Addr)
+			require.NoError(t, err)
+			require.True(t, net.ParseIP(host).IsLoopback(), "external relay tests require a disposable loopback instance")
+			driver = mysql.Open(dsn)
+			parsed.DBName = name
+			testDSN = parsed.FormatDSN()
+		case "postgres":
+			dsn := os.Getenv("TEST_POSTGRES_DSN")
+			require.NotEmpty(t, dsn)
+			parsed, err := url.Parse(dsn)
+			require.NoError(t, err)
+			require.True(t, net.ParseIP(parsed.Hostname()).IsLoopback(), "external relay tests require a disposable loopback instance")
+			driver = postgres.Open(dsn)
+			parsed.Path = "/" + name
+			testDSN = parsed.String()
+		default:
+			t.Fatalf("unsupported relay test dialect: %s", dialect)
+		}
+		admin, err := gorm.Open(driver, &gorm.Config{})
+		require.NoError(t, err)
+		create := "CREATE DATABASE " + name
+		if dialect == "mysql" {
+			create += " CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+		}
+		require.NoError(t, admin.Exec(create).Error)
+		// Only the newly created, task-owned database is removed. Register this
+		// before connection cleanup so refunds finish and connections close first.
+		t.Cleanup(func() {
+			assert.NoError(t, admin.Exec("DROP DATABASE "+name).Error)
+			connection, err := admin.DB()
+			require.NoError(t, err)
+			assert.NoError(t, connection.Close())
+		})
+	}
+	require.NoError(t, os.Setenv("SQL_DSN", testDSN))
 	require.NoError(t, model.InitDB())
 	model.LOG_DB = model.DB
 	require.NoError(t, model.DB.AutoMigrate(
@@ -129,6 +179,13 @@ func setupRelayRouterTestDB(t *testing.T) func(*testing.T) {
 		&model.BillingRefundOperation{},
 	))
 	testDB := model.DB
+	versionQuery := "SELECT version()"
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
+		versionQuery = "SELECT sqlite_version()"
+	}
+	var version string
+	require.NoError(t, testDB.Raw(versionQuery).Scan(&version).Error)
+	t.Logf("relay database: %s %s", common.MainDatabaseType(), version)
 	var completedRefundReads sync.Map
 	const refundCallback = "test:relay_refund_final_read"
 	// Status persistence precedes the reconciler's final read. Observe that

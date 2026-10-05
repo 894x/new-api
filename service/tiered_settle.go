@@ -189,9 +189,6 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 			types.ErrOptionWithSkipRetry(),
 		)
 	}
-	if snap == nil && !groupModelDiscountActive {
-		return nil
-	}
 	if snap != nil && snap.GroupRatio == 0 && !groupModelDiscountActive {
 		// Paid-to-free keeps FreeModel as-is: FreeModel means "pre-consume was
 		// skipped", which is not true once a session exists, and settlement
@@ -208,6 +205,15 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 		relayInfo.PriceData.QuotaToPreConsume = targetQuota
 	} else if snap != nil {
 		targetQuota = snap.EstimatedQuotaAfterGroup
+	} else {
+		// Legacy prices freeze their unrounded admission estimate too. Reprice
+		// only the group factor, without rereading mutable model prices or
+		// dividing an already-rounded (possibly zero) initial reservation.
+		targetQuota, err = common.QuotaFromFloatStrict(relayInfo.PriceData.QuotaToPreConsumeBeforeGroup * relayInfo.PriceData.GroupRatioInfo.GroupRatio)
+		if err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		relayInfo.PriceData.QuotaToPreConsume = targetQuota
 	}
 	// Input-only estimates can be zero for output-priced models. Monthly
 	// settlement still needs a session, including after a free-group retry.
@@ -222,7 +228,12 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 	if relayInfo.Billing == nil {
 		return PreConsumeBilling(c, targetQuota, relayInfo)
 	}
-	if err := relayInfo.Billing.Reserve(targetQuota); err != nil {
+	if _, modelContract := relayInfo.ResolveModelGroupSpecialRatio(); modelContract {
+		err = relayInfo.Billing.ReserveForAdmission(targetQuota)
+	} else {
+		err = relayInfo.Billing.Reserve(targetQuota)
+	}
+	if err != nil {
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
 	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
