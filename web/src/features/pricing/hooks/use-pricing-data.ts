@@ -53,13 +53,21 @@ export function usePricingData(enabled = true) {
       const vendor = model.vendor_id
         ? vendorMap.get(model.vendor_id)
         : undefined
+      const groupRatios = { ...data.group_ratio }
+      for (const [group, ratios] of Object.entries(
+        data.group_model_ratio ?? {}
+      )) {
+        if (Object.hasOwn(ratios, model.model_name)) {
+          groupRatios[group] = ratios[model.model_name]
+        }
+      }
       return {
         ...model,
         key: model.model_name,
         vendor_name: vendor?.name,
         vendor_icon: vendor?.icon,
         vendor_description: vendor?.description,
-        group_ratio: data.group_ratio,
+        group_ratio: groupRatios,
       }
     })
   }, [data])

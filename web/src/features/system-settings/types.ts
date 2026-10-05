@@ -330,6 +330,7 @@ export type ModelSettings = {
   GroupRatio: string
   UserUsableGroups: string
   GroupGroupRatio: string
+  'group_ratio_setting.group_group_model_ratio': string
   AutoGroups: string
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
@@ -374,6 +375,7 @@ export type BillingSettings = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   'group_ratio_setting.group_special_usable_group': string
+  'group_ratio_setting.group_group_model_ratio': string
   'group_ratio_setting.model_tiered_ratios': string
   GroupModelChannelGroups: string
   PayAddress: string

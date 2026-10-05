@@ -162,6 +162,7 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	if info.OriginModelName == "" {
 		if originTask.Properties.OriginModelName != "" {
 			info.OriginModelName = originTask.Properties.OriginModelName
+			info.PublicModelName = originTask.Properties.OriginModelName
 		} else if originTask.Properties.UpstreamModelName != "" {
 			info.OriginModelName = originTask.Properties.UpstreamModelName
 		} else {
@@ -373,6 +374,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	if !mappedBeforeValidate {
 		info.OriginModelName = modelName
+		if info.PublicModelName == "" {
+			info.PublicModelName = modelName
+		}
 		info.UpstreamModelName = modelName
 		if err := helper.ModelMappedHelper(c, info, nil); err != nil {
 			return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)

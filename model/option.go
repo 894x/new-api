@@ -349,6 +349,10 @@ func validateOptionValue(key string, value string) error {
 	if key == ratio_setting.ModelTieredRatiosOptionKey {
 		return ratio_setting.CheckModelTieredRatios(value)
 	}
+	if key == ratio_setting.GroupGroupModelRatioOptionKey {
+		_, err := ratio_setting.ParseGroupGroupModelRatios(value)
+		return err
+	}
 	if key == "error_setting.blocked_response_headers" {
 		_, err := operation_setting.ValidateBlockedResponseHeadersJSON(value)
 		return err
@@ -578,6 +582,13 @@ func updateOptionMap(key string, value string) (err error) {
 	}
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
+	if key == ratio_setting.GroupGroupModelRatioOptionKey {
+		if err := ratio_setting.UpdateGroupGroupModelRatioByJSONString(value); err != nil {
+			return err
+		}
+		common.OptionMap[key] = value
+		return nil
+	}
 	if key == setting.GroupModelChannelGroupsOptionKey {
 		if err := setting.UpdateGroupModelChannelGroups(value); err != nil {
 			return err

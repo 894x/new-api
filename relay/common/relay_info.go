@@ -150,7 +150,11 @@ type RelayInfo struct {
 	UsePrice               bool
 	RelayMode              int
 	OriginModelName        string
-	ResponseModel          *ResponseModel
+	// PublicModelName retains the client-facing ID across channel mappings and billing aliases.
+	PublicModelName            string
+	modelSpecialRatios         map[string]map[string]float64
+	modelSpecialRatiosCaptured bool
+	ResponseModel              *ResponseModel
 
 	// BillingModelName is the pricing identity for this request. It is kept
 	// separate from OriginModelName and UpstreamModelName so virtual pricing
@@ -286,6 +290,9 @@ type RelayInfo struct {
 // the same immutable resolver on their first pricing use for compatibility.
 func (info *RelayInfo) ResolveGroupModelDiscount() (groupdiscount.Snapshot, bool, error) {
 	if info == nil {
+		return groupdiscount.Snapshot{}, false, nil
+	}
+	if _, matched := info.ResolveModelGroupSpecialRatio(); matched {
 		return groupdiscount.Snapshot{}, false, nil
 	}
 	if info.GroupModelDiscountResolver == nil || info.GroupModelDiscountResolverOriginModel != info.GetBillingModelName() {
@@ -710,7 +717,10 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		UserQuota:     common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
 		UserEmail:     common.GetContextKeyString(c, constant.ContextKeyUserEmail),
 
-		OriginModelName: originModelName,
+		OriginModelName:            originModelName,
+		PublicModelName:            originModelName,
+		modelSpecialRatios:         ratio_setting.GetUserGroupModelRatios(common.GetContextKeyString(c, constant.ContextKeyUserGroup)),
+		modelSpecialRatiosCaptured: true,
 
 		TokenId:        common.GetContextKeyInt(c, constant.ContextKeyTokenId),
 		TokenKey:       common.GetContextKeyString(c, constant.ContextKeyTokenKey),
@@ -945,6 +955,22 @@ func (info *RelayInfo) GetOriginModelName() string {
 		return ""
 	}
 	return info.OriginModelName
+}
+
+// ResolveModelGroupSpecialRatio uses the public model and a request-local policy snapshot.
+func (info *RelayInfo) ResolveModelGroupSpecialRatio() (float64, bool) {
+	if info == nil {
+		return 0, false
+	}
+	if !info.modelSpecialRatiosCaptured {
+		if info.PublicModelName == "" {
+			info.PublicModelName = info.OriginModelName
+		}
+		info.modelSpecialRatios = ratio_setting.GetUserGroupModelRatios(info.UserGroup)
+		info.modelSpecialRatiosCaptured = true
+	}
+	ratio, matched := info.modelSpecialRatios[info.UsingGroup][info.PublicModelName]
+	return ratio, matched
 }
 
 // GetBillingModelName returns the effective pricing identity without changing

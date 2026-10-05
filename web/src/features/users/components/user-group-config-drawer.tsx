@@ -59,6 +59,8 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { GroupModelSpecialRatioEditor } from '@/features/system-settings/models/group-model-special-ratio-editor'
+import { billingGroupModelRatiosSchema } from '@/features/system-settings/models/lib/group-model-special-ratios'
 import { RateLimitModelRulesEditor } from '@/features/system-settings/request-limits/rate-limit-model-rules-editor'
 import { MAX_REQUEST_RATE_LIMIT } from '@/features/system-settings/request-limits/rate-limit-validation'
 import { handleServerError } from '@/lib/handle-server-error'
@@ -84,6 +86,7 @@ const createSchema = (t: (key: string) => string) =>
           ratio: z.number().min(0, t('Must be ≥ 0')),
         })
       ),
+      modelDiscounts: billingGroupModelRatiosSchema,
       rateLimitEnabled: z.boolean(),
       maxRequests: z.number().int().min(0).max(MAX_REQUEST_RATE_LIMIT),
       maxSuccess: z.number().int().min(1).max(MAX_REQUEST_RATE_LIMIT),
@@ -142,6 +145,7 @@ type FormValues = z.infer<ReturnType<typeof createSchema>>
 
 const emptyValues: FormValues = {
   discounts: [],
+  modelDiscounts: {},
   rateLimitEnabled: false,
   maxRequests: 0,
   maxSuccess: 1,
@@ -156,6 +160,7 @@ function toFormValues(config: UserGroupConfig): FormValues {
       targetGroup,
       ratio,
     })),
+    modelDiscounts: config.model_discounts ?? {},
     rateLimitEnabled: config.rate_limit_enabled,
     maxRequests: config.rate_limit.limits[0],
     maxSuccess: config.rate_limit.limits[1],
@@ -224,6 +229,9 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
   const groupOptions = useMemo(() => {
     const names = new Set(Object.keys(config?.available_group_ratios ?? {}))
     for (const item of form.getValues('discounts')) names.add(item.targetGroup)
+    for (const group of Object.keys(config?.model_discounts ?? {})) {
+      names.add(group)
+    }
     return [...names]
       .sort((left, right) => left.localeCompare(right))
       .map((name) => ({ value: name, label: name }))
@@ -239,6 +247,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
         discounts: Object.fromEntries(
           values.discounts.map((item) => [item.targetGroup, item.ratio])
         ),
+        model_discounts: values.modelDiscounts,
         rate_limit_enabled: values.rateLimitEnabled,
         rate_limit: {
           limits: [values.maxRequests, values.maxSuccess, values.maxTPM],
@@ -418,7 +427,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                     <TabsTrigger value='channels'>{t('Channels')}</TabsTrigger>
                   </TabsList>
 
-                  <TabsContent value='discounts' className='pt-5'>
+                  <TabsContent value='discounts' className='space-y-5 pt-5'>
                     <SideDrawerSection>
                       <SideDrawerSectionHeader
                         title={t('Specified group discounts')}
@@ -492,6 +501,28 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                       >
                         <Plus /> {t('Add ratio override')}
                       </Button>
+                    </SideDrawerSection>
+                    <SideDrawerSection>
+                      <SideDrawerSectionHeader
+                        title={t('Model special ratio rules')}
+                      />
+                      <FormField
+                        control={form.control}
+                        name='modelDiscounts'
+                        render={({ field }) => (
+                          <FormItem>
+                            <GroupModelSpecialRatioEditor
+                              value={field.value}
+                              groupOptions={groupOptions.map(
+                                (group) => group.value
+                              )}
+                              onChange={field.onChange}
+                              disabled={save.isPending}
+                            />
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
                     </SideDrawerSection>
                   </TabsContent>
 

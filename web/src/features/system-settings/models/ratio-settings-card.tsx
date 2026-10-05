@@ -46,6 +46,7 @@ import { safeJsonParse } from '../utils/json-parser'
 import { positiveIntegerSchema } from '../utils/numeric-field'
 import { GroupRatioForm } from './group-ratio-form'
 import { parseGroupModelChannelGroups } from './lib/group-model-channel-groups'
+import { groupModelSpecialRatiosSchema } from './lib/group-model-special-ratios'
 import {
   formatGroupModelTieredRatiosForTextarea,
   getUnknownTieredRatioGroups,
@@ -147,6 +148,11 @@ const createGroupSchema = (t: Translate) =>
       TopupGroupRatio: createJsonStringField(t),
       UserUsableGroups: createJsonStringField(t),
       GroupGroupRatio: createJsonStringField(t),
+      GroupGroupModelRatio: createJsonStringField(t, {
+        predicate: (parsed) =>
+          groupModelSpecialRatiosSchema.safeParse(parsed).success,
+        predicateMessage: 'Invalid model special ratios',
+      }).optional(),
       AutoGroups: createJsonStringField(t, {
         predicate: (parsed) =>
           Array.isArray(parsed) &&
@@ -317,6 +323,9 @@ export function RatioSettingsCard({
     TopupGroupRatio: normalizeJsonString(groupDefaults.TopupGroupRatio),
     UserUsableGroups: normalizeJsonString(groupDefaults.UserUsableGroups),
     GroupGroupRatio: normalizeJsonString(groupDefaults.GroupGroupRatio),
+    GroupGroupModelRatio: normalizeJsonString(
+      groupDefaults.GroupGroupModelRatio || '{}'
+    ),
     AutoGroups: normalizeJsonString(groupDefaults.AutoGroups),
     MaxTokenAutoGroups: groupDefaults.MaxTokenAutoGroups,
     DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
@@ -363,6 +372,9 @@ export function RatioSettingsCard({
       TopupGroupRatio: formatJsonForTextarea(groupDefaults.TopupGroupRatio),
       UserUsableGroups: formatJsonForTextarea(groupDefaults.UserUsableGroups),
       GroupGroupRatio: formatJsonForTextarea(groupDefaults.GroupGroupRatio),
+      GroupGroupModelRatio: formatJsonForTextarea(
+        groupDefaults.GroupGroupModelRatio || '{}'
+      ),
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
@@ -419,6 +431,9 @@ export function RatioSettingsCard({
       TopupGroupRatio: normalizeJsonString(groupDefaults.TopupGroupRatio),
       UserUsableGroups: normalizeJsonString(groupDefaults.UserUsableGroups),
       GroupGroupRatio: normalizeJsonString(groupDefaults.GroupGroupRatio),
+      GroupGroupModelRatio: normalizeJsonString(
+        groupDefaults.GroupGroupModelRatio || '{}'
+      ),
       AutoGroups: normalizeJsonString(groupDefaults.AutoGroups),
       MaxTokenAutoGroups: groupDefaults.MaxTokenAutoGroups,
       DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
@@ -439,6 +454,9 @@ export function RatioSettingsCard({
       TopupGroupRatio: formatJsonForTextarea(groupDefaults.TopupGroupRatio),
       UserUsableGroups: formatJsonForTextarea(groupDefaults.UserUsableGroups),
       GroupGroupRatio: formatJsonForTextarea(groupDefaults.GroupGroupRatio),
+      GroupGroupModelRatio: formatJsonForTextarea(
+        groupDefaults.GroupGroupModelRatio || '{}'
+      ),
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
@@ -509,6 +527,9 @@ export function RatioSettingsCard({
         TopupGroupRatio: normalizeJsonString(values.TopupGroupRatio),
         UserUsableGroups: normalizeJsonString(values.UserUsableGroups),
         GroupGroupRatio: normalizeJsonString(values.GroupGroupRatio),
+        GroupGroupModelRatio: normalizeJsonString(
+          values.GroupGroupModelRatio || '{}'
+        ),
         AutoGroups: normalizeJsonString(values.AutoGroups),
         MaxTokenAutoGroups: values.MaxTokenAutoGroups,
         DefaultUseAutoGroup: values.DefaultUseAutoGroup,
@@ -528,6 +549,7 @@ export function RatioSettingsCard({
         GroupSpecialUsableGroup:
           'group_ratio_setting.group_special_usable_group',
         ModelTieredRatios: 'group_ratio_setting.model_tiered_ratios',
+        GroupGroupModelRatio: 'group_ratio_setting.group_group_model_ratio',
       }
 
       const pricingPairChanged =

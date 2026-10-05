@@ -204,6 +204,7 @@ export interface UserGroupConfig {
   revision: string
   group_user_count: number
   discounts: Record<string, number>
+  model_discounts?: Record<string, Record<string, number>>
   rate_limit_enabled: boolean
   global_rate_limit_enabled: boolean
   rate_limit: UserGroupRateLimit
@@ -215,6 +216,7 @@ export interface UpdateUserGroupConfigPayload {
   group: string
   revision: string
   discounts: Record<string, number>
+  model_discounts?: Record<string, Record<string, number>>
   rate_limit_enabled: boolean
   rate_limit: UserGroupRateLimit
   model_channel_groups: Record<string, string[]>

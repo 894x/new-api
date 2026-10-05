@@ -135,6 +135,9 @@ func CaptureModelTieredDiscountResolver(userGroup, originModel string, requestAt
 // request. A user-group -> using-group contract remains authoritative and
 // suppresses dynamic discounting, preserving existing GroupGroupRatio behavior.
 func ResolveModelTieredDiscount(userGroup, usingGroup, originModel string, requestAt time.Time) (groupdiscount.Snapshot, bool, error) {
+	if _, hasModelRatio := GetGroupGroupModelRatio(userGroup, usingGroup, originModel); hasModelRatio {
+		return groupdiscount.Snapshot{}, false, nil
+	}
 	if _, hasContractRatio := GetGroupGroupRatio(userGroup, usingGroup); hasContractRatio {
 		return groupdiscount.Snapshot{}, false, nil
 	}

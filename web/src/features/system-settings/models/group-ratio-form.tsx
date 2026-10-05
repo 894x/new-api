@@ -81,6 +81,7 @@ type GroupFormValues = {
   TopupGroupRatio: string
   UserUsableGroups: string
   GroupGroupRatio: string
+  GroupGroupModelRatio?: string
   AutoGroups: string
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
@@ -256,6 +257,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               topupGroupRatio={values.TopupGroupRatio ?? ''}
               userUsableGroups={values.UserUsableGroups ?? ''}
               groupGroupRatio={values.GroupGroupRatio ?? ''}
+              groupGroupModelRatio={values.GroupGroupModelRatio ?? '{}'}
               autoGroups={values.AutoGroups ?? ''}
               maxTokenAutoGroupsField={
                 <FormField
@@ -446,6 +448,31 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                     {`{ targetGroup: ratio }`}{' '}
                     {t(
                       'to override billing when a user in one group uses a token of another group.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='GroupGroupModelRatio'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Model special ratio rules')}</FormLabel>
+                  <FormControl>
+                    <JsonCodeEditor
+                      value={field.value ?? '{}'}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Nested JSON: user group → billing group → public model ID → ratio'
                     )}
                   </FormDescription>
                   <FormMessage />

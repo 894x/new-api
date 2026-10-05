@@ -26,6 +26,7 @@ import (
 	"maps"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,12 +45,13 @@ var userGroupConfigMutex sync.Mutex
 const dedicatedUserGroupPrefix = "企业客户-"
 
 type userGroupConfigUpdateRequest struct {
-	Group              string                 `json:"group"`
-	Revision           string                 `json:"revision"`
-	Discounts          map[string]float64     `json:"discounts"`
-	RateLimitEnabled   bool                   `json:"rate_limit_enabled"`
-	RateLimit          setting.GroupRateLimit `json:"rate_limit"`
-	ModelChannelGroups map[string][]string    `json:"model_channel_groups"`
+	Group              string                          `json:"group"`
+	Revision           string                          `json:"revision"`
+	Discounts          map[string]float64              `json:"discounts"`
+	ModelDiscounts     *map[string]map[string]*float64 `json:"model_discounts"`
+	RateLimitEnabled   bool                            `json:"rate_limit_enabled"`
+	RateLimit          setting.GroupRateLimit          `json:"rate_limit"`
+	ModelChannelGroups map[string][]string             `json:"model_channel_groups"`
 }
 
 type userGroupRateLimitResponse struct {
@@ -58,19 +60,20 @@ type userGroupRateLimitResponse struct {
 }
 
 type userGroupConfigResponse struct {
-	UserID                 int                        `json:"user_id"`
-	Username               string                     `json:"username"`
-	Group                  string                     `json:"group"`
-	DedicatedGroupName     string                     `json:"dedicated_group_name"`
-	IsDedicatedGroup       bool                       `json:"is_dedicated_group"`
-	Revision               string                     `json:"revision"`
-	Discounts              map[string]float64         `json:"discounts"`
-	RateLimitEnabled       bool                       `json:"rate_limit_enabled"`
-	GlobalRateLimitEnabled bool                       `json:"global_rate_limit_enabled"`
-	RateLimit              userGroupRateLimitResponse `json:"rate_limit"`
-	ModelChannelGroups     map[string][]string        `json:"model_channel_groups"`
-	AvailableGroupRatios   map[string]float64         `json:"available_group_ratios"`
-	GroupUserCount         int64                      `json:"group_user_count"`
+	UserID                 int                           `json:"user_id"`
+	Username               string                        `json:"username"`
+	Group                  string                        `json:"group"`
+	DedicatedGroupName     string                        `json:"dedicated_group_name"`
+	IsDedicatedGroup       bool                          `json:"is_dedicated_group"`
+	Revision               string                        `json:"revision"`
+	Discounts              map[string]float64            `json:"discounts"`
+	ModelDiscounts         map[string]map[string]float64 `json:"model_discounts"`
+	RateLimitEnabled       bool                          `json:"rate_limit_enabled"`
+	GlobalRateLimitEnabled bool                          `json:"global_rate_limit_enabled"`
+	RateLimit              userGroupRateLimitResponse    `json:"rate_limit"`
+	ModelChannelGroups     map[string][]string           `json:"model_channel_groups"`
+	AvailableGroupRatios   map[string]float64            `json:"available_group_ratios"`
+	GroupUserCount         int64                         `json:"group_user_count"`
 }
 
 type createDedicatedUserGroupRequest struct {
@@ -213,6 +216,18 @@ func CreateDedicatedUserGroup(c *gin.Context) {
 	if source, exists := discounts[user.Group]; exists {
 		discounts[newGroup] = maps.Clone(source)
 	}
+	modelDiscounts, err := ratio_setting.ParseGroupGroupModelRatios(ratio_setting.GroupGroupModelRatio2JSONString())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if _, exists := modelDiscounts[newGroup]; exists {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "dedicated user group policy already exists"})
+		return
+	}
+	if _, exists := modelDiscounts[user.Group]; exists {
+		modelDiscounts[newGroup] = ratio_setting.GetUserGroupModelRatios(user.Group)
+	}
 
 	rateLimits := make(map[string]json.RawMessage)
 	if err := common.UnmarshalJsonStr(setting.ModelRequestRateLimitGroup2JSONString(), &rateLimits); err != nil {
@@ -256,9 +271,10 @@ func CreateDedicatedUserGroup(c *gin.Context) {
 		specialGroups[newGroup] = maps.Clone(source)
 	}
 
-	values := make(map[string]string, 4)
+	values := make(map[string]string, 5)
 	for key, value := range map[string]any{
-		"GroupGroupRatio":                                discounts,
+		"GroupGroupRatio": discounts,
+		ratio_setting.GroupGroupModelRatioOptionKey:      modelDiscounts,
 		"ModelRequestRateLimitGroup":                     rateLimits,
 		setting.GroupModelChannelGroupsOptionKey:         channelPolicies,
 		"group_ratio_setting.group_special_usable_group": specialGroups,
@@ -370,6 +386,34 @@ func UpdateUserGroupConfig(c *gin.Context) {
 	} else {
 		discountPolicies[user.Group] = request.Discounts
 	}
+	var modelDiscountsJSON []byte
+	if request.ModelDiscounts != nil {
+		encoded, marshalErr := common.Marshal(map[string]any{user.Group: *request.ModelDiscounts})
+		if marshalErr != nil {
+			common.ApiError(c, marshalErr)
+			return
+		}
+		updated, parseErr := ratio_setting.ParseGroupGroupModelRatios(string(encoded))
+		if parseErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": parseErr.Error()})
+			return
+		}
+		policies, parseErr := ratio_setting.ParseGroupGroupModelRatios(ratio_setting.GroupGroupModelRatio2JSONString())
+		if parseErr != nil {
+			common.ApiError(c, parseErr)
+			return
+		}
+		if len(updated[user.Group]) == 0 {
+			delete(policies, user.Group)
+		} else {
+			policies[user.Group] = updated[user.Group]
+		}
+		modelDiscountsJSON, err = common.Marshal(policies)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
 
 	rateLimits := make(map[string]json.RawMessage)
 	if err := common.UnmarshalJsonStr(setting.ModelRequestRateLimitGroup2JSONString(), &rateLimits); err != nil {
@@ -422,18 +466,27 @@ func UpdateUserGroupConfig(c *gin.Context) {
 		return
 	}
 
-	if err := model.UpdateOptionsBulk(map[string]string{
+	options := map[string]string{
 		"GroupGroupRatio":                        string(discountsJSON),
 		"ModelRequestRateLimitGroup":             string(rateLimitsJSON),
 		setting.GroupModelChannelGroupsOptionKey: string(channelPoliciesJSON),
-	}); err != nil {
+	}
+	if request.ModelDiscounts != nil {
+		options[ratio_setting.GroupGroupModelRatioOptionKey] = string(modelDiscountsJSON)
+	}
+	if err := model.UpdateOptionsBulk(options); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
+	keys := make([]string, 0, len(options))
+	for key := range options {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
 	recordManageAuditFor(c, userID, "user.group_config.update", map[string]any{
 		"group": user.Group,
-		"keys":  []string{"GroupGroupRatio", "ModelRequestRateLimitGroup", setting.GroupModelChannelGroupsOptionKey},
+		"keys":  keys,
 	})
 	config, err := buildUserGroupConfig(userID)
 	if err != nil {
@@ -461,6 +514,7 @@ func buildUserGroupConfig(userID int) (*userGroupConfigResponse, error) {
 	if discounts == nil {
 		discounts = map[string]float64{}
 	}
+	modelDiscounts := ratio_setting.GetUserGroupModelRatios(user.Group)
 
 	rateLimits := setting.GetModelRequestRateLimitGroups()
 	rateLimit, rateLimitEnabled := rateLimits[user.Group]
@@ -481,14 +535,15 @@ func buildUserGroupConfig(userID int) (*userGroupConfigResponse, error) {
 	}
 	specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()[user.Group]
 	revisionPayload, err := common.Marshal(struct {
-		Username           string                 `json:"username"`
-		Group              string                 `json:"group"`
-		Discounts          map[string]float64     `json:"discounts"`
-		RateLimitEnabled   bool                   `json:"rate_limit_enabled"`
-		RateLimit          setting.GroupRateLimit `json:"rate_limit"`
-		ModelChannelGroups map[string][]string    `json:"model_channel_groups"`
-		SpecialGroups      map[string]string      `json:"special_groups"`
-	}{user.Username, user.Group, discounts, rateLimitEnabled, rateLimit, modelChannelGroups, specialGroups})
+		Username           string                        `json:"username"`
+		Group              string                        `json:"group"`
+		Discounts          map[string]float64            `json:"discounts"`
+		ModelDiscounts     map[string]map[string]float64 `json:"model_discounts"`
+		RateLimitEnabled   bool                          `json:"rate_limit_enabled"`
+		RateLimit          setting.GroupRateLimit        `json:"rate_limit"`
+		ModelChannelGroups map[string][]string           `json:"model_channel_groups"`
+		SpecialGroups      map[string]string             `json:"special_groups"`
+	}{user.Username, user.Group, discounts, modelDiscounts, rateLimitEnabled, rateLimit, modelChannelGroups, specialGroups})
 	if err != nil {
 		return nil, err
 	}
@@ -502,6 +557,7 @@ func buildUserGroupConfig(userID int) (*userGroupConfigResponse, error) {
 		IsDedicatedGroup:       strings.HasPrefix(user.Group, dedicatedUserGroupPrefix),
 		Revision:               revision,
 		Discounts:              discounts,
+		ModelDiscounts:         modelDiscounts,
 		RateLimitEnabled:       rateLimitEnabled,
 		GlobalRateLimitEnabled: setting.ModelRequestRateLimitEnabled,
 		RateLimit: userGroupRateLimitResponse{

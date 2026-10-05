@@ -83,6 +83,7 @@ import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
 
 import { safeJsonParse } from '../utils/json-parser'
+import { GroupModelSpecialRatioPoliciesEditor } from './group-model-special-ratio-editor'
 import { GroupSpecialUsableRulesEditor } from './group-special-usable-editor'
 
 export type GroupSettingsSection =
@@ -99,6 +100,7 @@ type GroupRatioVisualEditorProps = {
   topupGroupRatio: string
   userUsableGroups: string
   groupGroupRatio: string
+  groupGroupModelRatio?: string
   autoGroups: string
   maxTokenAutoGroupsField: ReactNode
   groupSpecialUsableGroup: string
@@ -274,6 +276,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   topupGroupRatio,
   userUsableGroups,
   groupGroupRatio,
+  groupGroupModelRatio = '{}',
   autoGroups,
   maxTokenAutoGroupsField,
   groupSpecialUsableGroup,
@@ -374,11 +377,22 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
           onShowDetail={setDetailGroup}
         />
       </TabsContent>
-      <TabsContent value='overrides' keepMounted>
+      <TabsContent value='overrides' keepMounted className='space-y-5'>
         <GroupOverrideRules
           registry={registry}
           groupGroupRatio={groupGroupRatio}
           onChange={onChange}
+        />
+        <GroupModelSpecialRatioPoliciesEditor
+          value={groupGroupModelRatio}
+          groupOptions={registryNames}
+          userGroupOptions={[
+            ...new Set([
+              ...registryNames,
+              ...Object.keys(parseNestedRatioMap(groupGroupRatio)),
+            ]),
+          ]}
+          onChange={(value) => onChange('GroupGroupModelRatio', value)}
         />
       </TabsContent>
       <TabsContent value='visibility' keepMounted>
