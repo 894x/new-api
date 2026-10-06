@@ -31,8 +31,10 @@ import { requireServerSuccess } from '@/lib/server-error-message'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { API_KEY_STATUSES } from '../constants'
+import { useApiKeyPricingData } from '../hooks/use-api-key-pricing'
 import type { ApiKey } from '../types'
 import { ApiKeyGroupCell } from './api-key-group-cell'
+import { ApiKeyPricingCell } from './api-key-pricing-cell'
 import { ApiKeyQuotaCell } from './api-key-quota-cell'
 import {
   ApiKeyActivityCell,
@@ -73,6 +75,7 @@ export function useApiKeysColumns(now: number): ColumnDef<ApiKey>[] {
   const { meta: currency } = getCurrencyDisplay()
   const quotaUnit = currency.kind === 'tokens' ? t('Tokens') : currency.symbol
   const groupRatios = useGroupRatios()
+  const pricing = useApiKeyPricingData()
   const shouldReduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const justNowLabel = t('Just now')
@@ -167,6 +170,20 @@ export function useApiKeysColumns(now: number): ColumnDef<ApiKey>[] {
         meta: { mobileHidden: true },
       },
       {
+        id: 'pricing',
+        header: t('Model prices and discounts'),
+        cell: ({ row }) => (
+          <ApiKeyPricingCell
+            apiKey={row.original}
+            pricing={pricing}
+            isLoading={pricing.isLoading}
+            error={pricing.error}
+          />
+        ),
+        enableSorting: false,
+        size: 210,
+      },
+      {
         id: 'model_limits',
         accessorKey: 'model_limits',
         header: t('Models'),
@@ -233,6 +250,15 @@ export function useApiKeysColumns(now: number): ColumnDef<ApiKey>[] {
         meta: { pinned: 'right' as const },
       },
     ],
-    [t, quotaUnit, now, groupRatios, shouldReduceMotion, locale, justNowLabel]
+    [
+      t,
+      quotaUnit,
+      now,
+      groupRatios,
+      pricing,
+      shouldReduceMotion,
+      locale,
+      justNowLabel,
+    ]
   )
 }

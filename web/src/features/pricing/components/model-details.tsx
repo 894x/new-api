@@ -637,7 +637,7 @@ function ModelHeader(props: { model: PricingModel }) {
 // Base price card (used in the Overview tab)
 // ----------------------------------------------------------------------------
 
-function PriceSection(props: {
+export function PriceSection(props: {
   model: PricingModel
   priceRate: number
   usdExchangeRate: number
@@ -997,7 +997,7 @@ type GroupPricingSectionProps = {
   showRechargePrice?: boolean
 }
 
-function GroupPricingSection(props: GroupPricingSectionProps) {
+export function GroupPricingSection(props: GroupPricingSectionProps) {
   const { t } = useTranslation()
   const variants = props.model.billing_plugin_variants
   if (!variants?.length) {

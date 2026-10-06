@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { ApiKeyPricingDrawer } from './api-key-pricing-drawer'
 import { ApiKeysDeleteDialog } from './api-keys-delete-dialog'
 import { ApiKeysMutateDrawer } from './api-keys-mutate-drawer'
 import { useApiKeys } from './api-keys-provider'
@@ -26,6 +27,14 @@ export function ApiKeysDialogs() {
 
   return (
     <>
+      {open === 'pricing' && currentRow && (
+        <ApiKeyPricingDrawer
+          key={currentRow.id}
+          apiKey={currentRow}
+          open
+          onOpenChange={(isOpen) => !isOpen && setOpen(null)}
+        />
+      )}
       <ApiKeysMutateDrawer
         open={open === 'create' || open === 'update'}
         onOpenChange={(isOpen) => !isOpen && setOpen(null)}

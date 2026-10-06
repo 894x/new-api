@@ -106,6 +106,7 @@ export interface TokenAutoGroupsConfig {
 // ============================================================================
 
 export type ApiKeysDialogType =
+  | 'pricing'
   | 'create'
   | 'update'
   | 'delete'

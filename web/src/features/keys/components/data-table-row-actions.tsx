@@ -254,6 +254,14 @@ export function DataTableRowActions<TData>({
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
+          onClick={() => {
+            setCurrentRow(apiKey)
+            setOpen('pricing')
+          }}
+        >
+          {t('Model prices and discounts')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
           onClick={async () => {
             const realKey = await resolveRealKey(apiKey.id)
             if (!realKey) return

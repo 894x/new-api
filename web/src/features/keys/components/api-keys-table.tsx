@@ -143,6 +143,9 @@ function ApiKeysMobileList({
         const expiryCell = row
           .getAllCells()
           .find((cell) => cell.column.id === 'expired_time')
+        const pricingCell = row
+          .getAllCells()
+          .find((cell) => cell.column.id === 'pricing')
 
         return (
           <div
@@ -184,6 +187,11 @@ function ApiKeysMobileList({
                   )}
               </div>
               <ApiKeyQuotaCell apiKey={apiKey} now={now} variant='card' />
+              {pricingCell &&
+                flexRender(
+                  pricingCell.column.columnDef.cell,
+                  pricingCell.getContext()
+                )}
             </div>
 
             <div className='flex flex-wrap items-center gap-x-5 gap-y-1'>

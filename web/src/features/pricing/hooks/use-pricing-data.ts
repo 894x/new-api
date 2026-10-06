@@ -21,17 +21,25 @@ import { useMemo } from 'react'
 
 import { useStatus } from '@/hooks/use-status'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import { useAuthStore } from '@/stores/auth-store'
 
-import { getPricing } from '../api'
+import { getAccountPricing, getPricing } from '../api'
 
-export function usePricingData(enabled = true) {
+export function usePricingData(
+  enabled = true,
+  source: 'catalog' | 'account' = 'catalog'
+) {
   const { status } = useStatus()
+  const userId = useAuthStore((state) => state.auth.user?.id)
 
-  const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['pricing'],
-    queryFn: async () => requireServerSuccess(await getPricing()),
-    staleTime: 5 * 60 * 1000,
-    enabled,
+  const { data, isLoading, isFetching, error, refetch } = useQuery({
+    queryKey: ['pricing', source, userId],
+    queryFn: async () =>
+      requireServerSuccess(
+        await (source === 'account' ? getAccountPricing() : getPricing())
+      ),
+    staleTime: source === 'account' ? 0 : 5 * 60 * 1000,
+    enabled: enabled && (source !== 'account' || userId !== undefined),
   })
 
   // Ensure rates never reach zero to prevent division errors
@@ -76,10 +84,13 @@ export function usePricingData(enabled = true) {
     models,
     vendors: data?.vendors ?? [],
     groupRatio: data?.group_ratio ?? {},
+    groupModelRatio: data?.group_model_ratio ?? {},
+    currentGroup: data?.current_group ?? '',
     usableGroup: data?.usable_group ?? {},
     endpointMap: data?.supported_endpoint ?? {},
     autoGroups: data?.auto_groups ?? [],
     isLoading,
+    isFetching,
     error,
     refetch,
     priceRate,

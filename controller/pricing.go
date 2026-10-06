@@ -45,14 +45,16 @@ func GetPricing(c *gin.Context) {
 	var group string
 	if exists {
 		user, err := model.GetUserCache(userId.(int))
-		if err == nil {
-			group = user.Group
-			groupModelRatio = ratio_setting.GetUserGroupModelRatios(group)
-			for g := range groupRatio {
-				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
-				if ok {
-					groupRatio[g] = ratio
-				}
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		group = user.Group
+		groupModelRatio = ratio_setting.GetUserGroupModelRatios(group)
+		for g := range groupRatio {
+			ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
+			if ok {
+				groupRatio[g] = ratio
 			}
 		}
 	}
