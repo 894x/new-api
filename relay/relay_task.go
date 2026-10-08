@@ -33,17 +33,18 @@ import (
 )
 
 type TaskSubmitResult struct {
-	UpstreamTaskID string
-	TaskData       []byte
-	ClientResponse any
-	Platform       constant.TaskPlatform
-	Quota          int // fixed-group fallback quota; controller replaces it with the settled net amount
-	OriginalQuota  int // true pre-group amount used by monthly group/model tier calculation
-	responseStatus int
-	responseHeader http.Header
-	responseBody   []byte
-	Immediate      *relaycommon.TaskInfo
-	PluginState    []byte
+	UpstreamTaskID    string
+	TaskData          []byte
+	ClientResponse    any
+	Platform          constant.TaskPlatform
+	Quota             int // fixed-group fallback quota; controller replaces it with the settled net amount
+	OriginalQuota     int // true pre-group amount used by monthly group/model tier calculation
+	responseStatus    int
+	responseHeader    http.Header
+	responseBody      []byte
+	Immediate         *relaycommon.TaskInfo
+	PluginState       []byte
+	PendingSubmission *model.TaskPendingSubmission
 	//PerCallPrice   types.PriceData
 }
 
@@ -358,8 +359,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			}
 		}
 		seedanceChannel := info.ChannelType == constant.ChannelTypeSeedanceSLS || info.ChannelType == constant.ChannelTypeDoubaoVideo || pluginKey == "seedance-sls" || pluginKey == "doubao"
-		if err := prepareManagedVideoRequest(c, info.UserId, seedanceChannel); err != nil {
-			return nil, service.TaskErrorWrapperLocal(err, "asset_storage_failed", http.StatusBadRequest)
+		if pluginKey != "seedance-sls" {
+			if err := prepareManagedVideoRequest(c, info.UserId, seedanceChannel); err != nil {
+				return nil, service.TaskErrorWrapperLocal(err, "asset_storage_failed", http.StatusBadRequest)
+			}
 		}
 	}
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
@@ -522,6 +525,18 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 8. 构建请求体
+	if deferred, ok := adaptor.(interface {
+		PrepareTaskSubmission(*gin.Context, *relaycommon.RelayInfo) (*model.TaskPendingSubmission, error)
+	}); ok {
+		pending, err := deferred.PrepareTaskSubmission(c, info)
+		if err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "build_request_failed", http.StatusBadRequest)
+		}
+		if pending != nil {
+			return &TaskSubmitResult{Platform: platform, Quota: info.PriceData.Quota,
+				OriginalQuota: info.PriceData.OriginalQuota, PendingSubmission: pending}, nil
+		}
+	}
 	requestBody, err := adaptor.BuildRequestBody(c, info)
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "build_request_failed", http.StatusInternalServerError)

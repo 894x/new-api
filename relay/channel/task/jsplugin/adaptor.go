@@ -248,15 +248,24 @@ func (a *TaskAdaptor) ValidateMappedRequest(c *gin.Context, info *relaycommon.Re
 	if err != nil {
 		return service.TaskErrorWrapperLocal(err, "plugin_request_invalid", http.StatusBadRequest)
 	}
-	// SLS historically applies channel policies before media validation and
-	// quota reservation. Freeze that final payload so billing and transmission
-	// cannot disagree, and rebuild it from the original request on every retry.
+	// Freeze administrator rewrites and billing multipliers before reservation.
+	// Media transformations are applied to that payload by the background runner.
 	if a.plugin.Meta.Key == "seedance-sls" {
 		data, err := common.Marshal(descriptor.Body)
 		if err != nil {
 			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
 		}
-		data, err = relaycommon.ApplyRequestPoliciesWithRelayInfo(data, info, service.NewParameterMediaTransformer(c, info))
+		if err := relaycommon.CheckMediaTransformPassThrough(info); err != nil {
+			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+		}
+		if len(info.ParamOverride) == 0 {
+			info.ParamOverrideAudit = nil
+		}
+		data, err = relaycommon.ApplyParamOverrideWithRelayInfo(data, info)
+		if err != nil {
+			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+		}
+		data, err = relaycommon.ApplyParameterCapabilitiesWithRelayInfo(data, info)
 		if err != nil {
 			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
 		}
@@ -270,16 +279,8 @@ func (a *TaskAdaptor) ValidateMappedRequest(c *gin.Context, info *relaycommon.Re
 		if _, err := a.plugin.Engine.Call(c.Request.Context(), "validatePreparedRequest", a.submitContext(c, info), prepared); err != nil {
 			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
 		}
-		convertMedia := info.ChannelOtherSettings.SeedanceBase64VideoToURL == nil || *info.ChannelOtherSettings.SeedanceBase64VideoToURL
-		prepared, err = service.ConvertSeedanceBase64Media(c.Request.Context(), prepared, convertMedia)
-		if err != nil {
-			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
-		}
-		requestContext, err := service.ValidateSeedanceMedia(c.Request.Context(), info.UserId, info.GetUpstreamModelName(), prepared)
-		if err != nil {
-			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
-		}
-		c.Request = c.Request.WithContext(requestContext)
+		// Media I/O runs after the durable SLS receipt. Admission still validates
+		// the mapped payload and every billing multiplier before reservation.
 		descriptor.Body = prepared
 	}
 	a.requestPrepared = true

@@ -106,9 +106,9 @@ func TestSeedanceSLSPluginRejectsInvalidFinalPolicies(t *testing.T) {
 	}
 }
 
-func TestSeedanceSLSPluginMediaValidationUsesFinalMappedPayload(t *testing.T) {
+func TestSeedanceSLSPluginDefersMediaValidationWithFinalMappedPayload(t *testing.T) {
 	for _, removeInvalid := range []bool{false, true} {
-		t.Run(map[bool]string{false: "reject final invalid audio", true: "override removes invalid audio"}[removeInvalid], func(t *testing.T) {
+		t.Run(map[bool]string{false: "retain audio for background validation", true: "override removes invalid audio"}[removeInvalid], func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"public-alias","content":[{"type":"text","text":"a fox"},{"type":"audio_url","audio_url":{"url":"data:audio/wav;base64,YQ=="}}]}`))
 			c.Request.Header.Set("Content-Type", gin.MIMEJSON)
@@ -122,12 +122,18 @@ func TestSeedanceSLSPluginMediaValidationUsesFinalMappedPayload(t *testing.T) {
 			adaptor := taskplugin.New(seedanceSLSPlugin(t))
 			adaptor.Init(info)
 			require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
-			taskErr := adaptor.ValidateMappedRequest(c, info)
+			require.Nil(t, adaptor.ValidateMappedRequest(c, info))
+			pending, err := adaptor.PrepareTaskSubmission(c, info)
+			require.NoError(t, err)
+			require.NotNil(t, pending)
+			var body map[string]any
+			require.NoError(t, common.Unmarshal(pending.Body, &body))
+			assert.Equal(t, info.UpstreamModelName, body["model"])
 			if removeInvalid {
-				require.Nil(t, taskErr)
+				assert.Len(t, body["content"], 1)
 			} else {
-				require.NotNil(t, taskErr)
-				assert.Contains(t, taskErr.Message, "content[1].audio_url")
+				assert.Len(t, body["content"], 2)
+				assert.Contains(t, string(pending.Body), "data:audio/wav;base64,YQ==")
 			}
 		})
 	}
@@ -165,7 +171,7 @@ func TestSeedanceSLSPluginPollingPreservesNestedUsageAndFailures(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSeedanceSLSPluginTransformsMediaBeforeValidation(t *testing.T) {
+func TestSeedanceSLSPluginDefersMediaTransforms(t *testing.T) {
 	previousLimit := constant.MaxFileDownloadMB
 	constant.MaxFileDownloadMB = 64
 	previousAddress := system_setting.TaskPublicAddress
@@ -210,10 +216,13 @@ func TestSeedanceSLSPluginTransformsMediaBeforeValidation(t *testing.T) {
 	require.NoError(t, common.DecodeJson(body, &payload))
 	media := payload["content"].([]any)[1].(map[string]any)
 	assert.Equal(t, "first_frame", media["role"])
-	assert.Contains(t, media["image_url"].(map[string]any)["url"], "/v1/seedance-media/")
-	assert.Len(t, downloads, 1)
-	require.Len(t, info.ParameterCapabilityAudit, 1)
-	assert.Equal(t, "image_url_to_base64", info.ParameterCapabilityAudit[0].Action)
+	assert.Equal(t, server.URL, media["image_url"].(map[string]any)["url"])
+	assert.Empty(t, downloads)
+	pending, err := adaptor.PrepareTaskSubmission(c, info)
+	require.NoError(t, err)
+	require.NotNil(t, pending)
+	assert.Contains(t, string(pending.MediaPolicy), "image_url_to_base64")
+	assert.Empty(t, downloads)
 }
 
 func TestSeedanceSLSPluginArtifactFallbackAndLastFrame(t *testing.T) {

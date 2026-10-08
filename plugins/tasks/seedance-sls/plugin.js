@@ -2,7 +2,7 @@ export const meta = {
   apiVersion: 1,
   key: "seedance-sls",
   name: "Seedance SLS",
-  version: "1.0.1",
+  version: "1.0.2",
   author: { name: "QuantumNous" },
   channelTypes: [104],
   models: [
@@ -300,7 +300,10 @@ export const native = {
       result.content = { video_url: data.result_url || task.result_url || "" };
       if (data.last_frame_url) result.content.last_frame_url = data.last_frame_url;
     }
-    if (task.status === "FAILURE") result.error = { code: "", message: task.fail_reason || "task failed" };
+    if (task.status === "FAILURE") {
+      result.error = { code: (data.error && data.error.code) || "", message: task.fail_reason || "task failed" };
+      if (data.error && data.error.stage) result.error.stage = data.error.stage;
+    }
     return result;
   },
   error: function (_ctx, error) {
@@ -322,7 +325,11 @@ export const protocols = {
         progress: Number(String(task.progress || "0").replace("%", "")),
         created_at: task.created_at,
       };
-      if (task.status === "FAILURE") result.error = { message: task.fail_reason || "task failed" };
+      if (task.status === "FAILURE") {
+        const data = task.data ? taskData(task.data, 0) : {};
+        result.error = { code: (data.error && data.error.code) || "", message: task.fail_reason || "task failed" };
+        if (data.error && data.error.stage) result.error.stage = data.error.stage;
+      }
       return result;
     },
   },

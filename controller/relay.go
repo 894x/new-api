@@ -903,6 +903,10 @@ func executeTaskSubmissionWith(
 	task.PrivateData.AssetReferences = relay.ManagedVideoTaskReferences(c)
 	task.PrivateData.Execution = service.TaskExecutionSnapshotFromContext(c)
 	task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
+	if result.PendingSubmission != nil {
+		task.PrivateData.PendingSubmission = result.PendingSubmission
+		task.PrivateData.Key = relayInfo.ApiKey
+	}
 	task.PrivateData.BillingSource = relayInfo.BillingSource
 	task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 	task.PrivateData.TokenId = relayInfo.TokenId

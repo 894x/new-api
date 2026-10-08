@@ -1,13 +1,19 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,8 +23,11 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
+	jspluginadaptor "github.com/QuantumNous/new-api/relay/channel/task/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -683,4 +692,333 @@ func TestExecuteTaskSubmissionRefundsWhenFinalReserveFails(t *testing.T) {
 	assert.Equal(t, []string{"reserve", "refund"}, events)
 	assert.Equal(t, 1, billing.refunds)
 	assert.False(t, c.Writer.Written())
+}
+
+// Exercises the real SLS admission, asset import, background dispatch, public
+// presenters and refund chain on every dialect supported by this fixture.
+func TestSLSDeferredSubmissionDatabase(t *testing.T) {
+	db, dialect := openTaskDialectDatabase(t, &model.User{}, &model.Channel{}, &model.Task{}, &model.Log{},
+		&model.BillingAdmissionReserveOperation{}, &model.BillingRefundOperation{}, &model.AuditLog{},
+		&model.ChannelAssetConfig{}, &model.UserAssetGroup{}, &model.UserAsset{},
+		&model.UserAssetGroupReplica{}, &model.UserAssetReplica{})
+	previousDB, previousLog := model.DB, model.LOG_DB
+	previousMain, previousLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	previousRedis, previousMemory, previousBatch := common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled
+	previousConsume, previousExport := common.LogConsumeEnabled, common.DataExportEnabled
+	previousFactory := service.GetTaskAdaptorFunc
+	previousQueryLimit, previousTimeout, previousDownloadLimit := constant.TaskQueryLimit, constant.TaskTimeoutMinutes, constant.MaxFileDownloadMB
+	previousFetch := *system_setting.GetFetchSetting()
+	previousAddress := system_setting.TaskPublicAddress
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("test:isolated-audit-table", func(tx *gorm.DB) {
+		if tx.Statement.Table == "audit_logs" {
+			tx.Statement.Table = tx.NamingStrategy.TableName("audit_logs")
+			tx.Statement.TableExpr = nil
+		}
+	}))
+	model.DB, model.LOG_DB = db, db
+	common.SetDatabaseTypes(dialect, dialect)
+	common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled = false, false, false
+	common.LogConsumeEnabled, common.DataExportEnabled = true, false
+	constant.TaskQueryLimit, constant.TaskTimeoutMinutes = 100, 0
+	constant.MaxFileDownloadMB = 64
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	service.InitHttpClient()
+	t.Setenv("ASSET_STORAGE_ENABLED", "false")
+	t.Setenv("SEEDANCE_VIDEO_DIR", t.TempDir())
+	system_setting.TaskPublicAddress = "http://media.example"
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLog
+		common.SetDatabaseTypes(previousMain, previousLogType)
+		common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled = previousRedis, previousMemory, previousBatch
+		common.LogConsumeEnabled, common.DataExportEnabled = previousConsume, previousExport
+		service.GetTaskAdaptorFunc = previousFactory
+		constant.TaskQueryLimit, constant.TaskTimeoutMinutes = previousQueryLimit, previousTimeout
+		constant.MaxFileDownloadMB = previousDownloadLimit
+		*system_setting.GetFetchSetting() = previousFetch
+		system_setting.TaskPublicAddress = previousAddress
+		service.InitHttpClient()
+	})
+	const modelName = "doubao-seedance-2-0-260128"
+	withTieredBillingConfig(t, map[string]string{modelName: "tiered_expr"}, map[string]string{modelName: `u("tokens") * 0.000001`})
+	source, err := os.ReadFile("../plugins/tasks/seedance-sls/plugin.js")
+	require.NoError(t, err)
+	plugin, err := pluginruntime.CompilePlugin(string(source), pluginruntime.Options{})
+	require.NoError(t, err)
+	service.GetTaskAdaptorFunc = func(constant.TaskPlatform) service.TaskPollingAdaptor { return jspluginadaptor.New(plugin) }
+	legacy := model.Task{TaskID: "legacy-sls-task", Status: model.TaskStatusSuccess, Progress: "100%"}
+	require.NoError(t, db.Create(&legacy).Error)
+	require.NoError(t, db.Model(&legacy).Update("private_data", `{"upstream_task_id":"legacy-vendor","key":"legacy-key"}`).Error)
+	require.NoError(t, db.First(&legacy, legacy.ID).Error)
+	assert.Nil(t, legacy.PrivateData.PendingSubmission)
+	assert.Equal(t, "legacy-vendor", legacy.PrivateData.UpstreamTaskID)
+	_, claimed, err := model.ClaimTaskSubmission(t.Context(), legacy.ID, time.Now().Unix())
+	require.NoError(t, err)
+	assert.False(t, claimed, "historical rows do not enter the new submission queue")
+	t.Run("lease ownership", func(t *testing.T) {
+		ready := false
+		task := model.Task{TaskID: "unfunded-sls-task", Status: model.TaskStatusNotStart, BillingReady: &ready,
+			PrivateData: model.TaskPrivateData{PendingSubmission: &model.TaskPendingSubmission{Body: []byte(`{}`)}}}
+		require.NoError(t, db.Create(&task).Error)
+		_, claimed, err := model.ClaimTaskSubmission(t.Context(), task.ID, time.Now().Unix())
+		require.NoError(t, err)
+		assert.False(t, claimed, "an unconfirmed charge cannot reach the provider")
+		require.NoError(t, db.Model(&task).Update("billing_ready", true).Error)
+		first, claimed, err := model.ClaimTaskSubmission(t.Context(), task.ID, time.Now().Unix())
+		require.NoError(t, err)
+		require.True(t, claimed)
+		leaseID := first.PrivateData.PendingSubmission.LeaseID
+		second, claimed, err := model.ClaimTaskSubmission(t.Context(), task.ID, first.PrivateData.PendingSubmission.LeaseUntil)
+		require.NoError(t, err)
+		require.True(t, claimed)
+		assert.NotEqual(t, leaseID, second.PrivateData.PendingSubmission.LeaseID)
+		first.Status = model.TaskStatusSubmitted
+		won, err := model.UpdateClaimedTaskSubmission(t.Context(), first, leaseID)
+		require.NoError(t, err)
+		assert.False(t, won, "a stale executor cannot overwrite a replacement")
+		second.Status = model.TaskStatusSuccess
+		second.Progress = "100%"
+		secondLeaseID := second.PrivateData.PendingSubmission.LeaseID
+		second.PrivateData.PendingSubmission = nil
+		won, err = model.UpdateClaimedTaskSubmission(t.Context(), second, secondLeaseID)
+		require.NoError(t, err)
+		assert.True(t, won)
+	})
+	var pngBytes bytes.Buffer
+	require.NoError(t, png.Encode(&pngBytes, image.NewRGBA(image.Rect(0, 0, 512, 512))))
+	for index, mode := range []string{"disconnect", "asset failure", "invalid media", "media conversion", "restart during assets", "unknown submit", "concurrent poll", "disabled channel", "deleted channel", "upstream rejection", "transport failure", "timeout during assets", "timeout during upstream"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Cleanup(func() { constant.TaskTimeoutMinutes = 0 })
+			var downloads, uploads, submissions, queries atomic.Int32
+			assetEntered, assetContinue := make(chan struct{}), make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/v1/seedance-media/") {
+					file, contentType, err := service.OpenSeedanceMedia(strings.TrimPrefix(r.URL.Path, "/v1/seedance-media/"))
+					if !assert.NoError(t, err) {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					defer file.Close()
+					w.Header().Set("Content-Type", contentType)
+					_, _ = io.Copy(w, file)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				switch r.Method + " " + r.URL.Path {
+				case "GET /reference.png":
+					downloads.Add(1)
+					w.Header().Set("Content-Type", "image/png")
+					_, _ = w.Write(pngBytes.Bytes())
+				case "POST /v1/volcengine/assets":
+					uploads.Add(1)
+					if mode == "concurrent poll" || mode == "timeout during assets" {
+						close(assetEntered)
+						<-assetContinue
+					}
+					if mode == "asset failure" {
+						_, _ = w.Write([]byte(`{"success":false,"message":"asset rejected"}`))
+						return
+					}
+					_, _ = w.Write([]byte(`{"success":true,"data":{"logical_id":"lass_ref","logical_group_id":"lasg_ref","status":"Active"}}`))
+				case "POST /v1/video/generations":
+					submissions.Add(1)
+					assert.Equal(t, "Bearer sls-test-key", r.Header.Get("Authorization"))
+					var body map[string]any
+					if assert.NoError(t, common.DecodeJson(r.Body, &body)) {
+						assert.Equal(t, modelName, body["model"])
+						items := body["content"].([]any)
+						assert.Equal(t, "asset://lass_ref", items[0].(map[string]any)["image_url"].(map[string]any)["url"])
+					}
+					if mode == "upstream rejection" {
+						w.WriteHeader(http.StatusBadRequest)
+						_, _ = w.Write([]byte(`{"error":{"message":"generation rejected"}}`))
+						return
+					}
+					if mode == "timeout during upstream" {
+						close(assetEntered)
+						<-assetContinue
+					} else if mode == "transport failure" {
+						conn, _, err := w.(http.Hijacker).Hijack()
+						if assert.NoError(t, err) {
+							_ = conn.Close()
+						}
+						return
+					}
+					_, _ = w.Write([]byte(`{"task_id":"vendor-private-id","status":"queued"}`))
+				case "GET /v1/video/generations/vendor-private-id":
+					queries.Add(1)
+					_, _ = w.Write([]byte(`{"task_id":"vendor-private-id","status":"succeeded","total_tokens":10,"result_url":"https://example.com/result.mp4"}`))
+				default:
+					t.Errorf("unexpected provider request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			if mode == "media conversion" {
+				transport := http.DefaultTransport.(*http.Transport).Clone()
+				transport.Proxy = nil
+				dialer := (&net.Dialer{}).DialContext
+				transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+					if address == "media.example:80" {
+						address = server.Listener.Addr().String()
+					}
+					return dialer(ctx, network, address)
+				}
+				previousTransport := service.GetHttpClient().Transport
+				service.GetHttpClient().Transport = transport
+				t.Cleanup(func() { service.GetHttpClient().Transport = previousTransport; transport.CloseIdleConnections() })
+			}
+			initialQuota := int(20 * common.QuotaPerUnit)
+			user := model.User{Username: fmt.Sprintf("sls_user_%d", index), AffCode: fmt.Sprintf("sls_aff_%d", index), Quota: initialQuota}
+			require.NoError(t, db.Create(&user).Error)
+			baseURL := server.URL
+			ch := model.Channel{Name: "SLS test", Status: common.ChannelStatusEnabled, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-test-key", BaseURL: &baseURL}
+			require.NoError(t, db.Create(&ch).Error)
+			require.NoError(t, db.Create(&model.ChannelAssetConfig{ChannelId: ch.Id, Enabled: true,
+				Backend: service.AssetLibraryBackendSeedanceSLS, BaseURL: baseURL, AuthType: service.AssetLibraryAuthBearer, APIKey: "sls-test-key"}).Error)
+			c := taskSubmissionTestContext()
+			requestCtx, cancelCaller := context.WithCancel(c.Request.Context())
+			defer cancelCaller()
+			c.Request = c.Request.WithContext(requestCtx)
+			c.Set("group", "default")
+			c.Set("username", user.Username)
+			c.Set("task_request", map[string]any{"model": modelName, "payload": map[string]any{"model": modelName,
+				"content": []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": baseURL + "/reference.png"}},
+					map[string]any{"type": "text", "text": "animate"}}, "duration": 5}})
+			if mode == "invalid media" {
+				c.Set("task_request", map[string]any{"model": modelName, "payload": map[string]any{"model": modelName,
+					"content": []any{map[string]any{"type": "text", "text": "animate"},
+						map[string]any{"type": "audio_url", "audio_url": map[string]any{"url": "data:audio/wav;base64,YQ=="}}}, "duration": 5}})
+			}
+			c.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Plugin: plugin})
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, modelName)
+			common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, baseURL)
+			common.SetContextKey(c, constant.ContextKeyChannelKey, ch.Key)
+			common.SetContextKey(c, constant.ContextKeyChannelId, ch.Id)
+			common.SetContextKey(c, constant.ContextKeyChannelType, ch.Type)
+			if mode == "media conversion" {
+				common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, kitdto.ChannelOtherSettings{
+					ParameterCapabilities: &kitdto.ParameterCapabilityConfig{Defaults: map[string]kitdto.ParameterCapability{
+						"content.*.image_url": {Transform: "image_url_to_base64"},
+					}},
+				})
+			}
+			info := taskSubmissionRelayInfo(nil)
+			info.UserId, info.OriginModelName, info.UserGroup, info.UsingGroup = user.Id, modelName, "default", "default"
+			info.IsPlayground = true
+			info.UserSetting.BillingPreference = "wallet_only"
+			info.PublicTaskID, info.LockedChannel = model.GenerateTaskID(), &ch
+			outcome, taskErr := executeTaskSubmission(c, info)
+			require.Nil(t, taskErr)
+			require.NotNil(t, outcome)
+			assert.Zero(t, downloads.Load(), "receipt does not wait for asset I/O")
+			assert.Zero(t, uploads.Load())
+			assert.Zero(t, submissions.Load())
+			var stored model.Task
+			require.NoError(t, db.First(&stored, outcome.Task.ID).Error)
+			require.NotNil(t, stored.PrivateData.PendingSubmission)
+			assert.Empty(t, stored.PrivateData.UpstreamTaskID)
+			assert.Equal(t, model.TaskChargeStateCharged, stored.PrivateData.BillingContext.ChargeState)
+			assert.True(t, *stored.BillingReady)
+			assert.Positive(t, stored.Quota)
+			view, err := service.BuildTaskPluginView(&stored)
+			require.NoError(t, err)
+			viewBytes, err := common.Marshal(view)
+			require.NoError(t, err)
+			var publicView map[string]any
+			require.NoError(t, common.Unmarshal(viewBytes, &publicView))
+			receipt, err := plugin.Engine.CallMember(t.Context(), "native", "taskCreated", map[string]any{}, publicView)
+			require.NoError(t, err)
+			assert.Equal(t, stored.TaskID, receipt.(map[string]any)["id"])
+			cancelCaller()
+			if mode == "disabled channel" {
+				require.NoError(t, db.Model(&ch).Update("status", common.ChannelStatusManuallyDisabled).Error)
+			} else if mode == "deleted channel" {
+				require.NoError(t, db.Delete(&ch).Error)
+			}
+			if mode == "restart during assets" || mode == "unknown submit" {
+				stored.PrivateData.PendingSubmission.Stage = model.TaskSubmissionAssets
+				if mode == "unknown submit" {
+					stored.PrivateData.PendingSubmission.Stage = model.TaskSubmissionUpstream
+				}
+				stored.PrivateData.PendingSubmission.LeaseUntil = time.Now().Add(-time.Minute).Unix()
+				require.NoError(t, stored.Update())
+			}
+			if mode == "concurrent poll" || mode == "timeout during assets" || mode == "timeout during upstream" {
+				completed := make(chan struct{})
+				go func() { service.RunTaskPollingOnce(context.Background(), nil); close(completed) }()
+				select {
+				case <-assetEntered:
+				case <-time.After(10 * time.Second):
+					t.Fatal("background asset upload did not start")
+				}
+				if mode != "concurrent poll" {
+					require.NoError(t, db.Model(&stored).Update("submit_time", time.Now().Add(-2*time.Minute).Unix()).Error)
+					constant.TaskTimeoutMinutes = 1
+				}
+				service.RunTaskPollingOnce(context.Background(), nil)
+				close(assetContinue)
+				<-completed
+			} else {
+				service.RunTaskPollingOnce(context.Background(), nil)
+			}
+			require.NoError(t, db.First(&stored, outcome.Task.ID).Error)
+			var account model.User
+			require.NoError(t, db.First(&account, user.Id).Error)
+			unknownFailure := mode == "unknown submit" || mode == "transport failure" || mode == "timeout during upstream"
+			if unknownFailure || mode == "asset failure" || mode == "invalid media" || mode == "disabled channel" || mode == "deleted channel" || mode == "upstream rejection" || mode == "timeout during assets" {
+				require.Equal(t, model.TaskStatus(model.TaskStatusFailure), stored.Status)
+				view, err = service.BuildTaskPluginView(&stored)
+				require.NoError(t, err)
+				viewBytes, err = common.Marshal(view)
+				require.NoError(t, err)
+				require.NoError(t, common.Unmarshal(viewBytes, &publicView))
+				queried, err := plugin.Engine.CallMember(t.Context(), "native", "taskStatus", map[string]any{}, publicView)
+				require.NoError(t, err)
+				publicError := queried.(map[string]any)["error"].(map[string]any)
+				if !unknownFailure {
+					stage := model.TaskSubmissionAssets
+					if mode == "upstream rejection" {
+						stage = model.TaskSubmissionUpstream
+					}
+					code := stage + "_failed"
+					if mode == "timeout during assets" {
+						code = "asset_prepare_timeout"
+					}
+					assert.Equal(t, code, publicError["code"])
+					assert.Equal(t, stage, publicError["stage"])
+					assert.NotEmpty(t, publicError["message"])
+					if mode == "asset failure" {
+						assert.Contains(t, publicError["message"], "asset rejected")
+					}
+					assert.Equal(t, initialQuota, account.Quota)
+					assert.Zero(t, account.UsedQuota)
+					assert.Zero(t, stored.Quota)
+				} else {
+					assert.Equal(t, "upstream_submit_unknown", publicError["code"])
+					assert.Equal(t, initialQuota-outcome.Task.Quota, account.Quota)
+					if mode == "unknown submit" {
+						assert.Zero(t, uploads.Load())
+					}
+				}
+				service.RunTaskPollingOnce(context.Background(), nil)
+				wantSubmissions := int32(0)
+				if mode == "upstream rejection" || mode == "transport failure" || mode == "timeout during upstream" {
+					wantSubmissions = 1
+				}
+				assert.Equal(t, wantSubmissions, submissions.Load(), "failed or uncertain work never submits again")
+			} else {
+				require.Equal(t, model.TaskStatus(model.TaskStatusSubmitted), stored.Status, stored.FailReason)
+				assert.Nil(t, stored.PrivateData.PendingSubmission)
+				assert.Equal(t, "vendor-private-id", stored.PrivateData.UpstreamTaskID)
+				assert.Equal(t, int32(1), uploads.Load())
+				assert.Equal(t, int32(1), submissions.Load())
+				service.RunTaskPollingOnce(context.Background(), nil)
+				require.NoError(t, db.First(&stored, outcome.Task.ID).Error)
+				assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored.Status)
+				assert.Equal(t, int32(1), queries.Load())
+				assert.Equal(t, int32(1), submissions.Load())
+				assert.NotContains(t, string(stored.Data), "vendor-private-id")
+			}
+		})
+	}
 }

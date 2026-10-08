@@ -93,6 +93,20 @@ func sweepTimedOutTasks(ctx context.Context) {
 
 	for _, task := range tasks {
 		isLegacy := task.SubmitTime > 0 && task.SubmitTime < model.TaskRefundLegacyCutoff
+		if task.PrivateData.PendingSubmission != nil {
+			expired, won, err := model.ExpireTaskSubmission(ctx, task.ID, cutoff, now)
+			if err != nil {
+				logger.LogError(ctx, fmt.Sprintf("expire task submission %s: %v", task.TaskID, err))
+				continue
+			}
+			if won {
+				timedOutCount++
+				if !isLegacy && expired.PrivateData.PendingSubmission.Stage != model.TaskSubmissionUpstream && taskNeedsBillingRefund(expired) {
+					RefundTaskQuota(ctx, expired, expired.FailReason)
+				}
+			}
+			continue
+		}
 
 		oldStatus := task.Status
 		task.Status = model.TaskStatusFailure
@@ -443,6 +457,12 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 		var failedIDs []int64
 		for _, upstreamID := range taskIds {
 			if t, ok := taskM[upstreamID]; ok {
+				if t.PrivateData.PendingSubmission != nil {
+					if pendingErr := submitPendingTask(ctx, nil, t, fmt.Errorf("failed to get submission channel: %w", err)); pendingErr != nil {
+						logger.LogError(ctx, pendingErr.Error())
+					}
+					continue
+				}
 				failedIDs = append(failedIDs, t.ID)
 			}
 		}
@@ -467,6 +487,7 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 		ChannelId:            cacheGetChannel.Id,
 		ChannelBaseUrl:       cacheGetChannel.GetBaseURL(),
 		ChannelOtherSettings: channelOtherSettings,
+		ChannelSetting:       cacheGetChannel.GetSetting(),
 	}
 	info.ApiKey = cacheGetChannel.Key
 	adaptor.Init(info)
@@ -506,6 +527,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	if task == nil {
 		logger.LogError(ctx, fmt.Sprintf("Task %s not found in taskM", taskId))
 		return fmt.Errorf("task %s not found", taskId)
+	}
+	if task.PrivateData.PendingSubmission != nil {
+		var admissionErr error
+		if ch.Status != common.ChannelStatusEnabled {
+			admissionErr = fmt.Errorf("submission channel is disabled")
+		}
+		return submitPendingTask(ctx, adaptor, task, admissionErr)
 	}
 	key := ch.Key
 

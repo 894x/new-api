@@ -126,6 +126,7 @@ func (m Properties) Value() (driver.Value, error) {
 }
 
 type TaskPrivateData struct {
+	PendingSubmission   *TaskPendingSubmission `json:"pending_submission,omitempty"`
 	Execution           *TaskExecutionSnapshot `json:"execution,omitempty"`
 	ResponsesBackground bool                   `json:"responses_background,omitempty"`
 	AssetReferences     *TaskAssetReferences   `json:"asset_references,omitempty"`
@@ -267,7 +268,7 @@ func (p TaskPrivateData) Value() (driver.Value, error) {
 		p.Execution == nil && p.BillingSource == "" && p.SubscriptionId == 0 &&
 		p.TokenId == 0 && p.NodeName == "" && p.BillingContext == nil &&
 		!p.ResponsesBackground && p.Usage == nil && p.AssetReferences == nil &&
-		len(p.PluginState) == 0 && p.PollFailures == 0 && !p.ResultDiscarded {
+		len(p.PluginState) == 0 && p.PollFailures == 0 && !p.ResultDiscarded && p.PendingSubmission == nil {
 		return nil, nil
 	}
 	// 同 Properties.Value:string 避免 PG simple protocol 的 bytea 编码。
