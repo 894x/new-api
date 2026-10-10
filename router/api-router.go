@@ -379,6 +379,10 @@ func SetApiRouter(router *gin.Engine) {
 		systemInfoRoute.Use(middleware.RootAuth())
 		{
 			systemInfoRoute.GET("/instances", controller.ListSystemInstances)
+			systemInfoRoute.GET("/dns-traffic", middleware.DisableCache(), controller.GetDNSTraffic)
+			systemInfoRoute.GET("/dns-traffic/config", middleware.DisableCache(), controller.GetDNSPodConfig)
+			systemInfoRoute.PUT("/dns-traffic/config", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UpdateDNSPodConfig)
+			systemInfoRoute.PUT("/dns-traffic", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UpdateDNSTraffic)
 			systemInfoRoute.DELETE("/stale-instances", controller.DeleteStaleSystemInstances)
 			systemInfoRoute.DELETE("/instances/:node_name", controller.DeleteStaleSystemInstance)
 		}

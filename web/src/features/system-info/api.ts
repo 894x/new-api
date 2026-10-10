@@ -18,12 +18,51 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { SystemTaskFilters } from '@/features/system-settings/types'
 import { api } from '@/lib/api'
+import { authRequestOptions, authResult } from '@/lib/secure-verification'
 
 import type {
+  DNSPodConfigState,
+  DNSPodConfigUpdate,
+  DNSTrafficState,
+  DNSTrafficUpdate,
   SystemInstanceDeleteResponse,
   SystemInstanceListResponse,
   SystemTaskHistoryDeleteResponse,
 } from './types'
+
+export function getDNSPodConfig() {
+  return authResult<DNSPodConfigState>(
+    api.get('/api/system-info/dns-traffic/config', authRequestOptions)
+  )
+}
+
+export function updateDNSPodConfig(
+  update: DNSPodConfigUpdate,
+  proofToken: string
+) {
+  return authResult<DNSPodConfigState>(
+    api.put('/api/system-info/dns-traffic/config', update, {
+      ...authRequestOptions,
+      headers: { 'X-Security-Proof': proofToken },
+    })
+  )
+}
+
+export function getDNSTraffic() {
+  return authResult<DNSTrafficState>(
+    api.get('/api/system-info/dns-traffic', authRequestOptions)
+  )
+}
+
+export function updateDNSTraffic(update: DNSTrafficUpdate, proofToken: string) {
+  return authResult<DNSTrafficState>(
+    api.put('/api/system-info/dns-traffic', update, {
+      ...authRequestOptions,
+      headers: { 'X-Security-Proof': proofToken },
+      timeout: 100_000,
+    })
+  )
+}
 
 export async function listSystemInstances() {
   const res = await api.get<SystemInstanceListResponse>(

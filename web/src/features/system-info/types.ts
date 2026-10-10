@@ -91,3 +91,58 @@ export type SystemTaskHistoryDeleteResponse = {
   message: string
   data?: { deleted_count: number }
 }
+
+export type DNSInstanceRecord = {
+  id: string
+  ip: string
+  weight: number
+  ttl: number
+  enabled: boolean
+  remark: string
+  updated_on: string
+}
+
+export type DNSTrafficState = {
+  configured: boolean
+  can_apply: boolean
+  blocked_reason?: string
+  domain: string
+  subdomain: string
+  record_line: string
+  record_type: 'A' | 'AAAA' | ''
+  revision: string
+  records: DNSInstanceRecord[]
+}
+
+export type DNSTrafficUpdate = {
+  revision: string
+  weights: { id: string; weight: number }[]
+}
+
+export type DNSPodConfigState = {
+  revision: string
+  enabled: boolean
+  domain: string
+  subdomain: string
+  record_line: string
+  record_type: 'A' | 'AAAA'
+  secret_id_set: boolean
+  secret_key_set: boolean
+  session_token_set: boolean
+  source: 'database' | 'environment'
+  can_save: boolean
+  blocked_reason?: string
+}
+
+export type DNSPodConfigUpdate = {
+  revision: string
+  enabled: boolean
+  domain: string
+  subdomain: string
+  record_line: string
+  record_type: 'A' | 'AAAA'
+  secret_id: string
+  secret_key: string
+  session_token: string
+  clear_session_token: boolean
+}

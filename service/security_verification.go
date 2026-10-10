@@ -2,8 +2,10 @@ package service
 
 import (
 	"crypto/hmac"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 
@@ -21,6 +23,8 @@ const (
 	VerificationMethodOAuth              = "oauth"
 	VerificationMethodSession            = "session"
 	VerificationScopeChannelKeyRead      = "channel.key.read"
+	VerificationScopeDNSTrafficUpdate    = "dns.traffic.update"
+	VerificationScopeDNSConfigUpdate     = "dns.config.update"
 	VerificationScopePasskeyRegister     = "passkey.register"
 	VerificationScopePasskeyDelete       = "passkey.delete"
 	VerificationScopeTwoFASetup          = "2fa.setup"
@@ -82,6 +86,25 @@ func BindVerificationOperation(operation VerificationOperation) (VerificationBin
 	}
 	var normalized any
 	switch operation.Scope {
+	case VerificationScopeDNSConfigUpdate:
+		var context DNSPodConfigProofContext
+		if len(fields) != 2 || common.Unmarshal(operation.Context, &context) != nil {
+			return VerificationBinding{}, ErrVerificationContextInvalid
+		}
+		for _, value := range []string{context.Revision, context.ChangeHash} {
+			decoded, err := hex.DecodeString(value)
+			if err != nil || len(decoded) != 32 {
+				return VerificationBinding{}, ErrVerificationContextInvalid
+			}
+		}
+		normalized = context
+	case VerificationScopeDNSTrafficUpdate:
+		var context DNSTrafficUpdate
+		if len(fields) != 2 || common.Unmarshal(operation.Context, &context) != nil || ValidateDNSTrafficUpdate(context) != nil {
+			return VerificationBinding{}, ErrVerificationContextInvalid
+		}
+		slices.SortFunc(context.Weights, func(a, b DNSInstanceWeight) int { return strings.Compare(a.ID, b.ID) })
+		normalized = context
 	case VerificationScopeChannelKeyRead:
 		var context ChannelKeyReadContext
 		if len(fields) != 1 || common.Unmarshal(fields["channel_id"], &context.ChannelID) != nil || context.ChannelID <= 0 {
@@ -186,7 +209,10 @@ func securityVerificationPolicy(scope string, state model.UserVerificationState)
 	case VerificationScopePasskeyRegister, VerificationScopeTwoFASetup,
 		VerificationScopeAccessTokenGenerate, VerificationScopeAccessTokenRevoke,
 		VerificationScopeAccountBind, VerificationScopeAccountUnbind,
-		VerificationScopePasswordSet, VerificationScopePasswordChange, VerificationScopeAccountDelete:
+		VerificationScopePasswordSet, VerificationScopePasswordChange, VerificationScopeAccountDelete, VerificationScopeDNSTrafficUpdate, VerificationScopeDNSConfigUpdate:
+		if (scope == VerificationScopeDNSTrafficUpdate || scope == VerificationScopeDNSConfigUpdate) && state.Role != common.RoleRootUser {
+			return nil, ErrVerificationForbidden
+		}
 		if scope == VerificationScopeAccountDelete && state.Role == common.RoleRootUser {
 			return nil, ErrVerificationForbidden
 		}
@@ -231,7 +257,7 @@ func GetVerificationRequirements(identity AuthIdentity, scope string) (*Verifica
 	if state.Status != common.UserStatusEnabled || state.AuthVersion != identity.UserAuthVersion {
 		return nil, ErrAuthTokenInvalid
 	}
-	if scope == VerificationScopeChannelKeyRead && state.Role != common.RoleRootUser {
+	if (scope == VerificationScopeChannelKeyRead || scope == VerificationScopeDNSTrafficUpdate || scope == VerificationScopeDNSConfigUpdate) && state.Role != common.RoleRootUser {
 		return nil, ErrVerificationForbidden
 	}
 	methods, err := securityVerificationPolicy(scope, *state)
@@ -242,7 +268,7 @@ func GetVerificationRequirements(identity AuthIdentity, scope string) (*Verifica
 	for i := range methods {
 		if methods[i].Method == VerificationMethodPassword && !common.PasswordLoginEnabled {
 			switch scope {
-			case VerificationScopeAccountBind, VerificationScopeAccountUnbind, VerificationScopePasswordSet, VerificationScopePasswordChange, VerificationScopeAccountDelete:
+			case VerificationScopeAccountBind, VerificationScopeAccountUnbind, VerificationScopePasswordSet, VerificationScopePasswordChange, VerificationScopeAccountDelete, VerificationScopeDNSTrafficUpdate, VerificationScopeDNSConfigUpdate:
 				methods[i].Available, methods[i].Reason = false, "Password authentication is disabled."
 			}
 		}

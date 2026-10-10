@@ -14,8 +14,10 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -26,6 +28,100 @@ type managedUserE2EFixture struct {
 	root, managerA         model.User
 	managerB, unprivileged model.User
 	tokens                 map[int]string
+}
+
+func TestDNSTrafficRoutesRequireRootAndOperationProof(t *testing.T) {
+	for _, key := range []string{"DNSPOD_SECRET_ID", "DNSPOD_SECRET_KEY", "DNSPOD_SESSION_TOKEN", "DNSPOD_DOMAIN", "DNSPOD_SUBDOMAIN", "DNSPOD_RECORD_LINE", "DNSPOD_RECORD_TYPE"} {
+		t.Setenv(key, "")
+	}
+	fixture := setupManagedUserE2E(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Option{}))
+	status, response := fixture.request(t, http.MethodGet, "/api/system-info/dns-traffic", fixture.root.Id, nil)
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, false, response["data"].(map[string]any)["configured"])
+	for _, userID := range []int{0, fixture.unprivileged.Id} {
+		status, _ = fixture.request(t, http.MethodGet, "/api/system-info/dns-traffic", userID, nil)
+		assert.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, status)
+		status, _ = fixture.request(t, http.MethodPut, "/api/system-info/dns-traffic", userID, nil)
+		assert.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, status)
+	}
+	status, response = fixture.request(t, http.MethodPut, "/api/system-info/dns-traffic", fixture.root.Id, map[string]any{
+		"revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"weights":  []map[string]any{{"id": "11", "weight": 70}, {"id": "12", "weight": 30}},
+	})
+	assert.Equal(t, http.StatusForbidden, status)
+	assert.Equal(t, "SECURITY_PROOF_REQUIRED", response["code"])
+	for _, userID := range []int{0, fixture.unprivileged.Id, fixture.managerA.Id} {
+		for _, method := range []string{http.MethodGet, http.MethodPut} {
+			status, _ = fixture.request(t, method, "/api/system-info/dns-traffic/config", userID, nil)
+			assert.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, status)
+		}
+	}
+	t.Setenv("DNSPOD_SECRET_ID", "hidden-dnspod-id")
+	t.Setenv("DNSPOD_SECRET_KEY", "hidden-dnspod-key")
+	t.Setenv("DNSPOD_DOMAIN", "example.com")
+	t.Setenv("DNSPOD_SUBDOMAIN", "api")
+	status, response = fixture.request(t, http.MethodGet, "/api/system-info/dns-traffic/config", fixture.root.Id, nil)
+	require.Equal(t, http.StatusOK, status)
+	config := response["data"].(map[string]any)
+	assert.Equal(t, true, config["secret_id_set"])
+	assert.Equal(t, true, config["secret_key_set"])
+	encoded, err := common.Marshal(response)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "hidden-dnspod")
+	status, response = fixture.request(t, http.MethodPut, "/api/system-info/dns-traffic/config", fixture.root.Id, map[string]any{
+		"revision": config["revision"], "enabled": true, "domain": "example.com", "subdomain": "api", "record_line": "默认", "record_type": "A", "secret_key": "replacement-key",
+	})
+	assert.Equal(t, http.StatusForbidden, status)
+	assert.Equal(t, "SECURITY_PROOF_REQUIRED", response["code"])
+	status, response = fixture.request(t, http.MethodPut, "/api/option/", fixture.root.Id, map[string]any{"key": model.DNSPodConfigOptionKey, "value": "unverified-secret"})
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, false, response["success"])
+	previousOptions := common.OptionMap
+	common.OptionMap = map[string]string{model.DNSPodConfigOptionKey: "private-value"}
+	t.Cleanup(func() { common.OptionMap = previousOptions })
+	status, response = fixture.request(t, http.MethodGet, "/api/option/", fixture.root.Id, nil)
+	require.Equal(t, http.StatusOK, status)
+	encoded, err = common.Marshal(response)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), model.DNSPodConfigOptionKey)
+	assert.NotContains(t, string(encoded), "private-value")
+	// Exercise the actual controller's credential digest binding and one-use
+	// proof, rather than testing the persistence service alone.
+	require.NoError(t, model.DB.AutoMigrate(&model.AuthFlow{}, &model.TwoFA{}, &model.PasskeyCredential{}))
+	t.Setenv("CRYPTO_SECRET", "dns-route-test-key-with-at-least-32-characters")
+	previousRDB, previousPassword := common.RDB, common.PasswordLoginEnabled
+	redisServer := miniredis.RunT(t)
+	common.RDB = redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	common.RedisEnabled, common.PasswordLoginEnabled = true, true
+	t.Cleanup(func() {
+		_ = common.RDB.Close()
+		common.RDB = previousRDB
+		common.PasswordLoginEnabled = previousPassword
+	})
+	identity, err := service.ParseAccessToken(fixture.tokens[fixture.root.Id])
+	require.NoError(t, err)
+	update := service.DNSPodConfigUpdate{Revision: config["revision"].(string), Enabled: true, Domain: "example.com", Subdomain: "api", RecordLine: "默认", RecordType: "A", SecretKey: "verified-replacement-key"}
+	proofContext, err := common.Marshal(service.DNSPodConfigProofContext{Revision: update.Revision, ChangeHash: service.DNSPodConfigChangeHash(update)})
+	require.NoError(t, err)
+	binding, err := service.BindVerificationOperation(service.VerificationOperation{Scope: service.VerificationScopeDNSConfigUpdate, Context: proofContext})
+	require.NoError(t, err)
+	proof, _, err := service.IssueSecurityProof(identity, service.VerificationMethodPassword, binding)
+	require.NoError(t, err)
+	changed := update
+	changed.SecretKey = "unauthorized-replacement"
+	status, response = fixture.request(t, http.MethodPut, "/api/system-info/dns-traffic/config", fixture.root.Id, changed, map[string]string{"X-Security-Proof": proof})
+	assert.Equal(t, http.StatusForbidden, status)
+	assert.Equal(t, "SECURITY_PROOF_CONTEXT_MISMATCH", response["code"])
+	status, response = fixture.request(t, http.MethodPut, "/api/system-info/dns-traffic/config", fixture.root.Id, update, map[string]string{"X-Security-Proof": proof})
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, true, response["success"])
+	encoded, err = common.Marshal(response)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "verified-replacement-key")
+	status, response = fixture.request(t, http.MethodPut, "/api/system-info/dns-traffic/config", fixture.root.Id, update, map[string]string{"X-Security-Proof": proof})
+	assert.Equal(t, http.StatusForbidden, status)
+	assert.Equal(t, "SECURITY_PROOF_CONSUMED", response["code"])
 }
 
 func setupManagedUserE2E(t *testing.T) *managedUserE2EFixture {
@@ -91,7 +187,7 @@ func setupManagedUserE2E(t *testing.T) *managedUserE2EFixture {
 	return f
 }
 
-func (f *managedUserE2EFixture) request(t *testing.T, method, path string, userID int, payload any) (int, map[string]any) {
+func (f *managedUserE2EFixture) request(t *testing.T, method, path string, userID int, payload any, extraHeaders ...map[string]string) (int, map[string]any) {
 	t.Helper()
 	var body io.Reader
 	if payload != nil {
@@ -103,6 +199,11 @@ func (f *managedUserE2EFixture) request(t *testing.T, method, path string, userI
 	require.NoError(t, err)
 	request.Header.Set("Authorization", "Bearer "+f.tokens[userID])
 	request.Header.Set("Content-Type", "application/json")
+	for _, headers := range extraHeaders {
+		for name, value := range headers {
+			request.Header.Set(name, value)
+		}
+	}
 	response, err := http.DefaultClient.Do(request)
 	require.NoError(t, err)
 	defer response.Body.Close()

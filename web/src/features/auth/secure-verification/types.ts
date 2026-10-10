@@ -25,6 +25,8 @@ export type VerificationMethod =
   | 'oauth'
   | 'session'
 export type SecurityProofScope =
+  | 'dns.config.update'
+  | 'dns.traffic.update'
   | 'channel.key.read'
   | 'passkey.register'
   | 'passkey.delete'
@@ -40,6 +42,14 @@ export type SecurityProofScope =
   | 'account.delete'
 
 export type VerificationOperation =
+  | {
+      scope: 'dns.config.update'
+      context: { revision: string; change_hash: string }
+    }
+  | {
+      scope: 'dns.traffic.update'
+      context: { revision: string; weights: { id: string; weight: number }[] }
+    }
   | { scope: 'channel.key.read'; context: { channel_id: number } }
   | {
       scope: 'account.binding.bind'
@@ -49,7 +59,11 @@ export type VerificationOperation =
   | {
       scope: Exclude<
         SecurityProofScope,
-        'channel.key.read' | 'account.binding.bind' | 'account.binding.unbind'
+        | 'channel.key.read'
+        | 'account.binding.bind'
+        | 'account.binding.unbind'
+        | 'dns.traffic.update'
+        | 'dns.config.update'
       >
       context?: Record<string, never>
     }

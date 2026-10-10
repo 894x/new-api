@@ -27,6 +27,8 @@ type Option struct {
 	Value string `json:"value"`
 }
 
+const DNSPodConfigOptionKey = "DNSPodTrafficConfigSecret"
+
 var groupPricingOptionMutex sync.Mutex
 
 var ErrUserGroupChanged = errors.New("user group changed; reload the configuration")
@@ -311,6 +313,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == DNSPodConfigOptionKey {
+		return errors.New("DNSPod configuration requires its dedicated verified endpoint")
+	}
 	if strings.HasPrefix(key, UserCacheHitPolicyOptionPrefix) {
 		return fmt.Errorf("user cache hit policies must be updated through the user policy endpoint")
 	}
@@ -433,6 +438,9 @@ func UpdateOptionsBulkWithUserGroupChange(values map[string]string, change UserG
 }
 
 func updateOptionsBulk(values map[string]string, change *UserGroupTransition) error {
+	if _, exists := values[DNSPodConfigOptionKey]; exists {
+		return errors.New("DNSPod configuration requires its dedicated verified endpoint")
+	}
 	if len(values) == 0 {
 		if change == nil {
 			return nil
@@ -566,6 +574,12 @@ func applyGroupPricingOptions(groupRatios, modelTieredRatios string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	if key == DNSPodConfigOptionKey {
+		common.OptionMapRWMutex.Lock()
+		delete(common.OptionMap, key)
+		common.OptionMapRWMutex.Unlock()
+		return nil
+	}
 	if key == RequestCaptureStorageOptionKey {
 		if _, err := ParseRequestCaptureStorageSettings(value); err != nil {
 			return err
