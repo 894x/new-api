@@ -1,15 +1,51 @@
 ---
 name: deploy-new-api-remote
-description: Safely deliver a new-api change through commit, Git push, pinned-commit remote build, backup, targeted Compose application replacement, verification, and rollback preparation. Use when asked to deploy, publish, update, restart, or roll back a new-api test or production instance on a remote server, especially when only one instance or application service may change and databases, Redis, or neighboring instances must remain untouched.
+description: Deploy or roll back a pinned new-api commit on a remote server, with verified backups, graceful traffic switching, and retention of only the current and previous release. Use for remote releases and retirement of historical application instances while preserving data services and independent environments.
 ---
 
 # Deploy New API Remotely
 
-Deploy one verified commit to one explicitly named instance. Treat source delivery, remote build, backup, application replacement, and verification as separate gates.
+Deploy one verified commit to the authorized environment. Treat source delivery, build, backup, traffic switching, verification, and historical-instance retirement as separate gates.
+
+## Blue/green retention policy
+
+Use blue/green deployment by default for production releases. A retention-only
+request does not require a new source commit or build: rediscover the accepted
+slots, preserve the rollback point, and retire only authorized historical slots.
+
+For blue/green deployments, keep only the current accepted version and its
+immediately preceding version running in the same deployment lineage. The
+previous version is the rollback slot. Stop older application instances after
+acceptance and request draining, and disable their restart policies so they stay
+stopped after a Docker daemon restart. Preserve their images, containers, release
+files, and backups unless deletion is explicitly authorized.
+
+Keep the current slot as the background-task master. Run the previous slot with
+`NODE_TYPE=slave` and `UPDATE_TASK=false`; old standby code must not compete for
+periodic task polling, billing recovery, or subscription-reset work. These
+variables are read at startup: change roles through a healthy replacement and
+graceful routing handoff, not an environment edit on a running process.
+
+Apply retention to the requested hostname's deployment lineage, identified from
+its routes and accepted deployment history, not every application on the host.
+Resolve database peers through each container's Docker network and DNS; equal
+`SQL_DSN` strings or a hostname such as `postgres` do not prove a shared database.
+Sharing a real database also does not make two hostnames the same authorized
+deployment. Preserve other production/test hostnames and all database/Redis
+services. Move an active alias only when that alias is explicitly included in the
+user's deployment scope; otherwise keep its serving container and report the
+scope boundary. Confirm shared data, authentication configuration, and route
+compatibility before any authorized alias handoff.
+
+Read [references/blue-green-retention.md](references/blue-green-retention.md) for
+manual blue/green deployment, standby role changes, and historical cleanup.
+The Compose replacement helper below does not implement slot switching or
+historical-instance retirement; perform and verify those stages separately.
 
 ## Reusable Compose helper
 
-For the Linux Docker Compose + Nginx + PostgreSQL + Redis layout, use
+For an explicitly requested in-place replacement in the Linux Docker Compose +
+Nginx + PostgreSQL + Redis layout, use
 [`scripts/compose_release.py`](scripts/compose_release.py) after source and image
 verification. Read [`references/compose-release.md`](references/compose-release.md)
 for its manifest and commands. It discovers container names from Compose labels,
@@ -40,6 +76,8 @@ Resolve these values before making external changes:
 - image name/tag and build arguments
 - health/API URL and expected response
 - services and data that must remain unchanged
+- authorized domain aliases, the current and previous release identities, and the
+  historical application instances authorized for retirement
 
 Discover missing runtime details read-only on the server. Ask the user only when the target or authorized scope remains materially ambiguous. Never store credentials in the repository, skill, scripts, shell history, logs, or reports.
 
@@ -67,6 +105,8 @@ After connecting, inspect the live host rather than trusting remembered paths or
 - distinguish the target application from production, test, database, Redis, and neighboring projects
 - capture target and protected container IDs, image IDs, restart counts, health, and deployed revision labels
 - locate the actual checkout and Compose file set used by the target
+- resolve each application's database/Redis peer IDs and background-task role;
+  identify all routes and established connections that use a historical slot
 
 Resolve the absolute target path before any recursive move, backup, or replacement. Report and stop if discovery conflicts with the user's requested target.
 
@@ -106,6 +146,14 @@ Do not proceed if the backup is missing or unverifiable. A copied source tree al
 
 ## 5. Replace only the authorized application
 
+For blue/green releases, follow the retention reference: start the new slot on
+an unused loopback port, accept it before switching the authorized routes, and
+keep the previous image as a healthy standby. Retire older slots only after
+traffic and tasks drain. Preserve both versions' static resources.
+
+Use the following replacement sequence when in-place replacement is explicitly
+requested:
+
 1. Render and validate the effective Compose configuration.
 2. Point the target application service at the newly built immutable image.
 3. Recreate only that service. Prefer the equivalent of:
@@ -130,7 +178,19 @@ Confirm all of the following with current evidence:
 
 An HTTP response alone does not prove the correct commit is running. Verify both runtime identity and behavior.
 
-## 7. Roll back on failure
+## 7. Retire historical application instances
+
+After acceptance, enforce the two-version policy within the authorized lineage.
+Move authorized active aliases and required static resources first, validate the new
+routes, and wait for old requests to drain. Stop exact recorded historical
+container IDs gracefully, with their restart policies disabled. Do not remove
+containers, images, volumes, or backups. Validate the current/previous slots,
+single background master, every affected hostname, and protected services again.
+If any slot still has live traffic or task ownership that cannot drain safely,
+leave it running temporarily and report the unresolved retirement; do not claim
+retention is complete.
+
+## 8. Roll back on failure
 
 If verification fails, stop further rollout and restore the previous application image/configuration using the recorded rollback point. Recreate only the target application and repeat health, API, and protected-service checks. Restore data only when data was actually changed and the user authorized that recovery step.
 
@@ -145,6 +205,8 @@ Return a concise deployment record containing:
 - health/API verification result
 - protected services confirmed unchanged
 - rollback status or rollback command reference
+- current/previous slot roles, stopped historical container IDs, disabled restart
+  policies, and any remaining old traffic or background-task owners
 - any verification not completed
 
 Never include passwords, tokens, private keys, database credentials, or unredacted environment contents.

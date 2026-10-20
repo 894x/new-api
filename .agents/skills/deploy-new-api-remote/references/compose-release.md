@@ -58,6 +58,12 @@ do not copy their contents into user-facing reports or source control.
 
 ## Commands and receipts
 
+This helper does not manage two blue/green slots or stop historical containers.
+For blue/green retention and standby task roles, follow
+[blue-green-retention.md](blue-green-retention.md) after the helper's acceptance,
+or use the manual workflow for upstream/variable routing. A helper `passed`
+receipt alone is not proof that historical masters have been retired.
+
 ```sh
 python3 compose_release.py --config /srv/releases/release.json inspect
 python3 compose_release.py --config /srv/releases/release.json snapshot
