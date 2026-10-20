@@ -1,12 +1,14 @@
 package service
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
@@ -253,7 +255,7 @@ func estimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 	if meta.TokenType == types.TokenTypeTextNumber {
 		tkm += utf8.RuneCountInString(meta.CombineText)
 	} else {
-		tkm += CountTextToken(meta.CombineText, model)
+		tkm += countRequestTextTokens(c, meta.CombineText, model)
 	}
 
 	if format == types.RelayFormatOpenAI {
@@ -426,6 +428,43 @@ func CountAudioTokenOutput(audioBase64 string, audioFormat string) (int, error) 
 	}
 	// duration 来自上游返回的音频元数据，饱和转换防止 int 回绕
 	return common.QuotaFromFloat(duration / 60 * 200 / 0.24), nil
+}
+
+type requestTextTokenKey struct {
+	model string
+	hash  [sha256.Size]byte
+}
+
+type requestTextTokenCache struct {
+	mu     sync.Mutex
+	counts map[requestTextTokenKey]int
+}
+
+// Reuse only the pure text count across billing, final capacity checks and
+// retries. Format overhead, media and output reservations remain independent.
+// Keep bounded digests rather than retaining copies of large prompts.
+func countRequestTextTokens(c *gin.Context, text, model string) int {
+	if c == nil || text == "" {
+		return CountTextToken(text, model)
+	}
+	const contextKey = "__request_text_token_counts"
+	value, exists := c.Get(contextKey)
+	if !exists {
+		value = &requestTextTokenCache{counts: make(map[requestTextTokenKey]int)}
+		c.Set(contextKey, value)
+	}
+	cache := value.(*requestTextTokenCache)
+	key := requestTextTokenKey{model: model, hash: sha256.Sum256([]byte(text))}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if tokens, ok := cache.counts[key]; ok {
+		return tokens
+	}
+	tokens := CountTextToken(text, model)
+	if len(cache.counts) < 8 {
+		cache.counts[key] = tokens
+	}
+	return tokens
 }
 
 // CountTextToken 统计文本的token数量，仅OpenAI模型使用tokenizer，其余模型使用估算

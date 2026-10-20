@@ -45,8 +45,8 @@ func EstimateFinalChannelModelCapacityTokens(
 		return 0, err
 	}
 	finalBodyScan := scanFinalChannelModelCapacityJSON(data, info)
-	promptEstimate := finalChannelModelCapacityJSONPromptTokens(finalBodyScan, info)
-	providerReservation, providerOutputLimit := estimateProviderSpecificChannelModelCapacityReservation(finalBodyScan, info)
+	promptEstimate := finalChannelModelCapacityJSONPromptTokens(c, finalBodyScan, info)
+	providerReservation, providerOutputLimit := estimateProviderSpecificChannelModelCapacityReservation(finalBodyScan, info, promptEstimate.full)
 	initialPromptTokens := int64(info.GetEstimatePromptTokens())
 	if value, exists := c.Get(channelCapacityContextKey); exists {
 		if param, ok := value.(*RetryParam); ok && param.Capacity != nil {
@@ -358,11 +358,11 @@ type providerSpecificCapacityJSONScan struct {
 func estimateProviderSpecificChannelModelCapacityReservation(
 	scan *providerSpecificCapacityJSONScan,
 	info *relaycommon.RelayInfo,
+	promptTokens int64,
 ) (int64, *int64) {
 	if info == nil || !isChannelModelCapacityGenerationRequest(info) || scan == nil || !scan.hasOutputLimit {
 		return 0, nil
 	}
-	promptTokens := finalChannelModelCapacityJSONPromptTokens(scan, info).full
 	outputLimit := scan.outputTokens
 	return saturatingChannelModelCapacityAdd(promptTokens, outputLimit), &outputLimit
 }
@@ -371,7 +371,7 @@ func estimateFinalChannelModelCapacityJSONPromptTokens(data []byte, info *relayc
 	if info == nil {
 		return channelModelCapacityJSONPromptEstimate{}
 	}
-	return finalChannelModelCapacityJSONPromptTokens(scanFinalChannelModelCapacityJSON(data, info), info)
+	return finalChannelModelCapacityJSONPromptTokens(nil, scanFinalChannelModelCapacityJSON(data, info), info)
 }
 
 func scanFinalChannelModelCapacityJSON(data []byte, info *relaycommon.RelayInfo) *providerSpecificCapacityJSONScan {
@@ -385,14 +385,15 @@ func scanFinalChannelModelCapacityJSON(data []byte, info *relaycommon.RelayInfo)
 }
 
 func finalChannelModelCapacityJSONPromptTokens(
+	c *gin.Context,
 	scan *providerSpecificCapacityJSONScan,
 	info *relaycommon.RelayInfo,
 ) channelModelCapacityJSONPromptEstimate {
 	if scan == nil || info == nil {
 		return channelModelCapacityJSONPromptEstimate{}
 	}
-	textTokens := int64(CountTextToken(strings.Join(scan.promptTexts, "\n"), info.OriginModelName))
-	opaqueTokens := int64(CountTextToken(strings.Join(scan.opaqueTexts, "\n"), info.OriginModelName))
+	textTokens := int64(countRequestTextTokens(c, strings.Join(scan.promptTexts, "\n"), info.OriginModelName))
+	opaqueTokens := int64(countRequestTextTokens(c, strings.Join(scan.opaqueTexts, "\n"), info.OriginModelName))
 	return channelModelCapacityJSONPromptEstimate{
 		full:   saturatingChannelModelCapacityAdd(textTokens, scan.promptTokenIDs),
 		opaque: saturatingChannelModelCapacityAdd(opaqueTokens, scan.opaqueTokenIDs),

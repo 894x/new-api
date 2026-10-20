@@ -13,11 +13,190 @@ import (
 	"github.com/QuantumNous/new-api/pkg/channelcapacity"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tiktoken-go/tokenizer"
+	"github.com/tiktoken-go/tokenizer/codec"
 )
+
+type capacityCountingCodec struct {
+	tokenizer.Codec
+	calls map[string]int
+}
+
+func (c *capacityCountingCodec) Count(text string) (int, error) {
+	c.calls[text]++
+	return c.Codec.Count(text)
+}
+
+func TestFinalChannelCapacityReusesUnchangedTextCounts(t *testing.T) {
+	counter := &capacityCountingCodec{Codec: codec.NewCl100kBase(), calls: make(map[string]int)}
+	const modelName = "gpt-4o"
+	tokenEncoderMutex.Lock()
+	previous, existed := tokenEncoderMap[modelName]
+	tokenEncoderMap[modelName] = counter
+	tokenEncoderMutex.Unlock()
+	t.Cleanup(func() {
+		tokenEncoderMutex.Lock()
+		defer tokenEncoderMutex.Unlock()
+		if existed {
+			tokenEncoderMap[modelName] = previous
+		} else {
+			delete(tokenEncoderMap, modelName)
+		}
+	})
+
+	for _, tc := range []struct {
+		name, body string
+		format     types.RelayFormat
+	}{
+		{"unchanged", `{"messages":[{"role":"user","content":"hello world"}],"max_tokens":0}`, types.RelayFormatOpenAI},
+		{"system injection", `{"messages":[{"role":"system","content":"follow these instructions"},{"role":"user","content":"hello world"}],"max_tokens":0}`, types.RelayFormatOpenAI},
+		{"changed content", `{"messages":[{"role":"user","content":"other words"}],"max_tokens":0}`, types.RelayFormatOpenAI},
+		{"output limit and choices", `{"messages":[{"role":"user","content":"hello world"}],"max_tokens":10,"n":2}`, types.RelayFormatOpenAI},
+		{"provider output limit", `{"messages":[{"role":"user","content":"hello world"}],"options":{"num_predict":20}}`, types.RelayFormatOpenAI},
+		{"opaque input", `{"messages":[{"role":"user","content":"hello world"}],"prefix":"additional context","max_tokens":0}`, types.RelayFormatOpenAI},
+		{"protocol conversion", `{"messages":[{"role":"user","content":"hello world"}],"max_tokens":0}`, types.RelayFormatClaude},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clear(counter.calls)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, modelName)
+			info := &relaycommon.RelayInfo{
+				RelayFormat: types.RelayFormatOpenAI, RelayMode: relayconstant.RelayModeChatCompletions,
+				OriginModelName: modelName,
+			}
+			initial := &dto.GeneralOpenAIRequest{}
+			require.NoError(t, common.Unmarshal([]byte(`{"messages":[{"role":"user","content":"hello world"}]}`), initial))
+			initialText := initial.GetTokenCountMeta().CombineText
+			tokens, err := CountRequestToken(c, initial.GetTokenCountMeta(), info)
+			require.NoError(t, err)
+			info.SetEstimatePromptTokens(tokens)
+			info.RelayFormat = tc.format
+			body, closer, err := relaycommon.NewOutboundJSONBody([]byte(tc.body))
+			require.NoError(t, err)
+			defer closer.Close()
+			reserved, err := EstimateFinalChannelModelCapacityTokens(c, info, body, 0)
+			require.NoError(t, err)
+			assert.Equal(t, 1, counter.calls[initialText], "final admission must not recount unchanged billing text")
+			for text, calls := range counter.calls {
+				assert.Equal(t, 1, calls, "each distinct text is counted once: %q", text)
+			}
+			billingTokens := common.GetContextKeyInt(c, constant.ContextKeyPromptTokens)
+			assert.Equal(t, tokens, billingTokens, "capacity must not overwrite the billing estimate")
+
+			// A retry of the same outbound body reuses counts without reusing
+			// the reservation itself (output and opaque fields are still checked).
+			callCount := len(counter.calls)
+			retried, err := EstimateFinalChannelModelCapacityTokens(c, info, body, 0)
+			require.NoError(t, err)
+			assert.Equal(t, reserved, retried)
+			assert.Len(t, counter.calls, callCount)
+			for _, calls := range counter.calls {
+				assert.Equal(t, 1, calls)
+			}
+
+			fresh, _ := gin.CreateTestContext(httptest.NewRecorder())
+			common.SetContextKey(fresh, constant.ContextKeyOriginalModel, modelName)
+			expected, err := EstimateFinalChannelModelCapacityTokens(fresh, info, body, 0)
+			require.NoError(t, err)
+			assert.Equal(t, expected, reserved, "reuse must preserve final capacity semantics")
+			switch tc.name {
+			case "unchanged":
+				assert.Equal(t, int64(tokens), reserved)
+				assert.Equal(t, 2, counter.calls[initialText], "counts must not be shared across requests")
+			case "output limit and choices":
+				assert.Equal(t, int64(tokens+20), reserved)
+			case "protocol conversion":
+				assert.Equal(t, int64(tokens), reserved, "retain the conservative initial-prompt floor")
+			case "system injection", "opaque input":
+				assert.Greater(t, reserved, int64(tokens))
+			}
+		})
+	}
+	t.Run("model change", func(t *testing.T) {
+		const otherModel = "gpt-4"
+		tokenEncoderMutex.Lock()
+		previous, existed := tokenEncoderMap[otherModel]
+		tokenEncoderMap[otherModel] = counter
+		tokenEncoderMutex.Unlock()
+		t.Cleanup(func() {
+			tokenEncoderMutex.Lock()
+			defer tokenEncoderMutex.Unlock()
+			if existed {
+				tokenEncoderMap[otherModel] = previous
+			} else {
+				delete(tokenEncoderMap, otherModel)
+			}
+		})
+		clear(counter.calls)
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		meta := &types.TokenCountMeta{CombineText: "same text"}
+		info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI}
+		for _, name := range []string{modelName, otherModel, modelName} {
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, name)
+			_, err := CountRequestToken(c, meta, info)
+			require.NoError(t, err)
+		}
+		assert.Equal(t, 2, counter.calls[meta.CombineText], "each model must use its own text count")
+	})
+}
+
+func TestRequestTextTokenReusePreservesCountingInputs(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	const text = "hello world"
+	for _, modelName := range []string{"gpt-4o", "claude-sonnet-4"} {
+		common.SetContextKey(c, constant.ContextKeyOriginalModel, modelName)
+		info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI}
+		base := CountTextToken(text, modelName)
+		for _, tc := range []struct {
+			name string
+			meta types.TokenCountMeta
+			want int
+		}{
+			{"text", types.TokenCountMeta{CombineText: text}, base + 3},
+			{"message overhead", types.TokenCountMeta{CombineText: text, MessagesCount: 2, NameCount: 1, ToolsCount: 1}, base + 20},
+			{"numeric input", types.TokenCountMeta{CombineText: text, TokenType: types.TokenTypeTextNumber}, len(text) + 3},
+			{"audio", types.TokenCountMeta{CombineText: text, Files: []*types.FileMeta{
+				types.NewFileMeta(types.FileTypeAudio, types.NewBase64FileSource("AA==", "audio/wav")),
+			}}, base + 259},
+		} {
+			t.Run(modelName+"/"+tc.name, func(t *testing.T) {
+				got, err := CountRequestToken(c, &tc.meta, info)
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, got)
+			})
+		}
+		converted, err := estimateRequestTokenForCapacityFormat(c, &types.TokenCountMeta{CombineText: text}, info, types.RelayFormatClaude)
+		require.NoError(t, err)
+		assert.Equal(t, base, converted, "reuse text without carrying OpenAI framing into Claude")
+	}
+}
+
+func BenchmarkRepeatedRequestTextCount(b *testing.B) {
+	text := strings.Repeat("A gateway forwards requests and accounts for token usage.\n", 2048)
+	// Warm the codec so both cases measure request work, not initialization.
+	CountTextToken(text, "gpt-4o")
+	for _, cached := range []bool{false, true} {
+		b.Run(fmt.Sprintf("reuse=%t", cached), func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(text)))
+			for b.Loop() {
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				for range 2 {
+					if cached {
+						countRequestTextTokens(c, text, "gpt-4o")
+					} else {
+						CountTextToken(text, "gpt-4o")
+					}
+				}
+			}
+		})
+	}
+}
 
 func TestChannelCapacitySpilloverPreservesAutoGroupAndParameterFilters(t *testing.T) {
 	for _, tc := range []struct{ cache, dynamic bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
