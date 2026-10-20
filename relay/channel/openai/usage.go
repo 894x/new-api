@@ -18,7 +18,7 @@ func isKimiK3Model(model string) bool {
 	return model == "kimi-k3" || strings.HasPrefix(model, "kimi-k3-")
 }
 
-// Normalize only the K3 compatibility case, never arbitrary hidden reasoning.
+// K3 client usage must not report reasoning tokens without reasoning content.
 func shouldNormalizeEmptyK3ReasoningUsage(model string, hasReasoningContent bool, body []byte) bool {
 	if hasReasoningContent || !isKimiK3Model(model) {
 		return false
@@ -29,8 +29,7 @@ func shouldNormalizeEmptyK3ReasoningUsage(model string, hasReasoningContent bool
 		if !tokens.Exists() {
 			continue
 		}
-		// Conflicting aliases and counts other than exactly one stay untouched.
-		if tokens.Type != gjson.Number || tokens.Float() != 1 {
+		if tokens.Type != gjson.Number || tokens.Float() < 0 {
 			return false
 		}
 		found = true
@@ -38,8 +37,7 @@ func shouldNormalizeEmptyK3ReasoningUsage(model string, hasReasoningContent bool
 	return found
 }
 
-// Call only after the original provider usage satisfies the K3 rule. Checking
-// the formatted body instead would mistake generated zero aliases for conflicts.
+// Patch only the serialized client usage after checking the original response.
 func clearClientReasoningUsage(body []byte, forceFormat bool) ([]byte, error) {
 	if forceFormat {
 		// Fill aliases before clearing, so the existing reasoning-only detail

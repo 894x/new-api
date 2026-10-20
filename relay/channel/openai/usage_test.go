@@ -24,13 +24,14 @@ import (
 
 func TestK3EmptyReasoningUsagePreservesSettlement(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		model      string
-		message    string
-		details    string
-		incomplete bool
-		wantChat   int64
-		wantOutput int64
+		name         string
+		model        string
+		message      string
+		details      string
+		incomplete   bool
+		finishReason string
+		wantChat     int64
+		wantOutput   int64
 	}{
 		{name: "chat details only", details: `"completion_tokens_details":{"reasoning_tokens":1}`},
 		{name: "both detail families", details: `"completion_tokens_details":{"reasoning_tokens":1},"output_tokens_details":{"reasoning_tokens":1}`},
@@ -39,17 +40,23 @@ func TestK3EmptyReasoningUsagePreservesSettlement(t *testing.T) {
 		{name: "actual reasoning", message: `,"reasoning_content":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1, wantOutput: 1},
 		{name: "reasoning alias", message: `,"reasoning":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1, wantOutput: 1},
 		{name: "nonempty alias with empty canonical field", message: `,"reasoning_content":"","reasoning":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1, wantOutput: 1},
-		{name: "larger count", details: `"completion_tokens_details":{"reasoning_tokens":5}`, wantChat: 5, wantOutput: 5},
+		{name: "tool call with hidden reasoning", finishReason: "tool_calls", message: `,"tool_calls":[{"id":"call_lookup","type":"function","function":{"name":"lookup","arguments":"{}"}}]`, details: `"completion_tokens_details":{"reasoning_tokens":3}`},
+		{name: "larger count", details: `"completion_tokens_details":{"reasoning_tokens":143}`},
+		{name: "large output details only", details: `"output_tokens_details":{"reasoning_tokens":3365}`},
+		{name: "actual larger reasoning", message: `,"reasoning_content":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":143}`, wantChat: 143, wantOutput: 143},
 		{name: "other model", model: "gpt-test", details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1, wantOutput: 1},
 		{name: "k3 model variant", model: "kimi-k3-pro", details: `"completion_tokens_details":{"reasoning_tokens":1}`},
-		{name: "conflicting positive aliases", details: `"completion_tokens_details":{"reasoning_tokens":1},"output_tokens_details":{"reasoning_tokens":5}`, wantChat: 1, wantOutput: 5},
-		{name: "conflicting zero alias", details: `"completion_tokens_details":{"reasoning_tokens":1},"output_tokens_details":{"reasoning_tokens":0}`, wantChat: 1},
+		{name: "conflicting positive aliases", details: `"completion_tokens_details":{"reasoning_tokens":1},"output_tokens_details":{"reasoning_tokens":5}`},
+		{name: "conflicting zero alias", details: `"completion_tokens_details":{"reasoning_tokens":1},"output_tokens_details":{"reasoning_tokens":0}`},
 		{name: "incomplete response", incomplete: true, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1, wantOutput: 1},
+		{name: "incomplete larger response", incomplete: true, details: `"completion_tokens_details":{"reasoning_tokens":143}`, wantChat: 143, wantOutput: 143},
 	} {
 		for _, stream := range []bool{false, true} {
 			for _, forceFormat := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/stream=%t/format=%t", tc.name, stream, forceFormat), func(t *testing.T) {
-					usageJSON := `{"prompt_tokens":100,"completion_tokens":20,"input_tokens":100,"output_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":25},` + tc.details + `}`
+					completionTokens := max(20, int(gjson.Get("{"+tc.details+"}", "completion_tokens_details.reasoning_tokens").Int())+5, int(gjson.Get("{"+tc.details+"}", "output_tokens_details.reasoning_tokens").Int())+5)
+					totalTokens := 100 + completionTokens
+					usageJSON := fmt.Sprintf(`{"prompt_tokens":100,"completion_tokens":%d,"input_tokens":100,"output_tokens":%d,"total_tokens":%d,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":25},%s}`, completionTokens, completionTokens, totalTokens, tc.details)
 					body := `{"id":"chatcmpl-reasoning","object":"chat.completion","model":"kimi-k3","choices":[{"index":0,"message":{"role":"assistant","content":"ok"` + tc.message + `},"finish_reason":"stop"}],"usage":` + usageJSON + `}`
 					if stream {
 						body = `data: {"id":"chatcmpl-reasoning","object":"chat.completion.chunk","model":"kimi-k3","choices":[{"index":0,"delta":{"content":"ok"` + tc.message + `},"finish_reason":"stop"}]}` + "\n\n" +
@@ -58,6 +65,9 @@ func TestK3EmptyReasoningUsagePreservesSettlement(t *testing.T) {
 					if tc.incomplete {
 						body = strings.ReplaceAll(body, `"finish_reason":"stop"`, `"finish_reason":""`)
 						body = strings.ReplaceAll(body, "data: [DONE]\n\n", "")
+					}
+					if tc.finishReason != "" {
+						body = strings.ReplaceAll(body, `"finish_reason":"stop"`, `"finish_reason":"`+tc.finishReason+`"`)
 					}
 					c, recorder, resp, info := newChatCompletionResponseIDTestContext(t, body, stream)
 					info.ChannelSetting.ForceFormat = forceFormat
@@ -73,8 +83,8 @@ func TestK3EmptyReasoningUsagePreservesSettlement(t *testing.T) {
 					require.Nil(t, apiErr)
 					require.NotNil(t, usage)
 					assert.Equal(t, 100, usage.PromptTokens)
-					assert.Equal(t, 20, usage.CompletionTokens)
-					assert.Equal(t, 120, usage.TotalTokens)
+					assert.Equal(t, completionTokens, usage.CompletionTokens)
+					assert.Equal(t, totalTokens, usage.TotalTokens)
 					assert.Equal(t, 40, usage.PromptTokensDetails.CachedTokens)
 					assert.Equal(t, 25, usage.PromptTokensDetails.CacheWriteTokens)
 					assert.Equal(t, int(gjson.Get(usageJSON, "completion_tokens_details.reasoning_tokens").Int()), usage.CompletionTokenDetails.ReasoningTokens)
@@ -94,7 +104,7 @@ func TestK3EmptyReasoningUsagePreservesSettlement(t *testing.T) {
 						}
 					}
 					require.NotEmpty(t, payload)
-					for path, want := range map[string]int64{"prompt_tokens": 100, "completion_tokens": 20, "input_tokens": 100, "output_tokens": 20, "total_tokens": 120} {
+					for path, want := range map[string]int64{"prompt_tokens": 100, "completion_tokens": int64(completionTokens), "input_tokens": 100, "output_tokens": int64(completionTokens), "total_tokens": int64(totalTokens)} {
 						assert.Equal(t, want, gjson.Get(payload, "usage."+path).Int(), path)
 					}
 					assert.Equal(t, tc.wantChat, gjson.Get(payload, "usage.completion_tokens_details.reasoning_tokens").Int())
@@ -174,15 +184,19 @@ func TestK3StreamPreservesUsageSnapshots(t *testing.T) {
 		name                 string
 		metadata             string
 		lastCount            int
+		wantSettlementCount  int
 		excludeTerminalUsage bool
 		want                 []int64
 	}{
-		{name: "all snapshots normalized", lastCount: 1, want: []int64{0, 0}},
-		{name: "later larger count", lastCount: 5, want: []int64{1, 5}},
-		{name: "larger terminal usage excluded by client", lastCount: 5, excludeTerminalUsage: true, want: []int64{1}},
+		{name: "all snapshots normalized", lastCount: 1, wantSettlementCount: 1, want: []int64{0, 0}},
+		{name: "later larger count", lastCount: 5, wantSettlementCount: 5, want: []int64{0, 0}},
+		// The existing settlement merge keeps the earlier nonzero count. Client
+		// normalization must not change that accounting behavior.
+		{name: "later zero count", lastCount: 0, wantSettlementCount: 1, want: []int64{0, 0}},
+		{name: "larger terminal usage excluded by client", lastCount: 5, wantSettlementCount: 5, excludeTerminalUsage: true, want: []int64{0}},
 		// A large provider extension exercises the bounded-buffer fallback,
 		// rather than silently discarding usage or buffering unbounded data.
-		{name: "oversized provider metadata", metadata: strings.Repeat("x", 65<<10), lastCount: 1, want: []int64{1, 1}},
+		{name: "oversized provider metadata", metadata: strings.Repeat("x", 65<<10), lastCount: 1, wantSettlementCount: 1, want: []int64{1, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := `data: {"id":"chatcmpl-snapshots","choices":[{"index":0,"delta":{"content":"ok"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"completion_tokens_details":{"reasoning_tokens":1}}}` + "\n\n" +
@@ -200,7 +214,7 @@ func TestK3StreamPreservesUsageSnapshots(t *testing.T) {
 			require.NotNil(t, usage)
 			assert.Equal(t, 21, usage.CompletionTokens)
 			assert.Equal(t, 121, usage.TotalTokens)
-			assert.Equal(t, tc.lastCount, usage.CompletionTokenDetails.ReasoningTokens)
+			assert.Equal(t, tc.wantSettlementCount, usage.CompletionTokenDetails.ReasoningTokens)
 			var snapshots []gjson.Result
 			for line := range strings.SplitSeq(recorder.Body.String(), "\n") {
 				payload, ok := strings.CutPrefix(line, "data: ")
@@ -299,7 +313,7 @@ func TestK3StreamForwardsTextBeforeTerminalAndPreservesCancelledUsage(t *testing
 }
 
 func TestForceFormattedChatUsageIncludesResponsesAliases(t *testing.T) {
-	body := `{"id":"chatcmpl-usage","object":"chat.completion","created":1710000000,"model":"kimi-k3","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":25},"completion_tokens_details":{"reasoning_tokens":5}}}`
+	body := `{"id":"chatcmpl-usage","object":"chat.completion","created":1710000000,"model":"kimi-k3","choices":[{"index":0,"message":{"role":"assistant","content":"ok","reasoning_content":"think"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":25},"completion_tokens_details":{"reasoning_tokens":5}}}`
 	c, recorder, resp, info := newChatCompletionResponseIDTestContext(t, body, false)
 	info.ChannelType = constant.ChannelTypeOpenAI
 
@@ -321,7 +335,7 @@ func TestForceFormattedChatUsageIncludesResponsesAliases(t *testing.T) {
 
 func TestForceFormattedChatStreamUsageIncludesResponsesAliases(t *testing.T) {
 	body := strings.Join([]string{
-		`data: {"id":"chatcmpl-usage","object":"chat.completion.chunk","created":1710000000,"model":"kimi-k3","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl-usage","object":"chat.completion.chunk","created":1710000000,"model":"kimi-k3","choices":[{"index":0,"delta":{"content":"ok","reasoning_content":"think"},"finish_reason":null}]}`,
 		`data: {"id":"chatcmpl-usage","object":"chat.completion.chunk","created":1710000000,"model":"kimi-k3","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":25},"completion_tokens_details":{"reasoning_tokens":5}}}`,
 		`data: [DONE]`,
 		``,
