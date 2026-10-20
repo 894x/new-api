@@ -94,6 +94,7 @@ import { ResponseModelDetails } from '../model-badge'
 import { PluginAuthorLink } from '../plugin-author-link'
 import { RequestCapture } from '../request-capture'
 import { RequestTimingTimeline } from '../request-timing-timeline'
+import { TaskBillingHistoryButton } from '../task-billing-history'
 import { UpstreamTransportDetails } from '../upstream-transport-details'
 import { DetailRow, DetailSection } from './log-detail-layout'
 
@@ -683,6 +684,23 @@ export function DetailsDialog(props: DetailsDialogProps) {
       <div className='w-full max-w-full min-w-0 space-y-2.5 overflow-x-hidden py-1 sm:space-y-3'>
         {/* Overview section - key identifiers */}
         <div className='min-w-0 space-y-1'>
+          {other?.task_id && (
+            <DetailRow
+              label={t('Task ID')}
+              value={
+                <span className='inline-block min-w-0 space-y-2'>
+                  <span className='block break-all'>{other.task_id}</span>
+                  <TaskBillingHistoryButton
+                    requestId={props.log.request_id}
+                    taskId={props.log.request_id ? undefined : other.task_id}
+                    userId={props.log.user_id}
+                    isAdmin={props.isAdmin}
+                  />
+                </span>
+              }
+              mono
+            />
+          )}
           {props.log.request_id && (
             <DetailRow
               label={t('Request ID')}

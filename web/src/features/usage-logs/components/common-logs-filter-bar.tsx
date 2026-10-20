@@ -56,6 +56,7 @@ import {
   LogsFilterInput,
   LogsFilterToolbar,
 } from './logs-filter-toolbar'
+import { TaskBillingHistoryButton } from './task-billing-history'
 import { useLogsViewScope, useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
@@ -510,6 +511,10 @@ export function CommonLogsFilterBar<TData>(
         <>
           {props.densityToggle}
           {sensitiveToggle}
+          <TaskBillingHistoryButton
+            requestId={filters.requestId || undefined}
+            isAdmin={isAdmin}
+          />
           {isAdmin && <LogExportDialog params={exportParams} />}
         </>
       }

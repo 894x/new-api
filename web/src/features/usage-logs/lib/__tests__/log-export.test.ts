@@ -41,6 +41,7 @@ describe('usage log export', () => {
       'model_price',
       'completion_ratio',
       'cache_ratio',
+      'actual_amount_usd',
       'error_message',
     ])
   })
@@ -62,6 +63,7 @@ describe('usage log export', () => {
       'completion_ratio',
       'cache_ratio',
       'group_ratio',
+      'actual_amount_usd',
     ])
   })
 

@@ -22,6 +22,8 @@ import { Window } from 'happy-dom'
 import type React from 'react'
 import { afterAll, afterEach, describe, test } from 'vitest'
 
+import type { LogExportRequest } from '../../types'
+
 const domWindow = new Window()
 const domGlobals = [
   'window',
@@ -107,7 +109,7 @@ describe('usage log export dialog', () => {
   })
 
   test('associates the scope label and downloads the configured archive', async () => {
-    const requests: unknown[] = []
+    const requests: LogExportRequest[] = []
     const exporter: React.ComponentProps<
       typeof LogExportDialog
     >['exporter'] = async (request) => {
@@ -151,9 +153,18 @@ describe('usage log export dialog', () => {
       '[aria-labelledby="log-export-view-label"]'
     )
     assert.ok(scopeTrigger)
+    const chargeLabel = [...dialog.querySelectorAll('label')].find(
+      (label) => label.textContent === 'Actual Charge (USD)'
+    )
+    assert.ok(chargeLabel)
+    const chargeCheckbox = dialog.querySelector<HTMLInputElement>(
+      `input[id="${chargeLabel.htmlFor}"]`
+    )
+    assert.equal(chargeCheckbox?.checked, true)
 
     await act(async () => findButton(dialog, 'Export').click())
     assert.equal(requests.length, 1)
+    assert.ok(requests[0].fields.includes('actual_amount_usd'))
     assert.equal(downloadedFilename, 'usage-upstream.zip')
     assert.equal(revokedURL, 'blob:usage-export')
     assert.equal(document.querySelector('[role="dialog"]'), null)

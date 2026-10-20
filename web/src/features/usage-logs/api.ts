@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api, type ApiRequestConfig } from '@/lib/api'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { buildQueryParams } from './lib/query-params'
 import { parseTaskArtifactsResponse } from './lib/task-artifacts'
@@ -29,6 +30,7 @@ import type {
   GetTaskLogsParams,
   LogExportRequest,
   TaskArtifactsResponse,
+  TaskBillingHistory,
   UserInfo,
 } from './types'
 
@@ -148,4 +150,16 @@ export async function getTaskArtifacts(taskId: string) {
     taskArtifactRequestConfig
   )
   return parseTaskArtifactsResponse(response.data)
+}
+
+export async function getTaskBillingHistory(
+  params: { task_id?: string; request_id?: string; user_id?: number },
+  signal?: AbortSignal
+): Promise<TaskBillingHistory> {
+  const response = await api.get<{
+    success: boolean
+    message?: string
+    data: TaskBillingHistory
+  }>('/api/log/task-billing', { params, signal })
+  return requireServerSuccess(response.data).data
 }

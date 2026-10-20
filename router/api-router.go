@@ -356,6 +356,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/audit", middleware.DisableCache(), middleware.AdminAuth(), middleware.RequirePermission(authz.AuditRead), controller.GetAuditLogs)
 		apiRouter.GET("/audit/self", middleware.DisableCache(), middleware.UserAuth(), controller.GetAuditLogs)
 		logRoute := apiRouter.Group("/log")
+		logRoute.GET("/task-billing", middleware.UserAuth(), middleware.DisableCache(), middleware.SearchRateLimit(), controller.GetTaskBillingHistory)
 		logRoute.GET("/request-capture/:request_id", middleware.AdminAuth(), middleware.DisableCache(), controller.GetRequestCapture)
 		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)
 		logRoute.POST("/export", middleware.AdminAuth(), controller.ExportLogs)

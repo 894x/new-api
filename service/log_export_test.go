@@ -3,7 +3,9 @@ package service
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/csv"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -259,4 +261,53 @@ func TestValidateLogExportFieldsRejectsUpstreamDataInDownstreamExport(t *testing
 	err = ValidateLogExportFields(LogExportViewDownstream, []string{"request_id", "error_message"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error_message")
+}
+
+func TestLogExportActualAmountUsesRecordedChargeWithoutRemovingGroupRatio(t *testing.T) {
+	previousQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 1
+	t.Cleanup(func() { common.QuotaPerUnit = previousQuotaPerUnit })
+
+	tests := []struct {
+		name   string
+		kind   int
+		quota  int
+		other  map[string]any
+		amount string
+	}{
+		{name: "discounted charge", kind: model.LogTypeConsume, quota: 1500, other: map[string]any{"quota_per_unit": 500000, "group_ratio": 0.5}, amount: "0.003"},
+		{name: "missing group ratio", kind: model.LogTypeConsume, quota: 1000, other: map[string]any{"quota_per_unit": 500000}, amount: "0.002"},
+		{name: "free request", kind: model.LogTypeConsume, quota: 0, other: map[string]any{"quota_per_unit": 500000, "group_ratio": 0}, amount: "0"},
+		{name: "different historical conversion", kind: model.LogTypeConsume, quota: 1250, other: map[string]any{"quota_per_unit": 250000}, amount: "0.005"},
+		{name: "small charge", kind: model.LogTypeConsume, quota: 1, other: map[string]any{"quota_per_unit": 500000}, amount: "0.000002"},
+		{name: "missing conversion snapshot", kind: model.LogTypeConsume, quota: 1000, other: map[string]any{"group_ratio": 1}},
+		{name: "zero conversion snapshot", kind: model.LogTypeConsume, quota: 1000, other: map[string]any{"quota_per_unit": 0}},
+		{name: "negative conversion snapshot", kind: model.LogTypeConsume, quota: 1000, other: map[string]any{"quota_per_unit": -1}},
+		{name: "invalid conversion snapshot", kind: model.LogTypeConsume, quota: 1000, other: map[string]any{"quota_per_unit": "invalid"}},
+		{name: "failed attempt has no charge", kind: model.LogTypeError, quota: 1000, other: map[string]any{"quota_per_unit": 500000}},
+	}
+	for _, view := range []LogExportView{LogExportViewUpstream, LogExportViewDownstream} {
+		t.Run(string(view), func(t *testing.T) {
+			for _, tc := range tests {
+				t.Run(tc.name, func(t *testing.T) {
+					logs := []*model.Log{{Id: 1, RequestId: "req-1", Type: tc.kind, Quota: tc.quota, Other: common.MapToJsonStr(tc.other)}}
+					rows := BuildLogExportRows(view, logs)
+					require.Len(t, rows, 1)
+					var output bytes.Buffer
+					err := WriteLogExportArchive(&output, view, []string{"request_id", "actual_amount_usd"}, rows, BuildLogExportSummary(view, rows))
+					require.NoError(t, err)
+					archive, err := zip.NewReader(bytes.NewReader(output.Bytes()), int64(output.Len()))
+					require.NoError(t, err)
+					detail, err := archive.Open(string(view) + "-details.csv")
+					require.NoError(t, err)
+					defer detail.Close()
+					data, err := io.ReadAll(detail)
+					require.NoError(t, err)
+					records, err := csv.NewReader(strings.NewReader(strings.TrimPrefix(string(data), "\uFEFF"))).ReadAll()
+					require.NoError(t, err)
+					assert.Equal(t, [][]string{{"request_id", "actual_amount_usd"}, {"req-1", tc.amount}}, records)
+				})
+			}
+		})
+	}
 }

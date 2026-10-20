@@ -46,6 +46,7 @@ type LogExportRow struct {
 	GroupRatio        *float64
 	QuotaPerUnit      *float64
 	OriginalAmountUSD *float64
+	ActualAmountUSD   *float64
 	ErrorMessage      string
 }
 
@@ -96,6 +97,7 @@ var logExportFields = map[string]logExportField{
 	"group_ratio":         {value: func(row LogExportRow) string { return formatOptionalFloat(row.GroupRatio) }},
 	"quota_per_unit":      {value: func(row LogExportRow) string { return formatOptionalFloat(row.QuotaPerUnit) }},
 	"original_amount_usd": {value: func(row LogExportRow) string { return formatLogExportAmount(row.OriginalAmountUSD) }},
+	"actual_amount_usd":   {value: func(row LogExportRow) string { return formatLogExportAmount(row.ActualAmountUSD) }},
 	"error_message":       {upstreamOnly: true, text: true, value: func(row LogExportRow) string { return row.ErrorMessage }},
 }
 
@@ -103,7 +105,7 @@ func DefaultLogExportFields(view LogExportView) []string {
 	commonFields := []string{
 		"created_at", "request_id", "status", "user_id", "username", "token_id", "token_name", "group",
 		"model_name", "input_tokens", "cached_input_tokens", "output_tokens", "model_price", "model_ratio",
-		"completion_ratio", "cache_ratio", "group_ratio", "quota_per_unit", "original_amount_usd",
+		"completion_ratio", "cache_ratio", "group_ratio", "quota_per_unit", "original_amount_usd", "actual_amount_usd",
 	}
 	if view != LogExportViewUpstream {
 		return commonFields
@@ -111,7 +113,7 @@ func DefaultLogExportFields(view LogExportView) []string {
 	return []string{
 		"created_at", "request_id", "upstream_request_id", "status", "user_id", "username", "token_id", "token_name", "group",
 		"channel_id", "channel_name", "model_name", "upstream_model_name", "input_tokens", "cached_input_tokens", "output_tokens",
-		"model_price", "model_ratio", "completion_ratio", "cache_ratio", "group_ratio", "quota_per_unit", "original_amount_usd", "error_message",
+		"model_price", "model_ratio", "completion_ratio", "cache_ratio", "group_ratio", "quota_per_unit", "original_amount_usd", "actual_amount_usd", "error_message",
 	}
 }
 
@@ -289,6 +291,10 @@ func buildLogExportRow(log *model.Log, hideUpstream bool) LogExportRow {
 		row.CacheRatio = optionalFloat(other, "cache_ratio")
 		row.GroupRatio = optionalFloat(other, "group_ratio")
 		row.QuotaPerUnit = optionalFloat(other, "quota_per_unit")
+		if row.QuotaPerUnit != nil && *row.QuotaPerUnit > 0 {
+			amount := float64(log.Quota) / *row.QuotaPerUnit
+			row.ActualAmountUSD = &amount
+		}
 		if row.GroupRatio != nil && *row.GroupRatio > 0 && row.QuotaPerUnit != nil && *row.QuotaPerUnit > 0 {
 			amount := float64(log.Quota) / *row.GroupRatio / *row.QuotaPerUnit
 			row.OriginalAmountUSD = &amount

@@ -34,6 +34,7 @@ import type { TaskLog, TaskRequestParameters, TaskUsage } from '../../types'
 import { TaskDetailsDialog } from '../dialogs/task-details-dialog'
 import { PluginAuthorLink } from '../plugin-author-link'
 import { TaskArtifactsCell } from '../task-artifacts'
+import { TaskBillingHistoryButton } from '../task-billing-history'
 import { UsageCell } from '../usage-cell'
 import { useUsageLogsContext } from '../usage-logs-provider'
 import {
@@ -194,6 +195,11 @@ function TaskDetailsCell(props: {
           />
           {t('View details')}
         </button>
+        <TaskBillingHistoryButton
+          taskId={props.log.task_id}
+          userId={props.log.user_id}
+          isAdmin={props.isAdmin}
+        />
         {props.log.fail_reason ? (
           <span className='max-w-full truncate text-xs text-red-600 dark:text-red-400'>
             {props.log.fail_reason}
@@ -347,6 +353,15 @@ export function useTaskLogsColumns(
                 size='sm'
                 className='border-border/60 bg-muted/30 !text-foreground max-w-full truncate rounded-md border px-1.5 py-0.5 font-mono'
               />
+              {isAdmin && log.admin_info?.request_id && (
+                <StatusBadge
+                  label={log.admin_info.request_id}
+                  copyText={log.admin_info.request_id}
+                  variant='neutral'
+                  size='sm'
+                  className='max-w-full truncate font-mono'
+                />
+              )}
               {isAdmin && (
                 <span className='text-muted-foreground/60 truncate text-[11px]'>
                   {t(log.platform)} · {t(taskActionMapper.getLabel(log.action))}

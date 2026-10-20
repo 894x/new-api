@@ -76,6 +76,10 @@ const LOG_EXPORT_FIELDS: LogExportField[] = [
     label: 'Original Amount (USD)',
   },
   {
+    key: 'actual_amount_usd',
+    label: 'Actual Charge (USD)',
+  },
+  {
     key: 'error_message',
     label: 'Error Message',
     upstreamOnly: true,
@@ -96,6 +100,7 @@ const DEFAULT_LOG_EXPORT_FIELDS: Record<LogExportView, string[]> = {
     'model_price',
     'completion_ratio',
     'cache_ratio',
+    'actual_amount_usd',
     'error_message',
   ],
   downstream: [
@@ -114,6 +119,7 @@ const DEFAULT_LOG_EXPORT_FIELDS: Record<LogExportView, string[]> = {
     'completion_ratio',
     'cache_ratio',
     'group_ratio',
+    'actual_amount_usd',
   ],
 }
 

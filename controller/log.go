@@ -1,8 +1,11 @@
 package controller
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -10,6 +13,45 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// GetTaskBillingHistory is a dashboard read. Ordinary users are always scoped
+// to their own account, regardless of any supplied user_id.
+func GetTaskBillingHistory(c *gin.Context) {
+	taskID, requestID := strings.TrimSpace(c.Query("task_id")), strings.TrimSpace(c.Query("request_id"))
+	if (taskID == "") == (requestID == "") || len(taskID) > 191 || len(requestID) > 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Provide one task ID or request ID"})
+		return
+	}
+	userID := c.GetInt("id")
+	if userID <= 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Unauthorized"})
+		return
+	}
+	if c.GetInt("role") >= common.RoleAdminUser {
+		userID = 0
+		if value := c.Query("user_id"); value != "" {
+			var err error
+			userID, err = strconv.Atoi(value)
+			if err != nil || userID <= 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid user ID"})
+				return
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	history, err := model.GetTaskBillingHistory(ctx, taskID, requestID, userID)
+	if err != nil {
+		common.SysError("failed to query task billing history: " + err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to load related billing"})
+		return
+	}
+	if history == nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "Task billing history not found or ambiguous"})
+		return
+	}
+	common.ApiSuccess(c, history)
+}
 
 func GetAllLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)

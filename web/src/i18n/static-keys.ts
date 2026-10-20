@@ -742,6 +742,7 @@ export const STATIC_I18N_KEYS = [
   'Cache Ratio',
   'Quota per USD',
   'Original Amount (USD)',
+  'Actual Charge (USD)',
 
   'Personal Center Area',
   'User personal functions',

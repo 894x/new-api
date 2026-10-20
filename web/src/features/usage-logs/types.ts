@@ -616,3 +616,21 @@ export interface UserInfo {
   aff_quota?: number
   remark?: string
 }
+
+export interface TaskBillingHistory {
+  task_id: string
+  submit_request_id: string
+  status: string
+  task_quota: number
+  charged_quota: number
+  refunded_quota: number
+  net_quota: number
+  truncated: boolean
+  reconciled: boolean
+  entries: Array<{
+    request_id: string
+    created_at: number
+    kind: 'initial_charge' | 'additional_charge' | 'refund'
+    quota: number
+  }>
+}

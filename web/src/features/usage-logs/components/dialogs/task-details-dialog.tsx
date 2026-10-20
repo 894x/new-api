@@ -31,6 +31,7 @@ import { taskActionMapper, taskStatusMapper } from '../../lib/mappers'
 import { resolveTaskDetailAccess } from '../../lib/task-details'
 import type { TaskLog } from '../../types'
 import { PluginAuthorLink } from '../plugin-author-link'
+import { TaskBillingHistoryButton } from '../task-billing-history'
 
 function DetailRow(props: {
   label: React.ReactNode
@@ -124,6 +125,11 @@ export function TaskDetailsDialog(props: TaskDetailsDialogProps) {
       bodyClassName='pr-2 sm:pr-4'
     >
       <div className='space-y-3'>
+        <TaskBillingHistoryButton
+          taskId={props.log.task_id}
+          userId={props.log.user_id}
+          isAdmin={props.isAdmin}
+        />
         <DetailSection label={t('Basic Information')}>
           <DetailRow label={t('Task ID')} value={props.log.task_id} mono />
           <DetailRow label={t('Platform')} value={props.log.platform} mono />
