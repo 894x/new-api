@@ -11,7 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -104,7 +103,6 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	if err != nil {
 		return fmt.Errorf("error marshalling stream response: %w", err)
 	}
-	jsonData = service.TransformUserCacheHitResponse(c, jsonData)
 	if err := writeSSESegment(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
 		return err
 	}
@@ -115,7 +113,6 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 }
 
 func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) error {
-	data = string(service.TransformUserCacheHitResponse(c, []byte(data)))
 	if requestContextDone(c) {
 		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
@@ -130,7 +127,6 @@ func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) error
 }
 
 func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data string) error {
-	data = string(service.TransformUserCacheHitResponse(c, []byte(data)))
 	if requestContextDone(c) {
 		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
@@ -159,7 +155,7 @@ func StringData(c *gin.Context, str string) error {
 	if err != nil {
 		return fmt.Errorf("error normalizing response id: %w", err)
 	}
-	str = string(service.TransformUserCacheHitResponse(c, normalized))
+	str = string(normalized)
 
 	if err := writeSSESegment(c, "data: "+str); err != nil {
 		return err
@@ -201,7 +197,7 @@ func WriteJSON(c *gin.Context, data []byte) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("error normalizing response id: %w", err)
 	}
-	return c.Writer.Write(service.TransformUserCacheHitResponse(c, normalized))
+	return c.Writer.Write(normalized)
 }
 
 func Done(c *gin.Context) error {

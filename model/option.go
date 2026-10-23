@@ -316,9 +316,6 @@ func validateOptionValue(key string, value string) error {
 	if key == DNSPodConfigOptionKey {
 		return errors.New("DNSPod configuration requires its dedicated verified endpoint")
 	}
-	if strings.HasPrefix(key, UserCacheHitPolicyOptionPrefix) {
-		return fmt.Errorf("user cache hit policies must be updated through the user policy endpoint")
-	}
 	if key == setting.GroupModelChannelGroupsOptionKey {
 		_, err := setting.ParseGroupModelChannelGroups(value)
 		return err
