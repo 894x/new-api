@@ -1,10 +1,21 @@
 package service
 
 import (
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/gin-gonic/gin"
+)
+
+const (
+	cacheWrite5mHeader = "Msh-Usage-Cache-Write-Tokens-5m"
+	cacheWrite1hHeader = "Msh-Usage-Cache-Write-Tokens-1h"
 )
 
 const (
@@ -23,6 +34,37 @@ func effectiveBillingUsage(usage *dto.Usage) *dto.Usage {
 		return billingUsage
 	}
 	return usage
+}
+
+// Some OpenAI-compatible providers report TTL buckets only in response headers.
+// Use them only when the body has no breakdown and the complete header pair
+// agrees with its aggregate. Never infer a billed TTL from the request's TTL.
+func cacheCreationUsageFromHeaders(ctx *gin.Context, usage *dto.Usage) *dto.Usage {
+	if ctx == nil || usage == nil || usage.CacheCreation != nil ||
+		usage.ClaudeCacheCreation5mTokens != 0 || usage.ClaudeCacheCreation1hTokens != 0 {
+		return usage
+	}
+	headers, ok := common.GetContextKeyType[map[string]string](ctx, common.UpstreamResponseHeadersKey)
+	if !ok {
+		return usage
+	}
+	fiveMinutes, err5m := strconv.Atoi(strings.TrimSpace(headers[http.CanonicalHeaderKey(cacheWrite5mHeader)]))
+	oneHour, err1h := strconv.Atoi(strings.TrimSpace(headers[http.CanonicalHeaderKey(cacheWrite1hHeader)]))
+	maxInt := int(^uint(0) >> 1)
+	if err5m != nil || err1h != nil || fiveMinutes < 0 || oneHour < 0 || fiveMinutes > maxInt-oneHour {
+		return usage
+	}
+	total, _, _ := usage.CacheCreationTokenCounts()
+	split := fiveMinutes + oneHour
+	if split == 0 || total > 0 && total != split {
+		return usage
+	}
+	adjusted := *usage
+	adjusted.CacheCreation = &dto.ClaudeCacheCreationUsage{
+		Ephemeral5mInputTokens: fiveMinutes,
+		Ephemeral1hInputTokens: oneHour,
+	}
+	return &adjusted
 }
 
 func captureRelayPerformanceUsage(info *relaycommon.RelayInfo, usage *dto.Usage) {

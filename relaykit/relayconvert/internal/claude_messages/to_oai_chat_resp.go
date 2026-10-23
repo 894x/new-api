@@ -304,6 +304,10 @@ func UsageFromClaudeAPIUsage(usage *dto.ClaudeUsage) *dto.Usage {
 	}
 	semanticUsage.PromptTokensDetails.CachedTokens = usage.CacheReadInputTokens
 	semanticUsage.PromptTokensDetails.CachedCreationTokens = usage.CacheCreationInputTokens
+	if usage.CacheCreation != nil {
+		cacheCreation := *usage.CacheCreation
+		semanticUsage.CacheCreation = &cacheCreation
+	}
 	semanticUsage.ClaudeCacheCreation5mTokens = usage.GetCacheCreation5mTokens()
 	semanticUsage.ClaudeCacheCreation1hTokens = usage.GetCacheCreation1hTokens()
 	return UsageFromClaudeUsage(semanticUsage)

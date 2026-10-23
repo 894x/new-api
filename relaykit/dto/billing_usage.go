@@ -78,6 +78,10 @@ func HasOpenAIUsageTokens(usage *Usage) bool {
 	if usage == nil {
 		return false
 	}
+	if usage.CacheCreation != nil &&
+		(usage.CacheCreation.Ephemeral5mInputTokens != 0 || usage.CacheCreation.Ephemeral1hInputTokens != 0) {
+		return true
+	}
 	if usage.PromptTokens != 0 ||
 		usage.CompletionTokens != 0 ||
 		usage.TotalTokens != 0 ||
@@ -325,6 +329,10 @@ func (usage *BillingUsage) canonicalClaudeUsage() *Usage {
 	}
 	canonical.PromptTokensDetails.CachedTokens = claudeUsage.CacheReadInputTokens
 	canonical.PromptTokensDetails.CachedCreationTokens = claudeUsage.CacheCreationInputTokens
+	if claudeUsage.CacheCreation != nil {
+		cacheCreation := *claudeUsage.CacheCreation
+		canonical.CacheCreation = &cacheCreation
+	}
 	return canonical
 }
 
@@ -387,6 +395,10 @@ func cloneOpenAIUsage(usage *Usage) *Usage {
 	}
 	clone := *usage
 	clone.BillingUsage = nil
+	if usage.CacheCreation != nil {
+		cacheCreation := *usage.CacheCreation
+		clone.CacheCreation = &cacheCreation
+	}
 	clone.PromptTokensDetails = usage.PromptTokensDetails.Clone()
 	if usage.InputTokensDetails != nil {
 		inputTokensDetails := usage.InputTokensDetails.Clone()

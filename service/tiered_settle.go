@@ -27,13 +27,9 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	p := float64(usage.PromptTokens)
 	c := float64(usage.CompletionTokens)
 	cr := float64(usage.PromptTokensDetails.CachedTokens)
-	cc5m := float64(usage.PromptTokensDetails.CacheCreationTokensTotal())
-	cc1h := float64(0)
-
-	if usage.UsageSemantic == "anthropic" {
-		cc1h = float64(usage.ClaudeCacheCreation1hTokens)
-		cc5m = float64(usage.ClaudeCacheCreation5mTokens)
-	}
+	cacheCreationTotal, _, cacheCreation1h := usage.CacheCreationTokenCounts()
+	cc5m := float64(cacheCreationTotal - cacheCreation1h)
+	cc1h := float64(cacheCreation1h)
 
 	img := float64(usage.PromptTokensDetails.ImageTokens)
 	imgCR := float64(0)
@@ -84,6 +80,12 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		// price, merge those tokens into the input category instead.
 		if !usedVars["cr"] {
 			p += cr
+		}
+		if !usedVars["cc"] {
+			p += cc5m
+		}
+		if !usedVars["cc1h"] {
+			p += cc1h
 		}
 	} else {
 		if usedVars["cr"] {

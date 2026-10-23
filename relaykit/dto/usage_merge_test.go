@@ -7,6 +7,59 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCacheCreationTokenCountsPreservesNativeAndLegacySnapshots(t *testing.T) {
+	t.Parallel()
+	maxInt := int(^uint(0) >> 1)
+	for _, tc := range []struct {
+		name              string
+		usage             Usage
+		total, five, hour int
+	}{
+		{name: "aggregate aliases counted once", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100, CachedCreationTokens: 100}}, total: 100},
+		{name: "responses aggregate", usage: Usage{InputTokensDetails: &InputTokenDetails{CacheWriteTokens: 100}, CacheCreation: &ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 100}}, total: 100, hour: 100},
+		{name: "canonical prompt details win", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100}, InputTokensDetails: &InputTokenDetails{CacheWriteTokens: 200}}, total: 100},
+		{name: "unknown remainder", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100}, CacheCreation: &ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 20, Ephemeral1hInputTokens: 30}}, total: 100, five: 20, hour: 30},
+		{name: "legacy split only", usage: Usage{ClaudeCacheCreation5mTokens: 20, ClaudeCacheCreation1hTokens: 30}, total: 50, five: 20, hour: 30},
+		{name: "native split only", usage: Usage{CacheCreation: &ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 100}}, total: 100, hour: 100},
+		{name: "native zero overrides aliases", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100}, ClaudeCacheCreation1hTokens: 100, CacheCreation: &ClaudeCacheCreationUsage{}}, total: 100},
+		{name: "negative", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100}, CacheCreation: &ClaudeCacheCreationUsage{Ephemeral5mInputTokens: -1, Ephemeral1hInputTokens: 101}}, total: 100},
+		{name: "split exceeds total", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100}, CacheCreation: &ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 101}}, total: 100},
+		{name: "sum overflow", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100}, CacheCreation: &ClaudeCacheCreationUsage{Ephemeral5mInputTokens: maxInt, Ephemeral1hInputTokens: 1}}, total: 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			total, five, hour := tc.usage.CacheCreationTokenCounts()
+			assert.Equal(t, tc.total, total)
+			assert.Equal(t, tc.five, five)
+			assert.Equal(t, tc.hour, hour)
+		})
+	}
+}
+
+func TestMergeOpenAICacheTTLPreservesPartialStreamAndDetachesSnapshots(t *testing.T) {
+	t.Parallel()
+	native := &Usage{CacheCreation: &ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 100}}
+	sidecar := NewOpenAIResponsesBillingUsage(native)
+	require.NotNil(t, sidecar, "a TTL-only usage frame carries accounting facts")
+	native.CacheCreation.Ephemeral1hInputTokens = 999
+	canonical, ok := sidecar.CanonicalUsage()
+	require.True(t, ok)
+	_, _, hour := canonical.CacheCreationTokenCounts()
+	assert.Equal(t, 100, hour)
+	canonical.CacheCreation.Ephemeral1hInputTokens = 500
+	assert.Equal(t, 100, sidecar.OpenAIUsage.CacheCreation.Ephemeral1hInputTokens)
+	merged := MergeUsageNonZero(nil, sidecar.OpenAIUsage)
+	merged = MergeUsageNonZero(merged, &Usage{CompletionTokens: 10})
+	_, _, hour = merged.CacheCreationTokenCounts()
+	assert.Equal(t, 100, hour, "output-only terminal must retain earlier cache usage")
+	correction := &Usage{CacheCreation: &ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 100}}
+	MergeUsageNonZero(merged, correction)
+	correction.CacheCreation.Ephemeral5mInputTokens = 900
+	total, five, hour := merged.CacheCreationTokenCounts()
+	assert.Equal(t, 100, total)
+	assert.Equal(t, 100, five)
+	assert.Zero(t, hour, "explicit native zero must clear stale 1h aliases")
+}
+
 func TestMergeClaudeUsageCacheCreationReplacesWholeObject(t *testing.T) {
 	t.Parallel()
 

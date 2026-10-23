@@ -27,7 +27,7 @@ type TokenParams struct {
 	Len   float64 // total input context length for tier conditions (non-Claude: raw prompt_tokens; Claude: text + cache read + cache creation)
 	CR    float64 // cache read (hit) tokens
 	CC    float64 // cache creation tokens (5-min TTL for Claude, generic for others)
-	CC1h  float64 // cache creation tokens — 1-hour TTL (Claude only)
+	CC1h  float64 // cache creation tokens — explicitly reported 1-hour TTL
 	Img   float64 // image input tokens
 	ImgCR float64 // image cache read tokens, separated only when explicitly priced
 	ImgO  float64 // image output tokens

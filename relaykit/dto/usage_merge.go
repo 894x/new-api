@@ -44,6 +44,12 @@ func MergeUsageNonZero(current *Usage, incoming *Usage) *Usage {
 	if incoming.ClaudeCacheCreation1hTokens > 0 {
 		current.ClaudeCacheCreation1hTokens = incoming.ClaudeCacheCreation1hTokens
 	}
+	if incoming.CacheCreation != nil {
+		cacheCreation := *incoming.CacheCreation
+		current.CacheCreation = &cacheCreation
+		current.ClaudeCacheCreation5mTokens = cacheCreation.Ephemeral5mInputTokens
+		current.ClaudeCacheCreation1hTokens = cacheCreation.Ephemeral1hInputTokens
+	}
 
 	mergeInputTokenDetails(&current.PromptTokensDetails, incoming.PromptTokensDetails)
 	if incoming.InputTokensDetails != nil {

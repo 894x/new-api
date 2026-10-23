@@ -33,8 +33,8 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 | `p` | 输入 token 数（**计价用**）。**自动排除**表达式中单独计价的子类别（见下方说明） |
 | `len` | 输入上下文总长度（**条件判断用**）。不受自动排除影响，始终反映完整输入长度。非 Claude：等于原始 `prompt_tokens`；Claude：等于文本输入 + 缓存读取 + 缓存创建 |
 | `cr` | 缓存命中（读取）token 数 |
-| `cc` | 缓存创建 token 数（Claude 5分钟 TTL / 通用） |
-| `cc1h` | 缓存创建 token 数 — 1小时 TTL（Claude 专用） |
+| `cc` | 缓存创建 token 数（5分钟 TTL / 未报告时长的通用写入，不包含已报告的 1h 写入） |
+| `cc1h` | 缓存创建 token 数 — 上游明确报告的 1小时 TTL，适用于 Chat Completions、Responses 和 Messages |
 | `img` | 图片输入 token 数 |
 | `img_cr` | 图片缓存读取 token 数；只有表达式显式引用且上游提供有效缓存模态明细时才单独拆分 |
 | `ai` | 音频输入 token 数 |
@@ -156,7 +156,13 @@ OpenAI 已于 2026-05-12 下线 DALL·E 2/3；其校验、默认值和倍率保�
 （Qwen-Image-3.0 为 `usage.output_image_count`）或按各 `choices[].message.content[]` / `results[]`
 中的图片载荷数结算，任务消费日志同样记录 `image_count`。
 
-> **注意：** 自动扣除针对 GPT/OpenAI 格式的 API（prompt_tokens 包含子类别）。Claude 格式的 API 不重复扣除缓存；未独立计价的缓存读取加回输入。系统根据上游返回格式自动处理。
+> **注意：** 自动扣除针对 GPT/OpenAI 格式的 API（prompt_tokens 包含子类别）。Claude 格式的 API 不重复扣除缓存；未独立计价的缓存读取和写入加回输入。系统根据上游返回格式自动处理。
+
+缓存写入时长以实际用量为准：优先读取 `usage.cache_creation.ephemeral_5m_input_tokens` /
+`ephemeral_1h_input_tokens`；保留旧版 `claude_cache_creation_5_m_tokens` / `claude_cache_creation_1_h_tokens`
+别名。响应体没有时长明细时，可用完整且与总写入量一致的 `Msh-Usage-Cache-Write-Tokens-5m` /
+`Msh-Usage-Cache-Write-Tokens-1h` 上游响应头补齐。仅有总量的写入仍归入 `cc`，不从请求的 `ttl`
+推测时长。无效明细回退到总量，避免负数或重复收费。新增字段不改变历史快照的读取格式。
 
 ### Built-in Functions
 
@@ -483,7 +489,7 @@ After the upstream response returns with actual token usage:
 1. `BuildTieredTokenParams(usage, isClaudeUsageSemantic, usedVars)`:
    - Reads actual token counts from `dto.Usage`
    - For GPT-format APIs (prompt_tokens includes everything): subtracts sub-categories from P/C **only when** the expression uses their variables (detected via AST introspection of the compiled expression)
-   - For Claude-format APIs: cache reads omitted from the expression are added to input; separately priced cache remains separate
+   - For Claude-format APIs: cache reads and writes omitted from the expression are added to input; separately priced cache remains separate
 
 2. `TryTieredSettle(relayInfo, params)`:
    - Uses the captured `BillingSnapshot`, whose group-dependent fields have been refreshed from the final selected group

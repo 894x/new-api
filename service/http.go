@@ -50,8 +50,8 @@ func ResetUpstreamResponseMetadata(c *gin.Context) {
 	c.Set(common.UpstreamResponseHeadersKey, make(map[string]string))
 }
 
-// CaptureUpstreamResponseHeaders preserves only the headers that the gateway
-// blocks from client responses, so administrators can diagnose upstream calls.
+// CaptureUpstreamResponseHeaders preserves blocked diagnostics and cache-write
+// billing counters, independently of the configurable client header filter.
 func CaptureUpstreamResponseHeaders(c *gin.Context, headers http.Header) {
 	if c == nil {
 		return
@@ -64,7 +64,8 @@ func CaptureUpstreamResponseHeaders(c *gin.Context, headers http.Header) {
 			captureUpstreamResponseHeader(c, key, values)
 			continue
 		}
-		if operation_setting.ShouldBlockUpstreamResponseHeader(key) {
+		if strings.EqualFold(key, cacheWrite5mHeader) || strings.EqualFold(key, cacheWrite1hHeader) ||
+			operation_setting.ShouldBlockUpstreamResponseHeader(key) {
 			captureUpstreamResponseHeader(c, key, values)
 		}
 	}

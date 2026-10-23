@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"sync"
@@ -34,6 +35,112 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+func TestCacheTTLHeaderBillingAndProductionReplay(t *testing.T) {
+	// Sanitized usage from request 202610230333105940863968268d9d6EItVIeqI.
+	const native = `{"input_tokens":5887,"output_tokens":50,"total_tokens":5937,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":5887,"cached_creation_tokens":5887},"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":5887}}`
+	const expression = `tier("base", p * 2.739726027396 + c * 13.69863013698 + cr * 0.2739726027396 + cc * 2.739726027397 + cc1h * 5.479452054795)`
+	used := map[string]bool{"p": true, "c": true, "cr": true, "cc": true, "cc1h": true}
+	for _, tc := range []struct {
+		name, five, hour string
+		body             *dto.ClaudeCacheCreationUsage
+		wantHour, quota  int
+	}{
+		{name: "native body 1h", five: "5887", hour: "0", body: &dto.ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 5887}, wantHour: 5887, quota: 16471},
+		{name: "native zero beats header", five: "0", hour: "5887", body: &dto.ClaudeCacheCreationUsage{}, quota: 8407},
+		{name: "header 1h", five: "0", hour: "5887", wantHour: 5887, quota: 16471},
+		{name: "header 5m", five: "5887", hour: "0", quota: 8407},
+		{name: "missing header", five: "0", quota: 8407},
+		{name: "mismatched total", five: "0", hour: "5888", quota: 8407},
+		{name: "negative", five: "-1", hour: "5888", quota: 8407},
+		{name: "overflow", five: "9223372036854775807", hour: "1", quota: 8407},
+		{name: "malformed", five: "0", hour: "1h", quota: 8407},
+		{name: "duplicate header", five: "0", hour: "5887, 5887", quota: 8407},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var usage dto.Usage
+			require.NoError(t, common.Unmarshal([]byte(native), &usage))
+			usage.CacheCreation = tc.body
+			original := dto.NewOpenAIResponsesBillingUsage(&usage)
+			usage.BillingUsage = original
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			headers := http.Header{}
+			headers.Set(cacheWrite5mHeader, tc.five)
+			if tc.hour != "" {
+				headers.Set(cacheWrite1hHeader, tc.hour)
+			}
+			CaptureUpstreamResponseHeaders(ctx, headers)
+			billed := cacheCreationUsageFromHeaders(ctx, effectiveBillingUsage(&usage))
+			params := BuildTieredTokenParams(billed, false, used)
+			assert.Zero(t, params.P)
+			assert.Equal(t, float64(tc.wantHour), params.CC1h)
+			assert.Equal(t, float64(5887-tc.wantHour), params.CC)
+			info := makeRelayInfo(expression, 1, 5887, 50)
+			ok, quota, result := TryTieredSettle(info, params)
+			require.True(t, ok)
+			require.NotNil(t, result)
+			assert.Equal(t, tc.quota, quota)
+			assert.Equal(t, tc.body, original.OpenAIUsage.CacheCreation, "header enrichment must not mutate provider snapshots")
+		})
+	}
+}
+
+func TestCacheTTLQuotaSummaryIndependentOfProtocol(t *testing.T) {
+	for _, semantic := range []string{"openai", "anthropic"} {
+		for _, counts := range []struct{ five, hour, unknown, read int }{
+			{five: 600, read: 300}, {hour: 600, read: 300}, {five: 200, hour: 400, read: 300},
+			{read: 900}, {five: 100, hour: 200, unknown: 300, read: 300},
+		} {
+			t.Run(fmt.Sprintf("%s/%+v", semantic, counts), func(t *testing.T) {
+				total := counts.five + counts.hour + counts.unknown
+				prompt := 100
+				if semantic == "openai" {
+					prompt += total + counts.read
+				}
+				usage := &dto.Usage{PromptTokens: prompt, CompletionTokens: 10, UsageSemantic: semantic,
+					PromptTokensDetails: dto.InputTokenDetails{CachedTokens: counts.read, CacheWriteTokens: total, CachedCreationTokens: total},
+					CacheCreation:       &dto.ClaudeCacheCreationUsage{Ephemeral5mInputTokens: counts.five, Ephemeral1hInputTokens: counts.hour},
+				}
+				info := &relaycommon.RelayInfo{OriginModelName: "kimi-k3", StartTime: time.Now(),
+					PriceData: hosttypes.PriceData{ModelRatio: 1, CompletionRatio: 5, CacheRatio: 0.1,
+						CacheCreationRatio: 1, CacheCreation5mRatio: 1, CacheCreation1hRatio: 2,
+						GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 0.5}},
+				}
+				ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+				summary := calculateTextQuotaSummary(ctx, info, usage)
+				wantOriginal := common.QuotaRound(100 + 50 + float64(counts.read)*0.1 + float64(counts.five+counts.unknown) + float64(counts.hour)*2)
+				assert.Equal(t, wantOriginal, summary.OriginalQuota)
+				assert.Equal(t, common.QuotaRound(float64(wantOriginal)*0.5), summary.Quota)
+				assert.Equal(t, total, cacheWriteTokensTotal(summary))
+				// Expressions without cache terms retain all input at p's price.
+				params := BuildTieredTokenParams(usage, semantic == "anthropic", map[string]bool{"p": true, "c": true})
+				assert.Equal(t, float64(100+total+counts.read), params.P)
+				assert.Equal(t, params.P, params.Len)
+			})
+		}
+	}
+}
+
+func TestCacheTTLOnlyUsageIsBillableWithoutGeneratedTokens(t *testing.T) {
+	for _, usage := range []*dto.Usage{
+		{UsageSemantic: "anthropic", CacheCreation: &dto.ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 100}},
+		{UsageSemantic: "anthropic", PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 100}},
+	} {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		info := &relaycommon.RelayInfo{StartTime: time.Now(), PriceData: hosttypes.PriceData{
+			ModelRatio: 1, CacheRatio: 0.1, CacheCreationRatio: 1, CacheCreation1hRatio: 2,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
+		}}
+		assert.True(t, ValidUsage(usage), "partial cache-only stream frames must survive accumulation")
+		summary := calculateTextQuotaSummary(ctx, info, usage)
+		assert.True(t, summary.hasBillableUsage())
+		if usage.CacheCreation != nil {
+			assert.Equal(t, 200, summary.Quota)
+		} else {
+			assert.Equal(t, 10, summary.Quota)
+		}
+	}
+}
 
 func setupCacheHitPolicyTestRedis(t *testing.T) {
 	t.Helper()
@@ -257,7 +364,7 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 300, ImageTokens: 600, CachedTokensDetails: &dto.CachedTokenDetails{ImageTokens: common.GetPointer(200)}}}
 	operation_setting.SetToolPriceForTest("fixed_billing_tool", 4)
 	t.Cleanup(func() { operation_setting.DeleteToolPriceForTest("fixed_billing_tool") })
-	for index, tc := range []struct {
+	type accountingCase struct {
 		name, expression                          string
 		estimate                                  int
 		usage                                     *dto.Usage
@@ -269,7 +376,11 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		unit                                      billingexpr.BillingUnit
 		requestedImages, actualImages             int
 		cachePolicy                               bool
-	}{
+		cacheTTL                                  string
+		cacheFormat                               types.RelayFormat
+		cacheHeaders                              bool
+	}
+	cases := []accountingCase{
 		{name: "missing usage charges once", expression: flat, want: 5000, unit: billingexpr.BillingUnitRequest},
 		{name: "zero usage charges once", expression: flat, usage: &dto.Usage{}, want: 5000, unit: billingexpr.BillingUnitRequest},
 		{name: "stream charges once", expression: flat, stream: true, usage: &dto.Usage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120}, want: 5000, unit: billingexpr.BillingUnitRequest},
@@ -295,7 +406,38 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		{name: "image quantity exceeds one-image wallet before submission", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 4, wallet: 20000, insufficient: true},
 		{name: "image override reserves extra quantity", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, want: 80000, unit: billingexpr.BillingUnitRequest},
 		{name: "image override cannot exceed remaining wallet", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, wallet: 40000, reserveInsufficient: true, refund: true},
-	} {
+	}
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, types.RelayFormatClaude} {
+		for _, ttl := range []string{"5m", "1h"} {
+			for _, headers := range []bool{false, true} {
+				five, hour, want := 600, 0, 7800
+				if ttl == "1h" {
+					five, hour, want = 0, 600, 13800
+				}
+				breakdown := &dto.ClaudeCacheCreationUsage{Ephemeral5mInputTokens: five, Ephemeral1hInputTokens: hour}
+				if headers {
+					breakdown = nil
+				}
+				usage := &dto.Usage{PromptTokens: 1000, CompletionTokens: 10, TotalTokens: 1010,
+					PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 300, CacheWriteTokens: 600}, CacheCreation: breakdown}
+				switch format {
+				case types.RelayFormatOpenAI:
+					usage.BillingUsage = dto.NewOpenAIChatBillingUsage(usage)
+				case types.RelayFormatOpenAIResponses:
+					usage.BillingUsage = dto.NewOpenAIResponsesBillingUsage(&dto.Usage{InputTokens: 1000, OutputTokens: 10,
+						InputTokensDetails: &dto.InputTokenDetails{CachedTokens: 300, CacheWriteTokens: 600}, CacheCreation: breakdown})
+				case types.RelayFormatClaude:
+					usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(&dto.ClaudeUsage{InputTokens: 100, OutputTokens: 10,
+						CacheReadInputTokens: 300, CacheCreationInputTokens: 600, CacheCreation: breakdown})
+				}
+				cases = append(cases, accountingCase{name: fmt.Sprintf("cache/%s/%s/headers=%t", format, ttl, headers),
+					expression: `tier("base", p * 20 + c * 100 + cr * 2 + cc * 20 + cc1h * 40)`,
+					estimate:   1200, usage: usage, stream: true, want: want, unit: billingexpr.BillingUnitToken,
+					cacheTTL: ttl, cacheFormat: format, cacheHeaders: headers})
+			}
+		}
+	}
+	for index, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			quota := startingQuota
 			if tc.insufficient {
@@ -337,6 +479,20 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 			}
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+			if tc.cacheTTL != "" {
+				info.RelayFormat = tc.cacheFormat
+				info.FinalRequestRelayFormat = tc.cacheFormat
+				if tc.cacheHeaders {
+					headers := http.Header{}
+					headers.Set(cacheWrite5mHeader, "600")
+					headers.Set(cacheWrite1hHeader, "0")
+					if tc.cacheTTL == "1h" {
+						headers.Set(cacheWrite5mHeader, "0")
+						headers.Set(cacheWrite1hHeader, "600")
+					}
+					CaptureUpstreamResponseHeaders(ctx, headers)
+				}
+			}
 			if tc.expression == imageExpression {
 				ctx.Request.URL.Path = "/v1/images/generations"
 				info.RelayMode = relayconstant.RelayModeImagesGenerations
@@ -419,6 +575,12 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 					var other map[string]any
 					require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
 					assert.Equal(t, string(tc.unit), other["billing_unit"])
+					if tc.cacheTTL != "" {
+						assert.Equal(t, float64(600), other["cache_creation_tokens"])
+						assert.Equal(t, float64(600), other["cache_creation_tokens_"+tc.cacheTTL])
+						assert.Equal(t, float64(600), other["cache_write_tokens"])
+						assert.Equal(t, float64(300), other["cache_tokens"])
+					}
 					if tc.cachePolicy {
 						assert.Equal(t, float64(500), other["cache_tokens"])
 						assert.Equal(t, float64(25), other["cache_creation_tokens_5m"])

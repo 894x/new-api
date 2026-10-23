@@ -226,14 +226,15 @@ type CompletionsStreamResponse struct {
 }
 
 type Usage struct {
-	PromptTokens         int           `json:"prompt_tokens"`
-	CompletionTokens     int           `json:"completion_tokens"`
-	TotalTokens          int           `json:"total_tokens"`
-	CachedTokens         int           `json:"cached_tokens,omitempty"`
-	PromptCacheHitTokens int           `json:"prompt_cache_hit_tokens,omitempty"`
-	UsageSemantic        string        `json:"usage_semantic,omitempty"`
-	UsageSource          string        `json:"usage_source,omitempty"`
-	BillingUsage         *BillingUsage `json:"billing_usage,omitempty"`
+	PromptTokens         int                       `json:"prompt_tokens"`
+	CompletionTokens     int                       `json:"completion_tokens"`
+	TotalTokens          int                       `json:"total_tokens"`
+	CachedTokens         int                       `json:"cached_tokens,omitempty"`
+	PromptCacheHitTokens int                       `json:"prompt_cache_hit_tokens,omitempty"`
+	UsageSemantic        string                    `json:"usage_semantic,omitempty"`
+	UsageSource          string                    `json:"usage_source,omitempty"`
+	BillingUsage         *BillingUsage             `json:"billing_usage,omitempty"`
+	CacheCreation        *ClaudeCacheCreationUsage `json:"cache_creation,omitempty"`
 
 	PromptTokensDetails    InputTokenDetails   `json:"prompt_tokens_details"`
 	CompletionTokenDetails OutputTokenDetails  `json:"completion_tokens_details"`
@@ -242,12 +243,43 @@ type Usage struct {
 	InputTokensDetails     *InputTokenDetails  `json:"input_tokens_details"`
 	OutputTokensDetails    *OutputTokenDetails `json:"output_tokens_details,omitempty"`
 
-	// claude cache 1h
+	// Legacy TTL aliases remain readable across relays and stored snapshots.
 	ClaudeCacheCreation5mTokens int `json:"claude_cache_creation_5_m_tokens"`
 	ClaudeCacheCreation1hTokens int `json:"claude_cache_creation_1_h_tokens"`
 
 	// OpenRouter Params
 	Cost any `json:"cost,omitempty"`
+}
+
+// CacheCreationTokenCounts returns the total and the explicitly reported TTL
+// buckets. The remainder of total has an unknown TTL. Native breakdown presence
+// takes precedence over legacy aliases, including an explicit zero correction.
+func (u *Usage) CacheCreationTokenCounts() (total, fiveMinutes, oneHour int) {
+	if u == nil {
+		return
+	}
+	total = u.PromptTokensDetails.CacheCreationTokensTotal()
+	if total == 0 && u.InputTokensDetails != nil {
+		total = u.InputTokensDetails.CacheCreationTokensTotal()
+	}
+	fiveMinutes, oneHour = u.ClaudeCacheCreation5mTokens, u.ClaudeCacheCreation1hTokens
+	if u.CacheCreation != nil {
+		fiveMinutes = u.CacheCreation.Ephemeral5mInputTokens
+		oneHour = u.CacheCreation.Ephemeral1hInputTokens
+	}
+	// Invalid breakdowns must never increase the aggregate or produce credits.
+	maxInt := int(^uint(0) >> 1)
+	if fiveMinutes < 0 || oneHour < 0 || fiveMinutes > maxInt-oneHour {
+		return total, 0, 0
+	}
+	split := fiveMinutes + oneHour
+	if total > 0 && split > total {
+		return total, 0, 0
+	}
+	if total == 0 {
+		total = split
+	}
+	return
 }
 
 // FillOpenAIUsageAliases mirrors reported token usage into the other OpenAI

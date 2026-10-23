@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,13 +11,137 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/relay/channel/claude"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Exercise the real JSON/SSE parsers and conversion sidecars before settlement.
+// These are local upstream replays; no paid provider request is made.
+func TestCacheTTLBillingAcrossProtocolHandlers(t *testing.T) {
+	const expression = `tier("base", p * 20 + c * 100 + cr * 2 + cc * 20 + cc1h * 40)`
+	used := map[string]bool{"p": true, "c": true, "cr": true, "cc": true, "cc1h": true}
+	for _, scenario := range []struct {
+		name       string
+		five, hour int
+		read       int
+		wantQuota  int
+	}{
+		{name: "5m", five: 600, read: 300, wantQuota: 7800},
+		{name: "1h", hour: 600, read: 300, wantQuota: 13800},
+		{name: "mixed", five: 200, hour: 400, read: 300, wantQuota: 11800},
+		{name: "read_only", read: 900, wantQuota: 2400},
+	} {
+		for _, protocol := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses, types.RelayFormatClaude} {
+			for _, stream := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/stream=%t", scenario.name, protocol, stream), func(t *testing.T) {
+					writes := scenario.five + scenario.hour
+					details := fmt.Sprintf(`"cache_creation":{"ephemeral_5m_input_tokens":%d,"ephemeral_1h_input_tokens":%d}`,
+						scenario.five, scenario.hour)
+					var usageJSON, body string
+					switch protocol {
+					case types.RelayFormatOpenAI:
+						usageJSON = fmt.Sprintf(`{"prompt_tokens":1000,"completion_tokens":10,"total_tokens":1010,"prompt_tokens_details":{"cached_tokens":%d,"cache_write_tokens":%d,"cached_creation_tokens":%d},%s}`,
+							scenario.read, writes, writes, details)
+						body = `{"id":"chatcmpl_ttl","model":"kimi-k3","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":` + usageJSON + `}`
+						if stream {
+							body = "data: " + `{"id":"chatcmpl_ttl","model":"kimi-k3","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":` + usageJSON + "}\n\n" +
+								"data: " + `{"choices":[],"usage":{"completion_tokens":10}}` + "\n\ndata: [DONE]\n\n"
+						}
+					case types.RelayFormatOpenAIResponses:
+						usageJSON = fmt.Sprintf(`{"input_tokens":1000,"output_tokens":10,"total_tokens":1010,"input_tokens_details":{"cached_tokens":%d,"cache_write_tokens":%d,"cached_creation_tokens":%d},%s}`,
+							scenario.read, writes, writes, details)
+						body = `{"id":"resp_ttl","model":"kimi-k3","status":"completed","output":[],"usage":` + usageJSON + `}`
+						if stream {
+							body = "data: " + `{"type":"response.completed","response":` + body + "}\n\ndata: [DONE]\n\n"
+						}
+					case types.RelayFormatClaude:
+						usageJSON = fmt.Sprintf(`{"input_tokens":%d,"output_tokens":10,"cache_read_input_tokens":%d,"cache_creation_input_tokens":%d,%s}`,
+							1000-scenario.read-writes, scenario.read, writes, details)
+						body = `{"id":"msg_ttl","type":"message","model":"kimi-k3","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":` + usageJSON + `}`
+						if stream {
+							body = "data: " + `{"type":"message_start","message":` + body + "}\n\n" +
+								"data: " + `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}` + "\n\n" +
+								"data: " + `{"type":"message_stop"}` + "\n\n"
+						}
+					}
+					c, recorder, resp, info := newChatCompletionResponseIDTestContext(t, body, stream)
+					info.RelayFormat = protocol
+					info.FinalRequestRelayFormat = protocol
+					var usage *dto.Usage
+					var apiErr *types.NewAPIError
+					switch protocol {
+					case types.RelayFormatOpenAI:
+						if stream {
+							usage, apiErr = OaiStreamHandler(c, info, resp)
+						} else {
+							usage, apiErr = OpenaiHandler(c, info, resp)
+						}
+					case types.RelayFormatOpenAIResponses:
+						if stream {
+							usage, apiErr = OaiResponsesStreamHandler(c, info, resp)
+						} else {
+							usage, apiErr = OaiResponsesHandler(c, info, resp)
+						}
+					case types.RelayFormatClaude:
+						if stream {
+							usage, apiErr = claude.ClaudeStreamHandler(c, resp, info)
+						} else {
+							usage, apiErr = claude.ClaudeHandler(c, resp, info)
+						}
+					}
+					require.Nil(t, apiErr)
+					require.NotNil(t, usage)
+					assert.NotEmpty(t, recorder.Body.String())
+					if usage.BillingUsage != nil {
+						canonical, ok := usage.BillingUsage.CanonicalUsage()
+						require.True(t, ok)
+						usage = canonical
+					}
+					for _, groupRatio := range []float64{1, 0.5} {
+						info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{
+							BillingMode: "tiered_expr", ExprString: expression, ExprHash: billingexpr.ExprHashString(expression),
+							GroupRatio: groupRatio, QuotaPerUnit: 500000,
+						}
+						params := service.BuildTieredTokenParams(usage, usage.UsageSemantic == "anthropic", used)
+						assert.Equal(t, float64(100), params.P)
+						assert.Equal(t, float64(scenario.five), params.CC)
+						assert.Equal(t, float64(scenario.hour), params.CC1h)
+						assert.Equal(t, float64(1000), params.Len)
+						ok, quota, result := service.TryTieredSettle(info, params)
+						require.True(t, ok)
+						require.NotNil(t, result)
+						assert.Equal(t, float64(scenario.wantQuota)*groupRatio, float64(quota))
+					}
+					// Round-trip all three client shapes while preserving provider semantics.
+					chat := *usage
+					if usage.UsageSemantic == "anthropic" {
+						chat = *relayconvert.UsageFromClaudeUsage(usage)
+					}
+					responses := relayconvert.UsageFromChatUsage(&chat)
+					chatAgain := relayconvert.UsageFromResponsesUsage(responses)
+					messages := relayconvert.ResponseOpenAI2Claude(&dto.OpenAITextResponse{Usage: *chatAgain}, &convmeta.Values{})
+					require.NotNil(t, messages.Usage)
+					bridged := relayconvert.UsageFromClaudeAPIUsage(messages.Usage)
+					require.NotNil(t, bridged.BillingUsage)
+					canonical, ok := bridged.BillingUsage.CanonicalUsage()
+					require.True(t, ok)
+					assert.Equal(t, service.BuildTieredTokenParams(usage, usage.UsageSemantic == "anthropic", used),
+						service.BuildTieredTokenParams(canonical, canonical.UsageSemantic == "anthropic", used))
+				})
+			}
+		}
+	}
+}
 
 func TestOaiResponsesHandlerCountsOutputCallsNotDeclarations(t *testing.T) {
 	gin.SetMode(gin.TestMode)

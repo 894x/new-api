@@ -20,12 +20,7 @@ func UsageFromOpenAI(usage *dto.Usage) *dto.ClaudeUsage {
 	if billingUsage == nil {
 		billingUsage = dto.NewOpenAIChatBillingUsage(usage)
 	}
-	cacheCreation5m, cacheCreation1h := NormalizeCacheCreationSplit(
-		usage.PromptTokensDetails.CachedCreationTokens,
-		usage.ClaudeCacheCreation5mTokens,
-		usage.ClaudeCacheCreation1hTokens,
-	)
-	cacheCreationTokens := usage.PromptTokensDetails.CacheCreationTokensTotal()
+	cacheCreationTokens, cacheCreation5m, cacheCreation1h := usage.CacheCreationTokenCounts()
 	inputTokens := usage.PromptTokens
 	if usage.UsageSemantic != dto.BillingUsageSemanticAnthropic {
 		// OpenAI-style prompt/input totals include cache reads and writes, while
