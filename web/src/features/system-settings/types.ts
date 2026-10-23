@@ -434,6 +434,84 @@ export type BillingSettings = {
   'checkin_setting.max_quota': number
 }
 
+export type WecomBot = {
+  id: string
+  name: string
+  webhook_masked: string
+  mention_userids: string
+  enabled: boolean
+}
+
+export type WecomBotMutationRequest = {
+  name: string
+  webhook_api_key: string
+  mention_userids: string
+  enabled: boolean
+}
+
+export type WecomBotListResponse = {
+  success: boolean
+  message?: string
+  data: WecomBot[]
+}
+
+export type WecomBotResponse = {
+  success: boolean
+  message?: string
+  data?: WecomBot
+}
+
+export type WecomAIBotConfig = {
+  enabled: boolean
+  bot_id: string
+  secret_masked: string
+  channel_id: number
+  model: string
+  max_tool_rounds: number
+  session_rounds: number
+  session_ttl_minutes: number
+  allow_all_users: boolean
+  user_whitelist: string
+  group_enabled: boolean
+  welcome_text: string
+}
+
+export type WecomAIBotConfigMutationRequest = {
+  enabled: boolean
+  bot_id: string
+  secret: string
+  channel_id: number
+  model: string
+  max_tool_rounds: number
+  session_rounds: number
+  session_ttl_minutes: number
+  allow_all_users: boolean
+  user_whitelist: string
+  group_enabled: boolean
+  welcome_text: string
+}
+
+export type WecomAIBotConfigResponse = {
+  success: boolean
+  message?: string
+  data: WecomAIBotConfig
+}
+
+export type WecomAIBotStatus = {
+  enabled: boolean
+  holding: boolean
+  state: string
+  last_error: string
+  connected_at: number
+  last_pong_at: number
+}
+
+export type WecomAIBotStatusResponse = {
+  success: boolean
+  message?: string
+  data: WecomAIBotStatus
+}
+
 export type OperationsSettings = {
   'asset_storage_setting.default_quota_mb'?: number
   'asset_storage_setting.seedance_video_max_mb'?: number
@@ -467,6 +545,19 @@ export type OperationsSettings = {
   'perf_metrics_setting.flush_interval': number
   'perf_metrics_setting.bucket_time': 'hour' | 'minute' | '5min'
   'perf_metrics_setting.retention_days': number
+  'wecom_bot_setting.enabled'?: boolean
+  'wecom_bot_setting.error_notify_enabled'?: boolean
+  'wecom_bot_setting.error_cooldown_minutes'?: number
+  'wecom_bot_setting.disable_notify_enabled'?: boolean
+  'wecom_bot_setting.enable_notify_enabled'?: boolean
+  'balance_patrol_setting.channel_enabled'?: boolean
+  'balance_patrol_setting.channel_minutes'?: number
+  'balance_patrol_setting.low_balance_threshold'?: number
+  'balance_patrol_setting.disable_on_zero_balance'?: boolean
+  'balance_patrol_setting.user_enabled'?: boolean
+  'balance_patrol_setting.user_minutes'?: number
+  'balance_patrol_setting.user_min_quota'?: number
+  'balance_patrol_setting.user_list_limit'?: number
 }
 
 export type ErrorResponseReplacementRule = {

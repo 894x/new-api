@@ -1,0 +1,58 @@
+package controller
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestMaskWecomAIBotSecret(t *testing.T) {
+	assert.Equal(t, "", maskWecomAIBotSecret(""))
+	assert.Equal(t, "****", maskWecomAIBotSecret("abc"))
+	assert.Equal(t, "****e359", maskWecomAIBotSecret("81af1357-0f73-45e5-b7cf-465d453fe359"))
+}
+
+func TestNormalizeWecomAIBotConfig(t *testing.T) {
+	setting := operation_setting.GetWecomAIBotSetting()
+	original := *setting
+	t.Cleanup(func() { *setting = original })
+
+	// Secret 留空表示沿用现有凭据
+	setting.Secret = "existing-secret"
+	values, err := normalizeWecomAIBotConfig(wecomAIBotConfigPayload{
+		Enabled: false, BotID: " bot-1 ", Model: "gpt-4o-mini", ChannelID: 3,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "existing-secret", values[operation_setting.WecomAIBotSecretOptionKey])
+	assert.Equal(t, "bot-1", values["wecom_aibot_setting.bot_id"])
+	assert.Equal(t, "5", values["wecom_aibot_setting.max_tool_rounds"])
+
+	// 启用但渠道未配置 → 拒绝
+	_, err = normalizeWecomAIBotConfig(wecomAIBotConfigPayload{
+		Enabled: true, BotID: "bot-1", Secret: "s", Model: "gpt-4o-mini",
+	})
+	require.Error(t, err)
+
+	// 启用且核心配置齐备 → 通过，数值字段自动收敛到上下限
+	values, err = normalizeWecomAIBotConfig(wecomAIBotConfigPayload{
+		Enabled: true, BotID: "bot-1", Secret: "s", Model: "gpt-4o-mini", ChannelID: 3,
+		MaxToolRounds: 99, SessionRounds: 0, SessionTTLMinutes: 30,
+		UserWhitelist: "alice, bob",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "true", values["wecom_aibot_setting.enabled"])
+	assert.Equal(t, "10", values["wecom_aibot_setting.max_tool_rounds"])
+	assert.Equal(t, "10", values["wecom_aibot_setting.session_rounds"])
+	assert.Equal(t, "30", values["wecom_aibot_setting.session_ttl_minutes"])
+	assert.Equal(t, "alice, bob", values["wecom_aibot_setting.user_whitelist"])
+
+	// 白名单中的超长 userid → 拒绝
+	_, err = normalizeWecomAIBotConfig(wecomAIBotConfigPayload{
+		Enabled: false, BotID: "b", Secret: "s", UserWhitelist: strings.Repeat("x", 100),
+	})
+	require.Error(t, err)
+}

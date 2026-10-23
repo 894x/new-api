@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -648,40 +649,73 @@ func UpdateChannelBalance(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-func updateAllChannelsBalance() error {
+type channelBalanceTaskSummary struct {
+	Checked    int `json:"checked"`
+	Updated    int `json:"updated"`
+	LowBalance int `json:"low_balance"`
+	Disabled   int `json:"disabled"`
+	Failed     int `json:"failed"`
+}
+
+// runChannelBalanceTask 巡检所有可用渠道的上游余额并逐个更新。alert 控制是否推送
+// 低余额预警；手动触发的全量刷新传 false，保持旧行为（仅更新余额并按需禁用）。
+// ctx 为空或取消时安全返回，进度经 report 上报给系统任务框架。
+func runChannelBalanceTask(ctx context.Context, report func(processed, total int), alert bool) (*channelBalanceTaskSummary, error) {
+	patrolSetting := operation_setting.GetBalancePatrolSetting()
+	cooldown := time.Duration(patrolSetting.ChannelMinutes * float64(time.Minute))
+
 	channels, err := model.GetAllChannels(0, 0, true, false)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var candidates []*model.Channel
 	for _, channel := range channels {
-		if channel.Status != common.ChannelStatusEnabled {
+		if channel.Status != common.ChannelStatusEnabled || channel.ChannelInfo.IsMultiKey || channel.Type == constant.ChannelTypeTaskPlugin {
 			continue
 		}
-		if channel.ChannelInfo.IsMultiKey {
-			continue // skip multi-key channels
+		candidates = append(candidates, channel)
+	}
+
+	summary := &channelBalanceTaskSummary{Checked: len(candidates)}
+	processed := 0
+	for _, channel := range candidates {
+		if ctx != nil && ctx.Err() != nil {
+			break
 		}
-		// TODO: support Azure
-		//if channel.Type != common.ChannelTypeOpenAI && channel.Type != common.ChannelTypeCustom {
-		//	continue
-		//}
-		result, err := updateChannelBalance(channel)
-		if err != nil {
+		processed++
+		if report != nil {
+			report(processed, summary.Checked)
+		}
+		result, updateErr := updateChannelBalance(channel)
+		if updateErr != nil {
+			summary.Failed++
 			continue
-		} else if result.ResponseSummary == "" {
-			// err is nil & balance <= 0 means quota is used up
-			if result.Balance <= 0 {
-				service.DisableChannel(*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, "", channel.GetAutoBan()), "余额不足")
+		}
+		if result.ResponseSummary != "" {
+			continue
+		}
+		summary.Updated++
+		if disabled, alerted := service.ApplyChannelBalanceResult(channel, result.Balance, alert, cooldown); disabled {
+			summary.Disabled++
+		} else if alerted {
+			summary.LowBalance++
+		}
+		if common.RequestInterval > 0 && ctx != nil {
+			select {
+			case <-ctx.Done():
+			case <-time.After(common.RequestInterval):
 			}
 		}
-		time.Sleep(common.RequestInterval)
 	}
-	return nil
+	if report != nil && (ctx == nil || ctx.Err() == nil) {
+		report(summary.Checked, summary.Checked)
+	}
+	return summary, nil
 }
 
 func UpdateAllChannelsBalance(c *gin.Context) {
 	// TODO: make it async
-	err := updateAllChannelsBalance()
-	if err != nil {
+	if _, err := runChannelBalanceTask(context.Background(), nil, false); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -689,14 +723,4 @@ func UpdateAllChannelsBalance(c *gin.Context) {
 		"success": true,
 		"message": "",
 	})
-	return
-}
-
-func AutomaticallyUpdateChannels(frequency int) {
-	for {
-		time.Sleep(time.Duration(frequency) * time.Minute)
-		common.SysLog("updating all channels")
-		_ = updateAllChannelsBalance()
-		common.SysLog("channels update done")
-	}
 }

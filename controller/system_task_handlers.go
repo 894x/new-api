@@ -13,15 +13,17 @@ import (
 )
 
 // RegisterScheduledSystemTasks wires the periodic channel test, upstream model
-// update, and async task polling (Midjourney / Suno / video) jobs into the
-// system task framework so a DB lease dedups execution across multiple master
-// instances and each run is recorded as one task row. Call this before
-// service.StartSystemTaskRunner.
+// update, async task polling (Midjourney / Suno / video), and balance patrol
+// (channel upstream balance + user quota) jobs into the system task framework
+// so a DB lease dedups execution across multiple master instances and each
+// run is recorded as one task row. Call this before service.StartSystemTaskRunner.
 func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+	service.RegisterSystemTaskHandler(channelBalanceHandler{})
+	service.RegisterSystemTaskHandler(userQuotaPatrolHandler{})
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and
@@ -149,6 +151,57 @@ func (asyncTaskPollHandler) NewPayload() any { return nil }
 
 func (asyncTaskPollHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	summary := service.RunTaskPollingOnce(ctx, service.NewSystemTaskProgressReporter(task, runnerID))
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+// channelBalanceHandler 定时巡检渠道上游余额：更新余额、按需禁用、低余额预警。
+// 手动的全量刷新走 HTTP 接口，不经过本任务。
+type channelBalanceHandler struct{}
+
+func (channelBalanceHandler) Type() string { return model.SystemTaskTypeChannelBalance }
+
+func (channelBalanceHandler) Enabled() bool {
+	return operation_setting.GetBalancePatrolSetting().ChannelEnabled
+}
+
+func (channelBalanceHandler) Interval() time.Duration {
+	minutes := operation_setting.NormalizeBalancePatrolMinutes(operation_setting.GetBalancePatrolSetting().ChannelMinutes)
+	return time.Duration(minutes * float64(time.Minute))
+}
+
+func (channelBalanceHandler) NewPayload() any { return nil }
+
+func (channelBalanceHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	summary, err := runChannelBalanceTask(ctx, service.NewSystemTaskProgressReporter(task, runnerID), true)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+// userQuotaPatrolHandler 定时巡检用户剩余额度，聚合推送低余额预警。
+type userQuotaPatrolHandler struct{}
+
+func (userQuotaPatrolHandler) Type() string { return model.SystemTaskTypeUserQuota }
+
+func (userQuotaPatrolHandler) Enabled() bool {
+	return operation_setting.GetBalancePatrolSetting().UserEnabled
+}
+
+func (userQuotaPatrolHandler) Interval() time.Duration {
+	minutes := operation_setting.NormalizeBalancePatrolMinutes(operation_setting.GetBalancePatrolSetting().UserMinutes)
+	return time.Duration(minutes * float64(time.Minute))
+}
+
+func (userQuotaPatrolHandler) NewPayload() any { return nil }
+
+func (userQuotaPatrolHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	summary, err := service.RunUserQuotaPatrolCheck(ctx)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 

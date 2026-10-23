@@ -277,6 +277,23 @@ func SetApiRouter(router *gin.Engine) {
 			customOAuthRoute.PUT("/:id", controller.UpdateCustomOAuthProvider)
 			customOAuthRoute.DELETE("/:id", controller.DeleteCustomOAuthProvider)
 		}
+		// WeCom channel alert bot management (root only)
+		wecomBotRoute := apiRouter.Group("/wecom-bot")
+		wecomBotRoute.Use(middleware.RootAuth())
+		{
+			wecomBotRoute.GET("/", controller.GetWecomBots)
+			wecomBotRoute.PUT("/", controller.CreateWecomBot)
+			wecomBotRoute.POST("/:id", controller.UpdateWecomBot)
+			wecomBotRoute.DELETE("/:id", controller.DeleteWecomBot)
+		}
+		// WeCom AI bot (long-connection conversational query) management (root only)
+		wecomAIBotRoute := apiRouter.Group("/wecom-aibot")
+		wecomAIBotRoute.Use(middleware.RootAuth())
+		{
+			wecomAIBotRoute.GET("/config", controller.GetWecomAIBotConfig)
+			wecomAIBotRoute.PUT("/config", controller.UpdateWecomAIBotConfig)
+			wecomAIBotRoute.GET("/status", controller.GetWecomAIBotStatus)
+		}
 		performanceRoute := apiRouter.Group("/performance")
 		performanceRoute.Use(middleware.RootAuth())
 		{
