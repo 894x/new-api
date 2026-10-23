@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
 	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
+	sharedkimi "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/kimi"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
@@ -32,12 +33,17 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	if err := ValidateRequestChatUnsupportedFields(req); err != nil {
 		return nil, err
 	}
+	cacheControl, err := sharedkimi.CacheControl(req.Model, info, req.PromptCacheOptions)
+	if err != nil {
+		return nil, err
+	}
 
 	claudeRequest := &dto.ClaudeRequest{
-		Model:       req.Model,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		Stream:      req.Stream,
+		Model:        req.Model,
+		Temperature:  req.Temperature,
+		TopP:         req.TopP,
+		Stream:       req.Stream,
+		CacheControl: cacheControl,
 	}
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
 		claudeRequest.MaxTokens = kitutil.GetPointer(*req.MaxOutputTokens)

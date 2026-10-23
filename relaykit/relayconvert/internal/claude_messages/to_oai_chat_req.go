@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	sharedkimi "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/kimi"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
@@ -29,6 +30,11 @@ func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.Cl
 		Model:       claudeRequest.Model,
 		Temperature: claudeRequest.Temperature,
 	}
+	cacheOptions, err := sharedkimi.PromptCacheOptions(claudeRequest.Model, info, claudeRequest.CacheControl)
+	if err != nil {
+		return nil, err
+	}
+	openAIRequest.PromptCacheOptions = cacheOptions
 	if claudeRequest.MaxTokens != nil {
 		openAIRequest.MaxTokens = kitutil.GetPointer(*claudeRequest.MaxTokens)
 	}

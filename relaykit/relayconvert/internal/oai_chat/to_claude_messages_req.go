@@ -11,12 +11,17 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
 	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
+	sharedkimi "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/kimi"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
 
 func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
 	opts := convmeta.OptionsOf(info)
+	cacheControl, err := sharedkimi.CacheControl(textRequest.Model, info, textRequest.PromptCacheOptions)
+	if err != nil {
+		return nil, err
+	}
 	claudeTools := make([]any, 0, len(textRequest.Tools))
 
 	for _, tool := range textRequest.Tools {
@@ -69,6 +74,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		Model:         textRequest.Model,
 		StopSequences: nil,
 		Temperature:   textRequest.Temperature,
+		CacheControl:  cacheControl,
 	}
 	if len(claudeTools) > 0 {
 		claudeRequest.Tools = claudeTools

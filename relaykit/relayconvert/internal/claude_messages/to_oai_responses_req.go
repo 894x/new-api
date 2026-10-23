@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
+	sharedkimi "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/kimi"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
@@ -17,6 +18,10 @@ import (
 func ClaudeMessagesRequestToOpenAIResponses(ctx context.Context, claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.OpenAIResponsesRequest, error) {
 	if strings.TrimSpace(claudeRequest.Model) == "" {
 		return nil, errors.New("model is required")
+	}
+	cacheOptions, err := sharedkimi.PromptCacheOptions(claudeRequest.Model, info, claudeRequest.CacheControl)
+	if err != nil {
+		return nil, err
 	}
 
 	input, err := claudeMessagesToResponsesInput(claudeRequest.Messages)
@@ -40,17 +45,18 @@ func ClaudeMessagesRequestToOpenAIResponses(ctx context.Context, claudeRequest d
 	// strategies. Responses expects an array of compaction entries, so copying
 	// the raw Claude value would produce an invalid upstream request.
 	responsesRequest := &dto.OpenAIResponsesRequest{
-		Model:             claudeRequest.Model,
-		Input:             input,
-		Instructions:      instructions,
-		Metadata:          append(json.RawMessage(nil), claudeRequest.Metadata...),
-		ServiceTier:       claudeRequest.ServiceTier,
-		Stream:            claudeRequest.Stream,
-		Temperature:       claudeRequest.Temperature,
-		Tools:             tools,
-		ToolChoice:        toolChoice,
-		ParallelToolCalls: parallelToolCalls,
-		TopP:              claudeRequest.TopP,
+		Model:              claudeRequest.Model,
+		Input:              input,
+		Instructions:       instructions,
+		Metadata:           append(json.RawMessage(nil), claudeRequest.Metadata...),
+		ServiceTier:        claudeRequest.ServiceTier,
+		Stream:             claudeRequest.Stream,
+		Temperature:        claudeRequest.Temperature,
+		Tools:              tools,
+		ToolChoice:         toolChoice,
+		ParallelToolCalls:  parallelToolCalls,
+		TopP:               claudeRequest.TopP,
+		PromptCacheOptions: cacheOptions,
 	}
 	if info != nil && !convmeta.OptionsOf(info).OpenRouterDialect {
 		// Keep the outgoing -thinking suffix so a cascaded downstream new-api
