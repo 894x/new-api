@@ -169,6 +169,72 @@ func TestProcessHeaderOverride_NonTestKeepsClientHeaderPlaceholder(t *testing.T)
 	require.Equal(t, "trace-123", headers["x-upstream-trace"])
 }
 
+func TestProcessHeaderOverrideSessionIDClientPrecedence(t *testing.T) {
+	tests := []struct {
+		name            string
+		clientSessionID string
+		headerName      string
+		headerOverrides map[string]any
+		useRuntime      bool
+		channelTest     bool
+		wantSessionID   string
+	}{
+		{name: "client wins", clientSessionID: "client-session", wantSessionID: "client-session"},
+		{name: "missing client uses channel", wantSessionID: "channel-session"},
+		{name: "empty client uses channel", headerName: "X-Session-Id", wantSessionID: "channel-session"},
+		{name: "blank client uses channel", clientSessionID: " \t ", wantSessionID: "channel-session"},
+		{name: "case insensitive header", headerName: "x-SeSsIoN-iD", clientSessionID: "client-session", wantSessionID: "client-session"},
+		{name: "client value is not interpolated", clientSessionID: "client-{api_key}", wantSessionID: "client-{api_key}"},
+		{name: "unconfigured channel forwards client", clientSessionID: "client-session", headerOverrides: map[string]any{}, wantSessionID: "client-session"},
+		{name: "wildcard keeps client priority", clientSessionID: "client-session", headerOverrides: map[string]any{"*": "", "X-Session-ID": "channel-session"}, wantSessionID: "client-session"},
+		{name: "runtime override keeps client priority", clientSessionID: "client-session", useRuntime: true, wantSessionID: "client-session"},
+		{name: "missing client uses runtime", useRuntime: true, wantSessionID: "runtime-session"},
+		{name: "channel test uses channel", clientSessionID: "client-session", channelTest: true, wantSessionID: "channel-session"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			headerName := tt.headerName
+			if headerName == "" {
+				headerName = "X-Session-Id"
+			}
+			if tt.clientSessionID != "" || tt.headerName != "" {
+				ctx.Request.Header.Set(headerName, tt.clientSessionID)
+			}
+			ctx.Request.Header.Set("X-Trace-Id", "client-trace")
+			headerOverrides := tt.headerOverrides
+			if headerOverrides == nil {
+				headerOverrides = map[string]any{"X-Session-ID": "channel-session"}
+			}
+			headerOverrides["X-Trace-Id"] = "channel-trace"
+			info := &relaycommon.RelayInfo{
+				IsChannelTest:             tt.channelTest,
+				UseRuntimeHeadersOverride: tt.useRuntime,
+				RuntimeHeadersOverride: map[string]any{
+					"x-session-id": "runtime-session",
+					"x-trace-id":   "channel-trace",
+				},
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ApiKey:          "channel-secret",
+					HeadersOverride: headerOverrides,
+				},
+			}
+
+			headers, err := processHeaderOverride(info, ctx)
+			require.NoError(t, err)
+			upstream := httptest.NewRequest(http.MethodPost, "https://example.test/v1/chat/completions", nil)
+			applyHeaderOverrideToRequest(upstream, headers)
+
+			assert.Equal(t, tt.wantSessionID, upstream.Header.Get("X-Session-Id"))
+			assert.Equal(t, []string{tt.wantSessionID}, upstream.Header.Values("X-Session-Id"))
+			assert.Equal(t, "channel-trace", upstream.Header.Get("X-Trace-Id"))
+			assert.Equal(t, tt.clientSessionID, ctx.Request.Header.Get("X-Session-Id"))
+		})
+	}
+}
+
 func TestProcessHeaderOverride_RuntimeOverrideIsFinalHeaderMap(t *testing.T) {
 	t.Parallel()
 

@@ -194,6 +194,7 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 //   - "re:<regex>" / "regex:<regex>": passthrough headers whose names match the regex (Go regexp)
 //
 // Passthrough rules are applied first, then normal overrides are applied, so explicit overrides win.
+// A non-empty client X-Session-Id takes precedence over channel overrides outside channel tests.
 func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]string, error) {
 	headerOverride := make(map[string]string)
 	if info == nil {
@@ -290,6 +291,11 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 		}
 
 		headerOverride[key] = value
+	}
+	if !info.IsChannelTest && c != nil && c.Request != nil {
+		if sessionID := strings.TrimSpace(c.Request.Header.Get("X-Session-Id")); sessionID != "" {
+			headerOverride["x-session-id"] = sessionID
+		}
 	}
 	return headerOverride, nil
 }
