@@ -1,8 +1,10 @@
 package model
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
@@ -10,19 +12,27 @@ import (
 )
 
 type PerfMetricDetail struct {
-	Id              int    `json:"id" gorm:"primaryKey"`
-	ModelName       string `json:"model_name" gorm:"size:128;uniqueIndex:idx_perf_detail_dimension_bucket,priority:1;index:idx_perf_detail_model_bucket,priority:1;index:idx_perf_detail_user_model_bucket,priority:2"`
-	UserId          int    `json:"user_id" gorm:"uniqueIndex:idx_perf_detail_dimension_bucket,priority:2;index:idx_perf_detail_user_model_bucket,priority:1"`
-	TokenId         int    `json:"token_id" gorm:"uniqueIndex:idx_perf_detail_dimension_bucket,priority:3"`
-	BucketTs        int64  `json:"bucket_ts" gorm:"uniqueIndex:idx_perf_detail_dimension_bucket,priority:4;index:idx_perf_detail_model_bucket,priority:2;index:idx_perf_detail_user_model_bucket,priority:3;index:idx_perf_detail_bucket"`
-	RequestCount    int64  `json:"-" gorm:"default:0"`
-	SuccessCount    int64  `json:"-" gorm:"default:0"`
-	TtftCount       int64  `json:"-" gorm:"default:0"`
-	TpotCount       int64  `json:"-" gorm:"default:0"`
-	InputTokens     int64  `json:"-" gorm:"default:0"`
-	OutputTokens    int64  `json:"-" gorm:"default:0"`
-	TotalTokens     int64  `json:"-" gorm:"default:0"`
-	CacheReadTokens int64  `json:"-" gorm:"default:0"`
+	Id                  int    `json:"id" gorm:"primaryKey"`
+	ModelName           string `json:"model_name" gorm:"size:128;uniqueIndex:idx_perf_detail_dimension_bucket,priority:1;index:idx_perf_detail_model_bucket,priority:1;index:idx_perf_detail_user_model_bucket,priority:2"`
+	UserId              int    `json:"user_id" gorm:"uniqueIndex:idx_perf_detail_dimension_bucket,priority:2;index:idx_perf_detail_user_model_bucket,priority:1"`
+	TokenId             int    `json:"token_id" gorm:"uniqueIndex:idx_perf_detail_dimension_bucket,priority:3"`
+	BucketTs            int64  `json:"bucket_ts" gorm:"uniqueIndex:idx_perf_detail_dimension_bucket,priority:4;index:idx_perf_detail_model_bucket,priority:2;index:idx_perf_detail_user_model_bucket,priority:3;index:idx_perf_detail_bucket"`
+	RequestCount        int64  `json:"-" gorm:"default:0"`
+	SuccessCount        int64  `json:"-" gorm:"default:0"`
+	TtftCount           int64  `json:"-" gorm:"default:0"`
+	TpotCount           int64  `json:"-" gorm:"default:0"`
+	InputTokens         int64  `json:"-" gorm:"default:0"`
+	OutputTokens        int64  `json:"-" gorm:"default:0"`
+	TotalTokens         int64  `json:"-" gorm:"default:0"`
+	CacheReadTokens     int64  `json:"-" gorm:"default:0"`
+	RequestBodySamples  int64  `json:"-" gorm:"default:0"`
+	RequestBodyBytes    int64  `json:"-" gorm:"default:0"`
+	RequestBodyMaxBytes int64  `json:"-" gorm:"default:0"`
+	CacheReadSamples    int64  `json:"-" gorm:"default:0"`
+	CacheWriteTokens    int64  `json:"-" gorm:"default:0"`
+	CacheWriteSamples   int64  `json:"-" gorm:"default:0"`
+	CacheWrite5mTokens  int64  `json:"-" gorm:"column:cache_write_5m_tokens;default:0"`
+	CacheWrite1hTokens  int64  `json:"-" gorm:"column:cache_write_1h_tokens;default:0"`
 }
 
 func (PerfMetricDetail) TableName() string {
@@ -45,6 +55,7 @@ func (PerfMetricHistogram) TableName() string {
 }
 
 type PerfMetricDetailFilter struct {
+	Context       context.Context
 	ModelName     string
 	UserId        int
 	TokenId       int
@@ -92,6 +103,7 @@ func UpsertPerfAnalyticsBuckets(details []PerfMetricDetail, histograms []PerfMet
 			DoUpdates: perfMetricAdditiveAssignments("perf_metric_details", []string{
 				"request_count", "success_count", "ttft_count", "tpot_count",
 				"input_tokens", "output_tokens", "total_tokens", "cache_read_tokens",
+				"request_body_samples", "request_body_bytes", "cache_read_samples", "cache_write_tokens", "cache_write_samples", "cache_write_5m_tokens", "cache_write_1h_tokens",
 			}),
 		}).CreateInBatches(&details, 100).Error; err != nil {
 			return err
@@ -128,6 +140,13 @@ func perfMetricAdditiveAssignments(tableName string, columns []string) clause.Se
 			Value:  gorm.Expr(tableName + "." + column + " + " + insertedValue),
 		})
 	}
+	if tableName == "perf_metric_details" {
+		inserted := "excluded.request_body_max_bytes"
+		if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
+			inserted = "VALUES(request_body_max_bytes)"
+		}
+		assignments = append(assignments, clause.Assignment{Column: clause.Column{Name: "request_body_max_bytes"}, Value: gorm.Expr("CASE WHEN " + tableName + ".request_body_max_bytes > " + inserted + " THEN " + tableName + ".request_body_max_bytes ELSE " + inserted + " END")})
+	}
 	return assignments
 }
 
@@ -140,7 +159,7 @@ func getPerfMetricDetails(db *gorm.DB, filter PerfMetricDetailFilter) ([]PerfMet
 	query := applyPerfMetricDetailFilter(db.Model(&PerfMetricDetail{}), filter)
 	bucketExpression := perfMetricBucketExpression(filter.BucketSeconds)
 	return details, query.
-		Select(bucketExpression + " AS bucket_ts, SUM(request_count) AS request_count, SUM(success_count) AS success_count, SUM(ttft_count) AS ttft_count, SUM(tpot_count) AS tpot_count, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, SUM(total_tokens) AS total_tokens, SUM(cache_read_tokens) AS cache_read_tokens").
+		Select(bucketExpression + " AS bucket_ts, SUM(request_count) AS request_count, SUM(success_count) AS success_count, SUM(ttft_count) AS ttft_count, SUM(tpot_count) AS tpot_count, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, SUM(total_tokens) AS total_tokens, SUM(cache_read_tokens) AS cache_read_tokens, SUM(request_body_samples) AS request_body_samples, SUM(request_body_bytes) AS request_body_bytes, MAX(request_body_max_bytes) AS request_body_max_bytes, SUM(cache_read_samples) AS cache_read_samples, SUM(cache_write_tokens) AS cache_write_tokens, SUM(cache_write_samples) AS cache_write_samples, SUM(cache_write_5m_tokens) AS cache_write_5m_tokens, SUM(cache_write_1h_tokens) AS cache_write_1h_tokens").
 		Group(bucketExpression).
 		Order("bucket_ts ASC").
 		Find(&details).Error
@@ -175,10 +194,33 @@ func GetPerfAnalyticsBuckets(filter PerfMetricDetailFilter) ([]PerfMetricDetail,
 	}
 
 	var err error
+	db := DB.WithContext(filter.Context)
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
-		err = DB.Transaction(queryBuckets)
+		// The normal SQLite DSN uses BEGIN IMMEDIATE for write transactions.
+		// Pin a connection and explicitly begin a deferred read snapshot so
+		// analytics readers do not take the database's writer reservation.
+		err = db.Connection(func(tx *gorm.DB) error {
+			tx = tx.Session(&gorm.Session{NewDB: true})
+			if err := tx.Exec("BEGIN DEFERRED").Error; err != nil {
+				return err
+			}
+			committed := false
+			defer func() {
+				if !committed {
+					rollbackCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					_ = tx.WithContext(rollbackCtx).Exec("ROLLBACK").Error
+				}
+			}()
+			if err := queryBuckets(tx); err != nil {
+				return err
+			}
+			err := tx.Exec("COMMIT").Error
+			committed = err == nil
+			return err
+		})
 	} else {
-		err = DB.Transaction(queryBuckets, &sql.TxOptions{
+		err = db.Transaction(queryBuckets, &sql.TxOptions{
 			Isolation: sql.LevelRepeatableRead,
 			ReadOnly:  true,
 		})
@@ -227,14 +269,15 @@ func PerfAnalyticsTokenBelongsToUser(tokenId int, userId int) (bool, error) {
 	return count == 1, nil
 }
 
-func GetPerfAnalyticsOptions(userId int, includeUsers bool) (PerfAnalyticsOptions, error) {
+func GetPerfAnalyticsOptions(ctx context.Context, userId int, includeUsers bool) (PerfAnalyticsOptions, error) {
 	options := PerfAnalyticsOptions{
 		Models: make([]string, 0),
 		Users:  make([]PerfAnalyticsUserOption, 0),
 		Tokens: make([]PerfAnalyticsTokenOption, 0),
 	}
 
-	modelQuery := DB.Model(&PerfMetricDetail{}).Distinct("model_name")
+	db := DB.WithContext(ctx)
+	modelQuery := db.Model(&PerfMetricDetail{}).Distinct("model_name")
 	if userId > 0 {
 		modelQuery = modelQuery.Where("user_id = ?", userId)
 	}
@@ -243,8 +286,8 @@ func GetPerfAnalyticsOptions(userId int, includeUsers bool) (PerfAnalyticsOption
 	}
 
 	if includeUsers {
-		userIds := DB.Model(&PerfMetricDetail{}).Distinct("user_id").Select("user_id")
-		if err := DB.Model(&User{}).
+		userIds := db.Model(&PerfMetricDetail{}).Distinct("user_id").Select("user_id")
+		if err := db.Model(&User{}).
 			Select("id, username").
 			Where("id IN (?)", userIds).
 			Order("username ASC, id ASC").
@@ -254,11 +297,11 @@ func GetPerfAnalyticsOptions(userId int, includeUsers bool) (PerfAnalyticsOption
 	}
 
 	if userId > 0 {
-		tokenIds := DB.Model(&PerfMetricDetail{}).
+		tokenIds := db.Model(&PerfMetricDetail{}).
 			Distinct("token_id").
 			Select("token_id").
 			Where("user_id = ? AND token_id > 0", userId)
-		if err := DB.Unscoped().Model(&Token{}).
+		if err := db.Unscoped().Model(&Token{}).
 			Select("id, user_id, name").
 			Where("user_id = ? AND id IN (?)", userId, tokenIds).
 			Order("name ASC, id ASC").

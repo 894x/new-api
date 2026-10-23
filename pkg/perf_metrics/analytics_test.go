@@ -1,6 +1,9 @@
 package perfmetrics
 
 import (
+	"context"
+	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +16,88 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestAnalyticsLightweightFactsSurviveFlushAndRetryWithoutCapture(t *testing.T) {
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "metrics.db")+"?_pragma=journal_mode(WAL)&_txlock=immediate"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PerfMetricDetail{}, &model.PerfMetricHistogram{}))
+	model.DB, model.LOG_DB = db, nil
+	detailHotBuckets = sync.Map{}
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		detailHotBuckets = sync.Map{}
+		sqlDB, _ := db.DB()
+		_ = sqlDB.Close()
+	})
+	now := time.Now()
+	// A rolling upgrade can append new measurements to an existing old bucket.
+	require.NoError(t, db.Create(&model.PerfMetricDetail{ModelName: "facts", UserId: 7, TokenId: 11, BucketTs: bucketStart(now.Unix()), RequestCount: 2, InputTokens: 200, CacheReadTokens: 40}).Error)
+	for _, size := range []int64{1024, 3072} {
+		recordDetail(Sample{Model: "facts", UserId: 7, TokenId: 11, Success: true, RequestBodyBytes: &size, InputTokens: 100, CacheReadTokens: 40, CacheWriteTokens: 30, CacheWrite5mTokens: 10, CacheWrite1hTokens: 20}, now)
+	}
+	// An older/missing measurement must not become a zero-byte observation.
+	recordDetail(Sample{Model: "facts", UserId: 7, TokenId: 11, Success: true}, now)
+	params := AnalyticsQueryParams{Model: "facts", UserId: 7, StartTs: now.Add(-time.Hour).Unix(), EndTs: now.Add(time.Hour).Unix()}
+	flushed := false
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("test:flush_during_snapshot", func(tx *gorm.DB) {
+		if !flushed && tx.Statement.Table == "perf_metric_details" {
+			flushed = true
+			flushDetailBuckets()
+		}
+	}))
+	result, err := QueryAnalytics(params)
+	require.NoError(t, err)
+	require.True(t, flushed)
+	assert.Equal(t, int64(5), result.Summary.RequestCount)
+	assert.Equal(t, int64(2), result.Summary.RequestBodySamples)
+	assert.Equal(t, int64(4096), result.Summary.RequestBodyBytes)
+	assert.Equal(t, int64(3072), result.Summary.RequestBodyMaxBytes)
+	require.NotNil(t, result.Summary.RequestBodyAvgBytes)
+	assert.Equal(t, float64(2048), *result.Summary.RequestBodyAvgBytes)
+	assert.Equal(t, int64(120), result.Summary.CacheReadTokens)
+	assert.Equal(t, int64(60), result.Summary.CacheWriteTokens)
+	assert.Equal(t, int64(20), result.Summary.CacheWrite5mTokens)
+	assert.Equal(t, int64(40), result.Summary.CacheWrite1hTokens)
+	assert.Equal(t, 30.0, result.Summary.CacheHitRate)
+
+}
+
+func TestAnalyticsDegradesErrorScanFailureAndHonorsCancellation(t *testing.T) {
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PerfMetricDetail{}, &model.PerfMetricHistogram{}))
+	model.DB, model.LOG_DB = db, db // No logs table: only the optional breakdown fails.
+	detailHotBuckets = sync.Map{}
+	t.Cleanup(func() { model.DB, model.LOG_DB = previousDB, previousLogDB; detailHotBuckets = sync.Map{} })
+	params := AnalyticsQueryParams{Model: "facts", UserId: 7, StartTs: 100, EndTs: 200}
+	result, err := QueryAnalytics(params)
+	require.NoError(t, err)
+	assert.True(t, result.ErrorsUnavailable)
+	assert.True(t, result.Truncated)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	params.Context = ctx
+	_, err = QueryAnalytics(params)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.False(t, errors.Is(err, context.DeadlineExceeded))
+
+	ctx, cancel = context.WithCancel(context.Background())
+	params.Context = ctx
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("test:cancel_snapshot", func(tx *gorm.DB) {
+		if tx.Statement.Table == "perf_metric_details" {
+			cancel()
+		}
+	}))
+	_, err = QueryAnalytics(params)
+	assert.ErrorIs(t, err, context.Canceled)
+	require.NoError(t, db.Callback().Query().Remove("test:cancel_snapshot"))
+	// Reuse the same pool after cancellation: a transaction must not leak.
+	params.Context = context.Background()
+	_, err = QueryAnalytics(params)
+	require.NoError(t, err)
+}
 
 func TestRecordRelaySampleFeedsVisibleTtftAndTpotPercentiles(t *testing.T) {
 	previousDB := model.DB

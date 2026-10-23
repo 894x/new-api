@@ -39,9 +39,14 @@ func RecordRelayResult(ctx context.Context, info *relaycommon.RelayInfo, apiErr 
 		return
 	}
 	RecordRelaySampleAt(info, outcome == OutcomeSuccess, RelayTokenUsage{
-		InputTokens:     info.PerformanceInputTokens,
-		OutputTokens:    info.PerformanceOutputTokens,
-		CacheReadTokens: info.PerformanceCacheReadTokens,
+		InputTokens:        info.PerformanceInputTokens,
+		OutputTokens:       info.PerformanceOutputTokens,
+		CacheReadTokens:    info.PerformanceCacheReadTokens,
+		CacheWriteTokens:   info.PerformanceCacheWriteTokens,
+		CacheWrite5mTokens: info.PerformanceCacheWrite5mTokens,
+		CacheWrite1hTokens: info.PerformanceCacheWrite1hTokens,
+		CacheReadKnown:     info.PerformanceCacheReadKnown,
+		CacheWriteKnown:    info.PerformanceCacheWriteKnown,
 	}, time.Now())
 }
 
@@ -82,22 +87,28 @@ func RecordRelaySampleAt(info *relaycommon.RelayInfo, success bool, usage RelayT
 		tpotMs = generationMs / (outputTokens - 1)
 	}
 	Record(Sample{
-		Model:           info.OriginModelName,
-		Group:           info.UsingGroup,
-		UserId:          info.UserId,
-		TokenId:         info.TokenId,
-		LatencyMs:       latencyMs,
-		TtftMs:          ttftMs,
-		HasTtft:         hasTtft,
-		TpotMs:          tpotMs,
-		HasTpot:         hasTpot,
-		Success:         success,
-		InputTokens:     inputTokens,
-		OutputTokens:    outputTokens,
-		TotalTokens:     totalTokens,
-		CacheReadTokens: cacheReadTokens,
-		GenerationMs:    generationMs,
-		CompletedAt:     completedAt,
+		Model:              info.OriginModelName,
+		Group:              info.UsingGroup,
+		UserId:             info.UserId,
+		TokenId:            info.TokenId,
+		LatencyMs:          latencyMs,
+		TtftMs:             ttftMs,
+		HasTtft:            hasTtft,
+		TpotMs:             tpotMs,
+		HasTpot:            hasTpot,
+		Success:            success,
+		InputTokens:        inputTokens,
+		OutputTokens:       outputTokens,
+		TotalTokens:        totalTokens,
+		CacheReadTokens:    cacheReadTokens,
+		CacheWriteTokens:   max(usage.CacheWriteTokens, 0),
+		CacheWrite5mTokens: max(usage.CacheWrite5mTokens, 0),
+		CacheWrite1hTokens: max(usage.CacheWrite1hTokens, 0),
+		CacheReadKnown:     usage.CacheReadKnown,
+		CacheWriteKnown:    usage.CacheWriteKnown,
+		RequestBodyBytes:   info.PerformanceRequestBodyBytes,
+		GenerationMs:       generationMs,
+		CompletedAt:        completedAt,
 	})
 }
 

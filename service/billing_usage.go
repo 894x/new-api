@@ -72,12 +72,26 @@ func captureRelayPerformanceUsage(info *relaycommon.RelayInfo, usage *dto.Usage)
 	info.PerformanceInputTokens = tokens.InputTokens
 	info.PerformanceOutputTokens = tokens.OutputTokens
 	info.PerformanceCacheReadTokens = tokens.CacheReadTokens
+	info.PerformanceCacheWriteTokens = tokens.CacheWriteTokens
+	info.PerformanceCacheWrite5mTokens = tokens.CacheWrite5mTokens
+	info.PerformanceCacheWrite1hTokens = tokens.CacheWrite1hTokens
+	info.PerformanceCacheReadKnown = tokens.CacheReadKnown
+	info.PerformanceCacheWriteKnown = tokens.CacheWriteKnown
 }
 
 func performanceTokenUsage(usage *dto.Usage) perfmetrics.RelayTokenUsage {
+	var cacheCreation *dto.ClaudeCacheCreationUsage
+	if usage != nil && usage.UsageSource != "" {
+		cacheCreation = usage.CacheCreation
+	}
 	usage = effectiveBillingUsage(usage)
 	if usage == nil {
 		return perfmetrics.RelayTokenUsage{}
+	}
+	if cacheCreation != nil {
+		copyUsage := *usage
+		copyUsage.CacheCreation = cacheCreation
+		usage = &copyUsage
 	}
 
 	inputTokens := usage.InputTokens
@@ -95,11 +109,25 @@ func performanceTokenUsage(usage *dto.Usage) perfmetrics.RelayTokenUsage {
 	if cacheReadTokens <= 0 {
 		cacheReadTokens = usage.PromptCacheHitTokens
 	}
+	cacheWriteTokens, cacheWrite5m, cacheWrite1h := usage.CacheCreationTokenCounts()
+	// Cache zeroes are known only when the protocol carries that category.
+	// Legacy value DTOs cannot distinguish an omitted zero; keep it unknown.
+	readKnown := cacheReadTokens > 0 || usage.InputTokensDetails != nil || usage.UsageSemantic == dto.BillingUsageSemanticAnthropic || usage.UsageSemantic == dto.BillingUsageSemanticGemini
+	writeKnown := cacheWriteTokens > 0 || usage.CacheCreation != nil || usage.UsageSemantic == dto.BillingUsageSemanticAnthropic
+	if usage.BillingUsage != nil && usage.BillingUsage.Estimated {
+		readKnown, writeKnown = false, false
+		cacheReadTokens, cacheWriteTokens, cacheWrite5m, cacheWrite1h = 0, 0, 0, 0
+	}
 
 	return perfmetrics.RelayTokenUsage{
-		InputTokens:     int64(inputTokens),
-		OutputTokens:    int64(outputTokens),
-		CacheReadTokens: int64(cacheReadTokens),
+		InputTokens:        int64(inputTokens),
+		OutputTokens:       int64(outputTokens),
+		CacheReadTokens:    int64(cacheReadTokens),
+		CacheWriteTokens:   int64(cacheWriteTokens),
+		CacheWrite5mTokens: int64(cacheWrite5m),
+		CacheWrite1hTokens: int64(cacheWrite1h),
+		CacheReadKnown:     readKnown,
+		CacheWriteKnown:    writeKnown,
 	}
 }
 

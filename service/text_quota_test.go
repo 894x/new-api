@@ -277,7 +277,7 @@ func TestPerformanceTokenUsagePrefersNormalizedTotalsAndCacheSignals(t *testing.
 	}
 
 	assert.Equal(t, perfmetrics.RelayTokenUsage{
-		InputTokens: 120, OutputTokens: 25, CacheReadTokens: 30,
+		InputTokens: 120, OutputTokens: 25, CacheReadTokens: 30, CacheReadKnown: true,
 	}, performanceTokenUsage(usage))
 
 	usage.InputTokens = 0
@@ -285,8 +285,19 @@ func TestPerformanceTokenUsagePrefersNormalizedTotalsAndCacheSignals(t *testing.
 	usage.PromptTokensDetails.CachedTokens = 0
 	usage.InputTokensDetails = &dto.InputTokenDetails{CachedTokens: 15}
 	assert.Equal(t, perfmetrics.RelayTokenUsage{
-		InputTokens: 80, OutputTokens: 20, CacheReadTokens: 15,
+		InputTokens: 80, OutputTokens: 20, CacheReadTokens: 15, CacheReadKnown: true,
 	}, performanceTokenUsage(usage))
+
+	claude := &dto.Usage{BillingUsage: dto.NewClaudeMessagesBillingUsage(&dto.ClaudeUsage{
+		InputTokens: 10, OutputTokens: 5, CacheReadInputTokens: 40, CacheCreationInputTokens: 30,
+		CacheCreation: &dto.ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 10, Ephemeral1hInputTokens: 20},
+	})}
+	assert.Equal(t, perfmetrics.RelayTokenUsage{
+		InputTokens: 80, OutputTokens: 5, CacheReadTokens: 40, CacheWriteTokens: 30,
+		CacheWrite5mTokens: 10, CacheWrite1hTokens: 20, CacheReadKnown: true, CacheWriteKnown: true,
+	}, performanceTokenUsage(claude))
+	assert.Equal(t, perfmetrics.RelayTokenUsage{}, performanceTokenUsage(nil))
+	assert.False(t, performanceTokenUsage(&dto.Usage{PromptTokens: 50}).CacheWriteKnown)
 }
 
 // The configured DSNs must point at isolated test databases. Each dialect runs

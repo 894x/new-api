@@ -11,28 +11,39 @@ type Store interface {
 }
 
 type Sample struct {
-	Model           string
-	Group           string
-	UserId          int
-	TokenId         int
-	LatencyMs       int64
-	TtftMs          int64
-	HasTtft         bool
-	TpotMs          int64
-	HasTpot         bool
-	Success         bool
-	InputTokens     int64
-	OutputTokens    int64
-	TotalTokens     int64
-	CacheReadTokens int64
-	GenerationMs    int64
-	CompletedAt     time.Time
+	Model              string
+	Group              string
+	UserId             int
+	TokenId            int
+	LatencyMs          int64
+	TtftMs             int64
+	HasTtft            bool
+	TpotMs             int64
+	HasTpot            bool
+	Success            bool
+	InputTokens        int64
+	OutputTokens       int64
+	TotalTokens        int64
+	CacheReadTokens    int64
+	CacheWriteTokens   int64
+	CacheWrite5mTokens int64
+	CacheWrite1hTokens int64
+	CacheReadKnown     bool
+	CacheWriteKnown    bool
+	RequestBodyBytes   *int64
+	GenerationMs       int64
+	CompletedAt        time.Time
 }
 
 type RelayTokenUsage struct {
-	InputTokens     int64
-	OutputTokens    int64
-	CacheReadTokens int64
+	InputTokens        int64
+	OutputTokens       int64
+	CacheReadTokens    int64
+	CacheWriteTokens   int64
+	CacheWrite5mTokens int64
+	CacheWrite1hTokens int64
+	CacheReadKnown     bool
+	CacheWriteKnown    bool
 }
 
 type QueryParams struct {

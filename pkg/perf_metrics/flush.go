@@ -13,6 +13,12 @@ import (
 
 var flushMu sync.Mutex
 
+// Readers validate this generation around their database snapshot. Only the
+// in-memory snapshot is protected, so slow database reads never hold up a flush.
+var detailSnapshotMu sync.RWMutex
+var detailFlushGeneration uint64
+var detailFlushDone chan struct{}
+
 type pendingDetailFlush struct {
 	key        detailBucketKey
 	counters   detailCounters
@@ -81,6 +87,16 @@ func Flush() {
 }
 
 func flushDetailBuckets() {
+	detailSnapshotMu.Lock()
+	detailFlushGeneration++
+	detailFlushDone = make(chan struct{})
+	detailSnapshotMu.Unlock()
+	defer func() {
+		detailSnapshotMu.Lock()
+		detailFlushGeneration++
+		close(detailFlushDone)
+		detailSnapshotMu.Unlock()
+	}()
 	currentBucket := bucketStart(time.Now().Unix())
 	const dimensionBatchSize = 100
 	pending := make([]pendingDetailFlush, 0, dimensionBatchSize)
@@ -125,6 +141,14 @@ func flushDetailBuckets() {
 				SuccessCount: drained.successCount, TtftCount: drained.ttftCount, TpotCount: drained.tpotCount,
 				InputTokens: drained.inputTokens, OutputTokens: drained.outputTokens,
 				TotalTokens: drained.totalTokens, CacheReadTokens: drained.cacheReadTokens,
+				RequestBodySamples:  drained.requestBodySamples,
+				RequestBodyBytes:    drained.requestBodyBytes,
+				RequestBodyMaxBytes: drained.requestBodyMaxBytes,
+				CacheReadSamples:    drained.cacheReadSamples,
+				CacheWriteTokens:    drained.cacheWriteTokens,
+				CacheWriteSamples:   drained.cacheWriteSamples,
+				CacheWrite5mTokens:  drained.cacheWrite5mTokens,
+				CacheWrite1hTokens:  drained.cacheWrite1hTokens,
 			},
 			histograms: histograms,
 		})

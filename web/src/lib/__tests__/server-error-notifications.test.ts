@@ -42,6 +42,31 @@ import { useAuthStore, type AuthBundle } from '@/stores/auth-store'
 
 const originalAdapter = api.defaults.adapter
 
+it('keeps a locally handled analytics 500 on its page while preserving other query redirects', async () => {
+  const redirect = vi.fn()
+  const client = createAppQueryClient(redirect)
+  const error = { response: { status: 500 } }
+  await expect(
+    client.fetchQuery({
+      queryKey: ['performance-analytics', 'failure'],
+      queryFn: () => Promise.reject(error),
+      retry: false,
+      meta: { errorToast: false, redirectOnServerError: false },
+    })
+  ).rejects.toBe(error)
+  expect(redirect).not.toHaveBeenCalled()
+  await expect(
+    client.fetchQuery({
+      queryKey: ['unhandled-failure'],
+      queryFn: () => Promise.reject(error),
+      retry: false,
+      meta: { errorToast: false },
+    })
+  ).rejects.toBe(error)
+  expect(redirect).toHaveBeenCalledOnce()
+  client.clear()
+})
+
 afterEach(() => {
   api.defaults.adapter = originalAdapter
   vi.restoreAllMocks()

@@ -24,6 +24,16 @@ export type PerformancePercentiles = {
 }
 
 export type PerformanceAnalyticsSummary = {
+  request_body_samples?: number
+  request_body_bytes?: number
+  request_body_max_bytes?: number
+  request_body_avg_bytes?: number | null
+  cache_read_samples?: number
+  cache_read_tokens?: number
+  cache_write_samples?: number
+  cache_write_tokens?: number
+  cache_write_5m_tokens?: number
+  cache_write_1h_tokens?: number
   request_count: number
   error_count: number
   success_rate: number
@@ -39,6 +49,7 @@ export type PerformanceAnalyticsPoint = PerformanceAnalyticsSummary & {
 }
 
 export type PerformanceAnalyticsData = {
+  errors_unavailable?: boolean
   model_name: string
   scanned_logs: number
   truncated: boolean
@@ -87,7 +98,13 @@ export type PerformanceChartDatum = {
   value: number
 }
 
-export type PerformanceMetric = 'rpm' | 'tpm' | 'cache_hit_rate' | 'error_count'
+export type PerformanceMetric =
+  | 'rpm'
+  | 'tpm'
+  | 'cache_hit_rate'
+  | 'error_count'
+  | 'request_body_avg_bytes'
+  | 'cache_write_tokens'
 
 export type PerformanceMetricChartDatum = {
   ts: number

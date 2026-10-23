@@ -81,35 +81,7 @@ func setupPerfAnalyticsControllerTestDB(t *testing.T) {
 	t.Cleanup(func() { model.DB = previousDB })
 
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}))
-	require.NoError(t, db.Exec(`
-		CREATE TABLE perf_metric_details (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			token_id INTEGER NOT NULL,
-			model_name TEXT NOT NULL,
-			bucket_ts INTEGER NOT NULL,
-			request_count INTEGER NOT NULL DEFAULT 0,
-			success_count INTEGER NOT NULL DEFAULT 0,
-			ttft_count INTEGER NOT NULL DEFAULT 0,
-			tpot_count INTEGER NOT NULL DEFAULT 0,
-			input_tokens INTEGER NOT NULL DEFAULT 0,
-			output_tokens INTEGER NOT NULL DEFAULT 0,
-			total_tokens INTEGER NOT NULL DEFAULT 0,
-			cache_read_tokens INTEGER NOT NULL DEFAULT 0
-		)
-	`).Error)
-	require.NoError(t, db.Exec(`
-		CREATE TABLE perf_metric_histograms (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			token_id INTEGER NOT NULL,
-			model_name TEXT NOT NULL,
-			bucket_ts INTEGER NOT NULL,
-			metric TEXT NOT NULL,
-			upper_bound_ms INTEGER NOT NULL,
-			count INTEGER NOT NULL DEFAULT 0
-		)
-	`).Error)
+	require.NoError(t, db.AutoMigrate(&model.PerfMetricDetail{}, &model.PerfMetricHistogram{}))
 
 	require.NoError(t, db.Create(&[]model.Token{
 		{Id: 11, UserId: 1, Key: "self-key", Name: "Self key"},

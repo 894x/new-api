@@ -20,9 +20,40 @@ import assert from 'node:assert/strict'
 
 import { describe, test } from 'vitest'
 
+import { toIntlLocale } from '@/i18n/languages'
+
 import * as analyticsLib from '../lib'
 
 describe('performance analytics chart series', () => {
+  test('formats body sizes without rounding small payloads to zero and accepts all interface languages', () => {
+    for (const language of [
+      'en',
+      'zhCN',
+      'zhTW',
+      'fr',
+      'ru',
+      'ja',
+      'vi',
+      'invalid-language',
+    ]) {
+      const locale = toIntlLocale(language)
+      assert.equal(analyticsLib.formatRequestBodySize(1, locale), '1 B')
+      assert.equal(analyticsLib.formatRequestBodySize(1024, locale), '1 KiB')
+      assert.equal(
+        analyticsLib.formatRequestBodySize(1024 ** 2, locale),
+        '1 MiB'
+      )
+    }
+  })
+  test('bounds a single timestamp to its nearby interval', () => {
+    const axis = analyticsLib.buildPerformanceTimeAxis(
+      String,
+      '#fff',
+      [1_800_000_000]
+    )
+    assert.equal(axis.min, 1_799_999_850)
+    assert.equal(axis.max, 1_800_000_150)
+  })
   test('formats TTFT in seconds with one decimal place', () => {
     assert.equal(analyticsLib.formatTtftSeconds(50), '0.1 s')
     assert.equal(analyticsLib.formatTtftSeconds(1_240), '1.2 s')

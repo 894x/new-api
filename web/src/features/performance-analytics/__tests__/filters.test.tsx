@@ -145,6 +145,84 @@ beforeEach(() => {
   )
 })
 
+test('retains the last statistics and filters after a refresh fails', async () => {
+  getPerformanceAnalytics.mockResolvedValue(
+    response({
+      ...emptyAnalytics,
+      summary: { ...emptyAnalytics.summary, request_count: 1 },
+    })
+  )
+  const user = userEvent.setup()
+  renderAnalytics()
+  await screen.findByText('Average RPM')
+  getPerformanceAnalytics.mockRejectedValue({ response: { status: 500 } })
+  await user.click(screen.getAllByRole('button', { name: 'Refresh' })[0])
+  await screen.findByText(
+    'Performance data could not be refreshed. Showing the last result.'
+  )
+  expect(screen.getByText('Average RPM')).toBeVisible()
+  expect(screen.getByRole('combobox', { name: /User/ })).toBeVisible()
+})
+
+test('retries an initial analytics failure without losing the filters', async () => {
+  getPerformanceAnalytics.mockRejectedValue({ response: { status: 500 } })
+  const user = userEvent.setup()
+  renderAnalytics()
+  await screen.findByRole('button', { name: 'Retry' })
+  getPerformanceAnalytics.mockResolvedValue(
+    response({
+      ...emptyAnalytics,
+      summary: { ...emptyAnalytics.summary, request_count: 1 },
+    })
+  )
+  await user.click(screen.getByRole('button', { name: 'Retry' }))
+  await screen.findByText('Average RPM')
+  expect(screen.getByRole('combobox', { name: /Model/ })).toHaveTextContent(
+    'gpt-test'
+  )
+})
+
+test('shows missing measurements as unknown while retaining explicitly measured zeroes', async () => {
+  getPerformanceAnalytics.mockResolvedValue(
+    response({
+      ...emptyAnalytics,
+      summary: {
+        ...emptyAnalytics.summary,
+        request_count: 1,
+        request_body_samples: 0,
+        request_body_avg_bytes: null,
+        cache_read_samples: 0,
+        cache_write_samples: 0,
+      },
+    })
+  )
+  const user = userEvent.setup()
+  renderAnalytics()
+  await screen.findByText('Average RPM')
+  expect(screen.getAllByText('Unknown')).toHaveLength(5)
+  getPerformanceAnalytics.mockResolvedValue(
+    response({
+      ...emptyAnalytics,
+      summary: {
+        ...emptyAnalytics.summary,
+        request_count: 1,
+        request_body_samples: 1,
+        request_body_avg_bytes: 0,
+        request_body_max_bytes: 0,
+        cache_read_samples: 1,
+        cache_read_tokens: 0,
+        cache_write_samples: 1,
+        cache_write_tokens: 0,
+      },
+    })
+  )
+  await user.click(screen.getAllByRole('button', { name: 'Refresh' })[0])
+  await waitFor(() =>
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
+  )
+  expect(screen.getAllByText('0 B')).toHaveLength(2)
+})
+
 test('keeps the first selected user while scoped options are loading', async () => {
   const user = userEvent.setup()
   renderAnalytics()
@@ -154,11 +232,16 @@ test('keeps the first selected user while scoped options are loading', async () 
   await user.click(await screen.findByRole('option', { name: 'alice' }))
 
   await waitFor(() => expect(userSelect).toHaveTextContent('alice'))
-  expect(getPerformanceAnalyticsOptions).toHaveBeenCalledWith(true, 2)
+  expect(getPerformanceAnalyticsOptions).toHaveBeenCalledWith(
+    true,
+    2,
+    expect.any(AbortSignal)
+  )
   await waitFor(() =>
     expect(getPerformanceAnalytics).toHaveBeenCalledWith(
       expect.objectContaining({ user_id: 2 }),
-      true
+      true,
+      expect.any(AbortSignal)
     )
   )
 })
@@ -181,7 +264,8 @@ test('offers a one-hour range and sends an hour-wide query', async () => {
         start_timestamp: 1_799_996_400,
         end_timestamp: 1_800_000_000,
       }),
-      true
+      true,
+      expect.any(AbortSignal)
     )
   )
 })
@@ -202,7 +286,8 @@ test('moves the monitoring window forward on each automatic refresh', async () =
         start_timestamp: 1_799_999_400,
         end_timestamp: 1_800_000_000,
       }),
-      true
+      true,
+      expect.any(AbortSignal)
     )
 
     await act(async () => {
@@ -214,7 +299,8 @@ test('moves the monitoring window forward on each automatic refresh', async () =
         start_timestamp: 1_799_999_415,
         end_timestamp: 1_800_000_015,
       }),
-      true
+      true,
+      expect.any(AbortSignal)
     )
   } finally {
     view.unmount()

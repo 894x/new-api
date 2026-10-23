@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 )
@@ -39,6 +40,7 @@ type AnalyticsPercentiles struct {
 }
 
 type AnalyticsSummary struct {
+	AnalyticsUsage
 	RequestCount int64                `json:"request_count"`
 	ErrorCount   int64                `json:"error_count"`
 	SuccessRate  float64              `json:"success_rate"`
@@ -50,6 +52,7 @@ type AnalyticsSummary struct {
 }
 
 type AnalyticsPoint struct {
+	AnalyticsUsage
 	Ts           int64                `json:"ts"`
 	RequestCount int64                `json:"request_count"`
 	ErrorCount   int64                `json:"error_count"`
@@ -61,15 +64,29 @@ type AnalyticsPoint struct {
 	Tpot         AnalyticsPercentiles `json:"tpot"`
 }
 
+type AnalyticsUsage struct {
+	RequestBodySamples  int64    `json:"request_body_samples"`
+	RequestBodyBytes    int64    `json:"request_body_bytes"`
+	RequestBodyMaxBytes int64    `json:"request_body_max_bytes"`
+	CacheReadSamples    int64    `json:"cache_read_samples"`
+	CacheWriteTokens    int64    `json:"cache_write_tokens"`
+	CacheWriteSamples   int64    `json:"cache_write_samples"`
+	CacheWrite5mTokens  int64    `json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens  int64    `json:"cache_write_1h_tokens"`
+	CacheReadTokens     int64    `json:"cache_read_tokens"`
+	RequestBodyAvgBytes *float64 `json:"request_body_avg_bytes"`
+}
+
 type AnalyticsResult struct {
-	ModelName        string              `json:"model_name"`
-	ScannedLogs      int                 `json:"scanned_logs"`
-	Truncated        bool                `json:"truncated"`
-	ErrorGroups      []ChannelErrorGroup `json:"error_groups"`
-	EffectiveStartTs int64               `json:"effective_start_timestamp"`
-	EffectiveEndTs   int64               `json:"effective_end_timestamp"`
-	Summary          AnalyticsSummary    `json:"summary"`
-	Series           []AnalyticsPoint    `json:"series"`
+	ErrorsUnavailable bool                `json:"errors_unavailable"`
+	ModelName         string              `json:"model_name"`
+	ScannedLogs       int                 `json:"scanned_logs"`
+	Truncated         bool                `json:"truncated"`
+	ErrorGroups       []ChannelErrorGroup `json:"error_groups"`
+	EffectiveStartTs  int64               `json:"effective_start_timestamp"`
+	EffectiveEndTs    int64               `json:"effective_end_timestamp"`
+	Summary           AnalyticsSummary    `json:"summary"`
+	Series            []AnalyticsPoint    `json:"series"`
 }
 
 type detailBucketKey struct {
@@ -80,27 +97,45 @@ type detailBucketKey struct {
 }
 
 type detailCounters struct {
-	requestCount    int64
-	successCount    int64
-	inputTokens     int64
-	outputTokens    int64
-	totalTokens     int64
-	cacheReadTokens int64
-	ttftCount       int64
-	tpotCount       int64
-	ttftBuckets     [len(histogramUpperBoundsMs)]int64
-	tpotBuckets     [len(histogramUpperBoundsMs)]int64
+	requestCount        int64
+	successCount        int64
+	inputTokens         int64
+	outputTokens        int64
+	totalTokens         int64
+	cacheReadTokens     int64
+	requestBodySamples  int64
+	requestBodyBytes    int64
+	requestBodyMaxBytes int64
+	cacheReadSamples    int64
+	cacheWriteTokens    int64
+	cacheWriteSamples   int64
+	cacheWrite5mTokens  int64
+	cacheWrite1hTokens  int64
+
+	ttftCount   int64
+	tpotCount   int64
+	ttftBuckets [len(histogramUpperBoundsMs)]int64
+	tpotBuckets [len(histogramUpperBoundsMs)]int64
 }
 
 type analyticsAccumulator struct {
-	requestCount    int64
-	errorCount      int64
-	successCount    int64
-	inputTokens     int64
-	totalTokens     int64
-	cacheReadTokens int64
-	ttft            map[int64]int64
-	tpot            map[int64]int64
+	requestCount        int64
+	errorCount          int64
+	successCount        int64
+	inputTokens         int64
+	totalTokens         int64
+	cacheReadTokens     int64
+	requestBodySamples  int64
+	requestBodyBytes    int64
+	requestBodyMaxBytes int64
+	cacheReadSamples    int64
+	cacheWriteTokens    int64
+	cacheWriteSamples   int64
+	cacheWrite5mTokens  int64
+	cacheWrite1hTokens  int64
+
+	ttft map[int64]int64
+	tpot map[int64]int64
 }
 
 func QueryAnalytics(params AnalyticsQueryParams) (AnalyticsResult, error) {
@@ -125,35 +160,80 @@ func QueryAnalytics(params AnalyticsQueryParams) (AnalyticsResult, error) {
 		EndTs:         params.EndTs,
 		BucketSeconds: bucketSeconds,
 	}
-	// Read persisted and active counters under the flush lock so a drain cannot
-	// move samples between the two sources while the query is assembling them.
-	flushMu.Lock()
-	details, histograms, err := model.GetPerfAnalyticsBuckets(filter)
-	if err != nil {
-		flushMu.Unlock()
-		return AnalyticsResult{}, err
+	ctx := params.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	filter.Context = ctx
+	var series map[int64]*analyticsAccumulator
+	for {
+		if err := ctx.Err(); err != nil {
+			return AnalyticsResult{}, err
+		}
+		detailSnapshotMu.RLock()
+		generation, done := detailFlushGeneration, detailFlushDone
+		detailSnapshotMu.RUnlock()
+		if generation%2 != 0 {
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return AnalyticsResult{}, ctx.Err()
+			}
+		}
+		details, histograms, err := model.GetPerfAnalyticsBuckets(filter)
+		if err != nil {
+			if ctx.Err() != nil {
+				return AnalyticsResult{}, ctx.Err()
+			}
+			return AnalyticsResult{}, err
+		}
+		series = make(map[int64]*analyticsAccumulator)
+		for _, detail := range details {
+			point := analyticsPointAccumulator(series, detail.BucketTs)
+			point.requestCount += detail.RequestCount
+			point.successCount += detail.SuccessCount
+			point.inputTokens += detail.InputTokens
+			point.totalTokens += detail.TotalTokens
+			point.cacheReadTokens += detail.CacheReadTokens
+			if detail.CacheReadSamples == 0 && detail.CacheReadTokens > 0 {
+				point.cacheReadSamples += detail.RequestCount
+			}
+			point.requestBodySamples += detail.RequestBodySamples
+			point.requestBodyBytes += detail.RequestBodyBytes
+			point.requestBodyMaxBytes = max(point.requestBodyMaxBytes, detail.RequestBodyMaxBytes)
+			point.cacheReadSamples += detail.CacheReadSamples
+			point.cacheWriteTokens += detail.CacheWriteTokens
+			point.cacheWriteSamples += detail.CacheWriteSamples
+			point.cacheWrite5mTokens += detail.CacheWrite5mTokens
+			point.cacheWrite1hTokens += detail.CacheWrite1hTokens
+
+		}
+		for _, histogram := range histograms {
+			addHistogramCount(analyticsPointAccumulator(series, histogram.BucketTs), histogram.Metric, histogram.UpperBoundMs, histogram.Count)
+		}
+		detailSnapshotMu.RLock()
+		if generation != detailFlushGeneration {
+			detailSnapshotMu.RUnlock()
+			continue
+		}
+		mergeActiveDetailBuckets(series, params, bucketSeconds)
+		detailSnapshotMu.RUnlock()
+		break
 	}
 
-	series := make(map[int64]*analyticsAccumulator)
-	for _, detail := range details {
-		point := analyticsPointAccumulator(series, detail.BucketTs)
-		point.requestCount += detail.RequestCount
-		point.successCount += detail.SuccessCount
-		point.inputTokens += detail.InputTokens
-		point.totalTokens += detail.TotalTokens
-		point.cacheReadTokens += detail.CacheReadTokens
-	}
-	for _, histogram := range histograms {
-		point := analyticsPointAccumulator(series, histogram.BucketTs)
-		addHistogramCount(point, histogram.Metric, histogram.UpperBoundMs, histogram.Count)
-	}
-	mergeActiveDetailBuckets(series, params, bucketSeconds)
-	flushMu.Unlock()
 	errorParams := params
+	errorParams.Context = ctx
 	errorParams.StartTs = requestedStartTs
 	scannedLogs, truncated, errorGroups, err := queryAnalyticsErrors(errorParams, series, bucketSeconds)
 	if err != nil {
-		return AnalyticsResult{}, err
+		if params.Context != nil && params.Context.Err() != nil {
+			return AnalyticsResult{}, params.Context.Err()
+		}
+		common.SysError("performance error breakdown unavailable: " + err.Error())
+		truncated = true
 	}
 
 	timestamps := make([]int64, 0, len(series))
@@ -172,14 +252,15 @@ func QueryAnalytics(params AnalyticsQueryParams) (AnalyticsResult, error) {
 	effectiveDurationSeconds := effectiveEndTs - params.StartTs + 1
 
 	return AnalyticsResult{
-		ModelName:        params.Model,
-		ScannedLogs:      scannedLogs,
-		Truncated:        truncated,
-		ErrorGroups:      errorGroups,
-		EffectiveStartTs: params.StartTs,
-		EffectiveEndTs:   effectiveEndTs,
-		Summary:          buildAnalyticsSummary(effectiveDurationSeconds, summary),
-		Series:           points,
+		ErrorsUnavailable: err != nil,
+		ModelName:         params.Model,
+		ScannedLogs:       scannedLogs,
+		Truncated:         truncated,
+		ErrorGroups:       errorGroups,
+		EffectiveStartTs:  params.StartTs,
+		EffectiveEndTs:    effectiveEndTs,
+		Summary:           buildAnalyticsSummary(effectiveDurationSeconds, summary),
+		Series:            points,
 	}, nil
 }
 
@@ -207,6 +288,15 @@ func addDetailCounters(target *analyticsAccumulator, source detailCounters) {
 	target.inputTokens += source.inputTokens
 	target.totalTokens += source.totalTokens
 	target.cacheReadTokens += source.cacheReadTokens
+	target.requestBodySamples += source.requestBodySamples
+	target.requestBodyBytes += source.requestBodyBytes
+	target.requestBodyMaxBytes = max(target.requestBodyMaxBytes, source.requestBodyMaxBytes)
+	target.cacheReadSamples += source.cacheReadSamples
+	target.cacheWriteTokens += source.cacheWriteTokens
+	target.cacheWriteSamples += source.cacheWriteSamples
+	target.cacheWrite5mTokens += source.cacheWrite5mTokens
+	target.cacheWrite1hTokens += source.cacheWrite1hTokens
+
 	for i, count := range source.ttftBuckets {
 		if count > 0 {
 			target.ttft[histogramUpperBoundsMs[i]] += count
@@ -227,7 +317,7 @@ func queryAnalyticsErrors(params AnalyticsQueryParams, series map[int64]*analyti
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	groups := make(map[string]*ChannelErrorGroup)
 	scanned, truncated, err := model.VisitPerfUserLogs(ctx, params.UserId, params.Model, params.TokenId, params.StartTs, params.EndTs, func(row model.PerfChannelLog) {
@@ -294,6 +384,15 @@ func mergeAnalyticsAccumulator(target *analyticsAccumulator, source *analyticsAc
 	target.inputTokens += source.inputTokens
 	target.totalTokens += source.totalTokens
 	target.cacheReadTokens += source.cacheReadTokens
+	target.requestBodySamples += source.requestBodySamples
+	target.requestBodyBytes += source.requestBodyBytes
+	target.requestBodyMaxBytes = max(target.requestBodyMaxBytes, source.requestBodyMaxBytes)
+	target.cacheReadSamples += source.cacheReadSamples
+	target.cacheWriteTokens += source.cacheWriteTokens
+	target.cacheWriteSamples += source.cacheWriteSamples
+	target.cacheWrite5mTokens += source.cacheWrite5mTokens
+	target.cacheWrite1hTokens += source.cacheWrite1hTokens
+
 	for upperBoundMs, count := range source.ttft {
 		target.ttft[upperBoundMs] += count
 	}
@@ -304,28 +403,30 @@ func mergeAnalyticsAccumulator(target *analyticsAccumulator, source *analyticsAc
 
 func buildAnalyticsPoint(ts int64, bucketSeconds int64, accumulator *analyticsAccumulator) AnalyticsPoint {
 	return AnalyticsPoint{
-		Ts:           ts,
-		RequestCount: accumulator.requestCount,
-		ErrorCount:   accumulator.errorCount,
-		SuccessRate:  analyticsSuccessRate(accumulator),
-		Rpm:          analyticsPerMinute(accumulator.requestCount, bucketSeconds),
-		Tpm:          analyticsPerMinute(accumulator.totalTokens, bucketSeconds),
-		CacheHitRate: analyticsCacheHitRate(accumulator),
-		Ttft:         histogramPercentiles(accumulator.ttft),
-		Tpot:         histogramPercentiles(accumulator.tpot),
+		Ts:             ts,
+		AnalyticsUsage: buildAnalyticsUsage(accumulator),
+		RequestCount:   accumulator.requestCount,
+		ErrorCount:     accumulator.errorCount,
+		SuccessRate:    analyticsSuccessRate(accumulator),
+		Rpm:            analyticsPerMinute(accumulator.requestCount, bucketSeconds),
+		Tpm:            analyticsPerMinute(accumulator.totalTokens, bucketSeconds),
+		CacheHitRate:   analyticsCacheHitRate(accumulator),
+		Ttft:           histogramPercentiles(accumulator.ttft),
+		Tpot:           histogramPercentiles(accumulator.tpot),
 	}
 }
 
 func buildAnalyticsSummary(durationSeconds int64, accumulator *analyticsAccumulator) AnalyticsSummary {
 	return AnalyticsSummary{
-		RequestCount: accumulator.requestCount,
-		ErrorCount:   accumulator.errorCount,
-		SuccessRate:  analyticsSuccessRate(accumulator),
-		Rpm:          analyticsPerMinute(accumulator.requestCount, durationSeconds),
-		Tpm:          analyticsPerMinute(accumulator.totalTokens, durationSeconds),
-		CacheHitRate: analyticsCacheHitRate(accumulator),
-		Ttft:         histogramPercentiles(accumulator.ttft),
-		Tpot:         histogramPercentiles(accumulator.tpot),
+		AnalyticsUsage: buildAnalyticsUsage(accumulator),
+		RequestCount:   accumulator.requestCount,
+		ErrorCount:     accumulator.errorCount,
+		SuccessRate:    analyticsSuccessRate(accumulator),
+		Rpm:            analyticsPerMinute(accumulator.requestCount, durationSeconds),
+		Tpm:            analyticsPerMinute(accumulator.totalTokens, durationSeconds),
+		CacheHitRate:   analyticsCacheHitRate(accumulator),
+		Ttft:           histogramPercentiles(accumulator.ttft),
+		Tpot:           histogramPercentiles(accumulator.tpot),
 	}
 }
 
@@ -382,4 +483,23 @@ func histogramPercentile(histogram map[int64]int64, sampleCount int64, percentil
 		}
 	}
 	return upperBounds[len(upperBounds)-1]
+}
+
+func buildAnalyticsUsage(a *analyticsAccumulator) AnalyticsUsage {
+	result := AnalyticsUsage{
+		CacheReadTokens:     a.cacheReadTokens,
+		RequestBodySamples:  a.requestBodySamples,
+		RequestBodyBytes:    a.requestBodyBytes,
+		RequestBodyMaxBytes: a.requestBodyMaxBytes,
+		CacheReadSamples:    a.cacheReadSamples,
+		CacheWriteTokens:    a.cacheWriteTokens,
+		CacheWriteSamples:   a.cacheWriteSamples,
+		CacheWrite5mTokens:  a.cacheWrite5mTokens,
+		CacheWrite1hTokens:  a.cacheWrite1hTokens,
+	}
+	if a.requestBodySamples > 0 {
+		average := float64(a.requestBodyBytes) / float64(a.requestBodySamples)
+		result.RequestBodyAvgBytes = &average
+	}
+	return result
 }

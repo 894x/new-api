@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber } from '@/lib/format'
 
 import type {
   PerformanceAnalyticsPoint,
@@ -30,6 +31,20 @@ const PERCENTILE_FIELDS = [
   ['P90', 'p90_ms'],
   ['P99', 'p99_ms'],
 ] as const
+
+export function formatRequestBodySize(
+  bytes: number,
+  locale?: Intl.LocalesArgument
+): string {
+  for (const [unit, scale] of [
+    ['GiB', 1024 ** 3],
+    ['MiB', 1024 ** 2],
+    ['KiB', 1024],
+  ] as const) {
+    if (bytes >= scale) return `${formatNumber(bytes / scale, locale)} ${unit}`
+  }
+  return `${formatNumber(bytes, locale)} B`
+}
 
 export function getPerformanceFilterLabel(
   value: string | null,
@@ -59,12 +74,26 @@ export function formatTtftSeconds(ms: number): string {
 
 export function buildPerformanceTimeAxis(
   formatTime: (ts: number) => string,
-  textColor: string
+  textColor: string,
+  timestamps: number[] = []
 ) {
+  const finiteTimes = timestamps.filter(Number.isFinite)
+  let min: number | undefined
+  let max: number | undefined
+  if (finiteTimes.length > 0) {
+    min = Math.min(...finiteTimes)
+    max = Math.max(...finiteTimes)
+    if (min === max) {
+      min -= 150
+      max += 150
+    }
+  }
   return {
     orient: 'bottom' as const,
     type: 'linear' as const,
     zero: false,
+    min,
+    max,
     label: {
       formatMethod: (value: number | string) => formatTime(Number(value)),
       style: { fill: textColor, fontSize: 10 },
@@ -99,10 +128,13 @@ export function buildPerformanceMetricSeries(
   metric: PerformanceMetric,
   formatTime: (ts: number) => string
 ): PerformanceMetricChartDatum[] {
-  return points.map((point) => ({
-    ts: point.ts,
-    time: point.ts,
-    label: formatTime(point.ts),
-    value: point[metric],
-  }))
+  return points.flatMap((point) => {
+    const value = point[metric]
+    if (typeof value !== 'number' || !Number.isFinite(value)) return []
+    if (metric === 'cache_write_tokens' && !point.cache_write_samples) return []
+    if (metric === 'cache_hit_rate' && point.cache_read_samples === 0) return []
+    return [
+      { ts: point.ts, time: point.ts, label: formatTime(point.ts), value },
+    ]
+  })
 }

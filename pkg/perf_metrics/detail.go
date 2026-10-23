@@ -9,18 +9,27 @@ import (
 var detailHotBuckets sync.Map
 
 type atomicDetailBucket struct {
-	mu              sync.Mutex
-	sealed          bool
-	requestCount    atomic.Int64
-	successCount    atomic.Int64
-	ttftCount       atomic.Int64
-	tpotCount       atomic.Int64
-	inputTokens     atomic.Int64
-	outputTokens    atomic.Int64
-	totalTokens     atomic.Int64
-	cacheReadTokens atomic.Int64
-	ttftBuckets     [len(histogramUpperBoundsMs)]atomic.Int64
-	tpotBuckets     [len(histogramUpperBoundsMs)]atomic.Int64
+	mu                  sync.Mutex
+	sealed              bool
+	requestCount        atomic.Int64
+	successCount        atomic.Int64
+	ttftCount           atomic.Int64
+	tpotCount           atomic.Int64
+	inputTokens         atomic.Int64
+	outputTokens        atomic.Int64
+	totalTokens         atomic.Int64
+	cacheReadTokens     atomic.Int64
+	requestBodySamples  atomic.Int64
+	requestBodyBytes    atomic.Int64
+	requestBodyMaxBytes atomic.Int64
+	cacheReadSamples    atomic.Int64
+	cacheWriteTokens    atomic.Int64
+	cacheWriteSamples   atomic.Int64
+	cacheWrite5mTokens  atomic.Int64
+	cacheWrite1hTokens  atomic.Int64
+
+	ttftBuckets [len(histogramUpperBoundsMs)]atomic.Int64
+	tpotBuckets [len(histogramUpperBoundsMs)]atomic.Int64
 }
 
 func recordDetail(sample Sample, recordedAt time.Time) {
@@ -74,6 +83,20 @@ func (bucket *atomicDetailBucket) add(sample Sample) bool {
 	if sample.CacheReadTokens > 0 {
 		bucket.cacheReadTokens.Add(sample.CacheReadTokens)
 	}
+	if sample.RequestBodyBytes != nil && *sample.RequestBodyBytes >= 0 {
+		bucket.requestBodySamples.Add(1)
+		bucket.requestBodyBytes.Add(*sample.RequestBodyBytes)
+		bucket.requestBodyMaxBytes.Store(max(bucket.requestBodyMaxBytes.Load(), *sample.RequestBodyBytes))
+	}
+	if sample.CacheReadKnown || sample.CacheReadTokens > 0 {
+		bucket.cacheReadSamples.Add(1)
+	}
+	if sample.CacheWriteKnown || sample.CacheWriteTokens > 0 {
+		bucket.cacheWriteSamples.Add(1)
+	}
+	bucket.cacheWriteTokens.Add(max(sample.CacheWriteTokens, 0))
+	bucket.cacheWrite5mTokens.Add(max(sample.CacheWrite5mTokens, 0))
+	bucket.cacheWrite1hTokens.Add(max(sample.CacheWrite1hTokens, 0))
 	return true
 }
 
@@ -88,14 +111,22 @@ func (bucket *atomicDetailBucket) drain(seal bool) (detailCounters, bool) {
 	}
 
 	counters := detailCounters{
-		requestCount:    bucket.requestCount.Swap(0),
-		successCount:    bucket.successCount.Swap(0),
-		ttftCount:       bucket.ttftCount.Swap(0),
-		tpotCount:       bucket.tpotCount.Swap(0),
-		inputTokens:     bucket.inputTokens.Swap(0),
-		outputTokens:    bucket.outputTokens.Swap(0),
-		totalTokens:     bucket.totalTokens.Swap(0),
-		cacheReadTokens: bucket.cacheReadTokens.Swap(0),
+		requestCount:        bucket.requestCount.Swap(0),
+		successCount:        bucket.successCount.Swap(0),
+		ttftCount:           bucket.ttftCount.Swap(0),
+		tpotCount:           bucket.tpotCount.Swap(0),
+		inputTokens:         bucket.inputTokens.Swap(0),
+		outputTokens:        bucket.outputTokens.Swap(0),
+		totalTokens:         bucket.totalTokens.Swap(0),
+		cacheReadTokens:     bucket.cacheReadTokens.Swap(0),
+		requestBodySamples:  bucket.requestBodySamples.Swap(0),
+		requestBodyBytes:    bucket.requestBodyBytes.Swap(0),
+		requestBodyMaxBytes: bucket.requestBodyMaxBytes.Swap(0),
+		cacheReadSamples:    bucket.cacheReadSamples.Swap(0),
+		cacheWriteTokens:    bucket.cacheWriteTokens.Swap(0),
+		cacheWriteSamples:   bucket.cacheWriteSamples.Swap(0),
+		cacheWrite5mTokens:  bucket.cacheWrite5mTokens.Swap(0),
+		cacheWrite1hTokens:  bucket.cacheWrite1hTokens.Swap(0),
 	}
 	for i := range histogramUpperBoundsMs {
 		counters.ttftBuckets[i] = bucket.ttftBuckets[i].Swap(0)
@@ -112,14 +143,22 @@ func (bucket *atomicDetailBucket) snapshot() detailCounters {
 	}
 
 	counters := detailCounters{
-		requestCount:    bucket.requestCount.Load(),
-		successCount:    bucket.successCount.Load(),
-		ttftCount:       bucket.ttftCount.Load(),
-		tpotCount:       bucket.tpotCount.Load(),
-		inputTokens:     bucket.inputTokens.Load(),
-		outputTokens:    bucket.outputTokens.Load(),
-		totalTokens:     bucket.totalTokens.Load(),
-		cacheReadTokens: bucket.cacheReadTokens.Load(),
+		requestCount:        bucket.requestCount.Load(),
+		successCount:        bucket.successCount.Load(),
+		ttftCount:           bucket.ttftCount.Load(),
+		tpotCount:           bucket.tpotCount.Load(),
+		inputTokens:         bucket.inputTokens.Load(),
+		outputTokens:        bucket.outputTokens.Load(),
+		totalTokens:         bucket.totalTokens.Load(),
+		cacheReadTokens:     bucket.cacheReadTokens.Load(),
+		requestBodySamples:  bucket.requestBodySamples.Load(),
+		requestBodyBytes:    bucket.requestBodyBytes.Load(),
+		requestBodyMaxBytes: bucket.requestBodyMaxBytes.Load(),
+		cacheReadSamples:    bucket.cacheReadSamples.Load(),
+		cacheWriteTokens:    bucket.cacheWriteTokens.Load(),
+		cacheWriteSamples:   bucket.cacheWriteSamples.Load(),
+		cacheWrite5mTokens:  bucket.cacheWrite5mTokens.Load(),
+		cacheWrite1hTokens:  bucket.cacheWrite1hTokens.Load(),
 	}
 	for i := range histogramUpperBoundsMs {
 		counters.ttftBuckets[i] = bucket.ttftBuckets[i].Load()
@@ -143,6 +182,14 @@ func (bucket *atomicDetailBucket) addCounters(counters detailCounters) bool {
 	bucket.outputTokens.Add(counters.outputTokens)
 	bucket.totalTokens.Add(counters.totalTokens)
 	bucket.cacheReadTokens.Add(counters.cacheReadTokens)
+	bucket.requestBodySamples.Add(counters.requestBodySamples)
+	bucket.requestBodyBytes.Add(counters.requestBodyBytes)
+	bucket.requestBodyMaxBytes.Store(max(bucket.requestBodyMaxBytes.Load(), counters.requestBodyMaxBytes))
+	bucket.cacheReadSamples.Add(counters.cacheReadSamples)
+	bucket.cacheWriteTokens.Add(counters.cacheWriteTokens)
+	bucket.cacheWriteSamples.Add(counters.cacheWriteSamples)
+	bucket.cacheWrite5mTokens.Add(counters.cacheWrite5mTokens)
+	bucket.cacheWrite1hTokens.Add(counters.cacheWrite1hTokens)
 	for i := range histogramUpperBoundsMs {
 		bucket.ttftBuckets[i].Add(counters.ttftBuckets[i])
 		bucket.tpotBuckets[i].Add(counters.tpotBuckets[i])

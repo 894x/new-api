@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { PerformanceAnalyticsQueryParams } from '@/features/dashboard/lib/filters'
 import { api } from '@/lib/api'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import type {
   ChannelAnalyticsData,
@@ -40,40 +41,51 @@ function performanceAnalyticsPath(isAdmin: boolean, suffix = ''): string {
 
 export async function getPerformanceAnalytics(
   params: PerformanceAnalyticsQueryParams,
-  isAdmin: boolean
+  isAdmin: boolean,
+  signal?: AbortSignal
 ): Promise<PerformanceAnalyticsResponse<PerformanceAnalyticsData>> {
-  const response = await api.get(performanceAnalyticsPath(isAdmin), { params })
-  return response.data
+  const response = await api.get(performanceAnalyticsPath(isAdmin), {
+    params,
+    signal,
+    disableDuplicate: Boolean(signal),
+  })
+  return requireServerSuccess(response.data)
 }
 
 export async function getPerformanceAnalyticsOptions(
   isAdmin: boolean,
-  userId?: number
+  userId?: number,
+  signal?: AbortSignal
 ): Promise<PerformanceAnalyticsResponse<PerformanceAnalyticsOptions>> {
   const response = await api.get(
     performanceAnalyticsPath(isAdmin, '/options'),
     {
       params: isAdmin && userId ? { user_id: userId } : undefined,
+      signal,
+      disableDuplicate: Boolean(signal),
     }
   )
-  return response.data
+  return requireServerSuccess(response.data)
 }
 
 export async function getChannelPerformanceAnalytics(
-  params: ChannelAnalyticsQueryParams
+  params: ChannelAnalyticsQueryParams,
+  signal?: AbortSignal
 ): Promise<PerformanceAnalyticsResponse<ChannelAnalyticsData>> {
-  const response = await api.get(
-    '/api/perf-analytics/admin/channel',
-    { params }
-  )
-  return response.data
+  const response = await api.get('/api/perf-analytics/admin/channel', {
+    params,
+    signal,
+    disableDuplicate: Boolean(signal),
+  })
+  return requireServerSuccess(response.data)
 }
 
-export async function getHTTPTransportMetrics(): Promise<
-  PerformanceAnalyticsResponse<HTTPTransportMetric[]>
-> {
-  const response = await api.get(
-    '/api/perf-analytics/admin/transport'
-  )
-  return response.data
+export async function getHTTPTransportMetrics(
+  signal?: AbortSignal
+): Promise<PerformanceAnalyticsResponse<HTTPTransportMetric[]>> {
+  const response = await api.get('/api/perf-analytics/admin/transport', {
+    signal,
+    disableDuplicate: Boolean(signal),
+  })
+  return requireServerSuccess(response.data)
 }

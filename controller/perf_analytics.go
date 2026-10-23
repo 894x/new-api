@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -73,8 +74,13 @@ func GetPerfTransportMetricsAdmin(c *gin.Context) {
 }
 
 func GetPerfAnalyticsSelfOptions(c *gin.Context) {
-	options, err := model.GetPerfAnalyticsOptions(c.GetInt("id"), false)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	options, err := model.GetPerfAnalyticsOptions(ctx, c.GetInt("id"), false)
 	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		perfAnalyticsInternalError(c, "failed to load self options", err)
 		return
 	}
@@ -86,8 +92,13 @@ func GetPerfAnalyticsAdminOptions(c *gin.Context) {
 	if !ok {
 		return
 	}
-	options, err := model.GetPerfAnalyticsOptions(userId, true)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	options, err := model.GetPerfAnalyticsOptions(ctx, userId, true)
 	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		perfAnalyticsInternalError(c, "failed to load admin options", err)
 		return
 	}
@@ -217,7 +228,11 @@ func perfAnalyticsBadRequest(c *gin.Context, message string) {
 
 func perfAnalyticsInternalError(c *gin.Context, operation string, err error) {
 	logger.LogError(c, operation+": "+err.Error())
-	c.JSON(http.StatusInternalServerError, gin.H{
+	status := http.StatusInternalServerError
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		status = http.StatusServiceUnavailable
+	}
+	c.JSON(status, gin.H{
 		"success": false,
 		"message": "Failed to load performance data",
 	})

@@ -282,6 +282,9 @@ func QueryChannelAnalytics(params ChannelAnalyticsQueryParams) (ChannelAnalytics
 		}
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return ChannelAnalyticsResult{}, ctx.Err()
+		}
 		return ChannelAnalyticsResult{}, err
 	}
 	distributeChannelConcurrency(summary.concurrency.events, buckets, params)

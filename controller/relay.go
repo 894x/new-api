@@ -194,6 +194,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			resultErr = types.NewError(fmt.Errorf("relay panic: %v", recovered), types.ErrorCodeBadResponse)
 		}
 		if relayFormat != types.RelayFormatOpenAIRealtime {
+			if size, ok := common.GetContextKeyType[int64](c, constant.ContextKeySelectionBodySize); ok {
+				relayInfo.PerformanceRequestBodyBytes = &size
+			}
 			perfmetrics.RecordRelayResult(c.Request.Context(), relayInfo, resultErr)
 		}
 		if recovered != nil {
@@ -280,6 +283,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.PerformanceOutputTokens = 0
 		relayInfo.PerformanceInputTokens = 0
 		relayInfo.PerformanceCacheReadTokens = 0
+		relayInfo.PerformanceCacheWriteTokens = 0
+		relayInfo.PerformanceCacheWrite5mTokens = 0
+		relayInfo.PerformanceCacheWrite1hTokens = 0
+		relayInfo.PerformanceCacheReadKnown = false
+		relayInfo.PerformanceCacheWriteKnown = false
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		service.ResetUpstreamResponseMetadata(c)
 		failureStage = "channel_selection"

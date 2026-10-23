@@ -91,11 +91,13 @@ export function ChannelPerformanceDiagnostics({
   )
   const query = useQuery({
     queryKey: ['performance-analytics', 'channel', queryParams],
-    queryFn: () => getChannelPerformanceAnalytics(queryParams),
+    queryFn: ({ signal }) =>
+      getChannelPerformanceAnalytics(queryParams, signal),
     select: (response) => response.data,
     placeholderData: keepPreviousData,
     staleTime: 15_000,
     retry: false,
+    meta: { errorToast: false, redirectOnServerError: false },
   })
   useEffect(() => {
     if (
@@ -108,11 +110,12 @@ export function ChannelPerformanceDiagnostics({
   }, [channelId, channelOptions])
   const transportQuery = useQuery({
     queryKey: ['performance-analytics', 'transport'],
-    queryFn: getHTTPTransportMetrics,
+    queryFn: ({ signal }) => getHTTPTransportMetrics(signal),
     select: (response) => response.data,
     refetchInterval: 15_000,
     staleTime: 5_000,
     retry: false,
+    meta: { errorToast: false, redirectOnServerError: false },
   })
   const [transportHistory, setTransportHistory] = useState<
     Array<{ ts: number; connections: number; activeRequests: number }>
@@ -687,7 +690,11 @@ function lineSpec(
     point: { visible: values.length <= 60 },
     legends: { visible: true, orient: 'top', position: 'end' },
     axes: [
-      buildPerformanceTimeAxis(formatTime, chart.chartTextColor),
+      buildPerformanceTimeAxis(
+        formatTime,
+        chart.chartTextColor,
+        values.map((point) => Number(point.time))
+      ),
       {
         orient: 'left',
         label: {

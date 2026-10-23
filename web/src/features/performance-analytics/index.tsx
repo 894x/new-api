@@ -28,6 +28,7 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ErrorState } from '@/components/error-state'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -76,6 +77,7 @@ import {
   buildPerformanceMetricSeries,
   buildPerformanceSeries,
   buildPerformanceTimeAxis,
+  formatRequestBodySize,
   formatPerformanceTimestamp,
   formatTtftSeconds,
   getPerformanceFilterLabel,
@@ -127,11 +129,13 @@ export function PerformanceAnalytics({
       isAdmin ? 'admin' : 'self',
       isAdmin ? userId : undefined,
     ],
-    queryFn: () => getPerformanceAnalyticsOptions(isAdmin, userId),
+    queryFn: ({ signal }) =>
+      getPerformanceAnalyticsOptions(isAdmin, userId, signal),
     select: (response) => response.data,
     placeholderData: keepPreviousData,
     staleTime: 60_000,
     retry: false,
+    meta: { errorToast: false, redirectOnServerError: false },
   })
 
   const options = optionsQuery.data
@@ -183,9 +187,9 @@ export function PerformanceAnalytics({
       isAdmin ? 'admin' : 'self',
       queryParams,
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       if (!standalone) {
-        return getPerformanceAnalytics(queryParams, isAdmin)
+        return getPerformanceAnalytics(queryParams, isAdmin, signal)
       }
       const endTimestamp = Math.floor(Date.now() / 1000)
       return getPerformanceAnalytics(
@@ -194,7 +198,8 @@ export function PerformanceAnalytics({
           start_timestamp: endTimestamp - rangeSeconds,
           end_timestamp: endTimestamp,
         },
-        isAdmin
+        isAdmin,
+        signal
       )
     },
     select: (response) => response.data,
@@ -203,6 +208,7 @@ export function PerformanceAnalytics({
     refetchInterval: standalone ? 15_000 : false,
     refetchIntervalInBackground: false,
     retry: false,
+    meta: { errorToast: false, redirectOnServerError: false },
   })
 
   const handleRangeChange = useCallback((seconds: number) => {
@@ -211,12 +217,13 @@ export function PerformanceAnalytics({
   }, [])
 
   const handleRefresh = useCallback(() => {
-    setRangeEnd(Math.floor(Date.now() / 1000))
+    const now = Math.floor(Date.now() / 1000)
+    setRangeEnd(now)
     void optionsQuery.refetch()
-    if (modelName) {
+    if (modelName && now === rangeEnd) {
       void analyticsQuery.refetch()
     }
-  }, [analyticsQuery, modelName, optionsQuery])
+  }, [analyticsQuery, modelName, optionsQuery, rangeEnd])
 
   const handleUserChange = useCallback((value: string | null) => {
     setUserId(value && value !== ALL_VALUE ? Number(value) : undefined)
@@ -230,7 +237,25 @@ export function PerformanceAnalytics({
   )
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
 
-  const data = analyticsQuery.data
+  const resultScope = JSON.stringify([
+    isAdmin,
+    modelName,
+    userId,
+    tokenId,
+    rangeSeconds,
+  ])
+  const [lastResult, setLastResult] = useState<{
+    scope: string
+    data: PerformanceAnalyticsData
+  }>()
+  useEffect(() => {
+    if (analyticsQuery.data) {
+      setLastResult({ scope: resultScope, data: analyticsQuery.data })
+    }
+  }, [analyticsQuery.data, resultScope])
+  const data =
+    analyticsQuery.data ??
+    (lastResult?.scope === resultScope ? lastResult.data : undefined)
   const loading = optionsQuery.isLoading || analyticsQuery.isLoading
   const fetching = optionsQuery.isFetching || analyticsQuery.isFetching
   const hasData = Boolean(
@@ -243,19 +268,13 @@ export function PerformanceAnalytics({
 
   if (loading && !data) {
     analyticsContent = <PerformanceAnalyticsSkeleton />
-  } else if (optionsQuery.isError || analyticsQuery.isError) {
+  } else if ((optionsQuery.isError || analyticsQuery.isError) && !data) {
     analyticsContent = (
-      <Empty className='min-h-80 border'>
-        <EmptyHeader>
-          <EmptyMedia variant='icon'>
-            <Activity />
-          </EmptyMedia>
-          <EmptyTitle>{t('Failed to load performance data')}</EmptyTitle>
-          <EmptyDescription>
-            {t('Refresh the page or try again later.')}
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      <ErrorState
+        title={t('Failed to load performance data')}
+        description={t('Refresh the page or try again later.')}
+        onRetry={handleRefresh}
+      />
     )
   } else if (!modelName || !hasData) {
     analyticsContent = (
@@ -278,7 +297,43 @@ export function PerformanceAnalytics({
           {t('Time range')}: {formatTime(data.effective_start_timestamp)} –{' '}
           {formatTime(data.effective_end_timestamp)}
         </div>
-        <SummaryCards summary={data.summary} locale={locale} />
+        {(optionsQuery.isError || analyticsQuery.isError) && (
+          <p role='status' className='text-destructive text-sm'>
+            {t(
+              'Performance data could not be refreshed. Showing the last result.'
+            )}
+          </p>
+        )}
+        {data.errors_unavailable && (
+          <p role='status' className='text-muted-foreground text-sm'>
+            {t(
+              'Error breakdown is unavailable. Other performance statistics are available.'
+            )}
+          </p>
+        )}
+        <SummaryCards
+          summary={data.summary}
+          locale={locale}
+          errorsUnavailable={data.errors_unavailable}
+        />
+        <div className='grid gap-3 xl:grid-cols-2'>
+          <MetricChart
+            title={t('Average request body size')}
+            description={t('Application body bytes before upstream conversion')}
+            metric='request_body_avg_bytes'
+            points={data.series}
+            formatTime={formatTime}
+            formatValue={(value) => formatRequestBodySize(value, locale)}
+          />
+          <MetricChart
+            title={t('Cache Write')}
+            description={t('Upstream cache write tokens')}
+            metric='cache_write_tokens'
+            points={data.series}
+            formatTime={formatTime}
+            formatValue={(value) => formatNumber(value, locale)}
+          />
+        </div>
         <div className='grid gap-3 xl:grid-cols-2'>
           <LatencyChart
             title='TTFT'
@@ -323,17 +378,19 @@ export function PerformanceAnalytics({
             formatTime={formatTime}
             formatValue={(value) => formatThroughput(value, locale)}
           />
-          <MetricChart
-            className='xl:col-span-2'
-            title='Errors'
-            description={t('Errors recorded for this user and model')}
-            metric='error_count'
-            points={data.series}
-            formatTime={formatTime}
-            formatValue={(value) => formatNumber(value, locale)}
-          />
+          {!data.errors_unavailable && (
+            <MetricChart
+              className='xl:col-span-2'
+              title='Errors'
+              description={t('Errors recorded for this user and model')}
+              metric='error_count'
+              points={data.series}
+              formatTime={formatTime}
+              formatValue={(value) => formatNumber(value, locale)}
+            />
+          )}
         </div>
-        {(!isAdmin || userId !== undefined) && (
+        {!data.errors_unavailable && (!isAdmin || userId !== undefined) && (
           <UserErrorSummary
             groups={data.error_groups ?? []}
             scannedLogs={data.scanned_logs}
@@ -504,12 +561,55 @@ function FilterSelect(props: {
 function SummaryCards({
   summary,
   locale,
+  errorsUnavailable,
 }: {
+  errorsUnavailable?: boolean
   summary: PerformanceAnalyticsSummary
   locale: Intl.LocalesArgument
 }) {
   const { t } = useTranslation()
   const cards = [
+    {
+      label: t('Average request body size'),
+      value:
+        summary.request_body_avg_bytes == null
+          ? t('Unknown')
+          : formatRequestBodySize(summary.request_body_avg_bytes, locale),
+    },
+    {
+      label: t('Maximum request body size'),
+      value: !summary.request_body_samples
+        ? t('Unknown')
+        : formatRequestBodySize(summary.request_body_max_bytes ?? 0, locale),
+    },
+    {
+      label: t('Cache Read'),
+      value: !summary.cache_read_samples
+        ? t('Unknown')
+        : formatNumber(summary.cache_read_tokens ?? 0, locale),
+    },
+    {
+      label: t('Cache Write'),
+      value: !summary.cache_write_samples
+        ? t('Unknown')
+        : formatNumber(summary.cache_write_tokens ?? 0, locale),
+    },
+    ...(summary.cache_write_5m_tokens
+      ? [
+          {
+            label: t('Cache Write (5m)'),
+            value: formatNumber(summary.cache_write_5m_tokens, locale),
+          },
+        ]
+      : []),
+    ...(summary.cache_write_1h_tokens
+      ? [
+          {
+            label: t('Cache Write (1h)'),
+            value: formatNumber(summary.cache_write_1h_tokens, locale),
+          },
+        ]
+      : []),
     {
       label: t('Requests'),
       value: formatNumber(summary.request_count, locale),
@@ -520,11 +620,16 @@ function SummaryCards({
     },
     {
       label: t('Errors'),
-      value: formatNumber(summary.error_count, locale),
+      value: errorsUnavailable
+        ? t('Unknown')
+        : formatNumber(summary.error_count, locale),
     },
     {
       label: t('Cache hit rate'),
-      value: formatUptimePct(summary.cache_hit_rate),
+      value:
+        summary.cache_read_samples === 0
+          ? t('Unknown')
+          : formatUptimePct(summary.cache_hit_rate),
     },
     {
       label: t('Average RPM'),
@@ -675,7 +780,11 @@ function LatencyChart(props: {
         position: 'end',
       },
       axes: [
-        buildPerformanceTimeAxis(formatTime, chartTextColor),
+        buildPerformanceTimeAxis(
+          formatTime,
+          chartTextColor,
+          series.map((point) => point.time)
+        ),
         {
           orient: 'left',
           label: {
@@ -794,7 +903,11 @@ function MetricChart(props: {
       yField: 'value',
       point: { visible: series.length <= 60 },
       axes: [
-        buildPerformanceTimeAxis(formatTime, chartTextColor),
+        buildPerformanceTimeAxis(
+          formatTime,
+          chartTextColor,
+          series.map((point) => point.time)
+        ),
         {
           orient: 'left',
           label: {

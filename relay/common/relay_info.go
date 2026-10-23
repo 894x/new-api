@@ -264,10 +264,16 @@ type RelayInfo struct {
 	StreamStatus *StreamStatus
 	// PerformanceOutputTokens is captured by settlement and sampled once at
 	// the request boundary, independently of billing success or failure.
-	PerformanceOutputTokens      int64
-	PerformanceInputTokens       int64
-	PerformanceCacheReadTokens   int64
-	PerformanceBusinessRejection bool
+	PerformanceOutputTokens       int64
+	PerformanceInputTokens        int64
+	PerformanceCacheReadTokens    int64
+	PerformanceCacheWriteTokens   int64
+	PerformanceCacheWrite5mTokens int64
+	PerformanceCacheWrite1hTokens int64
+	PerformanceCacheReadKnown     bool
+	PerformanceCacheWriteKnown    bool
+	PerformanceRequestBodyBytes   *int64
+	PerformanceBusinessRejection  bool
 
 	// convOptions caches the converter settings snapshot (see ConvOptions).
 	convOptions *convmeta.Options
