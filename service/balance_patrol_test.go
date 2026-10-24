@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -75,7 +74,7 @@ func TestApplyChannelBalanceResultDisablesOnZero(t *testing.T) {
 
 	t.Run("zero balance disables auto-ban channel", func(t *testing.T) {
 		channel := createBalancePatrolChannel(t, 101, 1)
-		disabled, alerted := ApplyChannelBalanceResult(channel, 0, false, time.Minute)
+		disabled, alerted := ApplyChannelBalanceResult(channel, 0, false)
 		assert.True(t, disabled)
 		assert.False(t, alerted)
 		var reloaded model.Channel
@@ -85,7 +84,7 @@ func TestApplyChannelBalanceResultDisablesOnZero(t *testing.T) {
 
 	t.Run("auto-ban disabled channel is left enabled", func(t *testing.T) {
 		channel := createBalancePatrolChannel(t, 102, 0)
-		disabled, alerted := ApplyChannelBalanceResult(channel, 0, false, time.Minute)
+		disabled, alerted := ApplyChannelBalanceResult(channel, 0, false)
 		assert.False(t, disabled)
 		assert.False(t, alerted)
 		var reloaded model.Channel
@@ -98,7 +97,7 @@ func TestApplyChannelBalanceResultDisablesOnZero(t *testing.T) {
 			setting.DisableOnZeroBalance = false
 		})
 		channel := createBalancePatrolChannel(t, 103, 1)
-		disabled, alerted := ApplyChannelBalanceResult(channel, 0, false, time.Minute)
+		disabled, alerted := ApplyChannelBalanceResult(channel, 0, false)
 		assert.False(t, disabled)
 		assert.False(t, alerted)
 		var reloaded model.Channel
@@ -122,7 +121,8 @@ func TestApplyChannelBalanceResultLowBalanceAlert(t *testing.T) {
 	})
 
 	channel := createBalancePatrolChannel(t, 201, 1)
-	disabled, alerted := ApplyChannelBalanceResult(channel, 2, true, 10*time.Minute)
+	// 余额 3 落在预警级区间（严重阈值为 5*50%=2.5）
+	disabled, alerted := ApplyChannelBalanceResult(channel, 3, true)
 	assert.False(t, disabled)
 	assert.True(t, alerted)
 
@@ -131,11 +131,11 @@ func TestApplyChannelBalanceResultLowBalanceAlert(t *testing.T) {
 	assert.Equal(t, "渠道低余额预警", alert.title)
 	joined := strings.Join(alert.lines, "\n")
 	assert.Contains(t, joined, "渠道：OpenAI-201（#201）")
-	assert.Contains(t, joined, "当前余额：$2.00")
+	assert.Contains(t, joined, "当前余额：$3.00")
 	assert.Contains(t, joined, "预警阈值：$5.00")
 
 	t.Run("cooldown suppresses repeated alert", func(t *testing.T) {
-		_, alerted := ApplyChannelBalanceResult(channel, 2, true, 10*time.Minute)
+		_, alerted := ApplyChannelBalanceResult(channel, 3, true)
 		assert.True(t, alerted)
 		assertNoWecomBotAlert(t, captured)
 	})
@@ -156,7 +156,7 @@ func TestApplyChannelBalanceResultSkipsAlert(t *testing.T) {
 			setting.LowBalanceThreshold = 0
 		})
 		channel := createBalancePatrolChannel(t, 301, 1)
-		disabled, alerted := ApplyChannelBalanceResult(channel, 0.5, true, time.Minute)
+		disabled, alerted := ApplyChannelBalanceResult(channel, 0.5, true)
 		assert.False(t, disabled)
 		assert.False(t, alerted)
 	})
@@ -166,7 +166,7 @@ func TestApplyChannelBalanceResultSkipsAlert(t *testing.T) {
 			setting.LowBalanceThreshold = 5
 		})
 		channel := createBalancePatrolChannel(t, 302, 1)
-		disabled, alerted := ApplyChannelBalanceResult(channel, 2, false, time.Minute)
+		disabled, alerted := ApplyChannelBalanceResult(channel, 2, false)
 		assert.False(t, disabled)
 		assert.False(t, alerted)
 	})
@@ -290,4 +290,63 @@ func TestGetBalancePatrolSettingEnvAndNormalization(t *testing.T) {
 		require.NoError(t, operation_setting.ValidateBalancePatrolUserListLimit("0"))
 		require.Error(t, operation_setting.ValidateBalancePatrolUserListLimit("51"))
 	})
+}
+
+func TestApplyChannelBalanceResultTieredAndReset(t *testing.T) {
+	previousRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = previousRedis })
+	resetWecomBotAlertSlots(t)
+	captured := captureWecomBotAlerts(t)
+	enableTestWecomBot(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", "")
+
+	channel := &model.Channel{Id: 9, Name: "分级渠道", Status: common.ChannelStatusEnabled}
+	withBalancePatrolSetting(t, func(setting *operation_setting.BalancePatrolSetting) {
+		setting.LowBalanceThreshold = 10
+		setting.CriticalBalanceThreshold = 0 // 跟随预警阈值 50% => 5
+	})
+
+	// 预警级：余额 7 落在 [5,10)
+	_, alerted := ApplyChannelBalanceResult(channel, 7, true)
+	require.True(t, alerted)
+	select {
+	case alert := <-captured:
+		assert.Equal(t, "渠道低余额预警", alert.title)
+	default:
+		t.Fatal("expected warning alert")
+	}
+	// 同级抑制
+	_, alerted = ApplyChannelBalanceResult(channel, 7, true)
+	require.True(t, alerted)
+	select {
+	case <-captured:
+		t.Fatal("warning alert should be suppressed within TTL")
+	default:
+	}
+
+	// 严重级：余额 3 < 5，独立闸门立即放行
+	_, alerted = ApplyChannelBalanceResult(channel, 3, true)
+	require.True(t, alerted)
+	select {
+	case alert := <-captured:
+		assert.Equal(t, "渠道余额严重不足", alert.title)
+	default:
+		t.Fatal("expected critical alert")
+	}
+
+	// 回升到阈值之上：闸门被重置，再次跌破立即提醒
+	ApplyChannelBalanceResult(channel, 20, true)
+	select {
+	case <-captured:
+		t.Fatal("balance above threshold should not alert")
+	default:
+	}
+	_, alerted = ApplyChannelBalanceResult(channel, 7, true)
+	require.True(t, alerted)
+	select {
+	case alert := <-captured:
+		assert.Equal(t, "渠道低余额预警", alert.title)
+	default:
+		t.Fatal("expected immediate alert after recharge reset")
+	}
 }

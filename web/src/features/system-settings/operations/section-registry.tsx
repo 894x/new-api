@@ -120,6 +120,14 @@ const OPERATIONS_SECTIONS = [
             settings['balance_patrol_setting.user_min_quota'] ?? 0,
           'balance_patrol_setting.user_list_limit':
             settings['balance_patrol_setting.user_list_limit'] ?? 20,
+          'balance_patrol_setting.critical_balance_threshold':
+            settings['balance_patrol_setting.critical_balance_threshold'] ?? 0,
+          'balance_patrol_setting.watchdog_enabled':
+            settings['balance_patrol_setting.watchdog_enabled'] ?? false,
+          'balance_patrol_setting.watchdog_minutes':
+            settings['balance_patrol_setting.watchdog_minutes'] ?? 10,
+          'balance_patrol_setting.watchdog_threshold':
+            settings['balance_patrol_setting.watchdog_threshold'] ?? 10,
         }}
       />
     ),

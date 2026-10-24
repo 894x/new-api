@@ -12,7 +12,8 @@ import (
 // WecomAIBotSetting 企业微信智能机器人（API 模式长连接）配置。Secret 为长连接
 // 鉴权密钥，与群机器人 Webhook Key 是两套独立凭证；ChannelID/Model 指定对话
 // 使用的模型渠道。UserWhitelist 存放允许对话的企微 userid（可能是加密的
-// open_userid），逗号分隔。
+// open_userid），逗号分隔。AdminUserIDs 为具备管理员工具权限的企微 userid；
+// ReportEnabled/ReportHour 控制每日运营日报的推送。
 type WecomAIBotSetting struct {
 	Enabled           bool   `json:"enabled"`
 	BotID             string `json:"bot_id"`
@@ -26,6 +27,9 @@ type WecomAIBotSetting struct {
 	UserWhitelist     string `json:"user_whitelist"`
 	GroupEnabled      bool   `json:"group_enabled"`
 	WelcomeText       string `json:"welcome_text"`
+	AdminUserIDs      string `json:"admin_userids"`
+	ReportEnabled     bool   `json:"report_enabled"`
+	ReportHour        int    `json:"report_hour"`
 }
 
 const (
@@ -42,6 +46,10 @@ const (
 	MaxWecomAIBotSecretLength  = 512
 	MaxWecomAIBotModelLength   = 128
 	MaxWecomAIBotWelcomeLength = 1024
+
+	MaxWecomAIBotAdminUserRawLength = 2048
+	MaxWecomAIBotAdminUserLen       = 64
+	DefaultWecomAIBotReportHour     = 9
 
 	maxWecomAIBotWhitelistRawLength = 2048
 	maxWecomAIBotWhitelistUserLen   = 64
@@ -65,7 +73,16 @@ func GetWecomAIBotSetting() *WecomAIBotSetting {
 	wecomAIBotSetting.MaxToolRounds = NormalizeWecomAIBotToolRounds(wecomAIBotSetting.MaxToolRounds)
 	wecomAIBotSetting.SessionRounds = NormalizeWecomAIBotSessionRounds(wecomAIBotSetting.SessionRounds)
 	wecomAIBotSetting.SessionTTLMinutes = NormalizeWecomAIBotSessionTTL(wecomAIBotSetting.SessionTTLMinutes)
+	wecomAIBotSetting.ReportHour = NormalizeWecomAIBotReportHour(wecomAIBotSetting.ReportHour)
 	return &wecomAIBotSetting
+}
+
+// NormalizeWecomAIBotReportHour 日报时点收敛到 0-23，缺省 9 点。
+func NormalizeWecomAIBotReportHour(hour int) int {
+	if hour < 0 || hour > 23 {
+		return DefaultWecomAIBotReportHour
+	}
+	return hour
 }
 
 // ReadyForEnable 判断启用长连接所需的核心配置是否齐备。
@@ -175,6 +192,31 @@ func ValidateWecomAIBotUserWhitelist(value string) error {
 		if len(token) > maxWecomAIBotWhitelistUserLen {
 			return fmt.Errorf("wecom ai bot user whitelist contains an invalid userid: %s", token)
 		}
+	}
+	return nil
+}
+
+// ParseWecomAIBotAdminUserids 解析具备管理员工具权限的企微 userid 列表。
+func ParseWecomAIBotAdminUserids(raw string) []string {
+	return ParseWecomAIBotUserWhitelist(raw)
+}
+
+func ValidateWecomAIBotAdminUserids(value string) error {
+	if len(value) > MaxWecomAIBotAdminUserRawLength {
+		return fmt.Errorf("wecom ai bot admin userids are too long")
+	}
+	for _, token := range ParseWecomAIBotAdminUserids(value) {
+		if len(token) > MaxWecomAIBotAdminUserLen {
+			return fmt.Errorf("wecom ai bot admin userids contain an invalid userid: %s", token)
+		}
+	}
+	return nil
+}
+
+func ValidateWecomAIBotReportHour(value string) error {
+	hour, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || hour < 0 || hour > 23 {
+		return fmt.Errorf("wecom ai bot report hour must be between 0 and 23")
 	}
 	return nil
 }

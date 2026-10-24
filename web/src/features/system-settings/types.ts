@@ -474,6 +474,9 @@ export type WecomAIBotConfig = {
   user_whitelist: string
   group_enabled: boolean
   welcome_text: string
+  admin_userids: string
+  report_enabled: boolean
+  report_hour: number
 }
 
 export type WecomAIBotConfigMutationRequest = {
@@ -489,6 +492,9 @@ export type WecomAIBotConfigMutationRequest = {
   user_whitelist: string
   group_enabled: boolean
   welcome_text: string
+  admin_userids: string
+  report_enabled: boolean
+  report_hour: number
 }
 
 export type WecomAIBotConfigResponse = {
@@ -558,6 +564,10 @@ export type OperationsSettings = {
   'balance_patrol_setting.user_minutes'?: number
   'balance_patrol_setting.user_min_quota'?: number
   'balance_patrol_setting.user_list_limit'?: number
+  'balance_patrol_setting.critical_balance_threshold'?: number
+  'balance_patrol_setting.watchdog_enabled'?: boolean
+  'balance_patrol_setting.watchdog_minutes'?: number
+  'balance_patrol_setting.watchdog_threshold'?: number
 }
 
 export type ErrorResponseReplacementRule = {

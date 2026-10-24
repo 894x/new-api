@@ -13,14 +13,18 @@ import (
 // 用户侧巡检剩余额度并聚合预警。LowBalanceThreshold 为 0 时关闭渠道低余额预警；
 // UserMinQuota 为 0 时跟随全局 QuotaRemindThreshold。
 type BalancePatrolSetting struct {
-	ChannelEnabled       bool    `json:"channel_enabled"`
-	ChannelMinutes       float64 `json:"channel_minutes"`
-	LowBalanceThreshold  float64 `json:"low_balance_threshold"`
-	DisableOnZeroBalance bool    `json:"disable_on_zero_balance"`
-	UserEnabled          bool    `json:"user_enabled"`
-	UserMinutes          float64 `json:"user_minutes"`
-	UserMinQuota         int     `json:"user_min_quota"`
-	UserListLimit        int     `json:"user_list_limit"`
+	ChannelEnabled           bool    `json:"channel_enabled"`
+	ChannelMinutes           float64 `json:"channel_minutes"`
+	LowBalanceThreshold      float64 `json:"low_balance_threshold"`
+	CriticalBalanceThreshold float64 `json:"critical_balance_threshold"`
+	DisableOnZeroBalance     bool    `json:"disable_on_zero_balance"`
+	UserEnabled              bool    `json:"user_enabled"`
+	UserMinutes              float64 `json:"user_minutes"`
+	UserMinQuota             int     `json:"user_min_quota"`
+	UserListLimit            int     `json:"user_list_limit"`
+	WatchdogEnabled          bool    `json:"watchdog_enabled"`
+	WatchdogMinutes          int     `json:"watchdog_minutes"`
+	WatchdogThreshold        int     `json:"watchdog_threshold"`
 }
 
 const (
@@ -30,6 +34,12 @@ const (
 	DefaultLowBalanceThreshold        = 1.0
 	MaxBalancePatrolUserListLimit     = 50
 	DefaultBalancePatrolUserListLimit = 20
+
+	DefaultWatchdogMinutes   = 10
+	MinWatchdogMinutes       = 1
+	MaxWatchdogMinutes       = 1440
+	DefaultWatchdogThreshold = 10
+	MaxWatchdogThreshold     = 10000
 )
 
 var balancePatrolSetting = BalancePatrolSetting{
@@ -67,7 +77,52 @@ func GetBalancePatrolSetting() *BalancePatrolSetting {
 		balancePatrolSetting.UserMinQuota = 0
 	}
 	balancePatrolSetting.UserListLimit = NormalizeBalancePatrolUserListLimit(balancePatrolSetting.UserListLimit)
+	if balancePatrolSetting.CriticalBalanceThreshold < 0 {
+		balancePatrolSetting.CriticalBalanceThreshold = 0
+	}
+	balancePatrolSetting.WatchdogMinutes = NormalizeWatchdogMinutes(balancePatrolSetting.WatchdogMinutes)
+	balancePatrolSetting.WatchdogThreshold = NormalizeWatchdogThreshold(balancePatrolSetting.WatchdogThreshold)
 	return &balancePatrolSetting
+}
+
+// NormalizeWatchdogMinutes 看门狗巡检间隔收敛到 1-1440 分钟。
+func NormalizeWatchdogMinutes(minutes int) int {
+	if minutes <= 0 {
+		return DefaultWatchdogMinutes
+	}
+	return min(minutes, MaxWatchdogMinutes)
+}
+
+// NormalizeWatchdogThreshold 触发阈值收敛，0 回退默认 10 条。
+func NormalizeWatchdogThreshold(threshold int) int {
+	if threshold <= 0 {
+		return DefaultWatchdogThreshold
+	}
+	return min(threshold, MaxWatchdogThreshold)
+}
+
+func ValidateWatchdogMinutes(value string) error {
+	minutes, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || minutes < MinWatchdogMinutes || minutes > MaxWatchdogMinutes {
+		return fmt.Errorf("watchdog minutes must be between %d and %d", MinWatchdogMinutes, MaxWatchdogMinutes)
+	}
+	return nil
+}
+
+func ValidateWatchdogThreshold(value string) error {
+	threshold, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || threshold < 1 || threshold > MaxWatchdogThreshold {
+		return fmt.Errorf("watchdog threshold must be between 1 and %d", MaxWatchdogThreshold)
+	}
+	return nil
+}
+
+func ValidateCriticalBalanceThreshold(value string) error {
+	threshold, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || threshold < 0 {
+		return fmt.Errorf("critical balance threshold must be a non-negative number")
+	}
+	return nil
 }
 
 func NormalizeBalancePatrolMinutes(minutes float64) float64 {

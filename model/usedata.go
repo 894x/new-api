@@ -181,3 +181,14 @@ func GetAllQuotaDates(startTime int64, endTime int64, username string) (quotaDat
 	err = DB.Table("quota_data").Select("model_name, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, created_at").Where("created_at >= ? and created_at <= ?", startTime, endTime).Group("model_name, created_at").Find(&quotaDatas).Error
 	return quotaDatas, err
 }
+
+// GetChannelQuotaSince 汇总某渠道自 startTime 起的消费 quota（数据看板聚合），
+// 用于余额耗尽速度预估。
+func GetChannelQuotaSince(channelID int, startTime int64) (int64, error) {
+	var total int64
+	err := DB.Model(&QuotaData{}).
+		Select("COALESCE(SUM(quota), 0)").
+		Where("channel_id = ? AND created_at >= ?", channelID, startTime).
+		Scan(&total).Error
+	return total, err
+}

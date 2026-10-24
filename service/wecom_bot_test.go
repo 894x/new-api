@@ -81,8 +81,8 @@ func assertNoWecomBotAlert(t *testing.T, captured <-chan wecomBotAlert) {
 
 func resetWecomBotAlertSlots(t *testing.T) {
 	t.Helper()
-	wecomBotAlertSlots.Range(func(key, value any) bool {
-		wecomBotAlertSlots.Delete(key)
+	wecomBotAlertGates.Range(func(key, value any) bool {
+		wecomBotAlertGates.Delete(key)
 		return true
 	})
 }
@@ -266,16 +266,35 @@ func TestSendWecomBotAlertTruncatesContent(t *testing.T) {
 	assert.True(t, strings.HasSuffix(mirror.Markdown.Content, "…"))
 }
 
-func TestAcquireMemoryWecomBotAlertSlot(t *testing.T) {
+func TestAdmitMemoryWecomBotAlert(t *testing.T) {
 	withWecomBotMemoryCooldown(t)
 
-	assert.True(t, acquireMemoryWecomBotAlertSlot("k1", time.Minute))
-	assert.False(t, acquireMemoryWecomBotAlertSlot("k1", time.Minute))
-	assert.True(t, acquireMemoryWecomBotAlertSlot("k2", time.Minute))
+	// 首次放行；冷却窗口内抑制并计数
+	admitted, suppressed := admitMemoryWecomBotAlert("k1", time.Minute)
+	assert.True(t, admitted)
+	assert.Equal(t, 0, suppressed)
+	for range 2 {
+		admitted, suppressed = admitMemoryWecomBotAlert("k1", time.Minute)
+		assert.False(t, admitted)
+	}
 
-	assert.True(t, acquireMemoryWecomBotAlertSlot("k3", 50*time.Millisecond))
-	time.Sleep(60 * time.Millisecond)
-	assert.True(t, acquireMemoryWecomBotAlertSlot("k3", time.Minute))
+	// 把窗口回拨到过去，模拟冷却到期：放行并携带累计次数，随后计数归零
+	if value, ok := wecomBotAlertGates.Load("k1"); ok {
+		gate := value.(*memAlertGate)
+		gate.mu.Lock()
+		gate.until = time.Now().Add(-time.Second)
+		gate.mu.Unlock()
+	}
+	admitted, suppressed = admitMemoryWecomBotAlert("k1", time.Minute)
+	assert.True(t, admitted)
+	assert.Equal(t, 2, suppressed)
+	admitted, suppressed = admitMemoryWecomBotAlert("k1", time.Minute)
+	assert.False(t, admitted)
+	assert.Equal(t, 0, suppressed)
+
+	// 不同 key 互不影响
+	admitted, _ = admitMemoryWecomBotAlert("k2", time.Minute)
+	assert.True(t, admitted)
 }
 
 func TestNotifyWecomBotChannelErrorGating(t *testing.T) {

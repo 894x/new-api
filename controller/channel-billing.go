@@ -661,9 +661,6 @@ type channelBalanceTaskSummary struct {
 // 低余额预警；手动触发的全量刷新传 false，保持旧行为（仅更新余额并按需禁用）。
 // ctx 为空或取消时安全返回，进度经 report 上报给系统任务框架。
 func runChannelBalanceTask(ctx context.Context, report func(processed, total int), alert bool) (*channelBalanceTaskSummary, error) {
-	patrolSetting := operation_setting.GetBalancePatrolSetting()
-	cooldown := time.Duration(patrolSetting.ChannelMinutes * float64(time.Minute))
-
 	channels, err := model.GetAllChannels(0, 0, true, false)
 	if err != nil {
 		return nil, err
@@ -695,7 +692,7 @@ func runChannelBalanceTask(ctx context.Context, report func(processed, total int
 			continue
 		}
 		summary.Updated++
-		if disabled, alerted := service.ApplyChannelBalanceResult(channel, result.Balance, alert, cooldown); disabled {
+		if disabled, alerted := service.ApplyChannelBalanceResult(channel, result.Balance, alert); disabled {
 			summary.Disabled++
 		} else if alerted {
 			summary.LowBalance++

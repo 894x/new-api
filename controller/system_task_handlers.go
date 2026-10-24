@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/wecomaibot"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
@@ -24,6 +25,8 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
 	service.RegisterSystemTaskHandler(channelBalanceHandler{})
 	service.RegisterSystemTaskHandler(userQuotaPatrolHandler{})
+	service.RegisterSystemTaskHandler(wecomDailyReportHandler{})
+	service.RegisterSystemTaskHandler(channelWatchdogHandler{})
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and
@@ -198,6 +201,71 @@ func (userQuotaPatrolHandler) NewPayload() any { return nil }
 
 func (userQuotaPatrolHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	summary, err := service.RunUserQuotaPatrolCheck(ctx)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+// wecomDailyReportHandler 企微智能机器人每日运营日报。Enabled() 收窄到报时
+// 后 10 分钟窗口，避免全天产生空调度行；Run 内按日期幂等去重。
+type wecomDailyReportHandler struct{}
+
+func (wecomDailyReportHandler) Type() string { return model.SystemTaskTypeDailyReport }
+
+func (wecomDailyReportHandler) Enabled() bool {
+	setting := operation_setting.GetWecomAIBotSetting()
+	if !setting.Enabled || !setting.ReportEnabled {
+		return false
+	}
+	now := time.Now()
+	return now.Hour() == setting.ReportHour && now.Minute() < 10
+}
+
+func (wecomDailyReportHandler) Interval() time.Duration { return 10 * time.Minute }
+
+type wecomDailyReportTaskPayload struct {
+	Hour int `json:"hour"`
+}
+
+func (wecomDailyReportHandler) NewPayload() any {
+	return wecomDailyReportTaskPayload{Hour: operation_setting.GetWecomAIBotSetting().ReportHour}
+}
+
+func (wecomDailyReportHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	payload := wecomDailyReportTaskPayload{Hour: -1}
+	if err := task.DecodePayload(&payload); err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	hour := operation_setting.NormalizeWecomAIBotReportHour(payload.Hour)
+	summary, err := wecomaibot.RunDailyReportTask(ctx, hour)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+// channelWatchdogHandler 渠道健康看门狗：按窗口聚合错误日志，超阈值推送告警。
+type channelWatchdogHandler struct{}
+
+func (channelWatchdogHandler) Type() string { return model.SystemTaskTypeWatchdog }
+
+func (channelWatchdogHandler) Enabled() bool {
+	return operation_setting.GetBalancePatrolSetting().WatchdogEnabled
+}
+
+func (channelWatchdogHandler) Interval() time.Duration {
+	minutes := operation_setting.NormalizeWatchdogMinutes(operation_setting.GetBalancePatrolSetting().WatchdogMinutes)
+	return time.Duration(minutes) * time.Minute
+}
+
+func (channelWatchdogHandler) NewPayload() any { return nil }
+
+func (channelWatchdogHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	summary, err := service.RunChannelHealthWatchdog()
 	if err != nil {
 		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
 		return

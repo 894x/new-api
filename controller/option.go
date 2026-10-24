@@ -342,6 +342,21 @@ func UpdateOption(c *gin.Context) {
 			common.ApiErrorMsg(c, err.Error())
 			return
 		}
+	case "balance_patrol_setting.critical_balance_threshold":
+		if err := operation_setting.ValidateCriticalBalanceThreshold(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "balance_patrol_setting.watchdog_minutes":
+		if err := operation_setting.ValidateWatchdogMinutes(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "balance_patrol_setting.watchdog_threshold":
+		if err := operation_setting.ValidateWatchdogThreshold(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 	case "balance_patrol_setting.user_min_quota":
 		if err := operation_setting.ValidateBalancePatrolUserMinQuota(common.Interface2String(option.Value)); err != nil {
 			common.ApiErrorMsg(c, err.Error())
@@ -402,6 +417,16 @@ func UpdateOption(c *gin.Context) {
 		}
 	case "wecom_aibot_setting.welcome_text":
 		if err := operation_setting.ValidateWecomAIBotWelcomeText(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.admin_userids":
+		if err := operation_setting.ValidateWecomAIBotAdminUserids(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.report_hour":
+		if err := operation_setting.ValidateWecomAIBotReportHour(common.Interface2String(option.Value)); err != nil {
 			common.ApiErrorMsg(c, err.Error())
 			return
 		}

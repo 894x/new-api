@@ -2,10 +2,12 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -78,54 +80,90 @@ func runWecomBotQueueWorker() {
 }
 
 var (
-	wecomBotAlertSlots    sync.Map
-	wecomBotSlotCleanOnce sync.Once
+	wecomBotAlertGates    sync.Map
+	wecomBotGateCleanOnce sync.Once
 )
 
-// acquireWecomBotAlertSlot 在冷却窗口内对同一 key 只放行一次。Redis 异常时放行，
-// 宁可偶发重复告警也不漏报；多节点部署下通过 Redis 共享去重。
-func acquireWecomBotAlertSlot(key string, cooldown time.Duration) bool {
+// wecomBotGatePrefix / wecomBotCountPrefix 闸门与抑制计数的 Redis 键前缀。
+const (
+	wecomBotGatePrefix  = "wecom_bot_alert:gate:"
+	wecomBotCountPrefix = "wecom_bot_alert:count:"
+)
+
+// memAlertGate 内存降级用的告警闸门：until 为冷却截止，count 为窗口内抑制计数。
+type memAlertGate struct {
+	mu    sync.Mutex
+	until time.Time
+	count int
+}
+
+// admitWecomBotAlert 冷却闸门 + 抑制计数（digest 降噪模式）：同一 key 首次告警立即
+// 放行；冷却窗口内的重复告警只计数，窗口结束后的下一次告警放行并携带累计抑制次数，
+// 让消息里能体现"窗口内共发生 N 次"而不连环轰炸。Redis 异常时放行，宁重不漏；
+// 多节点部署下通过 Redis 共享闸门。
+func admitWecomBotAlert(key string, cooldown time.Duration) (admitted bool, suppressed int) {
 	if common.RedisEnabled {
-		return acquireRedisWecomBotAlertSlot(key, cooldown)
+		return admitRedisWecomBotAlert(key, cooldown)
 	}
-	return acquireMemoryWecomBotAlertSlot(key, cooldown)
+	return admitMemoryWecomBotAlert(key, cooldown)
 }
 
-func acquireRedisWecomBotAlertSlot(key string, cooldown time.Duration) bool {
-	existing, err := common.RedisGet(key)
-	if err != nil && err.Error() != "redis: nil" {
-		common.SysLog(fmt.Sprintf("failed to check wecom bot alert slot: %s", err.Error()))
-		return true
+func admitRedisWecomBotAlert(key string, cooldown time.Duration) (bool, int) {
+	ctx := context.Background()
+	gated, err := common.RDB.SetNX(ctx, wecomBotGatePrefix+key, "1", cooldown).Result()
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to check wecom bot alert gate: %s", err.Error()))
+		return true, 0
 	}
-	if existing != "" {
-		return false
-	}
-	if err := common.RedisSet(key, "1", cooldown); err != nil {
-		common.SysLog(fmt.Sprintf("failed to mark wecom bot alert slot: %s", err.Error()))
-	}
-	return true
-}
-
-func acquireMemoryWecomBotAlertSlot(key string, cooldown time.Duration) bool {
-	wecomBotSlotCleanOnce.Do(startWecomBotSlotCleanup)
-	now := time.Now()
-	if value, ok := wecomBotAlertSlots.Load(key); ok {
-		if until, ok := value.(time.Time); ok && now.Before(until) {
-			return false
+	if !gated {
+		if err := common.RDB.Incr(ctx, wecomBotCountPrefix+key).Err(); err == nil {
+			// 计数 TTL 比闸门略长，保证冷却结束后放行的那次仍能读到累计值
+			_ = common.RDB.Expire(ctx, wecomBotCountPrefix+key, cooldown+time.Hour).Err()
 		}
+		return false, 0
 	}
-	wecomBotAlertSlots.Store(key, now.Add(cooldown))
-	return true
+	count, err := common.RDB.Get(ctx, wecomBotCountPrefix+key).Result()
+	if err != nil {
+		return true, 0
+	}
+	_ = common.RDB.Del(ctx, wecomBotCountPrefix+key).Err()
+	suppressed, err := strconv.Atoi(count)
+	if err != nil || suppressed < 0 {
+		return true, 0
+	}
+	return true, suppressed
 }
 
-func startWecomBotSlotCleanup() {
+func admitMemoryWecomBotAlert(key string, cooldown time.Duration) (bool, int) {
+	wecomBotGateCleanOnce.Do(startWecomBotGateCleanup)
+	value, _ := wecomBotAlertGates.LoadOrStore(key, &memAlertGate{})
+	gate := value.(*memAlertGate)
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	now := time.Now()
+	if now.Before(gate.until) {
+		gate.count++
+		return false, 0
+	}
+	suppressed := gate.count
+	gate.until = now.Add(cooldown)
+	gate.count = 0
+	return true, suppressed
+}
+
+// startWecomBotGateCleanup 每小时清理已过期且无累计计数的内存闸门。
+func startWecomBotGateCleanup() {
 	gopool.Go(func() {
 		for {
 			time.Sleep(time.Hour)
 			now := time.Now()
-			wecomBotAlertSlots.Range(func(key, value any) bool {
-				if until, ok := value.(time.Time); ok && now.After(until) {
-					wecomBotAlertSlots.Delete(key)
+			wecomBotAlertGates.Range(func(key, value any) bool {
+				gate := value.(*memAlertGate)
+				gate.mu.Lock()
+				expired := now.After(gate.until) && gate.count == 0
+				gate.mu.Unlock()
+				if expired {
+					wecomBotAlertGates.Delete(key)
 				}
 				return true
 			})
@@ -133,14 +171,16 @@ func startWecomBotSlotCleanup() {
 	})
 }
 
-// notifyWecomBotChannelError 推送渠道转发错误告警，同一「渠道+状态码」在冷却窗口内只提醒一次。
+// notifyWecomBotChannelError 推送渠道转发错误告警，同一「渠道+状态码」冷却窗口内
+// 合并为计数摘要（窗口后首次放行时携带累计次数）。
 func notifyWecomBotChannelError(info wecomBotErrorAlertInfo) {
 	setting := operation_setting.GetWecomBotSetting()
 	if !setting.Enabled || !setting.ErrorNotifyEnabled || !setting.HasEnabledBot() {
 		return
 	}
 	slotKey := fmt.Sprintf("wecom_bot_alert:error:%d:%d", info.ChannelId, info.StatusCode)
-	if !acquireWecomBotAlertSlot(slotKey, time.Duration(setting.ErrorCooldownMinutes)*time.Minute) {
+	admitted, suppressed := admitWecomBotAlert(slotKey, time.Duration(setting.ErrorCooldownMinutes)*time.Minute)
+	if !admitted {
 		return
 	}
 	lines := []string{
@@ -158,6 +198,9 @@ func notifyWecomBotChannelError(info wecomBotErrorAlertInfo) {
 	}
 	if info.Message != "" {
 		lines = append(lines, fmt.Sprintf("错误信息：%s", truncateWecomBotMessage(info.Message)))
+	}
+	if suppressed > 0 {
+		lines = append(lines, fmt.Sprintf("上轮冷却窗口内同类错误累计：%d 次", suppressed))
 	}
 	lines = append(lines, fmt.Sprintf("时间：%s", time.Now().Format("2006-01-02 15:04:05")))
 	enqueueWecomBotAlert(wecomBotAlert{title: "渠道异常告警", color: "warning", lines: lines})

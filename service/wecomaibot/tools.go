@@ -19,11 +19,13 @@ import (
 )
 
 // Tool 是暴露给大模型的查询工具：Parameters 为 JSON Schema，Handler 全部只读，
-// 返回结果不得包含渠道 Key 等凭据。
+// 返回结果不得包含渠道 Key 等凭据。AdminOnly 工具仅对管理员身份开放（含用户
+// 隐私数据或会真实触达上游的能力），由 handler 按配置的管理员名单过滤。
 type Tool struct {
 	Name        string
 	Description string
 	Parameters  map[string]any
+	AdminOnly   bool
 	Handler     func(ctx context.Context, args map[string]any) (any, error)
 }
 
@@ -474,7 +476,8 @@ func builtinTools() []Tool {
 		},
 		{
 			Name:        "get_usage_overview",
-			Description: "查询用量统计：按模型的调用量、Token 与消费金额，以及按用户的调用量与消费金额（数据来自数据看板聚合，可能有几分钟滞后，适合用 render_chart 画对比或占比图）。金额为美元。",
+			AdminOnly:   true,
+			Description: "查询用量统计（仅管理员）：按模型的调用量、Token 与消费金额，以及按用户的调用量与消费金额（数据来自数据看板聚合，可能有几分钟滞后，适合用 render_chart 画对比或占比图）。金额为美元。",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

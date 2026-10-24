@@ -63,13 +63,20 @@ func handleMessage(w *wsConn, frame *inFrame) {
 	started := time.Now()
 	replier.progress("收到，正在查询…")
 
+	// 记录会话目标（供每日日报主动推送）并按管理员名单过滤工具（最小权限）
+	recordChatTarget(&chat)
+	tools := currentTools()
+	if !isAdminUser(setting, chat.From.UserID) {
+		tools = filterAdminTools(tools)
+	}
+
 	// 图表收集器经 context 传给工具：图片不进模型，直接附在最终回复帧
 	collector := &chartCollector{}
 	ctx, cancel := context.WithTimeout(
 		context.WithValue(context.Background(), chartCollectorKey, collector), agentTimeout)
 	defer cancel()
 	history := loadSession(key)
-	answer, turns, err := runAgentLoop(ctx, currentTools(), history, text, replier.progress)
+	answer, turns, err := runAgentLoop(ctx, tools, history, text, replier.progress)
 	if err != nil {
 		common.SysLog("wecom ai bot agent error: " + err.Error())
 		replier.finish("查询失败：" + truncateStreamContent(err.Error()))
@@ -110,6 +117,22 @@ func isUserAllowed(setting *operation_setting.WecomAIBotSetting, userid string) 
 		return true
 	}
 	return slices.Contains(operation_setting.ParseWecomAIBotUserWhitelist(setting.UserWhitelist), userid)
+}
+
+func isAdminUser(setting *operation_setting.WecomAIBotSetting, userid string) bool {
+	return slices.Contains(operation_setting.ParseWecomAIBotAdminUserids(setting.AdminUserIDs), userid)
+}
+
+// filterAdminTools 非管理员只保留公开工具（最小权限：管理员工具含用户隐私
+// 数据或会真实触达上游的调用）。
+func filterAdminTools(tools []Tool) []Tool {
+	public := make([]Tool, 0, len(tools))
+	for _, tool := range tools {
+		if !tool.AdminOnly {
+			public = append(public, tool)
+		}
+	}
+	return public
 }
 
 func tryBeginUser(key string) bool {

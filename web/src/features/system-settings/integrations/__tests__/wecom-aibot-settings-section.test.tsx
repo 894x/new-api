@@ -36,6 +36,9 @@ import { WecomAIBotSettingsSection } from '../wecom-aibot-settings-section'
 const baseConfig = {
   enabled: false,
   bot_id: 'bot-001',
+  admin_userids: '',
+  report_enabled: false,
+  report_hour: 9,
   secret_masked: '****e359',
   channel_id: 3,
   model: 'gpt-4o-mini',
@@ -143,6 +146,9 @@ test('saves edited fields and a newly typed secret through the dedicated endpoin
     user_whitelist: 'alice, bob',
     group_enabled: true,
     welcome_text: '',
+    admin_userids: '',
+    report_enabled: false,
+    report_hour: 9,
   })
 })
 

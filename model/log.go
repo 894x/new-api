@@ -859,3 +859,21 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 	}
 	return result.RowsAffected, nil
 }
+
+// ChannelErrorCount 渠道在时间窗口内的错误日志计数（健康看门狗用）。
+type ChannelErrorCount struct {
+	ChannelId int   `json:"channel_id"`
+	Count     int64 `json:"count"`
+}
+
+// GetChannelErrorCounts 统计自 startTimestamp 起各渠道的错误日志数，只统计
+// 已启用渠道交给调用方判断，这里只做聚合。
+func GetChannelErrorCounts(startTimestamp int64) ([]ChannelErrorCount, error) {
+	var counts []ChannelErrorCount
+	err := LOG_DB.Model(&Log{}).
+		Select("channel_id, COUNT(*) as count").
+		Where("type = ? AND created_at >= ? AND channel_id > 0", LogTypeError, startTimestamp).
+		Group("channel_id").
+		Find(&counts).Error
+	return counts, err
+}

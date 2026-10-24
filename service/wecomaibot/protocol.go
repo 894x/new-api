@@ -26,6 +26,8 @@ const (
 	cmdUploadMediaInit   = "aibot_upload_media_init"
 	cmdUploadMediaChunk  = "aibot_upload_media_chunk"
 	cmdUploadMediaFinish = "aibot_upload_media_finish"
+
+	cmdSendMsg = "aibot_send_msg"
 )
 
 const (
@@ -161,6 +163,24 @@ type mediaReplyBody struct {
 
 type mediaImage struct {
 	MediaID string `json:"media_id"`
+}
+
+// 主动推送（aibot_send_msg）：用户须先在会话中给机器人发过消息；ChatType
+// 1=单聊（chatid 填 userid）、2=群聊。回复 markdown 或已上传的图片素材。
+type sendMarkdownBody struct {
+	ChatID   string `json:"chatid"`
+	ChatType int    `json:"chat_type"`
+	MsgType  string `json:"msgtype"`
+	Markdown struct {
+		Content string `json:"content"`
+	} `json:"markdown"`
+}
+
+type sendImageBody struct {
+	ChatID   string     `json:"chatid"`
+	ChatType int        `json:"chat_type"`
+	MsgType  string     `json:"msgtype"`
+	Image    mediaImage `json:"image"`
 }
 
 type textBody struct {

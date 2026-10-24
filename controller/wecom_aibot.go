@@ -194,6 +194,7 @@ func WireWecomAIBot() {
 func wecomAIBotRefreshBalanceTool() wecomaibot.Tool {
 	return wecomaibot.Tool{
 		Name:        "refresh_channel_balance",
+		AdminOnly:   true,
 		Description: "实时请求上游查询指定渠道当前余额并写回平台缓存（会真实调用上游接口，每渠道 5 分钟限一次）。仅当用户明确要求最新/实时余额时使用；普通查询用 get_channel_detail 的缓存余额即可。",
 		Parameters: map[string]any{
 			"type": "object",
@@ -257,6 +258,9 @@ type wecomAIBotConfigPayload struct {
 	UserWhitelist     string `json:"user_whitelist"`
 	GroupEnabled      bool   `json:"group_enabled"`
 	WelcomeText       string `json:"welcome_text"`
+	AdminUserIDs      string `json:"admin_userids"`
+	ReportEnabled     bool   `json:"report_enabled"`
+	ReportHour        int    `json:"report_hour"`
 }
 
 // GetWecomAIBotConfig 返回智能机器人配置，Secret 仅返回掩码。
@@ -314,6 +318,9 @@ func wecomAIBotOptionKeys() []string {
 		"wecom_aibot_setting.user_whitelist",
 		"wecom_aibot_setting.group_enabled",
 		"wecom_aibot_setting.welcome_text",
+		"wecom_aibot_setting.admin_userids",
+		"wecom_aibot_setting.report_enabled",
+		"wecom_aibot_setting.report_hour",
 	}
 }
 
@@ -344,6 +351,12 @@ func normalizeWecomAIBotConfig(payload wecomAIBotConfigPayload) (map[string]stri
 	if err := operation_setting.ValidateWecomAIBotUserWhitelist(payload.UserWhitelist); err != nil {
 		return nil, err
 	}
+	if err := operation_setting.ValidateWecomAIBotAdminUserids(payload.AdminUserIDs); err != nil {
+		return nil, err
+	}
+	if err := operation_setting.ValidateWecomAIBotReportHour(strconv.Itoa(payload.ReportHour)); payload.ReportHour != 0 && err != nil {
+		return nil, err
+	}
 	if err := operation_setting.ValidateWecomAIBotWelcomeText(payload.WelcomeText); err != nil {
 		return nil, err
 	}
@@ -367,6 +380,9 @@ func normalizeWecomAIBotConfig(payload wecomAIBotConfigPayload) (map[string]stri
 		"wecom_aibot_setting.user_whitelist":        payload.UserWhitelist,
 		"wecom_aibot_setting.group_enabled":         strconv.FormatBool(payload.GroupEnabled),
 		"wecom_aibot_setting.welcome_text":          payload.WelcomeText,
+		"wecom_aibot_setting.admin_userids":         payload.AdminUserIDs,
+		"wecom_aibot_setting.report_enabled":        strconv.FormatBool(payload.ReportEnabled),
+		"wecom_aibot_setting.report_hour":           strconv.Itoa(operation_setting.NormalizeWecomAIBotReportHour(payload.ReportHour)),
 	}, nil
 }
 

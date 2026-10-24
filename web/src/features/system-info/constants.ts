@@ -26,4 +26,5 @@ export const SYSTEM_TASK_TYPE_LABEL: Record<string, string> = {
   async_task_poll: 'Async task polling',
   channel_balance: 'Channel balance patrol',
   user_quota_patrol: 'User quota patrol',
+  wecom_daily_report: 'WeCom daily report',
 }

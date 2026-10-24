@@ -70,6 +70,13 @@ const createBalancePatrolSchema = (t: (key: string) => string) =>
         .number()
         .min(0, t('List limit must be between 0 and 50'))
         .max(50, t('List limit must be between 0 and 50')),
+      critical_balance_threshold: z.coerce.number().min(0),
+      watchdog_enabled: z.boolean(),
+      watchdog_minutes: z.coerce
+        .number()
+        .min(1, t('Watchdog interval must be between 1 and 1440 minutes'))
+        .max(1440, t('Watchdog interval must be between 1 and 1440 minutes')),
+      watchdog_threshold: z.coerce.number().min(1).max(10000),
     }),
   })
 
@@ -85,6 +92,10 @@ type FlatBalancePatrolDefaults = {
   'balance_patrol_setting.user_minutes': number
   'balance_patrol_setting.user_min_quota': number
   'balance_patrol_setting.user_list_limit': number
+  'balance_patrol_setting.critical_balance_threshold': number
+  'balance_patrol_setting.watchdog_enabled': boolean
+  'balance_patrol_setting.watchdog_minutes': number
+  'balance_patrol_setting.watchdog_threshold': number
 }
 
 type BalancePatrolSettingsSectionProps = {
@@ -105,6 +116,11 @@ const buildFormDefaults = (
     user_minutes: defaults['balance_patrol_setting.user_minutes'],
     user_min_quota: defaults['balance_patrol_setting.user_min_quota'],
     user_list_limit: defaults['balance_patrol_setting.user_list_limit'],
+    critical_balance_threshold:
+      defaults['balance_patrol_setting.critical_balance_threshold'],
+    watchdog_enabled: defaults['balance_patrol_setting.watchdog_enabled'],
+    watchdog_minutes: defaults['balance_patrol_setting.watchdog_minutes'],
+    watchdog_threshold: defaults['balance_patrol_setting.watchdog_threshold'],
   },
 })
 
@@ -127,6 +143,14 @@ const normalizeDefaults = (
     defaults['balance_patrol_setting.user_min_quota'],
   'balance_patrol_setting.user_list_limit':
     defaults['balance_patrol_setting.user_list_limit'],
+  'balance_patrol_setting.critical_balance_threshold':
+    defaults['balance_patrol_setting.critical_balance_threshold'],
+  'balance_patrol_setting.watchdog_enabled':
+    defaults['balance_patrol_setting.watchdog_enabled'],
+  'balance_patrol_setting.watchdog_minutes':
+    defaults['balance_patrol_setting.watchdog_minutes'],
+  'balance_patrol_setting.watchdog_threshold':
+    defaults['balance_patrol_setting.watchdog_threshold'],
 })
 
 const normalizeFormValues = (
@@ -148,6 +172,14 @@ const normalizeFormValues = (
     values.balance_patrol_setting.user_min_quota,
   'balance_patrol_setting.user_list_limit':
     values.balance_patrol_setting.user_list_limit,
+  'balance_patrol_setting.critical_balance_threshold':
+    values.balance_patrol_setting.critical_balance_threshold,
+  'balance_patrol_setting.watchdog_enabled':
+    values.balance_patrol_setting.watchdog_enabled,
+  'balance_patrol_setting.watchdog_minutes':
+    values.balance_patrol_setting.watchdog_minutes,
+  'balance_patrol_setting.watchdog_threshold':
+    values.balance_patrol_setting.watchdog_threshold,
 })
 
 export function BalancePatrolSettingsSection({
@@ -357,6 +389,102 @@ export function BalancePatrolSettingsSection({
                 </FormItem>
               )}
             />
+          <div>
+            <h4 className='font-medium'>{t('Channel health watchdog')}</h4>
+            <p className='text-muted-foreground mt-1 text-xs'>
+              {t(
+                'Aggregate channel error logs and alert when a channel exceeds the error threshold in the window'
+              )}
+            </p>
+          </div>
+          <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
+            <FormField
+              control={form.control}
+              name='balance_patrol_setting.watchdog_enabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Enable watchdog')}</FormLabel>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='balance_patrol_setting.critical_balance_threshold'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    {t('Critical balance threshold (USD)')}
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      step={0.01}
+                      {...safeNumberFieldProps(field)}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      '0 auto-uses 50% of the low balance threshold; alerts every 6 hours when below'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='balance_patrol_setting.watchdog_minutes'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Watchdog interval (minutes)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={1}
+                      max={1440}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Also used as the error aggregation window')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='balance_patrol_setting.watchdog_threshold'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Error count threshold')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={1}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Alert when errors in the window reach this count')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
             <FormField
               control={form.control}
               name='balance_patrol_setting.user_min_quota'

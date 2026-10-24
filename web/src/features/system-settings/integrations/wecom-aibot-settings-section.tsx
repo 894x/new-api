@@ -93,6 +93,12 @@ const createWecomAIBotSchema = (
       user_whitelist: z.string(),
       group_enabled: z.boolean(),
       welcome_text: z.string(),
+      admin_userids: z.string(),
+      report_enabled: z.boolean(),
+      report_hour: z.coerce
+        .number()
+        .min(0, t('Report hour must be between 0 and 23'))
+        .max(23, t('Report hour must be between 0 and 23')),
     })
     .superRefine((values, ctx) => {
       if (!values.enabled) return
@@ -161,6 +167,9 @@ export function WecomAIBotSettingsSection() {
       user_whitelist: config?.user_whitelist ?? '',
       group_enabled: config?.group_enabled ?? true,
       welcome_text: config?.welcome_text ?? '',
+      admin_userids: config?.admin_userids ?? '',
+      report_enabled: config?.report_enabled ?? false,
+      report_hour: config?.report_hour ?? 9,
     }),
     [config]
   )
@@ -187,6 +196,9 @@ export function WecomAIBotSettingsSection() {
         user_whitelist: values.user_whitelist.trim(),
         group_enabled: values.group_enabled,
         welcome_text: values.welcome_text,
+        admin_userids: values.admin_userids.trim(),
+        report_enabled: values.report_enabled,
+        report_hour: values.report_hour,
       }),
     onSuccess: () => {
       toast.success(t('Setting updated successfully'))
@@ -456,6 +468,70 @@ export function WecomAIBotSettingsSection() {
                     'Rejected userids are recorded in server logs and can be copied here'
                   )}
                 </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name='admin_userids'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Admin userids')}</FormLabel>
+                <FormControl>
+                  <Textarea
+                    rows={2}
+                    placeholder={t('Comma-separated WeCom userids')}
+                    {...field}
+                    value={field.value ?? ''}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Admins can use sensitive tools such as per-user usage and live balance refresh'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name='report_enabled'
+            render={({ field }) => (
+              <SettingsSwitchItem>
+                <SettingsSwitchContent>
+                  <FormLabel>{t('Send daily report')}</FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Push usage, spend and anomaly summary with a chart to chats active in the last 7 days'
+                    )}
+                  </FormDescription>
+                </SettingsSwitchContent>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </SettingsSwitchItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name='report_hour'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Daily report hour (0-23)')}</FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={0}
+                    max={23}
+                    step={1}
+                    {...safeNumberFieldProps(field)}
+                  />
+                </FormControl>
                 <FormMessage />
               </FormItem>
             )}

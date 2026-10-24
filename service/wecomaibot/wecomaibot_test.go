@@ -730,3 +730,81 @@ func TestRenderChartPNGAllKinds(t *testing.T) {
 	}
 	t.Logf("样图已写入 %s 供人工查看", previewDir)
 }
+
+func TestFilterAdminTools(t *testing.T) {
+	tools := []Tool{
+		{Name: "search_channels"},
+		{Name: "get_usage_overview", AdminOnly: true},
+		{Name: "refresh_channel_balance", AdminOnly: true},
+	}
+	public := filterAdminTools(tools)
+	require.Len(t, public, 1)
+	assert.Equal(t, "search_channels", public[0].Name)
+
+	setting := &operation_setting.WecomAIBotSetting{AdminUserIDs: "alice, bob"}
+	assert.True(t, isAdminUser(setting, "alice"))
+	assert.False(t, isAdminUser(setting, "carol"))
+}
+
+func TestGatherAndRenderDailyReport(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := database.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, database.AutoMigrate(&model.Channel{}, &model.QuotaData{}, &model.PerfMetric{}))
+	previousDB := model.DB
+	model.DB = database
+	t.Cleanup(func() {
+		model.DB = previousDB
+		_ = sqlDB.Close()
+	})
+
+	// 报告日与前一日各 24 小时窗口；报告日内再前 86400 恰为前一日
+	base := time.Now()
+	dayStart := time.Date(base.Year(), base.Month(), base.Day(), 0, 0, 0, 0, base.Location()).Add(-24 * time.Hour).Unix()
+	seed := []model.QuotaData{
+		{ModelName: "glm-5.3", Username: "admin", CreatedAt: dayStart + 3600, Count: 10, TokenUsed: 1000, Quota: int(2 * common.QuotaPerUnit)},
+		{ModelName: "kimi-k3", Username: "admin", CreatedAt: dayStart + 7200, Count: 1, TokenUsed: 100, Quota: 1},
+		{ModelName: "glm-5.3", Username: "admin", CreatedAt: dayStart - 3600, Count: 20, TokenUsed: 2000, Quota: int(3 * common.QuotaPerUnit)},
+	}
+	for i := range seed {
+		require.NoError(t, database.Create(&seed[i]).Error)
+	}
+	// 性能：报告日 100 次请求 90 次成功（错误率 10%，≥50 次应产出异常项）
+	require.NoError(t, database.Create(&model.PerfMetric{
+		ModelName: "glm-5.3", Group: "default", BucketTs: dayStart + 600,
+		RequestCount: 100, SuccessCount: 90, TotalLatencyMs: 100000,
+	}).Error)
+
+	data, err := gatherDailyReport(dayStart)
+	require.NoError(t, err)
+	assert.Equal(t, 11, int(data.Requests))
+	assert.Equal(t, 20, int(data.PrevRequests))
+	assert.InDelta(t, 2.0, data.TotalUSD, 0.001)
+	assert.InDelta(t, 3.0, data.PrevUSD, 0.001)
+	assert.InDelta(t, 90.0, data.SuccessRate, 0.001)
+	require.NotEmpty(t, data.Anomalies)
+	assert.Contains(t, data.Anomalies[0], "glm-5.3")
+	require.Len(t, data.TopModels, 2)
+	assert.Equal(t, "glm-5.3", data.TopModels[0]["name"])
+
+	markdown := renderDailyReportMarkdown(data)
+	assert.Contains(t, markdown, "运营日报")
+	assert.Contains(t, markdown, "消费 $2.00")
+	assert.Contains(t, markdown, "请求 11 次")
+	assert.Contains(t, markdown, "异常关注")
+}
+
+func TestDailyReportSentIdempotent(t *testing.T) {
+	withoutRedis(t)
+	today := time.Now().Format("2006-01-02")
+	assert.False(t, reportAlreadySent(today))
+	markReportSent(today)
+	assert.True(t, reportAlreadySent(today))
+
+	// 已发送的当天任务直接跳过，不触达推送链路
+	summary, err := RunDailyReportTask(context.Background(), time.Now().Hour())
+	require.NoError(t, err)
+	assert.Equal(t, "already_sent_today", summary["skipped"])
+}

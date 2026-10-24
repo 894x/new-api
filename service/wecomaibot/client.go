@@ -172,6 +172,32 @@ func (w *wsConn) heartbeatLoop(ctx context.Context, onPong func()) {
 	}
 }
 
+// activeConnHolder 持有当前活跃的长连接，供主动推送（日报等）复用；
+// 连接重建时整体替换，读侧只做原子快照。
+var activeConnHolder atomic.Pointer[wsConn]
+
+// activeConn 返回当前活跃连接；机器人离线时返回 nil。
+func activeConn() *wsConn {
+	return activeConnHolder.Load()
+}
+
+// sendProactiveFrame 经当前活跃连接主动推送一帧（aibot_send_msg）。
+func sendProactiveFrame(body any) error {
+	w := activeConn()
+	if w == nil {
+		return errors.New("机器人长连接未在线，主动推送不可用")
+	}
+	frame := &outFrame{
+		Cmd:     cmdSendMsg,
+		Headers: frameHeaders{ReqID: newReqID(cmdSendMsg)},
+		Body:    body,
+	}
+	if _, err := w.sendRequest(frame, ackWait); err != nil {
+		return fmt.Errorf("proactive push failed: %w", err)
+	}
+	return nil
+}
+
 // run 维持连接直到 ctx 取消、鉴权连续失败或被踢下线，返回终态原因。
 func (cl *client) run(ctx context.Context) clientExit {
 	backoff := reconnectMinBackoff
@@ -244,6 +270,7 @@ func (cl *client) runOnce(ctx context.Context) clientExit {
 		return exitRetry
 	}
 	botState.set(stateConnected, "")
+	activeConnHolder.Store(w)
 
 	workers.Add(1)
 	gopool.Go(func() {
@@ -255,9 +282,11 @@ func (cl *client) runOnce(ctx context.Context) clientExit {
 	case <-ctx.Done():
 		w.close()
 		workers.Wait()
+		activeConnHolder.CompareAndSwap(w, nil)
 		return exitCancelled
 	case <-w.done:
 		workers.Wait()
+		activeConnHolder.CompareAndSwap(w, nil)
 		if cl.kicked.Load() {
 			return exitKicked
 		}
