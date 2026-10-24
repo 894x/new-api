@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"gorm.io/gorm"
 )
 
 // wecomBotLowBalanceTTL 低余额预警按渠道 24 小时最多提醒一次（对齐 LiteLLM 预算
@@ -144,10 +145,13 @@ func RunUserQuotaPatrolCheck(ctx context.Context) (*UserQuotaPatrolSummary, erro
 	}
 	summary := &UserQuotaPatrolSummary{}
 
+	baseQuery := model.DB.Model(&model.User{}).
+		Where("status = ? AND quota < ?", common.UserStatusEnabled, threshold)
+	if monitorNames := operation_setting.ParseUserMonitorList(patrolSetting.UserMonitorList); len(monitorNames) > 0 {
+		baseQuery = baseQuery.Where("username IN ?", monitorNames)
+	}
 	var total int64
-	if err := model.DB.Model(&model.User{}).
-		Where("status = ? AND quota < ?", common.UserStatusEnabled, threshold).
-		Count(&total).Error; err != nil {
+	if err := baseQuery.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		return nil, err
 	}
 	if ctx != nil && ctx.Err() != nil {
@@ -164,9 +168,8 @@ func RunUserQuotaPatrolCheck(ctx context.Context) (*UserQuotaPatrolSummary, erro
 		Quota    int
 	}
 	var users []lowQuotaUser
-	if err := model.DB.Model(&model.User{}).
+	if err := baseQuery.Session(&gorm.Session{}).
 		Select("username", "quota").
-		Where("status = ? AND quota < ?", common.UserStatusEnabled, threshold).
 		Order("quota asc").
 		Limit(listLimit).
 		Find(&users).Error; err != nil {

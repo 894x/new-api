@@ -23,6 +23,7 @@ const baseDefaults = {
   'balance_patrol_setting.user_enabled': false,
   'balance_patrol_setting.user_minutes': 30,
   'balance_patrol_setting.user_min_quota': 0,
+  'balance_patrol_setting.user_monitor_list': '',
   'balance_patrol_setting.user_list_limit': 20,
   'balance_patrol_setting.critical_balance_threshold': 0,
   'balance_patrol_setting.watchdog_enabled': false,

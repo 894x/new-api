@@ -34,6 +34,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { UserSearchSelect } from '@/components/user-search-select'
 
 import {
   SettingsForm,
@@ -63,6 +64,7 @@ const createBalancePatrolSchema = (t: (key: string) => string) =>
         .number()
         .min(1, t('Patrol interval must be between 1 and 10080 minutes'))
         .max(10080, t('Patrol interval must be between 1 and 10080 minutes')),
+      user_monitor_list: z.string(),
       user_min_quota: z.coerce
         .number()
         .min(0, t('User threshold must be a non-negative integer')),
@@ -91,6 +93,7 @@ type FlatBalancePatrolDefaults = {
   'balance_patrol_setting.user_enabled': boolean
   'balance_patrol_setting.user_minutes': number
   'balance_patrol_setting.user_min_quota': number
+  'balance_patrol_setting.user_monitor_list': string
   'balance_patrol_setting.user_list_limit': number
   'balance_patrol_setting.critical_balance_threshold': number
   'balance_patrol_setting.watchdog_enabled': boolean
@@ -115,6 +118,8 @@ const buildFormDefaults = (
     user_enabled: defaults['balance_patrol_setting.user_enabled'],
     user_minutes: defaults['balance_patrol_setting.user_minutes'],
     user_min_quota: defaults['balance_patrol_setting.user_min_quota'],
+    user_monitor_list:
+      defaults['balance_patrol_setting.user_monitor_list'] ?? '',
     user_list_limit: defaults['balance_patrol_setting.user_list_limit'],
     critical_balance_threshold:
       defaults['balance_patrol_setting.critical_balance_threshold'],
@@ -141,6 +146,8 @@ const normalizeDefaults = (
     defaults['balance_patrol_setting.user_minutes'],
   'balance_patrol_setting.user_min_quota':
     defaults['balance_patrol_setting.user_min_quota'],
+  'balance_patrol_setting.user_monitor_list':
+    defaults['balance_patrol_setting.user_monitor_list'],
   'balance_patrol_setting.user_list_limit':
     defaults['balance_patrol_setting.user_list_limit'],
   'balance_patrol_setting.critical_balance_threshold':
@@ -170,6 +177,8 @@ const normalizeFormValues = (
     values.balance_patrol_setting.user_minutes,
   'balance_patrol_setting.user_min_quota':
     values.balance_patrol_setting.user_min_quota,
+  'balance_patrol_setting.user_monitor_list':
+    values.balance_patrol_setting.user_monitor_list,
   'balance_patrol_setting.user_list_limit':
     values.balance_patrol_setting.user_list_limit,
   'balance_patrol_setting.critical_balance_threshold':
@@ -485,6 +494,29 @@ export function BalancePatrolSettingsSection({
             />
           </div>
 
+            <FormField
+              control={form.control}
+              name='balance_patrol_setting.user_monitor_list'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    {t('Monitored users (leave empty for all)')}
+                  </FormLabel>
+                  <FormControl>
+                    <UserSearchSelect
+                      value={field.value ?? ''}
+                      onChange={field.onChange}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Only patrol these users when set; leave empty to patrol all enabled users'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
             <FormField
               control={form.control}
               name='balance_patrol_setting.user_min_quota'

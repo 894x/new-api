@@ -563,6 +563,7 @@ export type OperationsSettings = {
   'balance_patrol_setting.user_enabled'?: boolean
   'balance_patrol_setting.user_minutes'?: number
   'balance_patrol_setting.user_min_quota'?: number
+  'balance_patrol_setting.user_monitor_list'?: string
   'balance_patrol_setting.user_list_limit'?: number
   'balance_patrol_setting.critical_balance_threshold'?: number
   'balance_patrol_setting.watchdog_enabled'?: boolean

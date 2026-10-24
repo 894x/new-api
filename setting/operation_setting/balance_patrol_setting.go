@@ -3,6 +3,7 @@ package operation_setting
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -21,10 +22,12 @@ type BalancePatrolSetting struct {
 	UserEnabled              bool    `json:"user_enabled"`
 	UserMinutes              float64 `json:"user_minutes"`
 	UserMinQuota             int     `json:"user_min_quota"`
-	UserListLimit            int     `json:"user_list_limit"`
-	WatchdogEnabled          bool    `json:"watchdog_enabled"`
-	WatchdogMinutes          int     `json:"watchdog_minutes"`
-	WatchdogThreshold        int     `json:"watchdog_threshold"`
+	// UserMonitorList 指定监控的用户名列表，逗号分隔；留空巡检全部启用用户。
+	UserMonitorList   string `json:"user_monitor_list"`
+	UserListLimit     int    `json:"user_list_limit"`
+	WatchdogEnabled   bool   `json:"watchdog_enabled"`
+	WatchdogMinutes   int    `json:"watchdog_minutes"`
+	WatchdogThreshold int    `json:"watchdog_threshold"`
 }
 
 const (
@@ -34,6 +37,9 @@ const (
 	DefaultLowBalanceThreshold        = 1.0
 	MaxBalancePatrolUserListLimit     = 50
 	DefaultBalancePatrolUserListLimit = 20
+
+	MaxUserMonitorListLength = 2048
+	MaxUserMonitorNameLength = 64
 
 	DefaultWatchdogMinutes   = 10
 	MinWatchdogMinutes       = 1
@@ -45,7 +51,7 @@ const (
 var balancePatrolSetting = BalancePatrolSetting{
 	ChannelMinutes:       DefaultBalancePatrolMinutes,
 	LowBalanceThreshold:  DefaultLowBalanceThreshold,
-	DisableOnZeroBalance: true,
+	DisableOnZeroBalance: false,
 	UserMinutes:          DefaultBalancePatrolMinutes,
 	UserListLimit:        DefaultBalancePatrolUserListLimit,
 }
@@ -173,6 +179,35 @@ func ValidateBalancePatrolUserListLimit(value string) error {
 	limit, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || limit < 0 || limit > MaxBalancePatrolUserListLimit {
 		return fmt.Errorf("user list limit must be between 0 and %d", MaxBalancePatrolUserListLimit)
+	}
+	return nil
+}
+
+// ParseUserMonitorList 解析逗号分隔的用户名列表，去重保持顺序。
+func ParseUserMonitorList(raw string) []string {
+	var names []string
+	for _, token := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '，' || r == ' ' || r == '\n'
+	}) {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		if !slices.Contains(names, token) {
+			names = append(names, token)
+		}
+	}
+	return names
+}
+
+func ValidateUserMonitorList(value string) error {
+	if len(value) > MaxUserMonitorListLength {
+		return fmt.Errorf("user monitor list is too long")
+	}
+	for _, name := range ParseUserMonitorList(value) {
+		if len(name) > MaxUserMonitorNameLength {
+			return fmt.Errorf("user monitor list contains an invalid username: %s", name)
+		}
 	}
 	return nil
 }

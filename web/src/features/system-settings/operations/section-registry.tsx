@@ -116,6 +116,8 @@ const OPERATIONS_SECTIONS = [
             settings['balance_patrol_setting.user_enabled'] ?? false,
           'balance_patrol_setting.user_minutes':
             settings['balance_patrol_setting.user_minutes'] ?? 30,
+          'balance_patrol_setting.user_monitor_list':
+            settings['balance_patrol_setting.user_monitor_list'] ?? '',
           'balance_patrol_setting.user_min_quota':
             settings['balance_patrol_setting.user_min_quota'] ?? 0,
           'balance_patrol_setting.user_list_limit':

@@ -362,6 +362,11 @@ func UpdateOption(c *gin.Context) {
 			common.ApiErrorMsg(c, err.Error())
 			return
 		}
+	case "balance_patrol_setting.user_monitor_list":
+		if err := operation_setting.ValidateUserMonitorList(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 	case "balance_patrol_setting.user_list_limit":
 		if err := operation_setting.ValidateBalancePatrolUserListLimit(common.Interface2String(option.Value)); err != nil {
 			common.ApiErrorMsg(c, err.Error())

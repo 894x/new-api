@@ -263,7 +263,7 @@ func TestGetBalancePatrolSettingEnvAndNormalization(t *testing.T) {
 	assert.Equal(t, float64(15), setting.ChannelMinutes)
 	assert.Equal(t, float64(operation_setting.DefaultBalancePatrolMinutes), setting.UserMinutes)
 	assert.Equal(t, operation_setting.DefaultLowBalanceThreshold, setting.LowBalanceThreshold)
-	assert.True(t, setting.DisableOnZeroBalance)
+	assert.False(t, setting.DisableOnZeroBalance)
 
 	t.Setenv("CHANNEL_UPDATE_ENABLED", "false")
 	setting = operation_setting.GetBalancePatrolSetting()
@@ -349,4 +349,51 @@ func TestApplyChannelBalanceResultTieredAndReset(t *testing.T) {
 	default:
 		t.Fatal("expected immediate alert after recharge reset")
 	}
+}
+
+func TestRunUserQuotaPatrolCheckMonitorList(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := database.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, database.AutoMigrate(&model.User{}))
+	previousDB := model.DB
+	model.DB = database
+	t.Cleanup(func() {
+		model.DB = previousDB
+		_ = sqlDB.Close()
+	})
+
+	// alice/bob 额度低，carol 额度高；指定名单只监控 alice
+	for i, name := range []string{"alice", "bob", "carol"} {
+		quota := 999999
+		if name == "alice" {
+			quota = 100
+		} else if name == "bob" {
+			quota = 200
+		}
+		require.NoError(t, database.Create(&model.User{
+			Username: name, Quota: quota, Status: common.UserStatusEnabled,
+			AffCode: fmt.Sprintf("aff-%d", i),
+		}).Error)
+	}
+
+	withBalancePatrolSetting(t, func(setting *operation_setting.BalancePatrolSetting) {
+		setting.UserMonitorList = "alice, bob_extra"
+		setting.UserMinQuota = 500
+	})
+
+	summary, err := RunUserQuotaPatrolCheck(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.Total, "只统计名单内低余额用户（alice）")
+	assert.Equal(t, 1, summary.Listed)
+
+	// 清空名单 → 巡检全部（alice+bob 都低）
+	withBalancePatrolSetting(t, func(setting *operation_setting.BalancePatrolSetting) {
+		setting.UserMonitorList = ""
+	})
+	summary, err = RunUserQuotaPatrolCheck(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, summary.Total)
 }
