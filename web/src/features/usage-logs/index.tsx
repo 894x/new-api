@@ -34,6 +34,7 @@ import {
   useUsageLogsContext,
 } from './components/usage-logs-provider'
 import { UsageLogsTable } from './components/usage-logs-table'
+import { UserChannelAnalytics } from './components/user-channel-analytics'
 import {
   isUsageLogsSectionId,
   USAGE_LOGS_DEFAULT_SECTION,
@@ -52,6 +53,9 @@ const SECTION_META: Record<UsageLogsSectionId, { titleKey: string }> = {
   },
   task: {
     titleKey: 'Task Logs',
+  },
+  'user-analytics': {
+    titleKey: 'User Channel Analytics',
   },
 }
 
@@ -117,10 +121,10 @@ function UsageLogsContent() {
     [setViewScope]
   )
 
-  const pageMeta =
-    activeCategory === 'common' ? SECTION_META.common : SECTION_META.task
-  const showTaskSwitcher =
-    activeCategory !== 'common' && visibleSections.length > 1
+  const pageMeta = SECTION_META[activeCategory]
+  const isTaskSection =
+    activeCategory === 'drawing' || activeCategory === 'task'
+  const showTaskSwitcher = isTaskSection && visibleSections.length > 1
 
   return (
     <>
@@ -129,7 +133,7 @@ function UsageLogsContent() {
           {t(pageMeta.titleKey)}
         </SectionPageLayout.Title>
         <SectionPageLayout.Actions>
-          {canManageScope && (
+          {canManageScope && activeCategory !== 'user-analytics' && (
             <Tabs value={viewScope} onValueChange={handleViewScopeChange}>
               <TabsList>
                 <TabsTrigger value='all'>{t('All')}</TabsTrigger>
@@ -152,7 +156,11 @@ function UsageLogsContent() {
               </Tabs>
             )}
             <div className='min-h-0 flex-1'>
-              <UsageLogsTable logCategory={activeCategory} />
+              {activeCategory === 'user-analytics' ? (
+                <UserChannelAnalytics />
+              ) : (
+                <UsageLogsTable logCategory={activeCategory} />
+              )}
             </div>
           </div>
         </SectionPageLayout.Content>

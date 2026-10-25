@@ -8004,6 +8004,13 @@
     "Zhipu": "智谱",
     "Zhipu GLM": "智谱GLM",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "User Channel Analytics": "用户渠道分析",
+    "Search user": "搜索用户",
+    "Prompt Tokens": "输入 Token",
+    "Completion Tokens": "输出 Token",
+    "First Used": "首次使用",
+    "RPM/TPM are realtime rates over the last 60 seconds": "RPM/TPM 为最近 60 秒的实时速率",
+    "Select a user to view per-channel usage": "请先选择用户，查看其各渠道用量"
   }
 }

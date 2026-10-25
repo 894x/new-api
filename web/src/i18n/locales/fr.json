@@ -8004,6 +8004,13 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "User Channel Analytics": "Analyse des canaux par utilisateur",
+    "Search user": "Rechercher un utilisateur",
+    "Prompt Tokens": "Jetons d’invite",
+    "Completion Tokens": "Jetons de complétion",
+    "First Used": "Première utilisation",
+    "RPM/TPM are realtime rates over the last 60 seconds": "Les RPM/TPM sont des débits en temps réel des 60 dernières secondes",
+    "Select a user to view per-channel usage": "Sélectionnez un utilisateur pour voir son utilisation par canal"
   }
 }

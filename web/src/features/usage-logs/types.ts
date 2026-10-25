@@ -557,6 +557,31 @@ export interface GetLogStatsResponse {
   data?: LogStatistics
 }
 
+export interface GetUserChannelStatsParams {
+  username: string
+  start_timestamp?: number
+  end_timestamp?: number
+}
+
+export interface UserChannelStat {
+  channel_id: number
+  channel_name: string
+  count: number
+  prompt_tokens: number
+  completion_tokens: number
+  quota: number
+  rpm: number
+  tpm: number
+  first_at: number
+  last_at: number
+}
+
+export interface GetUserChannelStatsResponse {
+  success: boolean
+  message?: string
+  data?: UserChannelStat[]
+}
+
 // ============================================================================
 // Drawing Log Types
 // ============================================================================

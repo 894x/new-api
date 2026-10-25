@@ -8004,6 +8004,13 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "User Channel Analytics": "ユーザーチャネル分析",
+    "Search user": "ユーザーを検索",
+    "Prompt Tokens": "入力トークン",
+    "Completion Tokens": "出力トークン",
+    "First Used": "初回使用",
+    "RPM/TPM are realtime rates over the last 60 seconds": "RPM/TPM は直近 60 秒のリアルタイム速度",
+    "Select a user to view per-channel usage": "ユーザーを選択するとチャネル別の使用量を表示します"
   }
 }

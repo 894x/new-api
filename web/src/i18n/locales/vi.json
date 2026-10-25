@@ -8004,6 +8004,13 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "User Channel Analytics": "Phân tích kênh theo người dùng",
+    "Search user": "Tìm kiếm người dùng",
+    "Prompt Tokens": "Token đầu vào",
+    "Completion Tokens": "Token đầu ra",
+    "First Used": "Sử dụng lần đầu",
+    "RPM/TPM are realtime rates over the last 60 seconds": "RPM/TPM là tốc độ thời gian thực trong 60 giây gần nhất",
+    "Select a user to view per-channel usage": "Chọn người dùng để xem mức sử dụng theo từng kênh"
   }
 }

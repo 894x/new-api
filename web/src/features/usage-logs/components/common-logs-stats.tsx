@@ -32,7 +32,7 @@ import { useLogsViewScope, useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 
-function StatBadge(props: {
+export function StatBadge(props: {
   label: string
   value: string | number
   accent: string
