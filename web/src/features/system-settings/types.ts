@@ -477,6 +477,7 @@ export type WecomAIBotConfig = {
   admin_userids: string
   report_enabled: boolean
   report_hour: number
+  report_targets: string
 }
 
 export type WecomAIBotConfigMutationRequest = {
@@ -495,6 +496,7 @@ export type WecomAIBotConfigMutationRequest = {
   admin_userids: string
   report_enabled: boolean
   report_hour: number
+  report_targets: string
 }
 
 export type WecomAIBotConfigResponse = {

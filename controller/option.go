@@ -430,6 +430,11 @@ func UpdateOption(c *gin.Context) {
 			common.ApiErrorMsg(c, err.Error())
 			return
 		}
+	case "wecom_aibot_setting.report_targets":
+		if len(common.Interface2String(option.Value)) > 2048 {
+			common.ApiErrorMsg(c, "report targets are too long")
+			return
+		}
 	case "wecom_aibot_setting.report_hour":
 		if err := operation_setting.ValidateWecomAIBotReportHour(common.Interface2String(option.Value)); err != nil {
 			common.ApiErrorMsg(c, err.Error())

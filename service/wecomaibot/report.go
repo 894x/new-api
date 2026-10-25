@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/go-redis/redis/v8"
 )
@@ -64,6 +65,36 @@ func recordChatTarget(chat *msgCallback) {
 	memReportTargetsMu.Lock()
 	memReportTargets[member] = time.Now()
 	memReportTargetsMu.Unlock()
+}
+
+// resolveReportTargets 按配置解析推送目标（优先级：显式指定 > 管理员单聊 > 全部活跃）。
+func resolveReportTargets(maxAge time.Duration) []reportTarget {
+	return resolveReportTargetsFor(operation_setting.GetWecomAIBotSetting(), maxAge)
+}
+
+func resolveReportTargetsFor(setting *operation_setting.WecomAIBotSetting, maxAge time.Duration) []reportTarget {
+	if configured := strings.TrimSpace(setting.ReportTargets); configured != "" {
+		targets := make([]reportTarget, 0)
+		for _, token := range strings.FieldsFunc(configured, func(r rune) bool {
+			return r == ',' || r == '，' || r == ' ' || r == '\n'
+		}) {
+			token = strings.TrimSpace(token)
+			if token == "" {
+				continue
+			}
+			// 群 chatid 通常较长/含特殊字符，短 token 视为 userid 单聊
+			targets = append(targets, reportTarget{Kind: chatTypeSingle, ID: token})
+		}
+		return targets
+	}
+	if admins := operation_setting.ParseWecomAIBotAdminUserids(setting.AdminUserIDs); len(admins) > 0 {
+		targets := make([]reportTarget, 0, len(admins))
+		for _, userid := range admins {
+			targets = append(targets, reportTarget{Kind: chatTypeSingle, ID: userid})
+		}
+		return targets
+	}
+	return listReportTargets(maxAge)
 }
 
 // listReportTargets 返回 maxAge 内活跃过的推送目标。
@@ -243,7 +274,7 @@ func runDailyReport(ctx context.Context, day time.Time) (map[string]any, error) 
 		}
 	}
 
-	targets := listReportTargets(reportTargetMaxAge)
+	targets := resolveReportTargets(reportTargetMaxAge)
 	sent := 0
 	var failures []string
 	for _, target := range targets {

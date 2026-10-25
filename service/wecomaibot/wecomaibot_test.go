@@ -808,3 +808,21 @@ func TestDailyReportSentIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "already_sent_today", summary["skipped"])
 }
+
+func TestResolveReportTargets(t *testing.T) {
+	withoutRedis(t)
+	setting := &operation_setting.WecomAIBotSetting{}
+	targets := resolveReportTargetsFor(setting, time.Hour)
+	assert.Empty(t, targets) // 无配置无管理员且无活跃目标时返回空
+
+	setting.AdminUserIDs = "admin1, admin2"
+	targets = resolveReportTargetsFor(setting, time.Hour)
+	require.Len(t, targets, 2)
+	assert.Equal(t, "admin1", targets[0].ID)
+	assert.Equal(t, chatTypeSingle, targets[0].Kind)
+
+	setting.ReportTargets = "group_chat_123, user456"
+	targets = resolveReportTargetsFor(setting, time.Hour)
+	require.Len(t, targets, 2)
+	assert.Equal(t, "group_chat_123", targets[0].ID)
+}

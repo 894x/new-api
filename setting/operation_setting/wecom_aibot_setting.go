@@ -30,6 +30,9 @@ type WecomAIBotSetting struct {
 	AdminUserIDs      string `json:"admin_userids"`
 	ReportEnabled     bool   `json:"report_enabled"`
 	ReportHour        int    `json:"report_hour"`
+	// ReportTargets 指定日报推送目标（逗号分隔的群 chatid 或用户 userid）；
+	// 留空仅推管理员 userid 单聊；管理员也留空则推全部 7 天内活跃会话。
+	ReportTargets string `json:"report_targets"`
 }
 
 const (

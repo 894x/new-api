@@ -32,7 +32,14 @@ import (
 // 走完整协议转换但标记 IsChannelTest（内部免计费），工具定义与消息原样透传。
 type wecomAIBotLLMDriver struct{}
 
+// wecomAIBotLLMTimeout 单次 LLM 补全的超时上限，防止上游卡住拖满 agentTimeout。
+const wecomAIBotLLMTimeout = 120 * time.Second
+
 func (wecomAIBotLLMDriver) ChatCompletion(ctx context.Context, req *wecomaibot.ChatRequest) (*wecomaibot.ChatResponse, error) {
+	// 每次调用独立限时，不占满 8 分钟整轮预算
+	ctx, cancel := context.WithTimeout(ctx, wecomAIBotLLMTimeout)
+	defer cancel()
+
 	setting := operation_setting.GetWecomAIBotSetting()
 	if !setting.ReadyForEnable() {
 		return nil, errors.New("wecom ai bot model channel is not configured")
@@ -261,6 +268,7 @@ type wecomAIBotConfigPayload struct {
 	AdminUserIDs      string `json:"admin_userids"`
 	ReportEnabled     bool   `json:"report_enabled"`
 	ReportHour        int    `json:"report_hour"`
+	ReportTargets     string `json:"report_targets"`
 }
 
 // GetWecomAIBotConfig 返回智能机器人配置，Secret 仅返回掩码。
@@ -321,6 +329,7 @@ func wecomAIBotOptionKeys() []string {
 		"wecom_aibot_setting.admin_userids",
 		"wecom_aibot_setting.report_enabled",
 		"wecom_aibot_setting.report_hour",
+		"wecom_aibot_setting.report_targets",
 	}
 }
 
@@ -383,6 +392,7 @@ func normalizeWecomAIBotConfig(payload wecomAIBotConfigPayload) (map[string]stri
 		"wecom_aibot_setting.admin_userids":         payload.AdminUserIDs,
 		"wecom_aibot_setting.report_enabled":        strconv.FormatBool(payload.ReportEnabled),
 		"wecom_aibot_setting.report_hour":           strconv.Itoa(operation_setting.NormalizeWecomAIBotReportHour(payload.ReportHour)),
+		"wecom_aibot_setting.report_targets":        payload.ReportTargets,
 	}, nil
 }
 

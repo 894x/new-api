@@ -149,6 +149,7 @@ test('saves edited fields and a newly typed secret through the dedicated endpoin
     admin_userids: '',
     report_enabled: false,
     report_hour: 9,
+    report_targets: '',
   })
 })
 

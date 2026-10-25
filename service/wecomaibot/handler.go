@@ -16,6 +16,12 @@ import (
 // 预留收尾余量后在到期前主动结题。
 const agentTimeout = 8 * time.Minute
 
+// agentConcurrencyLimit 全局同时处理的对话数上限，防止多用户并发时
+// FC 循环与 LLM 调用占满 CPU/内存（每用户串行之外的总闸）。
+const agentConcurrencyLimit = 8
+
+var agentSlots = make(chan struct{}, agentConcurrencyLimit)
+
 var (
 	busyMu    sync.Mutex
 	busyUsers = make(map[string]struct{})
@@ -59,6 +65,15 @@ func handleMessage(w *wsConn, frame *inFrame) {
 		return
 	}
 	defer endUser(key)
+
+	// 全局并发闸：防止不同用户同时涌入拖垮 LLM 调用与渲染
+	select {
+	case agentSlots <- struct{}{}:
+		defer func() { <-agentSlots }()
+	default:
+		replier.finish("当前查询排队已满，请稍后再试。")
+		return
+	}
 
 	started := time.Now()
 	replier.progress("收到，正在查询…")

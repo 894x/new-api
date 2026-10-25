@@ -95,6 +95,7 @@ const createWecomAIBotSchema = (
       welcome_text: z.string(),
       admin_userids: z.string(),
       report_enabled: z.boolean(),
+      report_targets: z.string(),
       report_hour: z.coerce
         .number()
         .min(0, t('Report hour must be between 0 and 23'))
@@ -170,6 +171,7 @@ export function WecomAIBotSettingsSection() {
       admin_userids: config?.admin_userids ?? '',
       report_enabled: config?.report_enabled ?? false,
       report_hour: config?.report_hour ?? 9,
+      report_targets: config?.report_targets ?? '',
     }),
     [config]
   )
@@ -199,6 +201,7 @@ export function WecomAIBotSettingsSection() {
         admin_userids: values.admin_userids.trim(),
         report_enabled: values.report_enabled,
         report_hour: values.report_hour,
+        report_targets: values.report_targets.trim(),
       }),
     onSuccess: () => {
       toast.success(t('Setting updated successfully'))
@@ -532,6 +535,30 @@ export function WecomAIBotSettingsSection() {
                     {...safeNumberFieldProps(field)}
                   />
                 </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name='report_targets'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Report push targets')}</FormLabel>
+                <FormControl>
+                  <Input
+                    placeholder={t(
+                      'Leave empty to push to admin userids only'
+                    )}
+                    {...field}
+                    value={field.value ?? ''}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Comma-separated chatids or userids; empty = admins only; admins empty = all active chats'
+                  )}
+                </FormDescription>
                 <FormMessage />
               </FormItem>
             )}
