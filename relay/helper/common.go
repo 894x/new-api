@@ -39,6 +39,13 @@ func writeSSESegment(c *gin.Context, data string) error {
 	if c == nil || c.Writer == nil {
 		return downstreamWriteError(errors.New("context or writer is nil"))
 	}
+	if payload, ok := strings.CutPrefix(data, "data: "); ok {
+		normalized, err := common.RewriteResponseModel(c, common.StringToByteSlice(payload))
+		if err != nil {
+			return fmt.Errorf("error normalizing response model: %w", err)
+		}
+		data = "data: " + string(normalized)
+	}
 	common.CustomEvent{}.WriteContentType(c.Writer)
 	encoded := strings.ReplaceAll(data, "\r", "\\r")
 	if strings.HasPrefix(data, "data") {
@@ -218,13 +225,17 @@ func ObjectData(c *gin.Context, object any) error {
 	return StringData(c, string(jsonData))
 }
 
-// WriteJSON writes a JSON response after applying the public Chat Completions ID.
+// WriteJSON applies the public response ID and requested model before delivery.
 func WriteJSON(c *gin.Context, data []byte) (int, error) {
 	responseId := common.GetContextKeyString(c, constant.ContextKeyResponseId)
 	common.CaptureUpstreamResponseID(c, data, responseId)
 	normalized, err := common.ReplaceTopLevelJSONID(data, responseId)
 	if err != nil {
 		return 0, fmt.Errorf("error normalizing response id: %w", err)
+	}
+	normalized, err = common.RewriteResponseModel(c, normalized)
+	if err != nil {
+		return 0, fmt.Errorf("error normalizing response model: %w", err)
 	}
 	return c.Writer.Write(normalized)
 }

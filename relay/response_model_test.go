@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,12 +16,14 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestResponseModelComparisonAndLog(t *testing.T) {
@@ -63,19 +66,22 @@ func TestResponseModelComparisonAndLog(t *testing.T) {
 			}
 			other := service.GenerateTextOtherInfo(c, info, 1, 1, 1, 0, 0, 0, 1)
 			var stored struct {
-				ResponseModel *relaycommon.ResponseModel `json:"response_model"`
+				AdminInfo struct {
+					ResponseModel *relaycommon.ResponseModel `json:"response_model"`
+				} `json:"admin_info"`
 			}
 			require.NoError(t, common.UnmarshalJsonStr(other.JSONString(), &stored))
+			assert.NotContains(t, other.Snapshot(), "response_model")
 			if tc.returned == "" {
-				assert.Nil(t, stored.ResponseModel)
+				assert.Nil(t, stored.AdminInfo.ResponseModel)
 				return
 			}
-			require.NotNil(t, stored.ResponseModel)
+			require.NotNil(t, stored.AdminInfo.ResponseModel)
 			assert.Equal(t, &relaycommon.ResponseModel{
 				RequestedModel: "requested", UpstreamModel: "mapped", ReturnedModel: tc.returned,
-			}, stored.ResponseModel)
+			}, stored.AdminInfo.ResponseModel)
 			assert.NotContains(t, other.JSONString(), "mismatch")
-			assert.Equal(t, tc.mismatch, stored.ResponseModel.Mismatch())
+			assert.Equal(t, tc.mismatch, stored.AdminInfo.ResponseModel.Mismatch())
 			assert.Equal(t, "mapped", info.UpstreamModelName)
 		})
 	}
@@ -108,9 +114,10 @@ func TestResponseModelLogOmitsUnchangedModel(t *testing.T) {
 			require.NotNil(t, info.ResponseModel)
 			assert.Equal(t, float64(1), other.Snapshot()["model_ratio"])
 			if tc.record {
-				assert.Equal(t, *info.ResponseModel, other.Snapshot()["response_model"])
+				assert.Equal(t, *info.ResponseModel, other.Snapshot()["admin_info"].(map[string]any)["response_model"])
 			} else {
 				assert.NotContains(t, other.Snapshot(), "response_model")
+				assert.False(t, gjson.Get(other.JSONString(), "admin_info.response_model").Exists())
 			}
 		})
 	}
@@ -216,8 +223,10 @@ func TestResponseModelHandlersCaptureBeforeConversion(t *testing.T) {
 		{"gemini to responses stream", geminiStream, types.RelayFormatOpenAIResponses, true, gemini.GeminiResponsesStreamHandler},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, "requested")
 			info := &relaycommon.RelayInfo{
 				OriginModelName: "requested", RelayFormat: tc.format, RelayMode: relayconstant.RelayModeChatCompletions,
 				IsStream: tc.stream, DisablePing: true, StartTime: time.Now(),
@@ -228,11 +237,30 @@ func TestResponseModelHandlersCaptureBeforeConversion(t *testing.T) {
 			require.Nil(t, apiErr)
 			require.NotNil(t, usage)
 			assert.Equal(t, 5, usage.TotalTokens)
+			payloads := []string{recorder.Body.String()}
+			if tc.stream {
+				payloads = nil
+				for line := range strings.SplitSeq(recorder.Body.String(), "\n") {
+					if payload, ok := strings.CutPrefix(line, "data: "); ok {
+						payloads = append(payloads, payload)
+					}
+				}
+			}
+			var models []string
+			for _, payload := range payloads {
+				for _, path := range []string{"model", "response.model", "message.model", "modelVersion"} {
+					if model := gjson.Get(payload, path); model.Exists() {
+						models = append(models, model.String())
+						assert.Equal(t, "requested", model.String(), path)
+					}
+				}
+			}
+			assert.NotEmpty(t, models, "the client must receive its requested model")
 			require.NotNil(t, info.ResponseModel)
 			assert.Equal(t, &relaycommon.ResponseModel{RequestedModel: "requested", UpstreamModel: "mapped", ReturnedModel: "returned"}, info.ResponseModel)
 			assert.True(t, info.ResponseModel.Mismatch())
 			other := service.GenerateTextOtherInfo(c, info, 1, 1, 1, 0, 0, 0, 1)
-			assert.Equal(t, *info.ResponseModel, other.Snapshot()["response_model"])
+			assert.Equal(t, *info.ResponseModel, other.Snapshot()["admin_info"].(map[string]any)["response_model"])
 		})
 	}
 }
@@ -248,6 +276,54 @@ func TestResponseModelSharedResponsesAccumulator(t *testing.T) {
 	require.NotNil(t, info.ResponseModel)
 	assert.True(t, info.ResponseModel.Mismatch())
 	assert.Equal(t, "returned", info.ResponseModel.ReturnedModel)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "requested")
+	upstream := []byte(`{"type":"response.completed","stream_id":"planner","response":{"id":"resp_1","model":"returned","usage":{"input_tokens":2,"output_tokens":3}}}`)
+	client := responsesWSDataForClient(c, upstream)
+	assert.Equal(t, "requested", gjson.GetBytes(client, "response.model").String())
+	assert.Equal(t, "planner", gjson.GetBytes(client, "stream_id").String())
+	assert.Equal(t, "resp_1", gjson.GetBytes(client, "response.id").String())
+	assert.Equal(t, "returned", gjson.GetBytes(upstream, "response.model").String())
+	assert.Equal(t, "returned", info.ResponseModel.ReturnedModel)
+}
+
+func TestClientResponseModelProjectionPreservesPayloads(t *testing.T) {
+	for _, tc := range []struct {
+		name, model, input, expected string
+	}{
+		{
+			name: "model mapping preserves usage and tool data", model: "client-alias",
+			input:    `{"model":"mapped","usage":{"total_tokens":9007199254740993},"choices":[{"message":{"content":"model: returned","tool_calls":[{"function":{"arguments":"{\"model\":\"tool-model\"}"}}]}}]}`,
+			expected: `{"model":"client-alias","usage":{"total_tokens":9007199254740993},"choices":[{"message":{"content":"model: returned","tool_calls":[{"function":{"arguments":"{\"model\":\"tool-model\"}"}}]}}]}`,
+		},
+		{name: "model-free event", model: "requested", input: `{"type":"response.output_text.delta","delta":"hello"}`, expected: `{"type":"response.output_text.delta","delta":"hello"}`},
+		{name: "error event", model: "requested", input: `{"error":{"model":"unavailable","message":"error"}}`, expected: `{"error":{"model":"unavailable","message":"error"}}`},
+		{name: "missing request model", input: `{"model":"returned"}`, expected: `{"model":"returned"}`},
+		{name: "escaped requested ID", model: "模型\"alias", input: `{"model":"returned"}`, expected: `{"model":"模型\"alias"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, tc.model)
+			_, err := helper.WriteJSON(c, []byte(tc.input))
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, recorder.Body.String())
+		})
+	}
+
+	t.Run("rewritten JSON updates response length and validators", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		common.SetContextKey(c, constant.ContextKeyOriginalModel, "kimi-k3")
+		service.IOCopyBytesGracefully(c, &http.Response{StatusCode: http.StatusOK, Header: http.Header{
+			"Content-Length": {"999"}, "Etag": {"upstream-body"}, "Digest": {"upstream-digest"},
+		}}, []byte(`{"model":"kimi/kimi-k2.8-preview","usage":{"total_tokens":5}}`))
+		assert.JSONEq(t, `{"model":"kimi-k3","usage":{"total_tokens":5}}`, recorder.Body.String())
+		assert.Equal(t, strconv.Itoa(recorder.Body.Len()), recorder.Header().Get("Content-Length"))
+		assert.Empty(t, recorder.Header().Get("ETag"))
+		assert.Empty(t, recorder.Header().Get("Digest"))
+	})
 }
 
 func TestResponseModelDoesNotRecordSynthesizedModel(t *testing.T) {

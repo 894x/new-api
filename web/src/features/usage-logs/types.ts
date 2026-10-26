@@ -129,6 +129,7 @@ export interface LogOtherData {
   /** HTTP status committed to the downstream, independent of the relay error. */
   client_status_code?: number
   admin_info?: {
+    response_model?: LogOtherData['response_model']
     request_policy?: PolicyEvent[]
     is_multi_key?: boolean
     multi_key_index?: number
@@ -228,8 +229,8 @@ export interface LogOtherData {
   cache_creation_ratio_1h?: number
   is_model_mapped?: boolean
   upstream_model_name?: string
-  // Diagnostic only. Whether the names disagree is derived in the UI via
-  // isResponseModelMismatch so old rows follow the current comparison rule.
+  // Legacy top-level storage; the backend moves this into admin_info for
+  // privileged views and strips it from customer log responses.
   response_model?: {
     requested_model: string
     upstream_model: string

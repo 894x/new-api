@@ -17,6 +17,7 @@ import (
 	appconstant "github.com/QuantumNous/new-api/constant"
 	appdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	appmodel "github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
@@ -678,11 +679,18 @@ func buildResponsesWSCreatePayload(c *gin.Context, info *relaycommon.RelayInfo, 
 }
 
 // responsesWSDataForClient keeps correlation identifiers when hiding provider
-// errors. Accounting consumes the original event before any redaction.
+// errors and projects model declarations to the client's requested ID.
+// Accounting consumes the original event before any downstream projection.
 func responsesWSDataForClient(c *gin.Context, body []byte) []byte {
 	if c == nil {
 		return body
 	}
+	normalized, err := common.RewriteResponseModel(c, body)
+	if err != nil {
+		logger.LogError(c, fmt.Sprintf("failed to normalize response model: %s", err.Error()))
+		return body
+	}
+	body = normalized
 	public, _ := service.StreamErrorDataForClient(c, string(body))
 	if public == string(body) {
 		return body

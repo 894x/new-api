@@ -104,10 +104,12 @@ it('shows model mismatch evidence when tapping the mobile model badge', async ()
       {
         ...log,
         other: JSON.stringify({
-          response_model: {
-            requested_model: longName,
-            upstream_model: 'mapped-model',
-            returned_model: 'unexpected-model',
+          admin_info: {
+            response_model: {
+              requested_model: longName,
+              upstream_model: 'mapped-model',
+              returned_model: 'unexpected-model',
+            },
           },
         }),
       },
@@ -124,6 +126,32 @@ it('shows model mismatch evidence when tapping the mobile model badge', async ()
   ).toBeVisible()
   expect(within(dialog).getByText('mapped-model')).toBeVisible()
   expect(within(dialog).getByText('unexpected-model')).toBeVisible()
+})
+
+it('shows and copies the input model for customer logs without exposing legacy response models', async () => {
+  const user = userEvent.setup()
+  const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
+  renderLogs({
+    admin: false,
+    logs: [
+      {
+        ...log,
+        other: JSON.stringify({
+          response_model: {
+            requested_model: longName,
+            upstream_model: 'mapped-model',
+            returned_model: 'unexpected-model',
+          },
+        }),
+      },
+    ],
+  })
+  expect(screen.queryByText(/unexpected-model/)).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: `Model: ${longName}` }))
+  expect(copy).toHaveBeenCalledWith(longName)
+  expect(
+    screen.queryByRole('dialog', { name: 'Model' })
+  ).not.toBeInTheDocument()
 })
 
 it('opens long channel text on tap and copies the complete value', async () => {
@@ -161,10 +189,12 @@ it.each([false, true])(
           ...log,
           other: observed
             ? JSON.stringify({
-                response_model: {
-                  requested_model: longName,
-                  upstream_model: longName,
-                  returned_model: longName,
+                admin_info: {
+                  response_model: {
+                    requested_model: longName,
+                    upstream_model: longName,
+                    returned_model: longName,
+                  },
                 },
               })
             : log.other,

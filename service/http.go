@@ -105,6 +105,11 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 		logger.LogError(c, fmt.Sprintf("failed to normalize response id: %s", err.Error()))
 		return
 	}
+	normalizedData, err = common.RewriteResponseModel(c, normalizedData)
+	if err != nil {
+		logger.LogError(c, fmt.Sprintf("failed to normalize response model: %s", err.Error()))
+		return
+	}
 	bodyChanged := !bytes.Equal(data, normalizedData)
 	data = normalizedData
 

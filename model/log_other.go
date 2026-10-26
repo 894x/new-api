@@ -21,6 +21,7 @@ var legacySensitiveLogOtherKeys = []string{
 	"channel_name",
 	"channel_type",
 	"reject_reason",
+	"response_model",
 }
 
 type logOtherVisibility int
@@ -184,8 +185,8 @@ func (o *LogOther) MarshalJSON() ([]byte, error) {
 	return common.Marshal(o.toMap())
 }
 
-func normalizeLegacyRejectReason(values map[string]json.RawMessage) bool {
-	rejectReason, ok := values["reject_reason"]
+func normalizeLegacyAdminField(values map[string]json.RawMessage, key string) bool {
+	legacyValue, ok := values[key]
 	if !ok {
 		return false
 	}
@@ -197,15 +198,15 @@ func normalizeLegacyRejectReason(values map[string]json.RawMessage) bool {
 	if adminInfo == nil {
 		adminInfo = make(map[string]json.RawMessage)
 	}
-	if _, exists := adminInfo["reject_reason"]; !exists {
-		adminInfo["reject_reason"] = rejectReason
+	if _, exists := adminInfo[key]; !exists {
+		adminInfo[key] = legacyValue
 	}
 	encodedAdminInfo, err := common.Marshal(adminInfo)
 	if err != nil {
 		return false
 	}
 	values[logOtherAdminInfoKey] = encodedAdminInfo
-	delete(values, "reject_reason")
+	delete(values, key)
 	return true
 }
 
@@ -240,7 +241,11 @@ func formatLogOtherJSON(value string, visibility logOtherVisibility) string {
 			}
 		}
 	} else {
-		changed = normalizeLegacyRejectReason(values)
+		for _, key := range []string{"reject_reason", "response_model"} {
+			if normalizeLegacyAdminField(values, key) {
+				changed = true
+			}
+		}
 		if visibility == logOtherVisibilityAdmin {
 			if _, exists := values[logOtherRootInfoKey]; exists {
 				delete(values, logOtherRootInfoKey)

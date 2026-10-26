@@ -89,6 +89,10 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
+	responseBody, err = common.RewriteResponseModel(c, responseBody)
+	if err != nil {
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+	}
 
 	for key, values := range resp.Header {
 		if !service.ShouldCopyUpstreamHeader(c, key, values) || len(values) == 0 {

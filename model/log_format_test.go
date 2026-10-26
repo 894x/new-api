@@ -55,6 +55,44 @@ func TestFormatUserLogsStripsAllUpstreamIdentifiers(t *testing.T) {
 	require.Empty(t, logs[0].UpstreamRequestId)
 }
 
+func TestResponseModelLogVisibility(t *testing.T) {
+	const observation = `{"requested_model":"kimi-k3","upstream_model":"kimi-k3","returned_model":"kimi/kimi-k2.8-preview"}`
+	for _, tc := range []struct{ name, stored string }{
+		{"legacy", `{"response_model":` + observation + `,"public_id":9007199254740993}`},
+		{"scoped", `{"admin_info":{"response_model":` + observation + `},"public_id":9007199254740993}`},
+		{"null admin scope", `{"response_model":` + observation + `,"admin_info":null,"public_id":9007199254740993}`},
+	} {
+		for _, role := range []string{"user", "admin", "root"} {
+			t.Run(role+"/"+tc.name, func(t *testing.T) {
+				logs := []*Log{{ModelName: "kimi-k3", Other: tc.stored}}
+				switch role {
+				case "user":
+					formatUserLogs(logs, 0)
+				case "admin":
+					FormatAdminLogs(logs)
+				case "root":
+					FormatRootLogs(logs)
+				}
+				assert.Equal(t, "kimi-k3", logs[0].ModelName)
+				assert.Contains(t, logs[0].Other, `"public_id":9007199254740993`)
+				var other map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
+				assert.NotContains(t, other, "response_model")
+				if role == "user" {
+					assert.NotContains(t, logs[0].Other, "kimi-k2.8-preview")
+					assert.NotContains(t, other, "admin_info")
+					return
+				}
+				adminInfo, ok := other["admin_info"].(map[string]any)
+				require.True(t, ok)
+				responseModel, ok := adminInfo["response_model"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, "kimi/kimi-k2.8-preview", responseModel["returned_model"])
+			})
+		}
+	}
+}
+
 func TestTaskPluginLogVisibilityIsRoleSeparated(t *testing.T) {
 	other := common.MapToJsonStr(map[string]any{
 		"model_price": 1.25,
