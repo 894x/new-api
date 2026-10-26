@@ -35,6 +35,44 @@ configuration and health checks. Confirm image and binary identity, startup,
 semantic health/authentication responses, and the relevant frontend resources.
 Negotiate Docker's supported API version if using the Engine API directly.
 
+### Frontend acceptance before switching
+
+Validate what the candidate actually serves, including when a Windows checkout
+cross-builds a Linux binary. An ELF/binary hash and a local `web/dist` inventory
+prove artifact identity, not that embedded files are accessible over HTTP.
+
+- Parse the candidate's served HTML, resolve its script and stylesheet URLs,
+  and fetch every entry resource. Require successful status, the appropriate
+  JavaScript/CSS content type, non-HTML content, and the expected build-manifest
+  hash. Missing assets can fall through to the SPA HTML with HTTP 200.
+- Render the candidate dashboard in a real browser and open a page that loads
+  an asynchronous chunk. Record the visible result and relevant console/network
+  failures. If browser verification is unavailable, disclose the unverified
+  acceptance gate; do not silently replace it with health checks or call the
+  dashboard accepted.
+- Check the actual Nginx `/static/` delivery path and every authorized hostname,
+  including a CLB alias. A successful loopback probe or one hostname does not
+  verify the others. With multiple serving versions, verify each HTML version's
+  referenced assets are reachable through that same hostname.
+- Discover all CLB backends before moving a public alias. HTML and its static
+  dependencies can land on different nodes. Stage the new dependency set on
+  every serving backend, or use a verified shared static delivery path, before
+  any backend serves the new HTML. Updating the local host's Nginx alone does
+  not complete a multi-backend alias rollout. If a peer cannot yet be updated,
+  keep a compatible frontend and report the remaining backend explicitly.
+- If Nginx serves release assets from disk, transfer the manifest and complete
+  static tree, verify file hashes and readable directory/file modes, and stage
+  them before switching HTML. Keep immutable URLs byte-identical. A log saying
+  an archive completed or a count extracted from executable strings is not proof
+  that the HTML entry's full dependency set was preserved.
+
+Repeat these checks immediately after graceful switching. If JS/CSS returns
+HTML, fails its hash, or the page is blank, stop further rollout and restore the
+healthy frontend route or publish the verified matching static tree, then
+recheck both rendered UI and APIs. Keep existing API streams and data services
+running during recovery. State that the release is incomplete until the
+frontend acceptance gate also passes.
+
 Change only the authorized routes, write configurations atomically, run
 `nginx -t`, and reload gracefully. Keep old containers and old Nginx workers
 running until their requests finish. Observe all affected hostnames throughout

@@ -125,9 +125,23 @@ If registry access fails and the required builder images are unavailable, use a
 clean local checkout at the pinned SHA to build the frontend and Linux binary.
 Match the Dockerfile's Go environment/build flags, verify ELF architecture and
 `go version -m`, then compare local, transferred, image-contained and running
-binary SHA-256 values. Build a runtime-only image from an explicitly verified
-cached base and copy the pinned license files. On a legacy Docker builder, use
-plain `COPY` followed by `RUN chmod`, since `COPY --chmod` needs BuildKit.
+binary SHA-256 values. Build a runtime-only image from an explicitly verified,
+pinned OS/runtime base and copy the pinned license files. Do not use a previous
+new-api application image as the base: copying a replacement binary over it
+retains all historical application layers, even when the base image ID is pinned.
+If a clean runtime base is unavailable, prepare one separately before packaging
+the release rather than extending the previous application image.
+
+Preserve executable permissions during the copy. With BuildKit, use
+`COPY --chmod=755`; with a legacy builder, set mode `0755` on the Linux staging
+binary before plain `COPY`. Avoid a separate `RUN chmod` after copying the large
+binary, which can add another full-size binary layer. Inspect the resulting
+image history and layer sizes: the release must contain one current application
+payload without an accumulated chain of previous binaries. Record compressed
+layer bytes separately from unpacked layer sizes; `docker image inspect .Size`
+depends on the Engine version and storage backend and is not by itself a download
+or unpacked-size measurement.
+
 For long SSH sessions, enable server keepalives; after disconnects, rediscover
 the deployment state before repeating any replacement command.
 
@@ -151,6 +165,13 @@ an unused loopback port, accept it before switching the authorized routes, and
 keep the previous image as a healthy standby. Retire older slots only after
 traffic and tasks drain. Preserve both versions' static resources.
 
+Acceptance before switching includes the dashboard: fetch the green slot's
+actual HTML entry, every referenced JS/CSS file, and one lazy-loaded page;
+check resource content types and hashes against the build manifest, then verify
+visible rendering in a browser. A healthy API, HTML 200, matching binary hash,
+or completed asset archive does not satisfy this gate. Follow the frontend
+acceptance procedure in the retention reference before moving traffic.
+
 Use the following replacement sequence when in-place replacement is explicitly
 requested:
 
@@ -171,6 +192,8 @@ Confirm all of the following with current evidence:
 - its image ID and OCI revision match the requested commit
 - startup logs contain no migration, connection, or panic errors
 - the health endpoint and a representative API request return the expected semantic result
+- every authorized public hostname renders the dashboard and a lazy-loaded page;
+  their referenced JS/CSS return actual assets with the expected type and hash
 - reverse-proxy routing reaches the intended instance
 - target database and Redis container IDs/restart counts are unchanged unless authorized
 - every protected application, database, Redis, and neighboring instance is unchanged
