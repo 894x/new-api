@@ -51,13 +51,10 @@ import type { CommonLogFilters } from '../types'
 import { CommonLogsStats } from './common-logs-stats'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
 import { LogExportDialog } from './log-export-dialog'
-import {
-  LogsFilterField,
-  LogsFilterInput,
-  LogsFilterToolbar,
-} from './logs-filter-toolbar'
+import { LogsFilterField, LogsFilterToolbar } from './logs-filter-toolbar'
 import { TaskBillingHistoryButton } from './task-billing-history'
 import { useLogsViewScope, useUsageLogsContext } from './usage-logs-provider'
+import { useLogFilterOptions } from './use-log-filter-options'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 
@@ -129,6 +126,7 @@ export function CommonLogsFilterBar<TData>(
   const { isAdminView: isAdmin } = useLogsViewScope()
   const { sensitiveVisible, setSensitiveVisible } = useUsageLogsContext()
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
+  const filterOptions = useLogFilterOptions(props.table, 'common', isAdmin)
   const { data: adminGroups } = useQuery({
     queryKey: ['groups'],
     queryFn: async () => requireServerSuccess(await getGroups()),
@@ -352,10 +350,14 @@ export function CommonLogsFilterBar<TData>(
   )
   const modelFilter = (
     <LogsFilterField>
-      <LogsFilterInput
+      <Combobox
+        options={filterOptions.modelOptions}
+        allowCustomValue
+        aria-label={t('Model Name')}
         placeholder={t('Model Name')}
+        className='h-8 min-w-0 text-sm leading-5'
         value={filters.model || ''}
-        onChange={(e) => handleChange('model', e.target.value)}
+        onValueChange={(value) => handleChange('model', value ?? '')}
         onKeyDown={handleKeyDown}
       />
     </LogsFilterField>
@@ -451,50 +453,72 @@ export function CommonLogsFilterBar<TData>(
   )
   const advancedFilters = (
     <>
-      <LogsFilterField>
-        <LogsFilterInput
+      <LogsFilterField className={sensitiveInputClass}>
+        <Combobox
+          options={filterOptions.tokenOptions}
+          allowCustomValue
+          aria-label={t('Token Name')}
           placeholder={t('Token Name')}
-          className={sensitiveInputClass}
+          className='h-8 min-w-0 text-sm leading-5'
+          popupClassName={sensitiveInputClass}
           value={filters.token || ''}
-          onChange={(e) => handleChange('token', e.target.value)}
+          onValueChange={(value) => handleChange('token', value ?? '')}
           onKeyDown={handleKeyDown}
         />
       </LogsFilterField>
       {isAdmin && (
-        <LogsFilterField>
-          <LogsFilterInput
+        <LogsFilterField className={sensitiveInputClass}>
+          <Combobox
+            options={filterOptions.usernameOptions}
+            allowCustomValue
+            aria-label={t('Username')}
             placeholder={t('Username')}
-            className={sensitiveInputClass}
+            className='h-8 min-w-0 text-sm leading-5'
+            popupClassName={sensitiveInputClass}
             value={filters.username || ''}
-            onChange={(e) => handleChange('username', e.target.value)}
+            onValueChange={(value) => handleChange('username', value ?? '')}
             onKeyDown={handleKeyDown}
           />
         </LogsFilterField>
       )}
       {isAdmin && (
         <LogsFilterField>
-          <LogsFilterInput
+          <Combobox
+            options={filterOptions.channelOptions}
+            allowCustomValue
+            aria-label={t('Channel ID')}
             placeholder={t('Channel ID')}
+            className='h-8 min-w-0 text-sm leading-5'
             value={filters.channel || ''}
-            onChange={(e) => handleChange('channel', e.target.value)}
+            onValueChange={(value) => handleChange('channel', value ?? '')}
             onKeyDown={handleKeyDown}
           />
         </LogsFilterField>
       )}
       <LogsFilterField>
-        <LogsFilterInput
+        <Combobox
+          options={filterOptions.requestIdOptions}
+          allowCustomValue
+          aria-label={t('Request ID')}
           placeholder={t('Request ID')}
+          className='h-8 min-w-0 text-sm leading-5'
           value={filters.requestId || ''}
-          onChange={(e) => handleChange('requestId', e.target.value)}
+          onValueChange={(value) => handleChange('requestId', value ?? '')}
           onKeyDown={handleKeyDown}
         />
       </LogsFilterField>
       {isAdmin && (
         <LogsFilterField>
-          <LogsFilterInput
+          <Combobox
+            options={filterOptions.upstreamRequestIdOptions}
+            allowCustomValue
+            aria-label={t('Upstream Request ID')}
             placeholder={t('Upstream Request ID')}
+            className='h-8 min-w-0 text-sm leading-5'
             value={filters.upstreamRequestId || ''}
-            onChange={(e) => handleChange('upstreamRequestId', e.target.value)}
+            onValueChange={(value) =>
+              handleChange('upstreamRequestId', value ?? '')
+            }
             onKeyDown={handleKeyDown}
           />
         </LogsFilterField>

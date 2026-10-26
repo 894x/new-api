@@ -43,12 +43,14 @@ const options = [
 
 function ProviderCombobox(props: {
   onValueChange: (value: string | null) => void
+  allowCustomValue?: boolean
 }) {
   return (
     <Combobox
       options={options}
       value='openai'
       onValueChange={props.onValueChange}
+      allowCustomValue={props.allowCustomValue}
       aria-label='Provider'
     />
   )
@@ -111,6 +113,40 @@ afterEach(() => {
 })
 
 describe('popups inside a drawer', () => {
+  it('anchors editable combobox options in the transformed drawer coordinate space', async () => {
+    const change = vi.fn()
+    render(
+      <FilterDrawer>
+        <ProviderCombobox allowCustomValue onValueChange={change} />
+      </FilterDrawer>
+    )
+    const user = userEvent.setup()
+    const dialog = screen.getByRole('dialog', { name: 'Filters' })
+    const input = within(dialog).getByRole('combobox', { name: 'Provider' })
+    dialog.style.transform = 'translateY(0)'
+    dialog.scrollTop = 24
+    dialog.scrollLeft = 3
+    vi.spyOn(dialog, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(10, 300, 360, 500)
+    )
+    vi.spyOn(input, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(20, 420, 320, 32)
+    )
+
+    await user.click(input)
+    const listbox = await within(dialog).findByRole('listbox')
+
+    expect(listbox.parentElement).toHaveStyle({
+      position: 'absolute',
+      top: '180px',
+      left: '13px',
+      width: '320px',
+    })
+    await user.click(within(listbox).getByRole('option', { name: 'Google' }))
+    expect(change).toHaveBeenCalledWith('gemini')
+    expect(dialog).toBeInTheDocument()
+  })
+
   it('renders combobox options inside the drawer dialog and clicking one applies it without closing the drawer', async () => {
     const change = vi.fn()
     render(
@@ -151,6 +187,25 @@ describe('popups inside a drawer', () => {
 })
 
 describe('popups outside a drawer', () => {
+  it('anchors editable combobox options in viewport coordinates outside dialogs', async () => {
+    render(<ProviderCombobox allowCustomValue onValueChange={vi.fn()} />)
+    const user = userEvent.setup()
+    const input = screen.getByRole('combobox', { name: 'Provider' })
+    vi.spyOn(input, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(20, 420, 320, 32)
+    )
+
+    await user.click(input)
+    const listbox = await screen.findByRole('listbox')
+
+    expect(listbox.parentElement).toHaveStyle({
+      position: 'fixed',
+      top: '456px',
+      left: '20px',
+      width: '320px',
+    })
+  })
+
   it('portals combobox options to document.body outside the component subtree', async () => {
     const view = render(<ProviderCombobox onValueChange={vi.fn()} />)
     const user = userEvent.setup()

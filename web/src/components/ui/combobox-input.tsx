@@ -85,6 +85,7 @@ export function ComboboxInput({
   // from treating option clicks as outside presses.
   const [dropdown, setDropdown] = React.useState<{
     container: HTMLElement
+    position: 'absolute' | 'fixed'
     top: number
     left: number
     width: number
@@ -141,14 +142,24 @@ export function ComboboxInput({
     }
     const input = inputRef.current
     if (!input) return
-    const container =
-      input.closest<HTMLElement>('[role="dialog"]') ?? document.body
+    const dialog = input.closest<HTMLElement>('[role="dialog"]')
+    const container = dialog ?? document.body
     const measure = () => {
       const rect = input.getBoundingClientRect()
+      let top = rect.bottom + 4
+      let left = rect.left
+      if (dialog) {
+        // Drawers transform their positioned dialog. Use its local coordinates
+        // so the popup moves with it instead of adding viewport offsets twice.
+        const dialogRect = dialog.getBoundingClientRect()
+        top += dialog.scrollTop - dialogRect.top - dialog.clientTop
+        left += dialog.scrollLeft - dialogRect.left - dialog.clientLeft
+      }
       setDropdown({
         container,
-        top: rect.bottom + 4,
-        left: rect.left,
+        position: dialog ? 'absolute' : 'fixed',
+        top,
+        left,
         width: rect.width,
       })
     }
@@ -298,7 +309,7 @@ export function ComboboxInput({
           <div
             ref={dropdownRef}
             style={{
-              position: 'fixed',
+              position: dropdown.position,
               top: dropdown.top,
               left: dropdown.left,
               width: dropdown.width,

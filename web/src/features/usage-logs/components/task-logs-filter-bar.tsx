@@ -22,16 +22,15 @@ import type { Table } from '@tanstack/react-table'
 import { useState, useEffect, useCallback, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Combobox } from '@/components/ui/combobox'
+
 import { buildSearchParams } from '../lib/filter'
 import { getDefaultTimeRange } from '../lib/utils'
 import type { DrawingLogFilters, LogCategory, TaskLogFilters } from '../types'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
-import {
-  LogsFilterField,
-  LogsFilterInput,
-  LogsFilterToolbar,
-} from './logs-filter-toolbar'
+import { LogsFilterField, LogsFilterToolbar } from './logs-filter-toolbar'
 import { useLogsViewScope } from './usage-logs-provider'
+import { useLogFilterOptions } from './use-log-filter-options'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 
@@ -72,6 +71,11 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
   const searchParams = route.useSearch()
   const { isAdminView: isAdmin } = useLogsViewScope()
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
+  const filterOptions = useLogFilterOptions(
+    props.table,
+    props.logCategory,
+    isAdmin
+  )
 
   const [filters, setFilters] = useState<TaskLogsFilters>(() => {
     const { start, end } = getDefaultTimeRange()
@@ -180,21 +184,28 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
   )
   const taskIdFilter = (
     <LogsFilterField>
-      <LogsFilterInput
+      <Combobox
+        options={filterOptions.taskIdOptions}
+        allowCustomValue
         aria-label={t('Task ID')}
         placeholder={placeholder}
+        className='h-8 min-w-0 text-sm leading-5'
         value={filterValue}
-        onChange={(e) => handleFilterChange(e.target.value)}
+        onValueChange={(value) => handleFilterChange(value ?? '')}
         onKeyDown={handleKeyDown}
       />
     </LogsFilterField>
   )
   const channelFilter = isAdmin ? (
     <LogsFilterField>
-      <LogsFilterInput
+      <Combobox
+        options={filterOptions.channelOptions}
+        allowCustomValue
+        aria-label={t('Channel ID')}
         placeholder={t('Channel ID')}
+        className='h-8 min-w-0 text-sm leading-5'
         value={filters.channel || ''}
-        onChange={(e) => handleChange('channel', e.target.value)}
+        onValueChange={(value) => handleChange('channel', value ?? '')}
         onKeyDown={handleKeyDown}
       />
     </LogsFilterField>
