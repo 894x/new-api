@@ -6,12 +6,15 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
+import { SettingsSwitchField } from '../components/settings-form-layout'
 import { useSystemOptions } from '../hooks/use-system-options'
 import { useUpdateOption } from '../hooks/use-update-option'
 
 const captureSettingsSchema = z.object({
   retention_days: z.number().int().min(1).max(365),
   max_gib: z.number().int().min(1).max(365),
+  max_concurrency: z.number().int().min(1).max(1024).default(8),
+  only_non_200: z.boolean().default(false),
 })
 type CaptureSettings = z.infer<typeof captureSettingsSchema>
 
@@ -63,7 +66,12 @@ function RequestCaptureSettingsForm({
   const updateOption = useUpdateOption()
   const [days, setDays] = useState(String(initialValue.retention_days))
   const [capacity, setCapacity] = useState(String(initialValue.max_gib))
+  const [concurrency, setConcurrency] = useState(
+    String(initialValue.max_concurrency)
+  )
+  const [onlyNon200, setOnlyNon200] = useState(initialValue.only_non_200)
   const [invalid, setInvalid] = useState(false)
+  const [invalidConcurrency, setInvalidConcurrency] = useState(false)
   const errorId = 'capture-storage-validation'
   return (
     <form
@@ -74,8 +82,16 @@ function RequestCaptureSettingsForm({
         const candidate = captureSettingsSchema.safeParse({
           retention_days: Number(days),
           max_gib: Number(capacity),
+          max_concurrency: Number(concurrency),
+          only_non_200: onlyNon200,
         })
         setInvalid(!candidate.success)
+        setInvalidConcurrency(
+          !candidate.success &&
+            candidate.error.issues.some(
+              (issue) => issue.path[0] === 'max_concurrency'
+            )
+        )
         if (!candidate.success) return
         updateOption.mutate({
           key: 'RequestCaptureStorage',
@@ -87,6 +103,11 @@ function RequestCaptureSettingsForm({
       <p className='text-muted-foreground text-sm'>
         {t(
           'Retention applies to new captures. Capacity changes take effect without restarting; old files are cleaned up in the background. Existing expiry dates stay unchanged.'
+        )}
+      </p>
+      <p className='text-muted-foreground text-sm'>
+        {t(
+          'Concurrency and capture mode apply to new requests without restarting. Active captures are not interrupted.'
         )}
       </p>
       <div className='grid min-w-0 gap-4 sm:grid-cols-2'>
@@ -124,10 +145,39 @@ function RequestCaptureSettingsForm({
             onChange={(event) => setCapacity(event.target.value)}
           />
         </div>
+        <div className='min-w-0 space-y-2'>
+          <Label htmlFor='capture-max-concurrency'>
+            {t('Maximum concurrent captures per instance')}
+          </Label>
+          <Input
+            id='capture-max-concurrency'
+            type='number'
+            min={1}
+            max={1024}
+            step={1}
+            value={concurrency}
+            disabled={updateOption.isPending}
+            aria-invalid={invalid}
+            aria-describedby={invalid ? errorId : undefined}
+            onChange={(event) => setConcurrency(event.target.value)}
+          />
+        </div>
       </div>
+      <SettingsSwitchField
+        controlId='capture-only-non-200'
+        checked={onlyNon200}
+        onCheckedChange={setOnlyNon200}
+        disabled={updateOption.isPending}
+        label={t('Only save non-200 requests')}
+        description={t(
+          'Keep captures only when the final client HTTP status is not 200. HTTP 200 stream errors are excluded.'
+        )}
+      />
       {invalid && (
         <p id={errorId} role='alert' className='text-destructive text-sm'>
-          {t('Enter whole numbers between 1 and 365.')}
+          {invalidConcurrency
+            ? t('Enter a whole number between 1 and 1024.')
+            : t('Enter whole numbers between 1 and 365.')}
         </p>
       )}
       {(updateOption.isError || updateOption.data?.success === false) && (

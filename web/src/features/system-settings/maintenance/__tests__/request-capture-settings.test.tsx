@@ -23,7 +23,7 @@ function renderSettings(value = '{"retention_days":3,"max_gib":10}') {
 }
 
 describe('Request capture storage settings', () => {
-  it('loads persisted values and saves both fields in one option', async () => {
+  it('loads legacy settings with defaults and saves all capture controls atomically', async () => {
     vi.mocked(api.put).mockResolvedValue({ data: { success: true } })
     renderSettings('{"retention_days":7,"max_gib":20}')
     const days = await screen.findByRole('spinbutton', {
@@ -34,19 +34,63 @@ describe('Request capture storage settings', () => {
     })
     expect(days).toHaveValue(7)
     expect(capacity).toHaveValue(20)
+    const concurrency = screen.getByRole('spinbutton', {
+      name: 'Maximum concurrent captures per instance',
+    })
+    const onlyNon200 = screen.getByRole('switch', {
+      name: 'Only save non-200 requests',
+    })
+    expect(concurrency).toHaveValue(8)
+    expect(onlyNon200).not.toBeChecked()
     fireEvent.change(days, { target: { value: '14' } })
     fireEvent.change(capacity, { target: { value: '50' } })
+    fireEvent.change(concurrency, { target: { value: '64' } })
+    fireEvent.click(onlyNon200)
     fireEvent.click(
       screen.getByRole('button', { name: 'Save capture settings' })
     )
     await waitFor(() =>
       expect(api.put).toHaveBeenCalledWith('/api/option/', {
         key: 'RequestCaptureStorage',
-        value: '{"retention_days":14,"max_gib":50}',
+        value:
+          '{"retention_days":14,"max_gib":50,"max_concurrency":64,"only_non_200":true}',
       })
     )
     expect(api.put).toHaveBeenCalledTimes(1)
   })
+
+  it('restores persisted concurrency and non-200 mode', async () => {
+    renderSettings(
+      '{"retention_days":3,"max_gib":10,"max_concurrency":32,"only_non_200":true}'
+    )
+    expect(
+      await screen.findByRole('spinbutton', {
+        name: 'Maximum concurrent captures per instance',
+      })
+    ).toHaveValue(32)
+    expect(
+      screen.getByRole('switch', { name: 'Only save non-200 requests' })
+    ).toBeChecked()
+  })
+
+  it.each(['', '0', '1.5', '1025'])(
+    'rejects invalid concurrency %s without saving',
+    async (value) => {
+      renderSettings()
+      const concurrency = await screen.findByRole('spinbutton', {
+        name: 'Maximum concurrent captures per instance',
+      })
+      fireEvent.change(concurrency, { target: { value } })
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Save capture settings' })
+      )
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Enter a whole number between 1 and 1024.'
+      )
+      expect(concurrency).toHaveAttribute('aria-invalid', 'true')
+      expect(api.put).not.toHaveBeenCalled()
+    }
+  )
 
   it.each(['', '0', '-1', '1.5', '366'])(
     'rejects invalid retention %s without sending settings',
@@ -75,7 +119,15 @@ describe('Request capture storage settings', () => {
     const capacity = await screen.findByRole('spinbutton', {
       name: 'Capture capacity per instance (GiB)',
     })
+    const concurrency = screen.getByRole('spinbutton', {
+      name: 'Maximum concurrent captures per instance',
+    })
+    const onlyNon200 = screen.getByRole('switch', {
+      name: 'Only save non-200 requests',
+    })
     fireEvent.change(capacity, { target: { value: '30' } })
+    fireEvent.change(concurrency, { target: { value: '64' } })
+    fireEvent.click(onlyNon200)
     fireEvent.click(
       screen.getByRole('button', { name: 'Save capture settings' })
     )
@@ -83,6 +135,8 @@ describe('Request capture storage settings', () => {
       'Failed to save capture settings'
     )
     expect(capacity).toHaveValue(30)
+    expect(concurrency).toHaveValue(64)
+    expect(onlyNon200).toBeChecked()
   })
 
   it('does not expose editable defaults for malformed persisted settings', async () => {

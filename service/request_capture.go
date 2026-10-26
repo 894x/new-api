@@ -43,13 +43,14 @@ type CapturePart struct {
 }
 
 type RequestCaptureSession struct {
-	mu        sync.Mutex
-	store     *RequestCaptureStore
-	Record    model.RequestCapture
-	Parts     []*CapturePart
-	remaining int
-	finished  bool
-	attempts  int
+	mu         sync.Mutex
+	store      *RequestCaptureStore
+	Record     model.RequestCapture
+	Parts      []*CapturePart
+	remaining  int
+	finished   bool
+	attempts   int
+	onlyNon200 bool
 }
 
 // BeginRequestCapture performs no body work for users without an enabled policy.
@@ -72,24 +73,43 @@ func BeginRequestCapture(c *gin.Context) *RequestCaptureSession {
 	id := common.GetUUID()
 	id = strings.ReplaceAll(id, "-", "")
 	now := time.Now()
-	retention := time.Duration(model.GetRequestCaptureStorageSettings().RetentionDays) * 24 * time.Hour
-	s := &RequestCaptureSession{store: store, remaining: captureBudget, Record: model.RequestCapture{
-		ID: id, RequestID: c.GetString(common.RequestIdKey), UserID: policy.UserID,
-		StoreID: store.id, CreatedAt: now.Unix(), ExpiresAt: now.Add(retention).Unix(), Status: "recording",
-	}}
-	select {
-	case store.slots <- struct{}{}:
-	default:
+	settings := model.GetRequestCaptureStorageSettings()
+	retention := time.Duration(settings.RetentionDays) * 24 * time.Hour
+	s := &RequestCaptureSession{
+		store:      store,
+		remaining:  captureBudget,
+		onlyNon200: settings.OnlyNon200,
+		Record: model.RequestCapture{
+			ID:        id,
+			RequestID: c.GetString(common.RequestIdKey),
+			UserID:    policy.UserID,
+			StoreID:   store.id,
+			CreatedAt: now.Unix(),
+			ExpiresAt: now.Add(retention).Unix(),
+			Status:    "recording",
+		},
+	}
+	store.admissionMu.Lock()
+	admitted := len(store.slots) < settings.MaxConcurrency
+	if admitted {
+		store.slots <- struct{}{}
+	}
+	store.admissionMu.Unlock()
+	if !admitted {
 		s.Record.Status, s.Record.Reason = "failed", "capacity_exceeded"
 		if model.SaveRequestCapture(ctx, &s.Record) != nil {
 			common.SysError("request capture failure index write failed")
 		}
 		return nil
 	}
-	if err := model.SaveRequestCapture(ctx, &s.Record); err != nil {
-		<-store.slots
-		common.SysError("request capture index write failed")
-		return nil
+	// Filtered captures remain in bounded memory until the final client status
+	// is known. Successful requests must leave neither an archive nor an index.
+	if !s.onlyNon200 {
+		if err := model.SaveRequestCapture(ctx, &s.Record); err != nil {
+			<-store.slots
+			common.SysError("request capture index write failed")
+			return nil
+		}
 	}
 	c.Set(requestCaptureKey, s)
 	return s
@@ -244,6 +264,15 @@ func (s *RequestCaptureSession) Finish() {
 		return
 	}
 	s.finished = true
+	if s.onlyNon200 && s.Record.StatusCode == http.StatusOK {
+		for _, part := range s.Parts {
+			part.head, part.tail = nil, nil
+		}
+		s.Parts = nil
+		s.mu.Unlock()
+		<-s.store.slots
+		return
+	}
 	s.mu.Unlock()
 	// A slot is held through persistence, so this bounded queue cannot fill.
 	s.store.queue <- s

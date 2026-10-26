@@ -29,6 +29,7 @@ type RequestCaptureStore struct {
 	root         string
 	id           string
 	cleanupOwner string
+	admissionMu  sync.Mutex
 	slots        chan struct{}
 	queue        chan *RequestCaptureSession
 	stop         chan struct{}
@@ -127,8 +128,17 @@ func newRequestCaptureStore(root string) (*RequestCaptureStore, error) {
 	if err != nil || !captureIDPattern.Match(id) {
 		return nil, errors.New("invalid capture store identity")
 	}
-	return &RequestCaptureStore{root: abs, id: string(id), cleanupOwner: strings.ReplaceAll(common.GetUUID(), "-", ""),
-		slots: make(chan struct{}, 8), queue: make(chan *RequestCaptureSession, 8), stop: make(chan struct{}), done: make(chan struct{})}, nil
+	return &RequestCaptureStore{
+		root:         abs,
+		id:           string(id),
+		cleanupOwner: strings.ReplaceAll(common.GetUUID(), "-", ""),
+		// Admission uses the live policy; fixed backing capacity lets limits
+		// shrink without replacing channels held by in-flight requests.
+		slots: make(chan struct{}, model.MaxRequestCaptureConcurrency),
+		queue: make(chan *RequestCaptureSession, model.MaxRequestCaptureConcurrency),
+		stop:  make(chan struct{}),
+		done:  make(chan struct{}),
+	}, nil
 }
 
 func (store *RequestCaptureStore) run() {

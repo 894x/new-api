@@ -18,12 +18,21 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 func captureFixture(t *testing.T) (*RequestCaptureStore, *gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	var driver gorm.Dialector = sqlite.Open(":memory:")
+	switch os.Getenv("CAPTURE_TEST_DIALECT") {
+	case "mysql":
+		driver = mysql.Open(os.Getenv("TEST_MYSQL_DSN"))
+	case "postgres":
+		driver = postgres.Open(os.Getenv("TEST_POSTGRES_DSN"))
+	}
+	db, err := gorm.Open(driver, &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
@@ -43,7 +52,15 @@ func captureFixture(t *testing.T) (*RequestCaptureStore, *gin.Context, *httptest
 	store, err := newRequestCaptureStore(t.TempDir())
 	require.NoError(t, err)
 	requestCaptureStore = store
-	t.Cleanup(func() { model.DB, requestCaptureStore = previousDB, previousStore; _ = sqlDB.Close() })
+	t.Cleanup(func() {
+		if os.Getenv("CAPTURE_TEST_DIALECT") != "" {
+			require.NoError(t, db.Migrator().DropTable(
+				&model.RequestCapturePolicy{}, &model.RequestCapture{}, &model.Option{}, &model.SystemTaskLock{},
+			))
+		}
+		model.DB, requestCaptureStore = previousDB, previousStore
+		_ = sqlDB.Close()
+	})
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Set("id", 7)
@@ -51,6 +68,134 @@ func captureFixture(t *testing.T) (*RequestCaptureStore, *gin.Context, *httptest
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"client-model","messages":[]}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	return store, c, w
+}
+
+func TestRequestCaptureConfiguredConcurrencyAndFilteredSlotReuse(t *testing.T) {
+	store, c, _ := captureFixture(t)
+	require.NoError(t, model.UpdateOption(model.RequestCaptureStorageOptionKey, `{"retention_days":3,"max_gib":10,"max_concurrency":16,"only_non_200":true}`))
+	require.NoError(t, model.SetRequestCapturePolicy(context.Background(), model.RequestCapturePolicy{UserID: 7, Enabled: true}))
+	sessions := make([]*RequestCaptureSession, 0, 16)
+	for range 16 {
+		s := BeginRequestCapture(c)
+		require.NotNil(t, s)
+		sessions = append(sessions, s)
+	}
+	original := c.Request.Body
+	assert.Nil(t, BeginRequestCapture(c))
+	assert.Equal(t, original, c.Request.Body)
+	sessions[0].Record.StatusCode = http.StatusOK
+	sessions[0].Finish()
+	sessions[0].Finish() // Repeated finalization must not release another slot.
+	require.NotNil(t, BeginRequestCapture(c))
+	assert.Nil(t, BeginRequestCapture(c))
+	// Shrinking a live limit drains existing captures without revoking them.
+	require.NoError(t, model.UpdateOption(model.RequestCaptureStorageOptionKey,
+		`{"retention_days":3,"max_gib":10,"max_concurrency":1,"only_non_200":true}`))
+	assert.Nil(t, BeginRequestCapture(c))
+	for _, s := range sessions[1:] {
+		s.Record.StatusCode = http.StatusOK
+		s.Finish()
+	}
+	assert.Nil(t, BeginRequestCapture(c)) // One replacement capture remains active.
+	require.NoError(t, model.UpdateOption(model.RequestCaptureStorageOptionKey,
+		`{"retention_days":3,"max_gib":10,"max_concurrency":2,"only_non_200":true}`))
+	require.NotNil(t, BeginRequestCapture(c))
+	assert.Nil(t, BeginRequestCapture(c))
+	assert.Empty(t, store.queue)
+}
+
+func TestRequestCaptureFiltersByFinalClientStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		onlyNon200       bool
+		clientStatus     int
+		upstreamStatus   int
+		sseError         bool
+		toggleAfterStart bool
+	}{
+		{name: "default keeps 200", clientStatus: 200, upstreamStatus: 200},
+		{name: "filtered 200", onlyNon200: true, clientStatus: 200, upstreamStatus: 200},
+		{name: "filtered 201 retained", onlyNon200: true, clientStatus: 201, upstreamStatus: 201},
+		{name: "filtered 400 retained", onlyNon200: true, clientStatus: 400, upstreamStatus: 400},
+		{name: "filtered 429 retained", onlyNon200: true, clientStatus: 429, upstreamStatus: 429},
+		{name: "filtered 500 retained", onlyNon200: true, clientStatus: 500, upstreamStatus: 500},
+		{name: "upstream error final 200 discarded", onlyNon200: true, clientStatus: 200, upstreamStatus: 400},
+		{name: "HTTP 200 SSE error discarded", onlyNon200: true, clientStatus: 200, upstreamStatus: 200, sseError: true},
+		{name: "in-flight all mode remains unchanged", clientStatus: 200, upstreamStatus: 200, toggleAfterStart: true},
+		{name: "in-flight filtered mode remains unchanged", onlyNon200: true, clientStatus: 200, upstreamStatus: 200, toggleAfterStart: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, c, w := captureFixture(t)
+			if tc.onlyNon200 {
+				require.NoError(t, model.UpdateOption(model.RequestCaptureStorageOptionKey, `{"retention_days":3,"max_gib":10,"max_concurrency":8,"only_non_200":true}`))
+			}
+			require.NoError(t, model.SetRequestCapturePolicy(context.Background(), model.RequestCapturePolicy{UserID: 7, Enabled: true}))
+			s := BeginRequestCapture(c)
+			require.NotNil(t, s)
+			if tc.toggleAfterStart {
+				settings := model.GetRequestCaptureStorageSettings()
+				settings.OnlyNon200 = !settings.OnlyNon200
+				value, err := common.Marshal(settings)
+				require.NoError(t, err)
+				require.NoError(t, model.UpdateOption(model.RequestCaptureStorageOptionKey, string(value)))
+			}
+			s.CaptureClientRequest(c)
+			clientBody, err := io.ReadAll(c.Request.Body)
+			require.NoError(t, err)
+			finishResponse := s.CaptureClientResponse(c)
+			req := httptest.NewRequest(http.MethodPost, "http://upstream/v1/chat/completions", bytes.NewReader(clientBody))
+			req.Header.Set("Content-Type", "application/json")
+			capture := CaptureUpstreamExchange(c, req, 44, "client-model")
+			upstreamBody, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			assert.Equal(t, clientBody, upstreamBody)
+			responseBody, contentType := `{"error":{"message":"test response"}}`, "application/json"
+			if tc.sseError {
+				responseBody, contentType = "data: {\"error\":{\"message\":\"test response\"}}\n\n", "text/event-stream"
+			}
+			resp := &http.Response{
+				StatusCode:    tc.upstreamStatus,
+				Header:        http.Header{"Content-Type": {contentType}},
+				Body:          io.NopCloser(strings.NewReader(responseBody)),
+				ContentLength: int64(len(responseBody)),
+			}
+			capture(resp, nil)
+			actual, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+			c.Writer.Header().Set("Content-Type", contentType)
+			c.Writer.WriteHeader(tc.clientStatus)
+			_, err = c.Writer.Write(actual)
+			require.NoError(t, err)
+			finishResponse(true)
+			s.Finish()
+			assert.Equal(t, tc.clientStatus, w.Code)
+			assert.Equal(t, responseBody, w.Body.String())
+			path, err := store.path(&s.Record)
+			require.NoError(t, err)
+			if tc.onlyNon200 && tc.clientStatus == http.StatusOK {
+				assert.Empty(t, store.slots)
+				assert.Empty(t, store.queue)
+				assert.Empty(t, s.Parts)
+				_, err = model.FindRequestCapture(context.Background(), s.Record.RequestID)
+				assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+				assert.NoFileExists(t, path)
+				return
+			}
+			store.persist(<-store.queue)
+			<-store.slots
+			record, err := model.FindRequestCapture(context.Background(), s.Record.RequestID)
+			require.NoError(t, err)
+			assert.Equal(t, tc.clientStatus, record.StatusCode)
+			assert.Equal(t, "ready", record.Status)
+			parts, err := ReadRequestCapture(record)
+			require.NoError(t, err)
+			require.Len(t, parts, 4)
+			assert.Equal(t, string(clientBody), parts[0].Body)
+			assert.Equal(t, string(upstreamBody), parts[2].Body)
+			assert.Equal(t, responseBody, parts[3].Body)
+		})
+	}
 }
 
 func TestRequestCaptureDisabledByDefaultAndPerUser(t *testing.T) {
