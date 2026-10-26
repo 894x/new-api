@@ -473,6 +473,10 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		break
 	}
 
+	responseBody, err = helper.SanitizeResponseBody(responseBody, info.RelayFormat)
+	if err != nil {
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+	}
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	return &usage, nil

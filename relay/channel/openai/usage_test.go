@@ -31,25 +31,24 @@ func TestK3EmptyReasoningUsagePreservesSettlement(t *testing.T) {
 		incomplete   bool
 		finishReason string
 		wantChat     int64
-		wantOutput   int64
 	}{
 		{name: "chat details only", details: `"completion_tokens_details":{"reasoning_tokens":1}`},
 		{name: "both detail families", details: `"completion_tokens_details":{"reasoning_tokens":1},"output_tokens_details":{"reasoning_tokens":1}`},
 		{name: "output details only", details: `"output_tokens_details":{"reasoning_tokens":1}`},
 		{name: "empty fields", message: `,"reasoning_content":"","reasoning":null`, details: `"completion_tokens_details":{"reasoning_tokens":1}`},
-		{name: "actual reasoning", message: `,"reasoning_content":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1, wantOutput: 1},
-		{name: "reasoning alias", message: `,"reasoning":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1, wantOutput: 1},
-		{name: "nonempty alias with empty canonical field", message: `,"reasoning_content":"","reasoning":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1, wantOutput: 1},
+		{name: "actual reasoning", message: `,"reasoning_content":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1},
+		{name: "reasoning alias", message: `,"reasoning":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1},
+		{name: "nonempty alias with empty canonical field", message: `,"reasoning_content":"","reasoning":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1},
 		{name: "tool call with hidden reasoning", finishReason: "tool_calls", message: `,"tool_calls":[{"id":"call_lookup","type":"function","function":{"name":"lookup","arguments":"{}"}}]`, details: `"completion_tokens_details":{"reasoning_tokens":3}`},
 		{name: "larger count", details: `"completion_tokens_details":{"reasoning_tokens":143}`},
 		{name: "large output details only", details: `"output_tokens_details":{"reasoning_tokens":3365}`},
-		{name: "actual larger reasoning", message: `,"reasoning_content":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":143}`, wantChat: 143, wantOutput: 143},
-		{name: "other model", model: "gpt-test", details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1, wantOutput: 1},
+		{name: "actual larger reasoning", message: `,"reasoning_content":"think"`, details: `"completion_tokens_details":{"reasoning_tokens":143}`, wantChat: 143},
+		{name: "other model", model: "gpt-test", details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1},
 		{name: "k3 model variant", model: "kimi-k3-pro", details: `"completion_tokens_details":{"reasoning_tokens":1}`},
 		{name: "conflicting positive aliases", details: `"completion_tokens_details":{"reasoning_tokens":1},"output_tokens_details":{"reasoning_tokens":5}`},
 		{name: "conflicting zero alias", details: `"completion_tokens_details":{"reasoning_tokens":1},"output_tokens_details":{"reasoning_tokens":0}`},
-		{name: "incomplete response", incomplete: true, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1, wantOutput: 1},
-		{name: "incomplete larger response", incomplete: true, details: `"completion_tokens_details":{"reasoning_tokens":143}`, wantChat: 143, wantOutput: 143},
+		{name: "incomplete response", incomplete: true, details: `"completion_tokens_details":{"reasoning_tokens":1}`, wantChat: 1},
+		{name: "incomplete larger response", incomplete: true, details: `"completion_tokens_details":{"reasoning_tokens":143}`, wantChat: 143},
 	} {
 		for _, stream := range []bool{false, true} {
 			for _, forceFormat := range []bool{false, true} {
@@ -104,17 +103,13 @@ func TestK3EmptyReasoningUsagePreservesSettlement(t *testing.T) {
 						}
 					}
 					require.NotEmpty(t, payload)
-					for path, want := range map[string]int64{"prompt_tokens": 100, "completion_tokens": int64(completionTokens), "input_tokens": 100, "output_tokens": int64(completionTokens), "total_tokens": int64(totalTokens)} {
+					for path, want := range map[string]int64{"prompt_tokens": 100, "completion_tokens": int64(completionTokens), "total_tokens": int64(totalTokens)} {
 						assert.Equal(t, want, gjson.Get(payload, "usage."+path).Int(), path)
 					}
 					assert.Equal(t, tc.wantChat, gjson.Get(payload, "usage.completion_tokens_details.reasoning_tokens").Int())
-					output := gjson.Get(payload, "usage.output_tokens_details.reasoning_tokens")
-					if forceFormat || gjson.Get(usageJSON, "output_tokens_details").Exists() {
-						require.True(t, output.Exists())
-						assert.Equal(t, tc.wantOutput, output.Int())
-					} else {
-						assert.False(t, output.Exists())
-					}
+					assert.False(t, gjson.Get(payload, "usage.input_tokens").Exists())
+					assert.False(t, gjson.Get(payload, "usage.output_tokens").Exists())
+					assert.False(t, gjson.Get(payload, "usage.output_tokens_details").Exists())
 				})
 			}
 		}
@@ -312,7 +307,7 @@ func TestK3StreamForwardsTextBeforeTerminalAndPreservesCancelledUsage(t *testing
 	}
 }
 
-func TestForceFormattedChatUsageIncludesResponsesAliases(t *testing.T) {
+func TestForceFormattedChatUsageOnlyExposesChatUsage(t *testing.T) {
 	body := `{"id":"chatcmpl-usage","object":"chat.completion","created":1710000000,"model":"kimi-k3","choices":[{"index":0,"message":{"role":"assistant","content":"ok","reasoning_content":"think"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":25},"completion_tokens_details":{"reasoning_tokens":5}}}`
 	c, recorder, resp, info := newChatCompletionResponseIDTestContext(t, body, false)
 	info.ChannelType = constant.ChannelTypeOpenAI
@@ -324,16 +319,20 @@ func TestForceFormattedChatUsageIncludesResponsesAliases(t *testing.T) {
 	assert.Nil(t, usage.OutputTokensDetails)
 	assert.Equal(t, 25, usage.PromptTokensDetails.CacheWriteTokens)
 	assert.Zero(t, usage.PromptTokensDetails.CachedCreationTokens)
-	assert.Equal(t, int64(100), gjson.GetBytes(recorder.Body.Bytes(), "usage.input_tokens").Int())
-	assert.Equal(t, int64(20), gjson.GetBytes(recorder.Body.Bytes(), "usage.output_tokens").Int())
-	assert.Equal(t, int64(40), gjson.GetBytes(recorder.Body.Bytes(), "usage.input_tokens_details.cached_tokens").Int())
-	assert.Equal(t, int64(25), gjson.GetBytes(recorder.Body.Bytes(), "usage.prompt_tokens_details.cached_creation_tokens").Int())
-	assert.Equal(t, int64(25), gjson.GetBytes(recorder.Body.Bytes(), "usage.input_tokens_details.cached_creation_tokens").Int())
-	assert.Equal(t, int64(5), gjson.GetBytes(recorder.Body.Bytes(), "usage.output_tokens_details.reasoning_tokens").Int())
+	assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage.input_tokens").Exists())
+	assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage.output_tokens").Exists())
+	assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage.input_tokens_details").Exists())
+	assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage.output_tokens_details").Exists())
+	assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage.prompt_tokens_details.cached_creation_tokens").Exists())
+	assert.Equal(t, int64(100), gjson.GetBytes(recorder.Body.Bytes(), "usage.prompt_tokens").Int())
+	assert.Equal(t, int64(20), gjson.GetBytes(recorder.Body.Bytes(), "usage.completion_tokens").Int())
+	assert.Equal(t, int64(40), gjson.GetBytes(recorder.Body.Bytes(), "usage.prompt_tokens_details.cached_tokens").Int())
+	assert.Equal(t, int64(25), gjson.GetBytes(recorder.Body.Bytes(), "usage.prompt_tokens_details.cache_write_tokens").Int())
+	assert.Equal(t, int64(5), gjson.GetBytes(recorder.Body.Bytes(), "usage.completion_tokens_details.reasoning_tokens").Int())
 	assert.Equal(t, int64(120), gjson.GetBytes(recorder.Body.Bytes(), "usage.total_tokens").Int())
 }
 
-func TestForceFormattedChatStreamUsageIncludesResponsesAliases(t *testing.T) {
+func TestForceFormattedChatStreamUsageOnlyExposesChatUsage(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"id":"chatcmpl-usage","object":"chat.completion.chunk","created":1710000000,"model":"kimi-k3","choices":[{"index":0,"delta":{"content":"ok","reasoning_content":"think"},"finish_reason":null}]}`,
 		`data: {"id":"chatcmpl-usage","object":"chat.completion.chunk","created":1710000000,"model":"kimi-k3","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":25},"completion_tokens_details":{"reasoning_tokens":5}}}`,
@@ -349,10 +348,10 @@ func TestForceFormattedChatStreamUsageIncludesResponsesAliases(t *testing.T) {
 	assert.Equal(t, 0, usage.InputTokens)
 	assert.Equal(t, 25, usage.PromptTokensDetails.CacheWriteTokens)
 	assert.Zero(t, usage.PromptTokensDetails.CachedCreationTokens)
-	assert.Contains(t, recorder.Body.String(), `"input_tokens":100`)
-	assert.Contains(t, recorder.Body.String(), `"output_tokens":20`)
-	assert.Contains(t, recorder.Body.String(), `"input_tokens_details":{"cached_tokens":40`)
-	assert.Contains(t, recorder.Body.String(), `"output_tokens_details":{"text_tokens":0,"audio_tokens":0,"image_tokens":0,"reasoning_tokens":5}`)
+	assert.Contains(t, recorder.Body.String(), `"prompt_tokens":100`)
+	assert.Contains(t, recorder.Body.String(), `"completion_tokens":20`)
+	assert.Contains(t, recorder.Body.String(), `"prompt_tokens_details":{"cached_tokens":40`)
+	assert.Contains(t, recorder.Body.String(), `"completion_tokens_details":{"text_tokens":0,"audio_tokens":0,"image_tokens":0,"reasoning_tokens":5}`)
 	foundUsage := false
 	for line := range strings.SplitSeq(recorder.Body.String(), "\n") {
 		payload, ok := strings.CutPrefix(line, "data: ")
@@ -360,13 +359,17 @@ func TestForceFormattedChatStreamUsageIncludesResponsesAliases(t *testing.T) {
 			continue
 		}
 		foundUsage = true
-		assert.Equal(t, int64(25), gjson.Get(payload, "usage.prompt_tokens_details.cached_creation_tokens").Int())
-		assert.Equal(t, int64(25), gjson.Get(payload, "usage.input_tokens_details.cached_creation_tokens").Int())
+		assert.False(t, gjson.Get(payload, "usage.input_tokens").Exists())
+		assert.False(t, gjson.Get(payload, "usage.output_tokens").Exists())
+		assert.False(t, gjson.Get(payload, "usage.input_tokens_details").Exists())
+		assert.False(t, gjson.Get(payload, "usage.output_tokens_details").Exists())
+		assert.False(t, gjson.Get(payload, "usage.prompt_tokens_details.cached_creation_tokens").Exists())
+		assert.Equal(t, int64(25), gjson.Get(payload, "usage.prompt_tokens_details.cache_write_tokens").Int())
 	}
 	assert.True(t, foundUsage)
 }
 
-func TestForceFormattedChatStreamEstimatedUsageIncludesResponsesAliases(t *testing.T) {
+func TestForceFormattedChatStreamEstimatedUsageOnlyExposesChatUsage(t *testing.T) {
 	body := "data: " + `{"id":"chatcmpl-usage","object":"chat.completion.chunk","created":1710000000,"model":"kimi-k3","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
 	c, recorder, resp, info := newChatCompletionResponseIDTestContext(t, body, true)
 	info.ChannelType = constant.ChannelTypeOpenAI
@@ -384,12 +387,14 @@ func TestForceFormattedChatStreamEstimatedUsageIncludesResponsesAliases(t *testi
 		}
 	}
 	require.NotEmpty(t, usageFrame)
-	assert.Equal(t, int64(7), gjson.Get(usageFrame, "usage.input_tokens").Int())
-	assert.Equal(t, int64(usage.CompletionTokens), gjson.Get(usageFrame, "usage.output_tokens").Int())
+	assert.Equal(t, int64(7), gjson.Get(usageFrame, "usage.prompt_tokens").Int())
+	assert.Equal(t, int64(usage.CompletionTokens), gjson.Get(usageFrame, "usage.completion_tokens").Int())
+	assert.False(t, gjson.Get(usageFrame, "usage.input_tokens").Exists())
+	assert.False(t, gjson.Get(usageFrame, "usage.output_tokens").Exists())
 	assert.Equal(t, int64(usage.TotalTokens), gjson.Get(usageFrame, "usage.total_tokens").Int())
 }
 
-func TestForceFormattedResponsesUsageIncludesChatAliases(t *testing.T) {
+func TestForceFormattedResponsesUsageOnlyExposesResponsesUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -407,19 +412,22 @@ func TestForceFormattedResponsesUsageIncludesChatAliases(t *testing.T) {
 	assert.Zero(t, usage.PromptTokensDetails.CachedCreationTokens)
 	require.NotNil(t, usage.InputTokensDetails)
 	assert.Zero(t, usage.InputTokensDetails.CachedCreationTokens)
-	assert.Equal(t, int64(100), gjson.GetBytes(recorder.Body.Bytes(), "usage.prompt_tokens").Int())
-	assert.Equal(t, int64(20), gjson.GetBytes(recorder.Body.Bytes(), "usage.completion_tokens").Int())
-	assert.Equal(t, int64(40), gjson.GetBytes(recorder.Body.Bytes(), "usage.prompt_tokens_details.cached_tokens").Int())
-	for _, detailName := range []string{"input_tokens_details", "prompt_tokens_details"} {
-		assert.Equal(t, int64(25), gjson.GetBytes(recorder.Body.Bytes(), "usage."+detailName+".cached_creation_tokens").Int())
-		assert.Equal(t, int64(3), gjson.GetBytes(recorder.Body.Bytes(), "usage."+detailName+".provider_tokens").Int())
-	}
-	assert.Equal(t, int64(5), gjson.GetBytes(recorder.Body.Bytes(), "usage.completion_tokens_details.reasoning_tokens").Int())
+	assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage.prompt_tokens").Exists())
+	assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage.completion_tokens").Exists())
+	assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage.prompt_tokens_details").Exists())
+	assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage.completion_tokens_details").Exists())
+	assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage.input_tokens_details.cached_creation_tokens").Exists())
+	assert.Equal(t, int64(100), gjson.GetBytes(recorder.Body.Bytes(), "usage.input_tokens").Int())
+	assert.Equal(t, int64(20), gjson.GetBytes(recorder.Body.Bytes(), "usage.output_tokens").Int())
+	assert.Equal(t, int64(40), gjson.GetBytes(recorder.Body.Bytes(), "usage.input_tokens_details.cached_tokens").Int())
+	assert.Equal(t, int64(25), gjson.GetBytes(recorder.Body.Bytes(), "usage.input_tokens_details.cache_write_tokens").Int())
+	assert.Equal(t, int64(3), gjson.GetBytes(recorder.Body.Bytes(), "usage.input_tokens_details.provider_tokens").Int())
+	assert.Equal(t, int64(5), gjson.GetBytes(recorder.Body.Bytes(), "usage.output_tokens_details.reasoning_tokens").Int())
 	assert.Equal(t, int64(120), gjson.GetBytes(recorder.Body.Bytes(), "usage.total_tokens").Int())
 	assert.Equal(t, int64(3), gjson.GetBytes(recorder.Body.Bytes(), "usage.provider_tokens").Int())
 }
 
-func TestForceFormattedResponsesStreamUsageIncludesChatAliases(t *testing.T) {
+func TestForceFormattedResponsesStreamUsageOnlyExposesResponsesUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -437,44 +445,45 @@ func TestForceFormattedResponsesStreamUsageIncludesChatAliases(t *testing.T) {
 	assert.Zero(t, usage.PromptTokensDetails.CachedCreationTokens)
 	require.NotNil(t, usage.InputTokensDetails)
 	assert.Zero(t, usage.InputTokensDetails.CachedCreationTokens)
-	assert.Contains(t, recorder.Body.String(), `"prompt_tokens":100`)
-	assert.Contains(t, recorder.Body.String(), `"completion_tokens":20`)
-	assert.Contains(t, recorder.Body.String(), `"prompt_tokens_details":{"cached_tokens":40`)
-	assert.Contains(t, recorder.Body.String(), `"completion_tokens_details":{"reasoning_tokens":5}`)
+	assert.Contains(t, recorder.Body.String(), `"input_tokens":100`)
+	assert.Contains(t, recorder.Body.String(), `"output_tokens":20`)
+	assert.Contains(t, recorder.Body.String(), `"input_tokens_details":{"cached_tokens":40`)
+	assert.Contains(t, recorder.Body.String(), `"output_tokens_details":{"reasoning_tokens":5}`)
 	for line := range strings.SplitSeq(recorder.Body.String(), "\n") {
 		payload, ok := strings.CutPrefix(line, "data: ")
 		if !ok || !gjson.Get(payload, "response.usage").Exists() {
 			continue
 		}
-		for _, detailName := range []string{"input_tokens_details", "prompt_tokens_details"} {
-			assert.Equal(t, int64(25), gjson.Get(payload, "response.usage."+detailName+".cached_creation_tokens").Int())
-			assert.Equal(t, int64(3), gjson.Get(payload, "response.usage."+detailName+".provider_tokens").Int())
-		}
+		assert.False(t, gjson.Get(payload, "response.usage.prompt_tokens").Exists())
+		assert.False(t, gjson.Get(payload, "response.usage.completion_tokens").Exists())
+		assert.False(t, gjson.Get(payload, "response.usage.prompt_tokens_details").Exists())
+		assert.False(t, gjson.Get(payload, "response.usage.completion_tokens_details").Exists())
+		assert.False(t, gjson.Get(payload, "response.usage.input_tokens_details.cached_creation_tokens").Exists())
+		assert.Equal(t, int64(25), gjson.Get(payload, "response.usage.input_tokens_details.cache_write_tokens").Int())
+		assert.Equal(t, int64(3), gjson.Get(payload, "response.usage.input_tokens_details.provider_tokens").Int())
 	}
 }
 
-func TestCacheCreationCompatibilityAlias(t *testing.T) {
+func TestCacheCreationCompatibilityAliasesStayInternal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses} {
 		for _, tc := range []struct {
-			name            string
-			details         string
-			forceFormat     bool
-			wantCreation    int64
-			creationPresent bool
+			name        string
+			details     string
+			forceFormat bool
 		}{
-			{name: "native cache write", details: `{"cache_write_tokens":5888}`, forceFormat: true, wantCreation: 5888, creationPresent: true},
-			{name: "reported compatibility value", details: `{"cache_write_tokens":5888,"cached_creation_tokens":123}`, forceFormat: true, wantCreation: 123, creationPresent: true},
-			{name: "compatibility value only", details: `{"cached_creation_tokens":123}`, forceFormat: true, wantCreation: 123, creationPresent: true},
+			{name: "native cache write", details: `{"cache_write_tokens":5888}`, forceFormat: true},
+			{name: "reported compatibility value", details: `{"cache_write_tokens":5888,"cached_creation_tokens":123}`, forceFormat: true},
+			{name: "compatibility value only", details: `{"cached_creation_tokens":123}`, forceFormat: true},
 			{name: "no cache write", details: `{}`, forceFormat: true},
 			{name: "zero cache write", details: `{"cache_write_tokens":0}`, forceFormat: true},
 			{name: "negative cache write", details: `{"cache_write_tokens":-1}`, forceFormat: true},
 			{name: "force format disabled", details: `{"cache_write_tokens":5888}`},
 		} {
 			t.Run(string(format)+"/"+tc.name, func(t *testing.T) {
-				// Both families are already reported, so each must gain its alias
-				// without modifying the shared input-details used for settlement.
+				// Client usage stays protocol-specific while settlement retains
+				// the reported cache-write and compatibility values.
 				usageJSON := `{"prompt_tokens":6011,"completion_tokens":5,"input_tokens":6011,"output_tokens":5,"total_tokens":6016,"prompt_tokens_details":` + tc.details + `,"input_tokens_details":` + tc.details + `}`
 				body := `{"id":"chatcmpl-cache-write","object":"chat.completion","model":"kimi-k3","choices":[],"usage":` + usageJSON + `}`
 				if format == types.RelayFormatOpenAIResponses {
@@ -502,18 +511,18 @@ func TestCacheCreationCompatibilityAlias(t *testing.T) {
 					assert.Equal(t, int(gjson.Get(tc.details, "cache_write_tokens").Int()), usage.InputTokensDetails.CacheWriteTokens)
 				}
 
-				for _, detailName := range []string{"prompt_tokens_details", "input_tokens_details"} {
-					creation := gjson.GetBytes(recorder.Body.Bytes(), "usage."+detailName+".cached_creation_tokens")
-					assert.Equal(t, tc.creationPresent, creation.Exists())
-					assert.Equal(t, tc.wantCreation, creation.Int())
-					assert.Equal(t, gjson.Get(tc.details, "cache_write_tokens").Int(), gjson.GetBytes(recorder.Body.Bytes(), "usage."+detailName+".cache_write_tokens").Int())
+				inputField, outputField := "prompt_tokens", "completion_tokens"
+				detailName, foreignDetailName := "prompt_tokens_details", "input_tokens_details"
+				if format == types.RelayFormatOpenAIResponses {
+					inputField, outputField = "input_tokens", "output_tokens"
+					detailName, foreignDetailName = foreignDetailName, detailName
 				}
-				assert.Equal(t, int64(6011), gjson.GetBytes(recorder.Body.Bytes(), "usage.prompt_tokens").Int())
-				assert.Equal(t, int64(5), gjson.GetBytes(recorder.Body.Bytes(), "usage.completion_tokens").Int())
+				assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage."+detailName+".cached_creation_tokens").Exists())
+				assert.False(t, gjson.GetBytes(recorder.Body.Bytes(), "usage."+foreignDetailName).Exists())
+				assert.Equal(t, gjson.Get(tc.details, "cache_write_tokens").Int(), gjson.GetBytes(recorder.Body.Bytes(), "usage."+detailName+".cache_write_tokens").Int())
+				assert.Equal(t, int64(6011), gjson.GetBytes(recorder.Body.Bytes(), "usage."+inputField).Int())
+				assert.Equal(t, int64(5), gjson.GetBytes(recorder.Body.Bytes(), "usage."+outputField).Int())
 				assert.Equal(t, int64(6016), gjson.GetBytes(recorder.Body.Bytes(), "usage.total_tokens").Int())
-				if tc.name == "native cache write" {
-					t.Logf("client usage: %s", gjson.GetBytes(recorder.Body.Bytes(), "usage").Raw)
-				}
 			})
 		}
 	}

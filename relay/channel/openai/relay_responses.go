@@ -44,6 +44,10 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 	}
+	responseBody, err = helper.SanitizeResponseBody(responseBody, types.RelayFormatOpenAIResponses)
+	if err != nil {
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+	}
 
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)

@@ -431,6 +431,10 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 	}
 
+	responseData, err = helper.SanitizeResponseBody(responseData, info.RelayFormat)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeBadResponseBody)
+	}
 	if claudeResponse.Usage != nil && claudeResponse.Usage.ServerToolUse != nil && claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
 		c.Set("claude_web_search_requests", claudeResponse.Usage.ServerToolUse.WebSearchRequests)
 	}

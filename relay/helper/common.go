@@ -103,6 +103,10 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	if err != nil {
 		return fmt.Errorf("error marshalling stream response: %w", err)
 	}
+	jsonData, err = SanitizeResponseBody(jsonData, types.RelayFormatClaude)
+	if err != nil {
+		return fmt.Errorf("error sanitizing stream response: %w", err)
+	}
 	if err := writeSSESegment(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
 		return err
 	}
@@ -117,10 +121,14 @@ func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) error
 		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
 
+	jsonData, err := SanitizeResponseBody(common.StringToByteSlice(data), types.RelayFormatClaude)
+	if err != nil {
+		return fmt.Errorf("error sanitizing stream response: %w", err)
+	}
 	if err := writeSSESegment(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
 		return err
 	}
-	if err := writeSSESegment(c, fmt.Sprintf("data: %s\n", data)); err != nil {
+	if err := writeSSESegment(c, fmt.Sprintf("data: %s\n", jsonData)); err != nil {
 		return err
 	}
 	return FlushWriter(c)
@@ -131,10 +139,14 @@ func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data st
 		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
 
+	jsonData, err := SanitizeResponseBody(common.StringToByteSlice(data), types.RelayFormatOpenAIResponses)
+	if err != nil {
+		return fmt.Errorf("error sanitizing stream response: %w", err)
+	}
 	if err := writeSSESegment(c, fmt.Sprintf("event: %s\n", resp.Type)); err != nil {
 		return err
 	}
-	if err := writeSSESegment(c, fmt.Sprintf("data: %s", data)); err != nil {
+	if err := writeSSESegment(c, fmt.Sprintf("data: %s", jsonData)); err != nil {
 		return err
 	}
 	return FlushWriter(c)
@@ -185,6 +197,23 @@ func ObjectData(c *gin.Context, object any) error {
 	jsonData, err := common.Marshal(object)
 	if err != nil {
 		return fmt.Errorf("error marshalling object: %w", err)
+	}
+	var relayFormat types.RelayFormat
+	switch object.(type) {
+	case dto.OpenAITextResponse, *dto.OpenAITextResponse,
+		dto.ChatCompletionsStreamResponse, *dto.ChatCompletionsStreamResponse,
+		dto.ChatCompletionsStreamResponseSimple, *dto.ChatCompletionsStreamResponseSimple:
+		relayFormat = types.RelayFormatOpenAI
+	case dto.OpenAIResponsesResponse, *dto.OpenAIResponsesResponse:
+		relayFormat = types.RelayFormatOpenAIResponses
+	case dto.ClaudeResponse, *dto.ClaudeResponse:
+		relayFormat = types.RelayFormatClaude
+	default:
+		return StringData(c, string(jsonData))
+	}
+	jsonData, err = SanitizeResponseBody(jsonData, relayFormat)
+	if err != nil {
+		return fmt.Errorf("error sanitizing object: %w", err)
 	}
 	return StringData(c, string(jsonData))
 }

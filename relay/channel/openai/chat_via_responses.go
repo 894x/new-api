@@ -85,6 +85,10 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
+	responseBody, err = helper.SanitizeResponseBody(responseBody, info.RelayFormat)
+	if err != nil {
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+	}
 
 	for key, values := range resp.Header {
 		if !service.ShouldCopyUpstreamHeader(c, key, values) || len(values) == 0 {
@@ -203,6 +207,10 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 	responseBody, err := common.Marshal(responseValue)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+	}
+	responseBody, err = helper.SanitizeResponseBody(responseBody, info.RelayFormat)
+	if err != nil {
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)

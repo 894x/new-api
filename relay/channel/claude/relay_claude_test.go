@@ -10,9 +10,11 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func commonPointer[T any](value T) *T {
@@ -399,4 +401,109 @@ func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48ThinkingUsesAdaptiveHighE
 	require.Nil(t, claudeRequest.Temperature)
 	require.Nil(t, claudeRequest.TopP)
 	require.Nil(t, claudeRequest.TopK)
+}
+
+func TestClaudeResponsesOnlyExposeClientProtocolUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("non-stream response", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude}
+		claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+		data := []byte(`{"type":"message","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":9,"output_tokens":3,"cache_read_input_tokens":2,"usage_semantic":"openai","usage_source":"oai_chat","billing_usage":{"source":"oai_chat","semantic":"openai","openai_usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}},"vendor_meta":{"trace_id":"trace_001"}}`)
+
+		apiErr := HandleClaudeResponseData(c, info, claudeInfo, nil, data)
+		require.Nil(t, apiErr)
+		body := recorder.Body.String()
+		assert.False(t, gjson.Get(body, "usage.billing_usage").Exists())
+		assert.False(t, gjson.Get(body, "usage.usage_semantic").Exists())
+		assert.False(t, gjson.Get(body, "usage.usage_source").Exists())
+		assert.EqualValues(t, 9, gjson.Get(body, "usage.input_tokens").Int())
+		assert.EqualValues(t, 3, gjson.Get(body, "usage.output_tokens").Int())
+		assert.EqualValues(t, 2, gjson.Get(body, "usage.cache_read_input_tokens").Int())
+		assert.Equal(t, "trace_001", gjson.Get(body, "vendor_meta.trace_id").String())
+		require.NotNil(t, claudeInfo.Usage.BillingUsage)
+		assert.Equal(t, dto.BillingUsageSemanticOpenAI, claudeInfo.Usage.BillingUsage.Semantic)
+		billingUsage, ok := claudeInfo.Usage.BillingUsage.CanonicalUsage()
+		require.True(t, ok)
+		assert.Equal(t, 11, billingUsage.PromptTokens)
+	})
+
+	conversionTests := []struct {
+		name         string
+		relayFormat  types.RelayFormat
+		keptField    string
+		removedField string
+	}{
+		{name: "converted to chat", relayFormat: types.RelayFormatOpenAI, keptField: "prompt_tokens", removedField: "input_tokens"},
+		{name: "converted to responses", relayFormat: types.RelayFormatOpenAIResponses, keptField: "input_tokens", removedField: "prompt_tokens"},
+	}
+	for _, tt := range conversionTests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			info := &relaycommon.RelayInfo{
+				RelayFormat: tt.relayFormat,
+				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "kimi-k3"},
+			}
+			claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+			data := []byte(`{"type":"message","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":9,"output_tokens":3,"cache_read_input_tokens":2,"billing_usage":{"source":"claude_messages","semantic":"anthropic","claude_usage":{"input_tokens":9,"output_tokens":3,"cache_read_input_tokens":2}}}}`)
+
+			apiErr := HandleClaudeResponseData(c, info, claudeInfo, nil, data)
+			require.Nil(t, apiErr)
+			body := recorder.Body.String()
+			assert.True(t, gjson.Get(body, "usage."+tt.keptField).Exists())
+			assert.False(t, gjson.Get(body, "usage."+tt.removedField).Exists())
+			assert.False(t, gjson.Get(body, "usage.billing_usage").Exists())
+			assert.False(t, gjson.Get(body, "usage.usage_semantic").Exists())
+			assert.False(t, gjson.Get(body, "usage.usage_source").Exists())
+			require.NotNil(t, claudeInfo.Usage.BillingUsage)
+			assert.Equal(t, dto.BillingUsageSemanticAnthropic, claudeInfo.Usage.BillingUsage.Semantic)
+		})
+	}
+
+	streamTests := []struct {
+		name        string
+		data        string
+		billingPath string
+		inputPath   string
+	}{
+		{
+			name:        "message start",
+			data:        `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"kimi-k3.1-pro","content":[],"usage":{"input_tokens":9,"output_tokens":1,"usage_semantic":"openai","usage_source":"oai_chat","billing_usage":{"source":"oai_chat","semantic":"openai","openai_usage":{"prompt_tokens":9,"completion_tokens":1,"total_tokens":10}}}}}`,
+			billingPath: "message.usage.billing_usage",
+			inputPath:   "message.usage.input_tokens",
+		},
+		{
+			name:        "message delta",
+			data:        `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":9,"output_tokens":3,"cache_read_input_tokens":2,"usage_semantic":"openai","usage_source":"oai_chat","billing_usage":{"source":"oai_chat","semantic":"openai","openai_usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}}}`,
+			billingPath: "usage.billing_usage",
+			inputPath:   "usage.input_tokens",
+		},
+	}
+	for _, tt := range streamTests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			info := &relaycommon.RelayInfo{
+				RelayFormat: types.RelayFormatClaude,
+				ChannelMeta: &relaycommon.ChannelMeta{},
+			}
+			claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+
+			apiErr := HandleStreamResponseData(c, info, claudeInfo, tt.data)
+			require.Nil(t, apiErr)
+			_, body, found := strings.Cut(recorder.Body.String(), "data: ")
+			require.True(t, found)
+			body = strings.TrimSpace(body)
+			assert.False(t, gjson.Get(body, tt.billingPath).Exists())
+			usagePath := strings.TrimSuffix(tt.billingPath, "billing_usage")
+			assert.False(t, gjson.Get(body, usagePath+"usage_semantic").Exists())
+			assert.False(t, gjson.Get(body, usagePath+"usage_source").Exists())
+			assert.EqualValues(t, 9, gjson.Get(body, tt.inputPath).Int())
+			require.NotNil(t, claudeInfo.Usage.BillingUsage)
+			assert.Equal(t, dto.BillingUsageSemanticOpenAI, claudeInfo.Usage.BillingUsage.Semantic)
+		})
+	}
 }

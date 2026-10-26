@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -125,20 +126,62 @@ func TestGeminiChatStreamHandlerClaudeFirstFrameUsesUpstreamUsage(t *testing.T) 
 
 	require.NotNil(t, startUsage)
 	require.Equal(t, 3868, startUsage.InputTokens)
-	require.NotNil(t, startUsage.BillingUsage)
-	require.Equal(t, dto.BillingUsageSourceGeminiChat, startUsage.BillingUsage.Source)
-	require.Equal(t, dto.BillingUsageSemanticGemini, startUsage.BillingUsage.Semantic)
-	require.NotNil(t, startUsage.BillingUsage.GeminiUsageMetadata)
-	require.Equal(t, 3868, startUsage.BillingUsage.GeminiUsageMetadata.PromptTokenCount)
-	require.False(t, startUsage.BillingUsage.Estimated)
+	require.Nil(t, startUsage.BillingUsage)
 
 	require.NotNil(t, deltaUsage)
 	require.Equal(t, 3868, deltaUsage.InputTokens)
-	require.NotNil(t, deltaUsage.BillingUsage)
-	require.Equal(t, dto.BillingUsageSourceGeminiChat, deltaUsage.BillingUsage.Source)
-	require.Equal(t, dto.BillingUsageSemanticGemini, deltaUsage.BillingUsage.Semantic)
-	require.NotNil(t, deltaUsage.BillingUsage.GeminiUsageMetadata)
-	require.Equal(t, 3868, deltaUsage.BillingUsage.GeminiUsageMetadata.PromptTokenCount)
+	require.Nil(t, deltaUsage.BillingUsage)
+
+	require.NotNil(t, usage.BillingUsage)
+	require.Equal(t, dto.BillingUsageSourceGeminiChat, usage.BillingUsage.Source)
+	require.Equal(t, dto.BillingUsageSemanticGemini, usage.BillingUsage.Semantic)
+	require.NotNil(t, usage.BillingUsage.GeminiUsageMetadata)
+	require.Equal(t, 3868, usage.BillingUsage.GeminiUsageMetadata.PromptTokenCount)
+}
+
+func TestGeminiChatHandlerOnlyExposesClientProtocolUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name         string
+		relayFormat  types.RelayFormat
+		keptField    string
+		removedField string
+	}{
+		{name: "chat", relayFormat: types.RelayFormatOpenAI, keptField: "prompt_tokens", removedField: "input_tokens"},
+		{name: "claude", relayFormat: types.RelayFormatClaude, keptField: "input_tokens", removedField: "prompt_tokens"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			info := &relaycommon.RelayInfo{
+				RelayFormat:     tt.relayFormat,
+				OriginModelName: "gemini-test",
+				ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-test"},
+			}
+			body, err := common.Marshal(dto.GeminiChatResponse{
+				Candidates: []dto.GeminiChatCandidate{{
+					Content: dto.GeminiChatContent{Role: "model", Parts: []dto.GeminiPart{{Text: "ok"}}},
+				}},
+				UsageMetadata: dto.GeminiUsageMetadata{PromptTokenCount: 9, CandidatesTokenCount: 3, TotalTokenCount: 12},
+			})
+			require.NoError(t, err)
+
+			usage, apiErr := GeminiChatHandler(c, info, &http.Response{Body: io.NopCloser(bytes.NewReader(body))})
+			require.Nil(t, apiErr)
+			require.NotNil(t, usage.BillingUsage)
+			var response map[string]any
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			responseUsage, ok := response["usage"].(map[string]any)
+			require.True(t, ok)
+			assert.Contains(t, responseUsage, tt.keptField)
+			assert.NotContains(t, responseUsage, tt.removedField)
+			assert.NotContains(t, responseUsage, "billing_usage")
+			assert.NotContains(t, responseUsage, "usage_semantic")
+			assert.NotContains(t, responseUsage, "usage_source")
+		})
+	}
 }
 
 func TestGeminiChatHandlerCompletionTokensExcludeToolUsePromptTokens(t *testing.T) {
