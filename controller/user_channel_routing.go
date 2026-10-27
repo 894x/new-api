@@ -26,13 +26,15 @@ type userChannelRoutingRow struct {
 	EffectivePriority int64  `json:"effective_priority"`
 	Enabled           bool   `json:"enabled"`
 	Available         bool   `json:"available"`
+	Configured        bool   `json:"configured"`
 }
 
 type userChannelRoutingResponse struct {
-	Models   []string                `json:"models"`
-	Model    string                  `json:"model"`
-	Revision string                  `json:"revision"`
-	Channels []userChannelRoutingRow `json:"channels"`
+	Models       []string                `json:"models"`
+	Model        string                  `json:"model"`
+	RoutingGroup string                  `json:"routing_group,omitempty"`
+	Revision     string                  `json:"revision"`
+	Channels     []userChannelRoutingRow `json:"channels"`
 }
 
 // GET without model lists selectable and previously configured public models.
@@ -41,7 +43,8 @@ type userChannelRoutingResponse struct {
 func GetUserChannelRouting(c *gin.Context) {
 	userID, err := strconv.Atoi(c.Param("id"))
 	modelName := strings.TrimSpace(c.Query("model"))
-	if err != nil || userID <= 0 || len(modelName) > 255 {
+	routingGroup := c.Query("routing_group")
+	if err != nil || userID <= 0 || len(modelName) > 255 || len(routingGroup) > 64 || strings.TrimSpace(routingGroup) != routingGroup || routingGroup == "auto" || strings.ContainsAny(routingGroup, ",\x00\r\n") {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid user channel routing query"})
 		return
 	}
@@ -55,7 +58,7 @@ func GetUserChannelRouting(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	response := userChannelRoutingResponse{Models: []string{}, Model: modelName, Channels: []userChannelRoutingRow{}}
+	response := userChannelRoutingResponse{Models: []string{}, Model: modelName, RoutingGroup: routingGroup, Channels: []userChannelRoutingRow{}}
 	groups := make([]string, 0)
 	for group := range service.GetUserUsableGroups(user.Group) {
 		if group != "auto" {
@@ -71,10 +74,36 @@ func GetUserChannelRouting(c *gin.Context) {
 		for _, override := range overrides {
 			models = append(models, override.Model)
 		}
+		groupOverrides, err := model.ListUserGroupChannelRoutingOverrides(userID, "")
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		for _, override := range groupOverrides {
+			models = append(models, override.Model)
+		}
 		slices.Sort(models)
 		response.Models = slices.Compact(models)
 		common.ApiSuccess(c, response)
 		return
+	}
+	legacyByID := make(map[int]model.UserChannelRoutingOverride)
+	if routingGroup != "" {
+		for _, row := range overrides {
+			legacyByID[row.ChannelId] = row
+		}
+		scoped, loadErr := model.ListUserGroupChannelRoutingOverrides(userID, modelName)
+		if loadErr != nil {
+			common.ApiError(c, loadErr)
+			return
+		}
+		overrides = make([]model.UserChannelRoutingOverride, 0)
+		for _, row := range scoped {
+			if row.RoutingGroup == routingGroup {
+				overrides = append(overrides, row.UserChannelRoutingOverride)
+			}
+		}
+		groups = []string{routingGroup}
 	}
 	response.Revision, err = model.UserChannelRoutingRevision(overrides)
 	if err != nil {
@@ -133,15 +162,23 @@ func GetUserChannelRouting(c *gin.Context) {
 		}
 		for _, route := range routes {
 			override, configured := overrideByID[route.ChannelId]
+			legacy, hasLegacy := legacyByID[route.ChannelId]
 			_, usable := available[route.ChannelId]
-			if seen[route.ChannelId] || (!usable && (draftChannelGroups || !configured)) {
+			if seen[route.ChannelId] || (!usable && (routingGroup != "" || draftChannelGroups || !configured)) {
 				continue
 			}
 			seen[route.ChannelId] = true
+			inherited := route.EffectivePriority
+			if legacy.Priority != nil {
+				inherited = *legacy.Priority
+			}
+			if !configured && hasLegacy {
+				override.Disabled = legacy.Disabled
+			}
 			row := userChannelRoutingRow{ChannelID: route.ChannelId, ChannelName: route.ChannelName,
 				DefaultPriority: route.DefaultPriority, ModelPriority: route.PriorityOverride,
-				InheritedPriority: route.EffectivePriority, EffectivePriority: route.EffectivePriority,
-				PriorityOverride: override.Priority, Enabled: !override.Disabled, Available: usable}
+				InheritedPriority: inherited, EffectivePriority: inherited,
+				PriorityOverride: override.Priority, Enabled: !override.Disabled, Available: usable, Configured: configured || hasLegacy}
 			if override.Priority != nil {
 				row.EffectivePriority = *override.Priority
 			}
@@ -149,7 +186,7 @@ func GetUserChannelRouting(c *gin.Context) {
 		}
 	}
 	// Stale records remain visible and can be reset even after channel removal.
-	if !draftChannelGroups {
+	if !draftChannelGroups && routingGroup == "" {
 		for _, override := range overrides {
 			if !seen[override.ChannelId] {
 				row := userChannelRoutingRow{ChannelID: override.ChannelId, PriorityOverride: override.Priority, Enabled: !override.Disabled}
@@ -175,15 +212,16 @@ func GetUserChannelRouting(c *gin.Context) {
 func PatchUserChannelRouting(c *gin.Context) {
 	userID, err := strconv.Atoi(c.Param("id"))
 	var request struct {
-		Model     string                          `json:"model"`
-		Revision  string                          `json:"revision"`
-		Overrides []model.UserChannelRoutingPatch `json:"overrides"`
+		Model        string                          `json:"model"`
+		RoutingGroup string                          `json:"routing_group"`
+		Revision     string                          `json:"revision"`
+		Overrides    []model.UserChannelRoutingPatch `json:"overrides"`
 	}
 	if err != nil || userID <= 0 || common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10), &request) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid user channel routing"})
 		return
 	}
-	if err := model.PatchUserChannelRouting(userID, request.Model, request.Revision, request.Overrides); err != nil {
+	if err := model.PatchUserChannelRoutingForGroup(userID, request.Model, request.RoutingGroup, request.Revision, request.Overrides); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, model.ErrUserChannelRoutingConflict) {
 			status = http.StatusConflict
@@ -194,6 +232,6 @@ func PatchUserChannelRouting(c *gin.Context) {
 		c.JSON(status, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	recordManageAuditFor(c, userID, "user.channel_routing.update", map[string]any{"model": request.Model, "channels": len(request.Overrides)})
+	recordManageAuditFor(c, userID, "user.channel_routing.update", map[string]any{"model": request.Model, "routing_group": request.RoutingGroup, "channels": len(request.Overrides)})
 	common.ApiSuccess(c, nil)
 }

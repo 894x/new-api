@@ -17,13 +17,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
 
 import type { UserChannelRoutingConfig } from '../../types'
-import { UserChannelRoutingEditor } from '../user-channel-routing-dialog'
+import {
+  UserChannelRoutingEditor,
+  UserChannelRoutingRuleEditor,
+} from '../user-channel-routing-dialog'
 
 vi.mock('@/lib/api', () => ({ api: { get: vi.fn(), patch: vi.fn() } }))
 
@@ -77,6 +87,135 @@ describe('user channel routing', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(api.patch).mockResolvedValue({ data: { success: true } })
+  })
+
+  it('saves one outlet group without changing the same channel or an unsaved draft in another group', async () => {
+    vi.mocked(api.get).mockImplementation(async (_url, options) => {
+      const group = options?.params?.routing_group as string
+      return {
+        data: {
+          success: true,
+          data: {
+            ...config,
+            routing_group: group,
+            revision: `revision-${group}`,
+            channels: config.channels.map((row) => ({
+              ...row,
+              configured: true,
+            })),
+          },
+        },
+      }
+    })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <UserChannelRoutingRuleEditor
+          userId={42}
+          model='gpt-5'
+          channelGroups={['pool-a', 'pool-b']}
+        />
+      </QueryClientProvider>
+    )
+    const a = await screen.findByRole('region', { name: 'pool-a' })
+    const b = await screen.findByRole('region', { name: 'pool-b' })
+    const inputA = await within(a).findByRole('spinbutton', {
+      name: 'Priority for Alpha #1',
+    })
+    const inputB = await within(b).findByRole('spinbutton', {
+      name: 'Priority for Alpha #1',
+    })
+    fireEvent.change(inputB, { target: { value: '200' } })
+    fireEvent.change(inputA, { target: { value: '7' } })
+    fireEvent.click(within(a).getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith(
+        '/api/user/42/channel-routing-overrides',
+        {
+          model: 'gpt-5',
+          routing_group: 'pool-a',
+          revision: 'revision-pool-a',
+          overrides: [{ channel_id: 1, priority_override: 7, enabled: true }],
+        }
+      )
+    )
+    expect(inputB).toHaveValue(200)
+    expect(
+      within(b).getByRole('button', { name: 'Save changes' })
+    ).toBeEnabled()
+    fireEvent.click(within(b).getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          routing_group: 'pool-b',
+          overrides: [{ channel_id: 1, priority_override: 200, enabled: true }],
+        })
+      )
+    )
+  })
+
+  it('adds a channel within its outlet group and saves it without adding it to another group', async () => {
+    const operator = userEvent.setup()
+    vi.mocked(api.get).mockImplementation(async (_url, options) => ({
+      data: {
+        success: true,
+        data: {
+          ...config,
+          routing_group: options?.params?.routing_group,
+          channels: config.channels.map((row) => ({
+            ...row,
+            configured: false,
+          })),
+        },
+      },
+    }))
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <UserChannelRoutingRuleEditor
+          userId={42}
+          model='gpt-5'
+          channelGroups={['pool-a', 'pool-b']}
+        />
+      </QueryClientProvider>
+    )
+    const a = await screen.findByRole('region', { name: 'pool-a' })
+    const b = screen.getByRole('region', { name: 'pool-b' })
+    const selector = await within(a).findByRole('combobox', {
+      name: 'Select channel',
+    })
+    expect(
+      within(a).getByRole('button', { name: 'Add channel' })
+    ).toBeDisabled()
+    await operator.type(selector, 'Alpha')
+    await operator.click(
+      await screen.findByRole('option', { name: 'Alpha #1' })
+    )
+    await operator.click(within(a).getByRole('button', { name: 'Add channel' }))
+    expect(
+      within(a).getByRole('listitem', { name: 'Alpha #1' })
+    ).toBeInTheDocument()
+    expect(within(b).queryByRole('listitem')).not.toBeInTheDocument()
+    expect(
+      within(b).getByRole('button', { name: 'Save changes' })
+    ).toBeDisabled()
+    await operator.click(
+      within(a).getByRole('button', { name: 'Save changes' })
+    )
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          routing_group: 'pool-a',
+          overrides: [{ channel_id: 1, priority_override: 100, enabled: true }],
+        })
+      )
+    )
   })
 
   it('dragging a channel persists descending user priorities and keeps paused rows', async () => {

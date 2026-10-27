@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, ArrowUp, GripVertical } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ArrowDown, ArrowUp, GripVertical, Plus } from 'lucide-react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { useFieldArray, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -31,6 +31,7 @@ import { LoadingState } from '@/components/loading-state'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
 import {
   Form,
   FormControl,
@@ -66,15 +67,51 @@ export function UserChannelRoutingRuleEditor(props: {
   channelGroups: string[]
   onDirtyChange?: (dirty: boolean) => void
 }) {
+  const { t } = useTranslation()
+  const dirtyGroups = useRef(new Set<string>())
+  return (
+    <div className='flex flex-col gap-3'>
+      <p className='text-muted-foreground text-xs'>
+        {t('Channel priorities are independent for each outlet group.')}
+      </p>
+      {props.channelGroups.map((group) => (
+        <section
+          key={group}
+          aria-label={group}
+          className='min-w-0 rounded-lg border p-3'
+        >
+          <h4 className='mb-3 text-sm font-medium break-all'>{group}</h4>
+          <UserChannelRoutingGroupEditor
+            userId={props.userId}
+            model={props.model}
+            group={group}
+            onDirtyChange={(dirty) => {
+              if (dirty) dirtyGroups.current.add(group)
+              else dirtyGroups.current.delete(group)
+              props.onDirtyChange?.(dirtyGroups.current.size > 0)
+            }}
+          />
+        </section>
+      ))}
+    </div>
+  )
+}
+
+function UserChannelRoutingGroupEditor(props: {
+  userId: number
+  model: string
+  group: string
+  onDirtyChange: (dirty: boolean) => void
+}) {
   const query = useQuery({
-    queryKey: [
-      'user-channel-routing',
-      props.userId,
-      props.model,
-      props.channelGroups,
-    ],
+    queryKey: ['user-channel-routing', props.userId, props.model, props.group],
     queryFn: () =>
-      getUserChannelRouting(props.userId, props.model, props.channelGroups),
+      getUserChannelRouting(
+        props.userId,
+        props.model,
+        [props.group],
+        props.group
+      ),
     enabled: props.model !== '',
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -88,10 +125,10 @@ export function UserChannelRoutingRuleEditor(props: {
 
   return (
     <UserChannelRoutingEditor
-      key={`${props.userId}:${props.model}:${query.dataUpdatedAt}`}
+      key={`${props.userId}:${props.model}:${props.group}:${query.dataUpdatedAt}`}
       userId={props.userId}
       config={query.data.data}
-      onDirtyChange={(dirty) => props.onDirtyChange?.(dirty)}
+      onDirtyChange={props.onDirtyChange}
       onReload={() => {
         props.onDirtyChange?.(false)
         void query.refetch()
@@ -111,14 +148,23 @@ export function UserChannelRoutingEditor(props: {
   const queryClient = useQueryClient()
   const [dragged, setDragged] = useState<number | null>(null)
   const [dropTarget, setDropTarget] = useState<number | null>(null)
+  const [channelToAdd, setChannelToAdd] = useState<string | null>(null)
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      channels: props.config.channels.map((row) => ({
-        channel_id: row.channel_id,
-        priority_override: row.priority_override,
-        enabled: row.enabled,
-      })),
+      channels: props.config.channels
+        .filter(
+          (row) =>
+            !props.config.routing_group ||
+            row.configured ||
+            row.priority_override !== null ||
+            !row.enabled
+        )
+        .map((row) => ({
+          channel_id: row.channel_id,
+          priority_override: row.priority_override,
+          enabled: row.enabled,
+        })),
     },
   })
   const rows = useFieldArray({ control: form.control, name: 'channels' })
@@ -130,12 +176,16 @@ export function UserChannelRoutingEditor(props: {
     mutationFn: (data: FormValues) =>
       patchUserChannelRouting(props.userId, {
         model: props.config.model,
+        ...(props.config.routing_group
+          ? { routing_group: props.config.routing_group }
+          : {}),
         revision: props.config.revision,
         overrides: data.channels.filter((row) => {
           const original = originalById.get(row.channel_id)
           return (
             row.priority_override !== original?.priority_override ||
-            row.enabled !== original.enabled
+            row.enabled !== original?.enabled ||
+            (props.config.routing_group && !original?.configured)
           )
         }),
       }),
@@ -143,7 +193,12 @@ export function UserChannelRoutingEditor(props: {
       toast.success(t('Saved successfully'))
       props.onDirtyChange(false)
       await queryClient.invalidateQueries({
-        queryKey: ['user-channel-routing', props.userId],
+        queryKey: [
+          'user-channel-routing',
+          props.userId,
+          props.config.model,
+          props.config.routing_group ?? '',
+        ],
       })
     },
     onError: (error) => handleServerError(error, t('Failed to save')),
@@ -152,13 +207,15 @@ export function UserChannelRoutingEditor(props: {
     const original = originalById.get(row.channel_id)
     return (
       row.priority_override !== original?.priority_override ||
-      row.enabled !== original.enabled
+      row.enabled !== original?.enabled ||
+      (!!props.config.routing_group && !original?.configured)
     )
   })
-  const { onDirtyChange } = props
+  const notifyDirty = useEffectEvent(props.onDirtyChange)
   useEffect(() => {
-    onDirtyChange(dirty)
-  }, [dirty, onDirtyChange])
+    notifyDirty(dirty)
+  }, [dirty])
+  useEffect(() => () => notifyDirty(false), [])
 
   function reorder(from: number, to: number) {
     if (
@@ -180,13 +237,61 @@ export function UserChannelRoutingEditor(props: {
     }
   }
 
-  if (rows.fields.length === 0) {
+  if (props.config.channels.length === 0) {
     return <EmptyState title={t('No available channels')} />
   }
 
   return (
     <Form {...form}>
       <div className='flex flex-col gap-4'>
+        {props.config.routing_group && (
+          <div className='flex flex-wrap gap-2'>
+            <Combobox
+              className='min-w-0 flex-1'
+              options={props.config.channels
+                .filter(
+                  (candidate) =>
+                    candidate.available &&
+                    !values.some(
+                      (row) => row.channel_id === candidate.channel_id
+                    )
+                )
+                .map((candidate) => ({
+                  value: String(candidate.channel_id),
+                  label: `${candidate.channel_name} #${candidate.channel_id}`,
+                }))}
+              value={channelToAdd}
+              onValueChange={setChannelToAdd}
+              disabled={save.isPending}
+              aria-label={t('Select channel')}
+              placeholder={t('Select channel')}
+            />
+            <Button
+              type='button'
+              variant='outline'
+              disabled={save.isPending || !channelToAdd}
+              onClick={() => {
+                const candidate = originalById.get(Number(channelToAdd))
+                if (
+                  !candidate ||
+                  !candidate.available ||
+                  values.some((row) => row.channel_id === candidate.channel_id)
+                ) {
+                  return
+                }
+                rows.append({
+                  channel_id: candidate.channel_id,
+                  priority_override: candidate.inherited_priority,
+                  enabled: true,
+                })
+                setChannelToAdd(null)
+              }}
+            >
+              <Plus />
+              {t('Add channel')}
+            </Button>
+          </div>
+        )}
         <ol
           className='flex flex-col gap-2'
           aria-label={t('Channel priority order')}

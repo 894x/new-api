@@ -683,6 +683,22 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                               </FormItem>
                             )}
                           />
+                          {user &&
+                            (channelRulesValue[index]?.modelName ?? '') !==
+                              '' && (
+                              <UserChannelRoutingRuleEditor
+                                userId={user.id}
+                                model={
+                                  channelRulesValue[index]?.modelName ?? ''
+                                }
+                                channelGroups={
+                                  channelRulesValue[index]?.groups ?? []
+                                }
+                                onDirtyChange={(dirty) =>
+                                  setRoutingRowDirty(item.id, dirty)
+                                }
+                              />
+                            )}
                           {previewKey === currentPreviewKey &&
                             previewChannels.data?.data &&
                             user && (
@@ -714,18 +730,6 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                                       </span>
                                     )}
                                 </p>
-                                <UserChannelRoutingRuleEditor
-                                  userId={user.id}
-                                  model={
-                                    channelRulesValue[index]?.modelName ?? ''
-                                  }
-                                  channelGroups={
-                                    channelRulesValue[index]?.groups ?? []
-                                  }
-                                  onDirtyChange={(dirty) =>
-                                    setRoutingRowDirty(item.id, dirty)
-                                  }
-                                />
                               </div>
                             )}
                         </div>

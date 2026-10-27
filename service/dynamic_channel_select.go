@@ -54,7 +54,7 @@ func ObserveDynamicRoutingSample(key dynamicrouting.ObservationKey, sample dynam
 }
 
 func getSatisfiedChannelForRoute(param *RetryParam, group string, retry int) (*model.Channel, bool, error) {
-	userRouting, err := param.UserChannelRouting()
+	userRouting, err := param.UserChannelRoutingForGroup(group)
 	if err != nil {
 		return nil, false, err
 	}
@@ -83,7 +83,7 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 		return nil, false, false, err
 	}
 
-	filters, err := param.SelectionFilters()
+	filters, err := param.SelectionFilters(group)
 	if err != nil {
 		return nil, true, false, err
 	}

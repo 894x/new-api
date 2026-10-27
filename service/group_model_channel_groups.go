@@ -41,8 +41,8 @@ func ChannelGroupsAllowedChannelIDs(groups []string, modelName string) (map[int]
 
 // SelectionFilters intersects user policy with asset constraints without
 // mutating either source. Each retry resolves the current policy again.
-func (p *RetryParam) SelectionFilters() (model.ChannelSelectionFilters, error) {
-	userRouting, err := p.UserChannelRouting()
+func (p *RetryParam) SelectionFilters(group string) (model.ChannelSelectionFilters, error) {
+	userRouting, err := p.UserChannelRoutingForGroup(group)
 	if err != nil {
 		return model.ChannelSelectionFilters{}, err
 	}
@@ -66,29 +66,45 @@ func (p *RetryParam) SelectionFilters() (model.ChannelSelectionFilters, error) {
 // and task retries. Token-group membership is checked independently so policy
 // never grants access outside the token's own candidate groups.
 func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName string) error {
-	rows, err := model.ListUserChannelRoutingOverrides(common.GetContextKeyInt(c, constant.ContextKeyUserId), modelName)
-	if err != nil {
-		return err
-	}
-	for _, row := range rows {
-		if row.ChannelId == channelID && row.Disabled {
-			return ErrGroupModelChannelDenied
-		}
-	}
 	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 	allowed, err := GroupModelAllowedChannelIDs(userGroup, modelName)
 	if err != nil {
 		return err
 	}
-	if allowed == nil {
-		return nil
-	}
-	if _, ok := allowed[channelID]; !ok {
-		return ErrGroupModelChannelDenied
+	if allowed != nil {
+		if _, ok := allowed[channelID]; !ok {
+			return ErrGroupModelChannelDenied
+		}
 	}
 	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	param := &RetryParam{Ctx: c, ModelName: modelName}
+	if allowed == nil && group == "auto" {
+		legacy, err := param.UserChannelRouting()
+		if err != nil {
+			return err
+		}
+		hasScopedPolicy := false
+		for _, row := range param.userGroupRouting {
+			if row.ChannelId == channelID {
+				hasScopedPolicy = true
+				break
+			}
+		}
+		// Preserve unscoped pinned-channel validation when there is no
+		// outlet policy to resolve for this channel.
+		if !hasScopedPolicy {
+			if legacy[channelID].Disabled {
+				return ErrGroupModelChannelDenied
+			}
+			return nil
+		}
+	}
 	if group != "auto" {
-		if model.IsChannelEnabledForGroupModel(group, modelName, channelID) {
+		routing, err := param.UserChannelRoutingForGroup(group)
+		if err != nil {
+			return err
+		}
+		if !routing[channelID].Disabled && (allowed == nil || model.IsChannelEnabledForGroupModel(group, modelName, channelID)) {
 			return nil
 		}
 		return ErrGroupModelChannelDenied
@@ -98,7 +114,11 @@ func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName
 		if selectedGroup != "" && candidate != selectedGroup {
 			continue
 		}
-		if model.IsChannelEnabledForGroupModel(candidate, modelName, channelID) {
+		routing, err := param.UserChannelRoutingForGroup(candidate)
+		if err != nil {
+			return err
+		}
+		if !routing[channelID].Disabled && model.IsChannelEnabledForGroupModel(candidate, modelName, channelID) {
 			return nil
 		}
 	}

@@ -44,6 +44,7 @@ func AppendTaskPluginIdentityFilter(c *gin.Context, pluginKey string) {
 type RetryParam struct {
 	userRoutingLoaded      bool
 	userRouting            map[int]model.UserChannelRoutingOverride
+	userGroupRouting       []model.UserGroupChannelRoutingOverride
 	Ctx                    *gin.Context
 	TokenGroup             string
 	ModelName              string
@@ -322,7 +323,7 @@ type ChannelSelectError struct {
 // filters. The group the channel was chosen from is returned for auto-group
 // callers. The caller still applies SetupContextForSelectedChannel.
 func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam) (*model.Channel, string, *ChannelSelectError) {
-	userRouting, routingErr := retry.UserChannelRouting()
+	userRouting, routingErr := retry.UserChannelRoutingForGroup(retry.TokenGroup)
 	if routingErr != nil {
 		return nil, "", &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: "user_channel_routing_unavailable"}
 	}
@@ -369,7 +370,17 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 	usingGroup := retry.TokenGroup
 	var channel *model.Channel
 	var selectGroup string
-	if retry.GetRetry() == 0 && len(userRouting) == 0 {
+	hasUserRouting := len(userRouting) > 0
+	if retry.TokenGroup == "auto" {
+		for _, group := range GetRequestAutoGroups(c, common.GetContextKeyString(c, constant.ContextKeyUserGroup)) {
+			for _, row := range retry.userGroupRouting {
+				if row.RoutingGroup == group && (row.Priority != nil || row.Disabled) {
+					hasUserRouting = true
+				}
+			}
+		}
+	}
+	if retry.GetRetry() == 0 && !hasUserRouting {
 		// Strict bindings must not be bypassed by dynamic routing. Best-effort
 		// affinity retains dynamic-routing and video-delivery tier precedence.
 		if preferredChannelID, found := GetPreferredChannelByAffinity(c, modelName, usingGroup); found &&

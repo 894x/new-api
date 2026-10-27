@@ -261,7 +261,7 @@ describe('User group quick configuration', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows user priorities inline only for channels matched by the selected pools', async () => {
+  it('shows an independent outlet group editor as soon as a model has selected pools', async () => {
     vi.mocked(api.post).mockResolvedValue({
       data: {
         success: true,
@@ -271,17 +271,14 @@ describe('User group quick configuration', () => {
     renderGroupConfig()
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Channels' }))
-    expect(screen.queryByText('Pool Alpha #11')).not.toBeInTheDocument()
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Preview channel availability' })
-    )
-
     expect(await screen.findByText('Pool Alpha #11')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'pool-a' })).toBeInTheDocument()
     expect(api.get).toHaveBeenCalledWith(
       '/api/user/42/channel-routing-overrides',
       {
         params: {
           model: 'model-x',
+          routing_group: 'pool-a',
           channel_groups: JSON.stringify(['pool-a']),
         },
       }

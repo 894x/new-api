@@ -177,17 +177,20 @@ export interface UserChannelRoutingRow {
   effective_priority: number
   enabled: boolean
   available: boolean
+  configured?: boolean
 }
 
 export interface UserChannelRoutingConfig {
   models: string[]
   model: string
+  routing_group?: string
   revision: string
   channels: UserChannelRoutingRow[]
 }
 
 export interface UserChannelRoutingPatch {
   model: string
+  routing_group?: string
   revision: string
   overrides: Pick<
     UserChannelRoutingRow,

@@ -19,7 +19,7 @@ func filterVideoMediaChannels(param *RetryParam, group string) (*RetryParam, boo
 	if !RequestHasVideoMedia(param.RequestBody) {
 		return param, false, nil
 	}
-	filters, err := param.SelectionFilters()
+	filters, err := param.SelectionFilters(group)
 	if err != nil {
 		return nil, false, err
 	}

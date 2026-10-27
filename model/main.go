@@ -361,6 +361,7 @@ func migrateDB() error {
 		&Ability{},
 		&ChannelModelOverride{},
 		&UserChannelRoutingOverride{},
+		&UserGroupChannelRoutingOverride{},
 		&Log{},
 		&Midjourney{},
 		&TopUp{},

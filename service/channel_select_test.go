@@ -27,14 +27,23 @@ func TestUserChannelRoutingOverridesAllSelectionPaths(t *testing.T) {
 			db := setupChannelSelectAutoGroupsTest(t)
 			common.MemoryCacheEnabled = cacheEnabled
 			configureDynamicRoutingForTest(t, true)
-			require.NoError(t, db.AutoMigrate(&model.UserChannelRoutingOverride{}))
-			createPrioritizedChannelSelectFixture(t, db, 9501, "default", "gpt-5", 100)
-			createPrioritizedChannelSelectFixture(t, db, 9502, "default", "gpt-5", 10)
+			require.NoError(t, db.AutoMigrate(&model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+			createPrioritizedChannelSelectFixture(t, db, 9501, "default,vip", "gpt-5", 100)
+			createPrioritizedChannelSelectFixture(t, db, 9502, "default,vip", "gpt-5", 10)
 			createPrioritizedChannelSelectFixture(t, db, 9503, "private", "gpt-5", 1000)
+			for _, id := range []int{9501, 9502} {
+				var channel model.Channel
+				require.NoError(t, db.First(&channel, id).Error)
+				require.NoError(t, channel.UpdateAbilities(nil))
+			}
 			require.NoError(t, db.Create(&[]model.UserChannelRoutingOverride{
 				{UserId: 42, Model: "gpt-5", ChannelId: 9501, Priority: common.GetPointer(int64(0))},
 				{UserId: 42, Model: "gpt-5", ChannelId: 9502, Priority: common.GetPointer(int64(200))},
 				{UserId: 42, Model: "gpt-5", ChannelId: 9503, Priority: common.GetPointer(int64(9999))},
+			}).Error)
+			require.NoError(t, db.Create(&[]model.UserGroupChannelRoutingOverride{
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: 42, Model: "gpt-5", ChannelId: 9501, Priority: common.GetPointer(int64(400))}, RoutingGroup: "vip"},
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: 42, Model: "gpt-5", ChannelId: 9502, Priority: common.GetPointer(int64(300))}, RoutingGroup: "vip"},
 			}).Error)
 			model.InitChannelCache()
 			affinity := operation_setting.GetChannelAffinitySetting()
@@ -52,6 +61,7 @@ func TestUserChannelRoutingOverridesAllSelectionPaths(t *testing.T) {
 			require.NoError(t, setting.UpdateGroupModelChannelGroups(`{}`))
 			for _, tc := range []struct {
 				name     string
+				group    string
 				retry    int
 				capacity bool
 				blocked  bool
@@ -64,19 +74,30 @@ func TestUserChannelRoutingOverridesAllSelectionPaths(t *testing.T) {
 				{name: "capacity_spillover", capacity: true, blocked: true, want: 9501},
 				{name: "asset_filter_before_priority", allowed: map[int]struct{}{9501: {}}, want: 9501},
 				{name: "deny_all_is_not_expanded", allowed: map[int]struct{}{}, want: 0},
+				{name: "scoped_priority_precedes_dynamic", group: "vip", want: 9501},
+				{name: "scoped_retry_priority", group: "vip", retry: 1, want: 9502},
+				{name: "scoped_capacity_spillover", group: "vip", capacity: true, blocked: true, want: 9502},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
+					group := tc.group
+					if group == "" {
+						group = "default"
+					}
 					c, _ := gin.CreateTestContext(httptest.NewRecorder())
 					c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 					c.Request.Header.Set("X-Affinity-Key", affinityKey)
 					common.SetContextKey(c, constant.ContextKeyUserId, 42)
 					common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
-					common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
-					param := &RetryParam{Ctx: c, ModelName: "gpt-5", TokenGroup: "default", DynamicRoutingEligible: true, Retry: &tc.retry, AllowedChannelIds: tc.allowed}
+					common.SetContextKey(c, constant.ContextKeyUsingGroup, group)
+					param := &RetryParam{Ctx: c, ModelName: "gpt-5", TokenGroup: group, DynamicRoutingEligible: true, Retry: &tc.retry, AllowedChannelIds: tc.allowed}
 					if tc.capacity {
 						param.Capacity = &ChannelCapacityState{eligible: map[int]struct{}{}, blocked: map[int]struct{}{}}
 						if tc.blocked {
-							param.Capacity.blocked[9502] = struct{}{}
+							blocked := 9502
+							if group == "vip" {
+								blocked = 9501
+							}
+							param.Capacity.blocked[blocked] = struct{}{}
 						}
 					}
 					selected, _, selectErr := SelectChannelForRequest(c, "gpt-5", param)

@@ -23,6 +23,26 @@ type UserChannelRoutingOverride struct {
 	Disabled  bool   `json:"disabled"`
 }
 
+// Group-scoped policies live separately so upgrades preserve the legacy
+// user/model/channel primary key and its inherited defaults.
+type UserGroupChannelRoutingOverride struct {
+	UserChannelRoutingOverride `gorm:"embedded"`
+	RoutingGroup               string `json:"routing_group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+}
+
+func ListUserGroupChannelRoutingOverrides(userID int, modelName string) ([]UserGroupChannelRoutingOverride, error) {
+	rows := make([]UserGroupChannelRoutingOverride, 0)
+	if userID <= 0 {
+		return rows, nil
+	}
+	query := DB.Where("user_id = ?", userID)
+	if modelName != "" {
+		query = query.Where("model = ?", modelName)
+	}
+	err := query.Order("model, routing_group, channel_id").Find(&rows).Error
+	return rows, err
+}
+
 type UserChannelRoutingPatch struct {
 	ChannelId int    `json:"channel_id"`
 	Priority  *int64 `json:"priority_override"`
@@ -56,7 +76,14 @@ func UserChannelRoutingRevision(rows []UserChannelRoutingOverride) (string, erro
 // PatchUserChannelRouting atomically patches final row values, with optimistic
 // concurrency per user/model. Omitted rows are untouched; enabled+nil inherits.
 func PatchUserChannelRouting(userID int, modelName, revision string, patches []UserChannelRoutingPatch) error {
+	return PatchUserChannelRoutingForGroup(userID, modelName, "", revision, patches)
+}
+
+func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revision string, patches []UserChannelRoutingPatch) error {
 	if userID <= 0 || modelName == "" || strings.TrimSpace(modelName) != modelName || len(modelName) > 255 || revision == "" || len(patches) == 0 || len(patches) > 1000 {
+		return ErrInvalidUserChannelRouting
+	}
+	if len(routingGroup) > 64 || strings.TrimSpace(routingGroup) != routingGroup || routingGroup == "auto" || strings.ContainsAny(routingGroup, ",\x00\r\n") {
 		return ErrInvalidUserChannelRouting
 	}
 	seen := make(map[int]struct{}, len(patches))
@@ -73,7 +100,13 @@ func PatchUserChannelRouting(userID int, modelName, revision string, patches []U
 			return err
 		}
 		rows := make([]UserChannelRoutingOverride, 0)
-		if err := tx.Where("user_id = ? AND model = ?", userID, modelName).Order("model, channel_id").Find(&rows).Error; err != nil {
+		query := tx.Where("user_id = ? AND model = ?", userID, modelName)
+		if routingGroup == "" {
+			query = query.Model(&UserChannelRoutingOverride{})
+		} else {
+			query = query.Model(&UserGroupChannelRoutingOverride{}).Where("routing_group = ?", routingGroup)
+		}
+		if err := query.Order("model, channel_id").Find(&rows).Error; err != nil {
 			return err
 		}
 		current, err := UserChannelRoutingRevision(rows)
@@ -84,25 +117,34 @@ func PatchUserChannelRouting(userID int, modelName, revision string, patches []U
 			return ErrUserChannelRoutingConflict
 		}
 		for _, patch := range patches {
-			if patch.Priority == nil && *patch.Enabled {
+			if routingGroup == "" && patch.Priority == nil && *patch.Enabled {
 				if err := tx.Where("user_id = ? AND model = ? AND channel_id = ?", userID, modelName, patch.ChannelId).Delete(&UserChannelRoutingOverride{}).Error; err != nil {
 					return err
 				}
 				continue
 			}
 			var channel Channel
-			if err := tx.Select("id", "models").First(&channel, patch.ChannelId).Error; err != nil {
+			if err := tx.Select("id", "models", "group").First(&channel, patch.ChannelId).Error; err != nil {
 				return err
 			}
 			models := normalizeChannelModels(&channel)
 			if !slices.Contains(models, modelName) && !slices.Contains(models, ratio_setting.RoutingMatchModelName(modelName)) {
 				return fmt.Errorf("%w: channel %d does not support model %s", ErrInvalidUserChannelRouting, patch.ChannelId, modelName)
 			}
+			if routingGroup != "" && !slices.Contains(channel.GetGroups(), routingGroup) {
+				return fmt.Errorf("%w: channel %d does not belong to group %s", ErrInvalidUserChannelRouting, patch.ChannelId, routingGroup)
+			}
 			row := UserChannelRoutingOverride{UserId: userID, Model: modelName, ChannelId: patch.ChannelId, Priority: patch.Priority, Disabled: !*patch.Enabled}
+			columns := []clause.Column{{Name: "user_id"}, {Name: "model"}, {Name: "channel_id"}}
+			var record any = &row
+			if routingGroup != "" {
+				columns = append(columns, clause.Column{Name: "routing_group"})
+				record = &UserGroupChannelRoutingOverride{UserChannelRoutingOverride: row, RoutingGroup: routingGroup}
+			}
 			if err := tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "user_id"}, {Name: "model"}, {Name: "channel_id"}},
+				Columns:   columns,
 				DoUpdates: clause.AssignmentColumns([]string{"priority", "disabled"}),
-			}).Create(&row).Error; err != nil {
+			}).Create(record).Error; err != nil {
 				return err
 			}
 		}

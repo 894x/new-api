@@ -40,13 +40,15 @@ import type {
 export async function getUserChannelRouting(
   id: number,
   model = '',
-  channelGroups?: string[]
+  channelGroups?: string[],
+  routingGroup?: string
 ) {
   const response = await api.get<ApiResponse<UserChannelRoutingConfig>>(
     `/api/user/${id}/channel-routing-overrides`,
     {
       params: {
         model,
+        ...(routingGroup ? { routing_group: routingGroup } : {}),
         ...(channelGroups === undefined
           ? {}
           : { channel_groups: JSON.stringify(channelGroups) }),

@@ -115,7 +115,7 @@ func setupRelayErrorLogDatabases(t *testing.T) (*gorm.DB, *gorm.DB) {
 	oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
 	oldRedis, oldMemory := common.RedisEnabled, common.MemoryCacheEnabled
 	oldErrorLog := constant.ErrorLogEnabled
-	mainDB, dialect := openTaskDialectDatabase(t, &model.User{}, &model.Token{}, &model.Channel{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}, &model.UserSubscription{})
+	mainDB, dialect := openTaskDialectDatabase(t, &model.User{}, &model.Token{}, &model.Channel{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.UserSubscription{})
 	logDB, logDialect := openTaskDialectDatabase(t, &model.Log{})
 	model.DB, model.LOG_DB = mainDB, logDB
 	common.SetDatabaseTypes(dialect, logDialect)
