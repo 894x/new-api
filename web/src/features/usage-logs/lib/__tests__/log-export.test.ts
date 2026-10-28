@@ -18,8 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 
-import { describe, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 
+import { api } from '@/lib/api'
+
+import { exportLogs } from '../../api'
 import {
   buildLogExportRequest,
   getDefaultLogExportFields,
@@ -27,6 +30,78 @@ import {
 } from '../log-export'
 
 describe('usage log export', () => {
+  test('offers only the personal consumption field allowlist in self mode', () => {
+    const fields = [
+      'created_at',
+      'request_id',
+      'consumption_type',
+      'token_name',
+      'model_name',
+      'input_tokens',
+      'cached_input_tokens',
+      'output_tokens',
+      'charged_quota',
+      'actual_amount_usd',
+    ]
+    expect(getLogExportFields('self').map((field) => field.key)).toEqual(fields)
+    expect(getDefaultLogExportFields('self')).toEqual(fields)
+  })
+
+  test('drops identity, channel, upstream and arbitrary parameters in self requests', () => {
+    const request = buildLogExportRequest(
+      'self',
+      ['request_id', 'channel_id', 'group_ratio', 'charged_quota'],
+      {
+        p: 3,
+        page_size: 100,
+        type: 5,
+        username: 'another-user',
+        channel: 10,
+        group: 'internal-group',
+        upstream_request_id: 'provider-request',
+        user_id: 99,
+        arbitrary_filter: 'private',
+        start_timestamp: 100,
+        end_timestamp: 200,
+        model_name: 'gpt-x',
+        token_name: 'personal-key',
+        request_id: 'client-request',
+      } as Parameters<typeof buildLogExportRequest>[2]
+    )
+    expect(request).toEqual({
+      view: 'self',
+      fields: ['request_id', 'charged_quota'],
+      start_timestamp: 100,
+      end_timestamp: 200,
+      model_name: 'gpt-x',
+      token_name: 'personal-key',
+      request_id: 'client-request',
+    })
+  })
+
+  test.each([
+    ['self', '/api/log/self/export'],
+    ['upstream', '/api/log/export'],
+    ['downstream', '/api/log/export'],
+  ] as const)(
+    'uses the correct endpoint for %s exports',
+    async (view, endpoint) => {
+      const request = { view, fields: ['request_id'] }
+      const blob = new Blob(['archive'])
+      const post = vi.spyOn(api, 'post').mockResolvedValue({
+        data: blob,
+        headers: { 'content-type': 'application/zip' },
+      })
+      const result = await exportLogs(request)
+      expect(post).toHaveBeenCalledWith(
+        endpoint,
+        request,
+        expect.objectContaining({ responseType: 'blob' })
+      )
+      expect(result).toEqual({ blob, filename: `usage-${view}-export.zip` })
+    }
+  )
+
   test('uses the reconciliation-focused upstream fields by default', () => {
     assert.deepEqual(getDefaultLogExportFields('upstream'), [
       'created_at',

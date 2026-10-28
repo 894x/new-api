@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/shopspring/decimal"
 )
 
 type LogExportView string
@@ -20,6 +22,7 @@ type LogExportView string
 const (
 	LogExportViewUpstream   LogExportView = "upstream"
 	LogExportViewDownstream LogExportView = "downstream"
+	LogExportViewSelf       LogExportView = "self"
 )
 
 type LogExportRow struct {
@@ -48,6 +51,8 @@ type LogExportRow struct {
 	OriginalAmountUSD *float64
 	ActualAmountUSD   *float64
 	ErrorMessage      string
+	ConsumptionType   string
+	ChargedQuota      int64
 }
 
 type LogExportSummary struct {
@@ -65,6 +70,11 @@ type LogExportSummary struct {
 	PricedRequestCount     int
 	UnpricedRequestCount   int
 	KnownOriginalAmountUSD float64
+	ConsumptionCount       int
+	ViolationFeeCount      int
+	RefundCount            int
+	ChargedQuota           decimal.Decimal
+	KnownActualAmountUSD   float64
 }
 
 type logExportField struct {
@@ -99,9 +109,17 @@ var logExportFields = map[string]logExportField{
 	"original_amount_usd": {value: func(row LogExportRow) string { return formatLogExportAmount(row.OriginalAmountUSD) }},
 	"actual_amount_usd":   {value: func(row LogExportRow) string { return formatLogExportAmount(row.ActualAmountUSD) }},
 	"error_message":       {upstreamOnly: true, text: true, value: func(row LogExportRow) string { return row.ErrorMessage }},
+	"consumption_type":    {text: true, value: func(row LogExportRow) string { return row.ConsumptionType }},
+	"charged_quota":       {value: func(row LogExportRow) string { return strconv.FormatInt(row.ChargedQuota, 10) }},
 }
 
 func DefaultLogExportFields(view LogExportView) []string {
+	if view == LogExportViewSelf {
+		return []string{
+			"created_at", "request_id", "consumption_type", "token_name", "model_name",
+			"input_tokens", "cached_input_tokens", "output_tokens", "charged_quota", "actual_amount_usd",
+		}
+	}
 	commonFields := []string{
 		"created_at", "request_id", "status", "user_id", "username", "token_id", "token_name", "group",
 		"model_name", "input_tokens", "cached_input_tokens", "output_tokens", "model_price", "model_ratio",
@@ -118,17 +136,30 @@ func DefaultLogExportFields(view LogExportView) []string {
 }
 
 func ValidateLogExportFields(view LogExportView, fields []string) error {
-	if view != LogExportViewUpstream && view != LogExportViewDownstream {
+	if view != LogExportViewUpstream && view != LogExportViewDownstream && view != LogExportViewSelf {
 		return fmt.Errorf("unsupported export view %q", view)
 	}
 	if len(fields) == 0 {
 		return errors.New("at least one export field is required")
 	}
 	seen := make(map[string]struct{}, len(fields))
+	selfFields := make(map[string]struct{})
+	if view == LogExportViewSelf {
+		for _, name := range DefaultLogExportFields(LogExportViewSelf) {
+			selfFields[name] = struct{}{}
+		}
+	}
 	for _, name := range fields {
 		field, ok := logExportFields[name]
 		if !ok {
 			return fmt.Errorf("unsupported export field %q", name)
+		}
+		if view == LogExportViewSelf {
+			if _, allowed := selfFields[name]; !allowed {
+				return fmt.Errorf("field %q is not available in self exports", name)
+			}
+		} else if name == "consumption_type" || name == "charged_quota" {
+			return fmt.Errorf("field %q is only available in self exports", name)
 		}
 		if view == LogExportViewDownstream && field.upstreamOnly {
 			return fmt.Errorf("field %q is not available in downstream exports", name)
@@ -149,6 +180,46 @@ func BuildLogExportRows(view LogExportView, logs []*model.Log) []LogExportRow {
 		}
 		return orderedLogs[i].Id < orderedLogs[j].Id
 	})
+
+	if view == LogExportViewSelf {
+		rows := make([]LogExportRow, 0, len(orderedLogs))
+		for _, log := range orderedLogs {
+			if log == nil || (log.Type != model.LogTypeConsume && log.Type != model.LogTypeRefund) {
+				continue
+			}
+			other := parseLogExportOther(log.Other)
+			row := LogExportRow{
+				CreatedAt:       log.CreatedAt,
+				RequestID:       log.RequestId,
+				ConsumptionType: "consumption",
+				TokenName:       log.TokenName,
+				ModelName:       log.ModelName,
+				ChargedQuota:    int64(log.Quota),
+			}
+			if log.Type == model.LogTypeRefund {
+				row.ConsumptionType = "refund"
+				row.ChargedQuota = -row.ChargedQuota
+			} else if isViolationFeeLog(log) {
+				row.ConsumptionType = "violation_fee"
+			}
+			if row.ConsumptionType == "consumption" {
+				row.InputTokens = log.PromptTokens
+				row.CachedInputTokens = optionalInt(other, "cache_tokens")
+				row.OutputTokens = log.CompletionTokens
+			}
+			// Historical entries without a valid conversion snapshot have an unknown
+			// USD amount. Current settings cannot reconstruct what was charged then.
+			quotaPerUnit := optionalFloat(other, "quota_per_unit")
+			if quotaPerUnit != nil && *quotaPerUnit > 0 && !math.IsNaN(*quotaPerUnit) && !math.IsInf(*quotaPerUnit, 0) {
+				amount := float64(row.ChargedQuota) / *quotaPerUnit
+				if !math.IsNaN(amount) && !math.IsInf(amount, 0) {
+					row.ActualAmountUSD = &amount
+				}
+			}
+			rows = append(rows, row)
+		}
+		return rows
+	}
 
 	if view == LogExportViewUpstream {
 		rows := make([]LogExportRow, 0, len(orderedLogs))
@@ -196,6 +267,9 @@ func BuildLogExportSummary(view LogExportView, rows []LogExportRow) []LogExportS
 	summaries := make(map[summaryKey]*LogExportSummary)
 	for _, row := range rows {
 		key := summaryKey{partyID: row.UserID, model: row.ModelName}
+		if view == LogExportViewSelf {
+			key.partyID = 0
+		}
 		if view == LogExportViewUpstream {
 			key.partyID = row.ChannelID
 			key.model = row.UpstreamModelName
@@ -212,6 +286,27 @@ func BuildLogExportSummary(view LogExportView, rows []LogExportRow) []LogExportS
 			summaries[key] = summary
 		}
 		summary.RequestCount++
+		if view == LogExportViewSelf {
+			summary.InputTokens += row.InputTokens
+			summary.CachedInputTokens += row.CachedInputTokens
+			summary.OutputTokens += row.OutputTokens
+			summary.ChargedQuota = summary.ChargedQuota.Add(decimal.NewFromInt(row.ChargedQuota))
+			switch row.ConsumptionType {
+			case "consumption":
+				summary.ConsumptionCount++
+			case "violation_fee":
+				summary.ViolationFeeCount++
+			case "refund":
+				summary.RefundCount++
+			}
+			if row.ActualAmountUSD == nil {
+				summary.UnpricedRequestCount++
+			} else {
+				summary.PricedRequestCount++
+				summary.KnownActualAmountUSD += *row.ActualAmountUSD
+			}
+			continue
+		}
 		if row.Status == "success" {
 			summary.SuccessCount++
 			summary.InputTokens += row.InputTokens
@@ -331,7 +426,7 @@ func isViolationFeeLog(log *model.Log) bool {
 	return ok && violationFee
 }
 
-func parseLogExportOther(value string) map[string]interface{} {
+func parseLogExportOther(value string) map[string]any {
 	if value == "" {
 		return nil
 	}
@@ -342,7 +437,7 @@ func parseLogExportOther(value string) map[string]interface{} {
 	return other
 }
 
-func optionalFloat(values map[string]interface{}, key string) *float64 {
+func optionalFloat(values map[string]any, key string) *float64 {
 	value, ok := values[key]
 	if !ok {
 		return nil
@@ -354,7 +449,7 @@ func optionalFloat(values map[string]interface{}, key string) *float64 {
 	return &number
 }
 
-func optionalInt(values map[string]interface{}, key string) int {
+func optionalInt(values map[string]any, key string) int {
 	value := optionalFloat(values, key)
 	if value == nil {
 		return 0
@@ -362,7 +457,7 @@ func optionalInt(values map[string]interface{}, key string) int {
 	return int(*value)
 }
 
-func logExportString(values map[string]interface{}, key string) string {
+func logExportString(values map[string]any, key string) string {
 	value, _ := values[key].(string)
 	return value
 }
@@ -417,6 +512,8 @@ func writeLogExportSummary(writer io.Writer, view LogExportView, summaries []Log
 	header := []string{"model_name", "request_count", "success_count", "failure_count", "input_tokens", "cached_input_tokens", "output_tokens", "priced_success_count", "unpriced_success_count", "known_original_amount_usd"}
 	if view == LogExportViewUpstream {
 		header = append([]string{"channel_id", "channel_name"}, header...)
+	} else if view == LogExportViewSelf {
+		header = []string{"model_name", "entry_count", "consumption_count", "violation_fee_count", "refund_count", "input_tokens", "cached_input_tokens", "output_tokens", "charged_quota", "known_actual_amount_usd", "unknown_amount_count"}
 	} else {
 		header = append([]string{"user_id", "username"}, header...)
 	}
@@ -424,6 +521,29 @@ func writeLogExportSummary(writer io.Writer, view LogExportView, summaries []Log
 		return err
 	}
 	for _, summary := range summaries {
+		if view == LogExportViewSelf {
+			knownActualAmount := ""
+			if summary.PricedRequestCount > 0 {
+				knownActualAmount = formatLogExportAmount(&summary.KnownActualAmountUSD)
+			}
+			record := []string{
+				safeSpreadsheetText(summary.ModelName),
+				strconv.Itoa(summary.RequestCount),
+				strconv.Itoa(summary.ConsumptionCount),
+				strconv.Itoa(summary.ViolationFeeCount),
+				strconv.Itoa(summary.RefundCount),
+				strconv.Itoa(summary.InputTokens),
+				strconv.Itoa(summary.CachedInputTokens),
+				strconv.Itoa(summary.OutputTokens),
+				summary.ChargedQuota.String(),
+				knownActualAmount,
+				strconv.Itoa(summary.UnpricedRequestCount),
+			}
+			if err := csvWriter.Write(record); err != nil {
+				return err
+			}
+			continue
+		}
 		knownOriginalAmount := ""
 		if summary.PricedRequestCount > 0 {
 			knownOriginalAmount = formatLogExportAmount(&summary.KnownOriginalAmountUSD)
@@ -455,7 +575,7 @@ func writeLogExportSummary(writer io.Writer, view LogExportView, summaries []Log
 
 func safeSpreadsheetText(value string) string {
 	if strings.HasPrefix(value, "=") || strings.HasPrefix(value, "+") || strings.HasPrefix(value, "-") || strings.HasPrefix(value, "@") ||
-		strings.HasPrefix(value, "\t") || strings.HasPrefix(value, "\r") || strings.HasPrefix(value, "\n") {
+		strings.HasPrefix(value, "\t") || strings.HasPrefix(value, "\r") || strings.HasPrefix(value, "\n") || strings.HasPrefix(value, "\x00") {
 		return "'" + value
 	}
 	return value

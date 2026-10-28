@@ -569,6 +569,53 @@ type LogExportQuery struct {
 	UpstreamRequestID string
 }
 
+// SelfLogExportQuery contains only filters available to a user's consumption ledger.
+// Ownership is a separate required argument, never a client-supplied filter.
+type SelfLogExportQuery struct {
+	StartTimestamp int64
+	EndTimestamp   int64
+	ModelName      string
+	TokenName      string
+	RequestID      string
+}
+
+func GetUserConsumptionLogsForExport(userID int, query SelfLogExportQuery, limit int) (logs []*Log, total int64, err error) {
+	if userID <= 0 || limit <= 0 {
+		return nil, 0, errors.New("invalid user consumption export scope")
+	}
+	tx := LOG_DB.Model(&Log{}).
+		Where("user_id = ?", userID).
+		Where("type IN ?", []int{LogTypeConsume, LogTypeRefund})
+	if tx, err = applyExplicitLogTextFilter(tx, "model_name", query.ModelName); err != nil {
+		return nil, 0, err
+	}
+	if query.TokenName != "" {
+		tx = tx.Where("token_name = ?", query.TokenName)
+	}
+	if query.RequestID != "" {
+		tx = tx.Where("request_id = ?", query.RequestID)
+	}
+	if query.StartTimestamp != 0 {
+		tx = tx.Where("created_at >= ?", query.StartTimestamp)
+	}
+	if query.EndTimestamp != 0 {
+		tx = tx.Where("created_at <= ?", query.EndTimestamp)
+	}
+	if err = tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	columns := []string{"created_at", "type", "request_id", "token_name", "model_name", "prompt_tokens", "completion_tokens", "quota", "other"}
+	order := "created_at desc, id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("")
+	} else {
+		columns = append(columns, "id")
+	}
+	err = tx.Select(columns).Order(order).Limit(limit + 1).Find(&logs).Error
+	return logs, total, err
+}
+
 func GetLogsForExport(query LogExportQuery, limit int) (logs []*Log, total int64, err error) {
 	tx := LOG_DB.Where("logs.type IN ?", []int{LogTypeConsume, LogTypeError})
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", query.ModelName); err != nil {

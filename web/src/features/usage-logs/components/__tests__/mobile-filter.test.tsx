@@ -173,14 +173,27 @@ it('applies mobile drawer filters only when Search is pressed', async () => {
 it('keeps all quick actions visible without opening a menu', async () => {
   await renderMobileFilter()
   const user = userEvent.setup()
-  for (const name of ['Hide', 'Filter', 'Search', 'View']) {
+  for (const name of [
+    'Hide',
+    'Related billing',
+    'Export',
+    'Filter',
+    'Search',
+    'View',
+  ]) {
     expect(screen.getByRole('button', { name })).toBeVisible()
   }
   expect(screen.queryByRole('button', { name: 'More' })).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: 'Hide' }))
   expect(screen.getByRole('button', { name: 'Show' })).toBeVisible()
   screen.getByRole('button', { name: 'Show' }).focus()
-  for (const name of ['Filter', 'Search', 'View']) {
+  for (const name of [
+    'Related billing',
+    'Export',
+    'Filter',
+    'Search',
+    'View',
+  ]) {
     await user.tab()
     expect(screen.getByRole('button', { name })).toHaveFocus()
   }
@@ -243,7 +256,14 @@ it('collapses only date and statistics while keeping the right-hand quick action
   expect(screen.queryByRole('button', { name: date })).not.toBeInTheDocument()
   expect(screen.queryByText('Usage')).not.toBeInTheDocument()
   const actions = screen.getByRole('group', { name: 'Actions' })
-  for (const name of ['Hide', 'Filter', 'Search', 'View']) {
+  for (const name of [
+    'Hide',
+    'Related billing',
+    'Export',
+    'Filter',
+    'Search',
+    'View',
+  ]) {
     expect(within(actions).getByRole('button', { name })).toBeVisible()
   }
   expect(

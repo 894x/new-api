@@ -23,6 +23,8 @@ export const STATIC_I18N_KEYS = [
   'Edit customer group configuration',
   'View customer group discounts, rate limits, channel policies, and user channel priorities.',
   'Edit customer group discounts, rate limits, channel policies, and user channel priorities. Changes to a shared group affect every user in that group. Requires view permission.',
+  'Charged quota',
+  'Consumption type',
   'DNSPod server configuration is incomplete or invalid.',
   'DNSPod configuration changed. Refresh and review it before saving again.',
   'A shared Redis connection is required to apply DNS weights.',

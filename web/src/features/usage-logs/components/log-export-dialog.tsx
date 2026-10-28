@@ -22,17 +22,9 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog'
 import { Field, FieldLabel, FieldSet, FieldTitle } from '@/components/ui/field'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
@@ -54,6 +46,7 @@ import {
 import type { GetLogsParams } from '../types'
 
 interface LogExportDialogProps {
+  scope: 'all' | 'self'
   params: GetLogsParams
   exporter?: typeof exportLogs
 }
@@ -61,12 +54,16 @@ interface LogExportDialogProps {
 export function LogExportDialog(props: LogExportDialogProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
-  const [view, setView] = useState<LogExportView>('upstream')
+  const [adminView, setAdminView] = useState<'upstream' | 'downstream'>(
+    'upstream'
+  )
+  const view: LogExportView = props.scope === 'self' ? 'self' : adminView
   const [selectedByView, setSelectedByView] = useState<
     Record<LogExportView, string[]>
   >(() => ({
     upstream: getDefaultLogExportFields('upstream'),
     downstream: getDefaultLogExportFields('downstream'),
+    self: getDefaultLogExportFields('self'),
   }))
   const [exporting, setExporting] = useState(false)
 
@@ -124,24 +121,57 @@ export function LogExportDialog(props: LogExportDialogProps) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger
-        render={<Button variant='outline' size='sm' data-icon='inline-start' />}
-      >
-        <HugeiconsIcon icon={Download02Icon} strokeWidth={2} />
-        {t('Export')}
-      </DialogTrigger>
-      <DialogContent className='sm:max-w-2xl'>
-        <DialogHeader>
-          <DialogTitle>{t('Export usage logs')}</DialogTitle>
-          <DialogDescription>
-            {t(
+    <Dialog
+      open={open}
+      onOpenChange={setOpen}
+      title={
+        props.scope === 'self'
+          ? t('Export my consumption data')
+          : t('Export usage logs')
+      }
+      description={
+        props.scope === 'self'
+          ? t(
+              'Exports your consumption, violation fees, and refunds as detail and per-model summary CSV files. Charges are positive and refunds negative. Historical USD amounts may be blank when conversion data is unavailable.'
+            )
+          : t(
               'Exports matching usage and error logs as detail and summary CSV files. Failed requests keep pricing empty.'
-            )}
-          </DialogDescription>
-        </DialogHeader>
-
-        <FieldSet>
+            )
+      }
+      trigger={
+        <Button variant='outline' size='sm' data-icon='inline-start'>
+          <HugeiconsIcon icon={Download02Icon} strokeWidth={2} />
+          {t('Export')}
+        </Button>
+      }
+      footer={
+        <>
+          <Button
+            type='button'
+            variant='outline'
+            onClick={() => setOpen(false)}
+            disabled={exporting}
+          >
+            {t('Cancel')}
+          </Button>
+          <Button
+            type='button'
+            onClick={handleExport}
+            disabled={exporting || selectedFields.length === 0}
+            data-icon='inline-start'
+          >
+            <HugeiconsIcon
+              icon={exporting ? Loading03Icon : Download02Icon}
+              strokeWidth={2}
+              className={exporting ? 'animate-spin' : undefined}
+            />
+            {exporting ? t('Exporting...') : t('Export')}
+          </Button>
+        </>
+      }
+    >
+      <FieldSet>
+        {props.scope === 'all' && (
           <Field>
             <FieldLabel id='log-export-view-label'>
               {t('Reconciliation view')}
@@ -151,7 +181,7 @@ export function LogExportDialog(props: LogExportDialogProps) {
               value={view}
               onValueChange={(value) => {
                 if (value === 'upstream' || value === 'downstream') {
-                  setView(value)
+                  setAdminView(value)
                 }
               }}
             >
@@ -176,85 +206,61 @@ export function LogExportDialog(props: LogExportDialogProps) {
                   )}
             </p>
           </Field>
+        )}
 
-          <FieldSet>
-            <div className='flex items-center justify-between gap-2'>
-              <FieldTitle>{t('Detail columns')}</FieldTitle>
-              <div className='flex gap-1'>
-                <Button
-                  type='button'
-                  variant='ghost'
-                  size='xs'
-                  onClick={() =>
-                    setSelectedByView((current) => ({
-                      ...current,
-                      [view]: availableFields.map((field) => field.key),
-                    }))
-                  }
-                >
-                  {t('Select all')}
-                </Button>
-                <Button
-                  type='button'
-                  variant='ghost'
-                  size='xs'
-                  onClick={() =>
-                    setSelectedByView((current) => ({
-                      ...current,
-                      [view]: getDefaultLogExportFields(view),
-                    }))
-                  }
-                >
-                  {t('Reset')}
-                </Button>
-              </div>
+        <FieldSet>
+          <div className='flex items-center justify-between gap-2'>
+            <FieldTitle>{t('Detail columns')}</FieldTitle>
+            <div className='flex gap-1'>
+              <Button
+                type='button'
+                variant='ghost'
+                size='xs'
+                onClick={() =>
+                  setSelectedByView((current) => ({
+                    ...current,
+                    [view]: availableFields.map((field) => field.key),
+                  }))
+                }
+              >
+                {t('Select all')}
+              </Button>
+              <Button
+                type='button'
+                variant='ghost'
+                size='xs'
+                onClick={() =>
+                  setSelectedByView((current) => ({
+                    ...current,
+                    [view]: getDefaultLogExportFields(view),
+                  }))
+                }
+              >
+                {t('Reset')}
+              </Button>
             </div>
-            <ScrollArea className='h-64 rounded-lg border'>
-              <div className='grid gap-1 p-3 sm:grid-cols-2'>
-                {availableFields.map((field) => {
-                  const id = `log-export-${view}-${field.key}`
-                  return (
-                    <Field key={field.key} orientation='horizontal'>
-                      <Checkbox
-                        id={id}
-                        checked={selectedFieldSet.has(field.key)}
-                        onCheckedChange={(checked) =>
-                          toggleField(field.key, Boolean(checked))
-                        }
-                      />
-                      <FieldLabel htmlFor={id}>{t(field.label)}</FieldLabel>
-                    </Field>
-                  )
-                })}
-              </div>
-            </ScrollArea>
-          </FieldSet>
+          </div>
+          <ScrollArea className='h-64 rounded-lg border'>
+            <div className='grid gap-1 p-3 sm:grid-cols-2'>
+              {availableFields.map((field) => {
+                const id = `log-export-${view}-${field.key}`
+                return (
+                  <Field key={field.key} orientation='horizontal'>
+                    <Checkbox
+                      id={id}
+                      checked={selectedFieldSet.has(field.key)}
+                      onCheckedChange={(checked) =>
+                        toggleField(field.key, Boolean(checked))
+                      }
+                    />
+                    <FieldLabel htmlFor={id}>{t(field.label)}</FieldLabel>
+                  </Field>
+                )
+              })}
+            </div>
+          </ScrollArea>
         </FieldSet>
-
-        <DialogFooter>
-          <Button
-            type='button'
-            variant='outline'
-            onClick={() => setOpen(false)}
-            disabled={exporting}
-          >
-            {t('Cancel')}
-          </Button>
-          <Button
-            type='button'
-            onClick={handleExport}
-            disabled={exporting || selectedFields.length === 0}
-            data-icon='inline-start'
-          >
-            <HugeiconsIcon
-              icon={exporting ? Loading03Icon : Download02Icon}
-              strokeWidth={2}
-              className={exporting ? 'animate-spin' : undefined}
-            />
-            {exporting ? t('Exporting...') : t('Export')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
+      </FieldSet>
     </Dialog>
   )
 }

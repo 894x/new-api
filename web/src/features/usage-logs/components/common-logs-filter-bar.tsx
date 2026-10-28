@@ -539,7 +539,11 @@ export function CommonLogsFilterBar<TData>(
             requestId={filters.requestId || undefined}
             isAdmin={isAdmin}
           />
-          {isAdmin && <LogExportDialog params={exportParams} />}
+          <LogExportDialog
+            key={isAdmin ? 'all' : 'self'}
+            scope={isAdmin ? 'all' : 'self'}
+            params={exportParams}
+          />
         </>
       }
       primaryFilters={

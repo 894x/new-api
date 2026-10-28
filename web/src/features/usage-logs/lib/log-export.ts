@@ -86,7 +86,21 @@ const LOG_EXPORT_FIELDS: LogExportField[] = [
   },
 ]
 
+const SELF_LOG_EXPORT_FIELDS: LogExportField[] = [
+  { key: 'created_at', label: 'Time' },
+  { key: 'request_id', label: 'Request ID' },
+  { key: 'consumption_type', label: 'Consumption type' },
+  { key: 'token_name', label: 'Token Name' },
+  { key: 'model_name', label: 'Model Name' },
+  { key: 'input_tokens', label: 'Input Tokens' },
+  { key: 'cached_input_tokens', label: 'Cached Input Tokens' },
+  { key: 'output_tokens', label: 'Output Tokens' },
+  { key: 'charged_quota', label: 'Charged quota' },
+  { key: 'actual_amount_usd', label: 'Actual Charge (USD)' },
+]
+
 const DEFAULT_LOG_EXPORT_FIELDS: Record<LogExportView, string[]> = {
+  self: SELF_LOG_EXPORT_FIELDS.map((field) => field.key),
   upstream: [
     'created_at',
     'upstream_request_id',
@@ -124,6 +138,7 @@ const DEFAULT_LOG_EXPORT_FIELDS: Record<LogExportView, string[]> = {
 }
 
 export function getLogExportFields(view: LogExportView): LogExportField[] {
+  if (view === 'self') return SELF_LOG_EXPORT_FIELDS
   if (view === 'upstream') return LOG_EXPORT_FIELDS
   return LOG_EXPORT_FIELDS.filter((field) => !field.upstreamOnly)
 }
@@ -137,6 +152,20 @@ export function buildLogExportRequest(
   fields: string[],
   params: GetLogsParams
 ): LogExportRequest {
+  if (view === 'self') {
+    const allowedFields = new Set(
+      SELF_LOG_EXPORT_FIELDS.map((field) => field.key)
+    )
+    return {
+      view,
+      fields: fields.filter((field) => allowedFields.has(field)),
+      start_timestamp: params.start_timestamp,
+      end_timestamp: params.end_timestamp,
+      model_name: params.model_name,
+      token_name: params.token_name,
+      request_id: params.request_id,
+    }
+  }
   const { p: _page, page_size: _pageSize, type: _type, ...filters } = params
   if (view === 'downstream') {
     const {
