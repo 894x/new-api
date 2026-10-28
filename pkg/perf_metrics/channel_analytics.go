@@ -22,10 +22,13 @@ type ChannelAnalyticsQueryParams struct {
 }
 
 type ChannelAnalyticsPercentiles struct {
-	P50Ms       int64 `json:"p50_ms"`
-	P95Ms       int64 `json:"p95_ms"`
-	P99Ms       int64 `json:"p99_ms"`
-	SampleCount int64 `json:"sample_count"`
+	AvgMs       *float64 `json:"avg_ms"`
+	P90Ms       int64    `json:"p90_ms"`
+	MaxMs       *float64 `json:"max_ms"`
+	P50Ms       int64    `json:"p50_ms"`
+	P95Ms       int64    `json:"p95_ms"`
+	P99Ms       int64    `json:"p99_ms"`
+	SampleCount int64    `json:"sample_count"`
 }
 
 type ChannelAnalyticsLatency struct {
@@ -144,10 +147,10 @@ func accumulateChannelTransport(groups map[string]*channelTransportAccumulator, 
 		group.group.Canceled++
 	}
 	if attempt.AcquireMs != nil {
-		group.acquire.add(int64(math.Ceil(*attempt.AcquireMs)))
+		group.acquire.add(*attempt.AcquireMs)
 	}
 	if attempt.WriteMs != nil {
-		group.write.add(int64(math.Ceil(*attempt.WriteMs)))
+		group.write.add(*attempt.WriteMs)
 	}
 }
 
@@ -211,7 +214,8 @@ type channelBucket struct {
 
 type histogram struct {
 	counts  [len(histogramUpperBoundsMs)]int64
-	maximum int64
+	maximum float64
+	sum     float64
 }
 
 type concurrencyEvent struct {
@@ -419,10 +423,10 @@ func decodeChannelTiming(row model.PerfChannelLog) (channelTimingSample, bool) {
 	}
 	for _, attempt := range sample.attempts {
 		if attempt.AcquireMs != nil {
-			sample.latency.acquireMs.add(int64(math.Ceil(*attempt.AcquireMs)))
+			sample.latency.acquireMs.add(*attempt.AcquireMs)
 		}
 		if attempt.WriteMs != nil {
-			sample.latency.writeMs.add(int64(math.Ceil(*attempt.WriteMs)))
+			sample.latency.writeMs.add(*attempt.WriteMs)
 		}
 	}
 	if timing.RequestBodyReadAtMs > 0 {
@@ -443,28 +447,29 @@ func decodeChannelTiming(row model.PerfChannelLog) (channelTimingSample, bool) {
 	if timing.RequestCompletedAtMs > 0 && timing.FirstResponseAtMs > 0 {
 		sample.latency.downstreamMs.add(maxDurationMs(timing.RequestCompletedAtMs - timing.FirstResponseAtMs))
 	}
-	sample.latency.totalMs.add(completedMs - startMs)
+	sample.latency.totalMs.add(float64(completedMs - startMs))
 	return sample, true
 }
 
-func maxDurationMs(value int64) int64 {
+func maxDurationMs(value int64) float64 {
 	if value < 0 {
 		return -1
 	}
-	return value
+	return float64(value)
 }
 
 func bucketStartAt(ts int64, bucketSeconds int64) int64 {
 	return ts - ts%bucketSeconds
 }
 
-func (h *histogram) add(valueMs int64) {
-	if valueMs < 0 {
+func (h *histogram) add(valueMs float64) {
+	if valueMs < 0 || math.IsNaN(valueMs) || math.IsInf(valueMs, 0) {
 		return
 	}
 	h.maximum = max(h.maximum, valueMs)
+	h.sum += valueMs
 	for i, upperBoundMs := range histogramUpperBoundsMs {
-		if valueMs <= upperBoundMs {
+		if valueMs <= float64(upperBoundMs) {
 			h.counts[i]++
 			return
 		}
@@ -477,7 +482,14 @@ func (h histogram) percentiles() ChannelAnalyticsPercentiles {
 	for _, count := range h.counts {
 		total += count
 	}
+	var average, maximum *float64
+	if total > 0 {
+		mean := h.sum / float64(total)
+		measuredMax := h.maximum
+		average, maximum = &mean, &measuredMax
+	}
 	return ChannelAnalyticsPercentiles{
+		AvgMs: average, MaxMs: maximum, P90Ms: h.percentile(total, .90),
 		P50Ms:       h.percentile(total, 0.50),
 		P95Ms:       h.percentile(total, 0.95),
 		P99Ms:       h.percentile(total, 0.99),
@@ -495,7 +507,7 @@ func (h histogram) percentile(total int64, percentile float64) int64 {
 		cumulative += count
 		if cumulative >= rank {
 			if i == len(h.counts)-1 {
-				return max(h.maximum, histogramUpperBoundsMs[i])
+				return int64(math.Ceil(max(h.maximum, float64(histogramUpperBoundsMs[i]))))
 			}
 			return histogramUpperBoundsMs[i]
 		}
@@ -517,6 +529,7 @@ func mergeChannelLatency(target *channelLatencyAccumulator, source *channelLaten
 
 func mergeHistogram(target *histogram, source *histogram) {
 	target.maximum = max(target.maximum, source.maximum)
+	target.sum += source.sum
 	for i, count := range source.counts {
 		target.counts[i] += count
 	}

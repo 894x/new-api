@@ -17,17 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import {
-  Activity,
-  ChartNoAxesCombined,
-  Clock3,
-  RefreshCw,
-  Pause,
-  Play,
-  Radio,
-  RotateCcw,
-  Link2,
-} from 'lucide-react'
+import { Activity, ChartNoAxesCombined, Clock3, RefreshCw } from 'lucide-react'
 import {
   type ReactNode,
   useCallback,
@@ -82,6 +72,8 @@ import { dateToUnixTimestamp } from '@/lib/time'
 
 import { getPerformanceAnalytics, getPerformanceAnalyticsOptions } from './api'
 import { PerformanceChartContext } from './chart-context'
+import { PerformanceChartHeader } from './chart-header'
+import { PerformanceChartToolbar } from './chart-toolbar'
 import {
   buildPerformanceMetricSeries,
   PERFORMANCE_CURVE_LABELS,
@@ -685,51 +677,14 @@ export function PerformanceAnalytics({
           </CardContent>
         </Card>
 
-        <div className='bg-card flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border px-3 py-2 text-xs'>
-          <span className='flex items-center gap-2 font-medium' role='status'>
-            <Radio
-              className={
-                live
-                  ? 'size-3.5 text-emerald-500'
-                  : 'text-muted-foreground size-3.5'
-              }
-            />
-            {live
-              ? t('Live · every 15 seconds')
-              : t('Paused · exploring history')}
-          </span>
-          <span className='text-muted-foreground flex items-center gap-1.5'>
-            <Link2 className='size-3.5' />
-            {t('Linked crosshair and zoom')}
-          </span>
-          <span className='text-muted-foreground hidden xl:inline'>
-            {t('Drag to pan · Ctrl + scroll to zoom · keyboard + / −')}
-          </span>
-          <div className='ml-auto flex flex-wrap items-center gap-1'>
-            <Button
-              variant='ghost'
-              size='sm'
-              onClick={() => setChartReset((value) => value + 1)}
-            >
-              <RotateCcw />
-              {t('Reset zoom')}
-            </Button>
-            <Button
-              variant='outline'
-              size='sm'
-              onClick={live ? pauseLive : resumeLive}
-            >
-              {live ? <Pause /> : <Play />}
-              {live ? t('Pause live updates') : t('Back to latest')}
-            </Button>
-          </div>
-          {analyticsQuery.dataUpdatedAt > 0 && (
-            <span className='text-muted-foreground w-full sm:w-auto'>
-              {t('Last updated')}:{' '}
-              {formatTime(analyticsQuery.dataUpdatedAt / 1000)}
-            </span>
-          )}
-        </div>
+        <PerformanceChartToolbar
+          live={live}
+          onPause={pauseLive}
+          onResume={resumeLive}
+          onReset={() => setChartReset((value) => value + 1)}
+          updatedAt={analyticsQuery.dataUpdatedAt}
+          formatTime={formatTime}
+        />
         {analyticsContent}
       </div>
     </PerformanceChartContext>
@@ -1082,54 +1037,6 @@ function MetricChart(props: {
         )}
       </CardContent>
     </Card>
-  )
-}
-
-function PerformanceChartHeader(props: {
-  title: string
-  description?: string
-  formatValue: (value: number) => string
-  statistics?: Array<{ label: string; value?: number }>
-}) {
-  return (
-    <CardHeader
-      className={
-        props.statistics
-          ? 'flex min-h-11 flex-nowrap items-start justify-between gap-2'
-          : 'min-h-11'
-      }
-    >
-      <div className='min-w-0 shrink-0 space-y-1'>
-        <CardTitle>{props.title}</CardTitle>
-        {props.description && (
-          <CardDescription className='text-xs'>
-            {props.description}
-          </CardDescription>
-        )}
-      </div>
-      {props.statistics && (
-        <dl className='ml-auto flex min-w-0 flex-nowrap justify-end gap-1 text-right'>
-          {props.statistics.map(({ label, value }) => {
-            const displayValue =
-              value === undefined ? '—' : props.formatValue(value)
-            return (
-              <div
-                key={label}
-                className='bg-muted/60 min-w-0 rounded-md px-0.5 py-1'
-              >
-                <dt className='text-muted-foreground text-[10px]'>{label}</dt>
-                <dd
-                  title={displayValue}
-                  className='truncate font-mono text-[10px] font-semibold whitespace-nowrap tabular-nums'
-                >
-                  {displayValue}
-                </dd>
-              </div>
-            )
-          })}
-        </dl>
-      )}
-    </CardHeader>
   )
 }
 

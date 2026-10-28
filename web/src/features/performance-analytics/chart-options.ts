@@ -32,9 +32,14 @@ export function buildPerformanceChartOption(props: {
   formatValue: (value: number) => string
   formatTooltipValue?: (value: number) => string
 }): EChartsCoreOption {
-  const names = props.values.some((point) => point.percentile)
-    ? [...PERFORMANCE_CURVE_LABELS]
-    : [props.title]
+  let names = [props.title]
+  if (props.values.some((point) => point.series)) {
+    names = [
+      ...new Set(props.values.map((point) => point.series ?? props.title)),
+    ]
+  } else if (props.values.some((point) => point.percentile)) {
+    names = [...PERFORMANCE_CURVE_LABELS]
+  }
   const text = props.dark ? '#a1a1aa' : '#64748b'
   const grid = props.dark ? '#ffffff14' : '#0f172a0f'
   const timestamps = [...new Set(props.timestamps)].sort((a, b) => a - b)
@@ -117,7 +122,10 @@ export function buildPerformanceChartOption(props: {
     series: names.map((name, index) => {
       const values = new Map(
         props.values
-          .filter((point) => (point.percentile ?? props.title) === name)
+          .filter(
+            (point) =>
+              (point.series ?? point.percentile ?? props.title) === name
+          )
           .map((point) => [point.ts, point.value])
       )
       return {

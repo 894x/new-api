@@ -43,9 +43,15 @@ vi.mock('react-i18next', () => ({
   }),
 }))
 
-vi.mock('@visactor/react-vchart', () => ({ VChart: () => null }))
-vi.mock('@visactor/vchart', () => ({
-  ThemeManager: { setCurrentTheme: vi.fn() },
+vi.mock('../echarts-runtime', () => ({
+  init: () => ({
+    setOption: vi.fn(),
+    on: vi.fn(),
+    resize: vi.fn(),
+    dispatchAction: vi.fn(),
+    dispose: vi.fn(),
+  }),
+  joinChartGroup: () => vi.fn(),
 }))
 
 const {

@@ -21,6 +21,7 @@ import { formatNumber } from '@/lib/format'
 
 import type {
   PerformanceAnalyticsPoint,
+  PerformancePercentiles,
   PerformanceChartDatum,
   PerformanceMetric,
   PerformanceMetricChartDatum,
@@ -142,8 +143,21 @@ export function buildPerformanceSeries(
   metric: 'ttft' | 'tpot',
   formatTime: (ts: number) => string
 ): PerformanceChartDatum[] {
+  return buildLatencyChartSeries(
+    points.map((point) => ({ ts: point.ts, latency: point[metric] })),
+    formatTime
+  )
+}
+
+export function buildLatencyChartSeries(
+  points: Array<{
+    ts: number
+    latency: Partial<PerformancePercentiles> & { sample_count: number }
+  }>,
+  formatTime: (ts: number) => string
+): PerformanceChartDatum[] {
   return points.flatMap((point) => {
-    const percentiles = point[metric]
+    const percentiles = point.latency
     if (percentiles.sample_count <= 0) return []
 
     return PERCENTILE_FIELDS.flatMap(([percentile, field]) => {

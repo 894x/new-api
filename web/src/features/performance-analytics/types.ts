@@ -127,10 +127,14 @@ export type PerformanceMetricChartDatum = Omit<
   PerformanceChartDatum,
   'percentile'
 > & {
+  series?: string
   percentile?: PerformanceChartDatum['percentile']
 }
 
 export type ChannelAnalyticsPercentiles = {
+  avg_ms?: number | null
+  p90_ms?: number
+  max_ms?: number | null
   p50_ms: number
   p95_ms: number
   p99_ms: number

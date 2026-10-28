@@ -26,6 +26,66 @@ import { buildPerformanceChartOption } from '../chart-options'
 import * as analyticsLib from '../lib'
 
 describe('performance analytics chart series', () => {
+  test('uses measured channel averages and leaves missing historical fields unknown', () => {
+    const series = analyticsLib.buildLatencyChartSeries(
+      [
+        {
+          ts: 100,
+          latency: {
+            sample_count: 2,
+            avg_ms: 0.125,
+            p50_ms: 1,
+            p95_ms: 2,
+            p99_ms: 3,
+            max_ms: 0.375,
+          },
+        },
+        { ts: 200, latency: { sample_count: 0, avg_ms: 0, p50_ms: 0 } },
+      ],
+      String
+    )
+    expect(series.map(({ percentile, value }) => [percentile, value])).toEqual([
+      ['AVG', 0.125],
+      ['P50', 1],
+      ['P95', 2],
+      ['P99', 3],
+      ['MAX', 0.375],
+    ])
+  })
+
+  test('preserves independent named concurrency curves and missing buckets', () => {
+    const option = buildPerformanceChartOption({
+      title: 'Concurrency',
+      values: [
+        { ts: 100, time: 100, label: '100', series: 'Average', value: 0.125 },
+        { ts: 100, time: 100, label: '100', series: 'Peak', value: 2 },
+        { ts: 200, time: 200, label: '200', series: 'Peak', value: 0 },
+      ],
+      timestamps: [100, 200],
+      start: 100,
+      end: 200,
+      dark: false,
+      formatTime: String,
+      formatValue: String,
+    })
+    expect(option.series).toEqual([
+      expect.objectContaining({
+        name: 'Average',
+        data: [
+          [100000, 0.125],
+          [200000, null],
+        ],
+      }),
+      expect.objectContaining({
+        name: 'Peak',
+        data: [
+          [100000, 2],
+          [200000, 0],
+        ],
+      }),
+    ])
+  })
+
   test.each([
     'request_body_avg_bytes',
     'cache_write_tokens',
