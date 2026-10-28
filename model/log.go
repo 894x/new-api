@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -863,6 +864,120 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	return token
 }
 
+// UserChannelStat 指定用户在单个渠道上的聚合用量；RPM/TPM 与 SumUsedQuota
+// 同口径，取最近 60 秒的实时速率。
+type UserChannelStat struct {
+	ChannelId        int    `json:"channel_id"`
+	ChannelName      string `json:"channel_name"`
+	Count            int64  `json:"count"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	Quota            int64  `json:"quota"`
+	Rpm              int64  `json:"rpm"`
+	Tpm              int64  `json:"tpm"`
+	FirstAt          int64  `json:"first_at"`
+	LastAt           int64  `json:"last_at"`
+}
+
+func GetUserChannelStats(username string, startTimestamp int64, endTimestamp int64) ([]UserChannelStat, error) {
+	applyFilters := func(tx *gorm.DB) (*gorm.DB, error) {
+		tx = tx.Where("type = ?", LogTypeConsume)
+		var err error
+		if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
+			return nil, err
+		}
+		if startTimestamp != 0 {
+			tx = tx.Where("created_at >= ?", startTimestamp)
+		}
+		if endTimestamp != 0 {
+			tx = tx.Where("created_at <= ?", endTimestamp)
+		}
+		return tx, nil
+	}
+
+	tx, err := applyFilters(LOG_DB.Table("logs"))
+	if err != nil {
+		return nil, err
+	}
+	var stats []UserChannelStat
+	if err := tx.Select("channel_id, count(*) as count, COALESCE(sum(prompt_tokens), 0) as prompt_tokens, COALESCE(sum(completion_tokens), 0) as completion_tokens, COALESCE(sum(quota), 0) as quota, min(created_at) as first_at, max(created_at) as last_at").
+		Group("channel_id").Scan(&stats).Error; err != nil {
+		common.SysError("failed to query user channel stats: " + err.Error())
+		return nil, errors.New("查询用户渠道统计失败")
+	}
+	if len(stats) == 0 {
+		return stats, nil
+	}
+
+	rpmTx, err := applyExplicitLogTextFilter(LOG_DB.Table("logs").Where("type = ?", LogTypeConsume), "username", username)
+	if err != nil {
+		return nil, err
+	}
+	var rateRows []UserChannelStat
+	if err := rpmTx.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix()).
+		Select("channel_id, count(*) as rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) as tpm").
+		Group("channel_id").Scan(&rateRows).Error; err != nil {
+		common.SysError("failed to query user channel rpm/tpm: " + err.Error())
+		return nil, errors.New("查询用户渠道统计失败")
+	}
+	rateByChannel := make(map[int]*UserChannelStat, len(rateRows))
+	for i := range rateRows {
+		rateByChannel[rateRows[i].ChannelId] = &rateRows[i]
+	}
+
+	for i := range stats {
+		if rate, ok := rateByChannel[stats[i].ChannelId]; ok {
+			stats[i].Rpm = rate.Rpm
+			stats[i].Tpm = rate.Tpm
+		}
+	}
+	// 按渠道 ID 升序输出，便于与渠道管理页对照
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].ChannelId < stats[j].ChannelId
+	})
+	fillUserChannelStatNames(stats)
+	return stats, nil
+}
+
+func fillUserChannelStatNames(stats []UserChannelStat) {
+	if DB == nil {
+		return
+	}
+	ids := make([]int, 0, len(stats))
+	for _, stat := range stats {
+		if stat.ChannelId != 0 {
+			ids = append(ids, stat.ChannelId)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	var channels []struct {
+		Id   int    `gorm:"column:id"`
+		Name string `gorm:"column:name"`
+	}
+	if common.MemoryCacheEnabled {
+		for _, id := range ids {
+			if cacheChannel, err := CacheGetChannel(id); err == nil {
+				channels = append(channels, struct {
+					Id   int    `gorm:"column:id"`
+					Name string `gorm:"column:name"`
+				}{Id: id, Name: cacheChannel.Name})
+			}
+		}
+	} else if err := DB.Table("channels").Select("id, name").Where("id IN ?", ids).Find(&channels).Error; err != nil {
+		common.SysError("failed to fill channel names for user channel stats: " + err.Error())
+		return
+	}
+	names := make(map[int]string, len(channels))
+	for _, channel := range channels {
+		names[channel.Id] = channel.Name
+	}
+	for i := range stats {
+		stats[i].ChannelName = names[stats[i].ChannelId]
+	}
+}
+
 func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
 	var total int64
 	if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
@@ -905,4 +1020,22 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 		return 0, result.Error
 	}
 	return result.RowsAffected, nil
+}
+
+// ChannelErrorCount 渠道在时间窗口内的错误日志计数（健康看门狗用）。
+type ChannelErrorCount struct {
+	ChannelId int   `json:"channel_id"`
+	Count     int64 `json:"count"`
+}
+
+// GetChannelErrorCounts 统计自 startTimestamp 起各渠道的错误日志数，只统计
+// 已启用渠道交给调用方判断，这里只做聚合。
+func GetChannelErrorCounts(startTimestamp int64) ([]ChannelErrorCount, error) {
+	var counts []ChannelErrorCount
+	err := LOG_DB.Model(&Log{}).
+		Select("channel_id, COUNT(*) as count").
+		Where("type = ? AND created_at >= ? AND channel_id > 0", LogTypeError, startTimestamp).
+		Group("channel_id").
+		Find(&counts).Error
+	return counts, err
 }

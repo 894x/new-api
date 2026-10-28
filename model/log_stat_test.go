@@ -1,6 +1,7 @@
 package model
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -8,6 +9,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -53,6 +56,111 @@ func TestSumUsedQuotaPreservesTotalsAndRateFilters(t *testing.T) {
 			stat, err := SumUsedQuota(LogTypeConsume, now-300, tc.end, tc.model, "alice", "key", 7, "team")
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, stat)
+		})
+	}
+}
+
+func TestGetUserChannelStatsAggregatesAndLiveRates(t *testing.T) {
+	for _, dialect := range []struct {
+		name         string
+		databaseType common.DatabaseType
+		env          string
+		open         func(string) gorm.Dialector
+	}{
+		{"sqlite", common.DatabaseTypeSQLite, "", func(dsn string) gorm.Dialector { return sqlite.Open(dsn) }},
+		{"mysql", common.DatabaseTypeMySQL, "TEST_MYSQL_DSN", func(dsn string) gorm.Dialector { return mysql.Open(dsn) }},
+		{"postgres", common.DatabaseTypePostgreSQL, "TEST_POSTGRES_DSN", func(dsn string) gorm.Dialector { return postgres.Open(dsn) }},
+	} {
+		t.Run(dialect.name, func(t *testing.T) {
+			dsn := ":memory:"
+			if dialect.env != "" {
+				dsn = os.Getenv(dialect.env)
+				if dsn == "" {
+					t.Skip(dialect.env + " is not configured")
+				}
+			}
+			db, err := gorm.Open(dialect.open(dsn), &gorm.Config{})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			sqlDB.SetMaxOpenConns(1)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			previousDB, previousLogDB, previousType := DB, LOG_DB, common.LogDatabaseType()
+			common.SetLogDatabaseType(dialect.databaseType)
+			initCol()
+			t.Cleanup(func() { DB, LOG_DB = previousDB, previousLogDB; common.SetLogDatabaseType(previousType); initCol() })
+			require.NoError(t, db.AutoMigrate(&Log{}, &Channel{}))
+			var version string
+			versionQuery := "SELECT VERSION()"
+			if dialect.databaseType == common.DatabaseTypeSQLite {
+				versionQuery = "SELECT sqlite_version()"
+			}
+			require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
+			t.Logf("database version: %s", version)
+			tx := db.Begin()
+			require.NoError(t, tx.Error)
+			t.Cleanup(func() { require.NoError(t, tx.Rollback().Error) })
+			DB, LOG_DB = tx, tx
+			now := time.Now().Unix()
+			rows := []Log{
+				{CreatedAt: now - 300, Type: LogTypeConsume, Username: "alice", ChannelId: 1, Quota: 10, PromptTokens: 100, CompletionTokens: 20},
+				{CreatedAt: now - 5, Type: LogTypeConsume, Username: "alice", ChannelId: 1, Quota: 15, PromptTokens: 30, CompletionTokens: 10},
+				{CreatedAt: now - 5, Type: LogTypeConsume, Username: "alice", ChannelId: 2, Quota: 7, PromptTokens: 40, CompletionTokens: 8},
+				{CreatedAt: now - 5, Type: LogTypeConsume, Username: "alice", ChannelId: 2, Quota: 3, PromptTokens: 10, CompletionTokens: 2},
+				{CreatedAt: now - 200, Type: LogTypeConsume, Username: "alice", ChannelId: 2, Quota: 2, PromptTokens: 5, CompletionTokens: 1},
+				{CreatedAt: now - 5, Type: LogTypeConsume, Username: "bob", ChannelId: 1, Quota: 9999, PromptTokens: 9999},
+				{CreatedAt: now - 5, Type: LogTypeTopup, Username: "alice", ChannelId: 1, Quota: 8000},
+			}
+			require.NoError(t, LOG_DB.Create(&rows).Error)
+
+			stats, err := GetUserChannelStats("alice", now-600, now)
+			require.NoError(t, err)
+			// 渠道 2 请求更多（3 > 2）仍按渠道 ID 升序输出；RPM/TPM 只统计最近 60 秒
+			require.Len(t, stats, 2)
+			assert.Equal(t, 1, stats[0].ChannelId)
+			assert.Equal(t, int64(2), stats[0].Count)
+			assert.Equal(t, int64(25), stats[0].Quota)
+			assert.Equal(t, int64(130), stats[0].PromptTokens)
+			assert.Equal(t, int64(30), stats[0].CompletionTokens)
+			assert.Equal(t, int64(1), stats[0].Rpm)
+			assert.Equal(t, int64(40), stats[0].Tpm)
+			assert.Equal(t, now-300, stats[0].FirstAt)
+			assert.Equal(t, now-5, stats[0].LastAt)
+			assert.Equal(t, 2, stats[1].ChannelId)
+			assert.Equal(t, int64(3), stats[1].Count)
+			assert.Equal(t, int64(2), stats[1].Rpm)
+			assert.Equal(t, int64(60), stats[1].Tpm)
+
+			// 时间下界排除旧请求后渠道 1 的窗口聚合随之缩小，实时速率不变
+			stats, err = GetUserChannelStats("alice", now-100, now)
+			require.NoError(t, err)
+			require.Len(t, stats, 2)
+			assert.Equal(t, int64(1), stats[0].Count)
+			assert.Equal(t, int64(1), stats[0].Rpm)
+
+			// 用户名与其他统计接口同口径：默认精确匹配，显式 % 才走模糊匹配
+			stats, err = GetUserChannelStats("alice", now-600, now-90)
+			require.NoError(t, err)
+			require.Len(t, stats, 2)
+			assert.Equal(t, int64(1), stats[0].Count)
+			assert.Equal(t, int64(10), stats[0].Quota)
+			assert.Equal(t, int64(1), stats[0].Rpm)
+			assert.Equal(t, int64(40), stats[0].Tpm)
+			assert.Equal(t, int64(2), stats[1].Rpm)
+			assert.Equal(t, int64(60), stats[1].Tpm)
+
+			stats, err = GetUserChannelStats("ali", now-600, now)
+			require.NoError(t, err)
+			assert.Empty(t, stats)
+
+			stats, err = GetUserChannelStats("al%", now-600, now)
+			require.NoError(t, err)
+			require.Len(t, stats, 2)
+
+			stats, err = GetUserChannelStats("nobody", now-600, now)
+			require.NoError(t, err)
+			assert.Empty(t, stats)
+
 		})
 	}
 }

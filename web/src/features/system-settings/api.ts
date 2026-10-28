@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import type {
   ConfirmPaymentComplianceResponse,
@@ -34,6 +35,12 @@ import type {
   UpdatePasskeyDomainsResponse,
   UpstreamChannelsResponse,
   UpstreamRatiosResponse,
+  WecomBotListResponse,
+  WecomBotMutationRequest,
+  WecomBotResponse,
+  WecomAIBotConfigMutationRequest,
+  WecomAIBotConfigResponse,
+  WecomAIBotStatusResponse,
 } from './types'
 
 export async function getSystemOptions() {
@@ -150,4 +157,52 @@ export async function fetchUpstreamRatios(request: FetchUpstreamRatiosRequest) {
     request
   )
   return res.data
+}
+
+export async function getWecomBots() {
+  const res = await api.get<WecomBotListResponse>('/api/wecom-bot/')
+  return requireServerSuccess(res.data)
+}
+
+export async function createWecomBot(request: WecomBotMutationRequest) {
+  const res = await api.put<WecomBotResponse>('/api/wecom-bot/', request)
+  return requireServerSuccess(res.data)
+}
+
+export async function updateWecomBot(
+  id: string,
+  request: WecomBotMutationRequest
+) {
+  const res = await api.post<WecomBotResponse>(`/api/wecom-bot/${id}`, request)
+  return requireServerSuccess(res.data)
+}
+
+export async function deleteWecomBot(id: string) {
+  const res = await api.delete<UpdateOptionResponse>(`/api/wecom-bot/${id}`)
+  return requireServerSuccess(res.data)
+}
+
+export async function testWecomBot(id: string) {
+  const res = await api.post<UpdateOptionResponse>(`/api/wecom-bot/${id}/test`)
+  return requireServerSuccess(res.data)
+}
+
+export async function getWecomAIBotConfig() {
+  const res = await api.get<WecomAIBotConfigResponse>('/api/wecom-aibot/config')
+  return requireServerSuccess(res.data)
+}
+
+export async function updateWecomAIBotConfig(
+  request: WecomAIBotConfigMutationRequest
+) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/wecom-aibot/config',
+    request
+  )
+  return requireServerSuccess(res.data)
+}
+
+export async function getWecomAIBotStatus() {
+  const res = await api.get<WecomAIBotStatusResponse>('/api/wecom-aibot/status')
+  return requireServerSuccess(res.data)
 }

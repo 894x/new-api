@@ -18,8 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { AssetStorageSection } from '../general/asset-storage-section'
 import { SystemBehaviorSection } from '../general/system-behavior-section'
+import { BalancePatrolSettingsSection } from '../integrations/balance-patrol-settings-section'
 import { EmailSettingsSection } from '../integrations/email-settings-section'
 import { MonitoringSettingsSection } from '../integrations/monitoring-settings-section'
+import { WecomBotSettingsSection } from '../integrations/wecom-bot-settings-section'
+import { WecomAIBotSettingsSection } from '../integrations/wecom-aibot-settings-section'
 import { WorkerSettingsSection } from '../integrations/worker-settings-section'
 import { LogSettingsSection } from '../maintenance/log-settings-section'
 import { PerformanceSection } from '../maintenance/performance-section'
@@ -74,6 +77,67 @@ const OPERATIONS_SECTIONS = [
         }}
       />
     ),
+  },
+  {
+    id: 'wecom-bot',
+    titleKey: 'WeCom Channel Alert Bot',
+    build: (settings: OperationsSettings) => (
+      <WecomBotSettingsSection
+        defaultValues={{
+          'wecom_bot_setting.enabled':
+            settings['wecom_bot_setting.enabled'] ?? false,
+          'wecom_bot_setting.error_notify_enabled':
+            settings['wecom_bot_setting.error_notify_enabled'] ?? true,
+          'wecom_bot_setting.error_cooldown_minutes':
+            settings['wecom_bot_setting.error_cooldown_minutes'] ?? 10,
+          'wecom_bot_setting.disable_notify_enabled':
+            settings['wecom_bot_setting.disable_notify_enabled'] ?? true,
+          'wecom_bot_setting.enable_notify_enabled':
+            settings['wecom_bot_setting.enable_notify_enabled'] ?? true,
+        }}
+      />
+    ),
+  },
+  {
+    id: 'balance-patrol',
+    titleKey: 'Balance Patrol',
+    build: (settings: OperationsSettings) => (
+      <BalancePatrolSettingsSection
+        defaultValues={{
+          'balance_patrol_setting.channel_enabled':
+            settings['balance_patrol_setting.channel_enabled'] ?? false,
+          'balance_patrol_setting.channel_minutes':
+            settings['balance_patrol_setting.channel_minutes'] ?? 30,
+          'balance_patrol_setting.low_balance_threshold':
+            settings['balance_patrol_setting.low_balance_threshold'] ?? 1,
+          'balance_patrol_setting.disable_on_zero_balance':
+            settings['balance_patrol_setting.disable_on_zero_balance'] ?? true,
+          'balance_patrol_setting.user_enabled':
+            settings['balance_patrol_setting.user_enabled'] ?? false,
+          'balance_patrol_setting.user_minutes':
+            settings['balance_patrol_setting.user_minutes'] ?? 30,
+          'balance_patrol_setting.user_monitor_list':
+            settings['balance_patrol_setting.user_monitor_list'] ?? '',
+          'balance_patrol_setting.user_min_quota':
+            settings['balance_patrol_setting.user_min_quota'] ?? 0,
+          'balance_patrol_setting.user_list_limit':
+            settings['balance_patrol_setting.user_list_limit'] ?? 20,
+          'balance_patrol_setting.critical_balance_threshold':
+            settings['balance_patrol_setting.critical_balance_threshold'] ?? 0,
+          'balance_patrol_setting.watchdog_enabled':
+            settings['balance_patrol_setting.watchdog_enabled'] ?? false,
+          'balance_patrol_setting.watchdog_minutes':
+            settings['balance_patrol_setting.watchdog_minutes'] ?? 10,
+          'balance_patrol_setting.watchdog_threshold':
+            settings['balance_patrol_setting.watchdog_threshold'] ?? 10,
+        }}
+      />
+    ),
+  },
+  {
+    id: 'wecom-aibot',
+    titleKey: 'WeCom AI Bot',
+    build: () => <WecomAIBotSettingsSection />,
   },
   {
     id: 'email',

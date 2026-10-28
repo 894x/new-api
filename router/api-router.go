@@ -276,6 +276,24 @@ func SetApiRouter(router *gin.Engine) {
 			customOAuthRoute.PUT("/:id", controller.UpdateCustomOAuthProvider)
 			customOAuthRoute.DELETE("/:id", controller.DeleteCustomOAuthProvider)
 		}
+		// WeCom channel alert bot management (root only)
+		wecomBotRoute := apiRouter.Group("/wecom-bot")
+		wecomBotRoute.Use(middleware.RootAuth())
+		{
+			wecomBotRoute.GET("/", controller.GetWecomBots)
+			wecomBotRoute.PUT("/", controller.CreateWecomBot)
+			wecomBotRoute.POST("/:id", controller.UpdateWecomBot)
+			wecomBotRoute.POST("/:id/test", controller.TestWecomBot)
+			wecomBotRoute.DELETE("/:id", controller.DeleteWecomBot)
+		}
+		// WeCom AI bot (long-connection conversational query) management (root only)
+		wecomAIBotRoute := apiRouter.Group("/wecom-aibot")
+		wecomAIBotRoute.Use(middleware.RootAuth())
+		{
+			wecomAIBotRoute.GET("/config", controller.GetWecomAIBotConfig)
+			wecomAIBotRoute.PUT("/config", controller.UpdateWecomAIBotConfig)
+			wecomAIBotRoute.GET("/status", controller.GetWecomAIBotStatus)
+		}
 		performanceRoute := apiRouter.Group("/performance")
 		performanceRoute.Use(middleware.RootAuth())
 		{
@@ -361,6 +379,7 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.POST("/self/export", middleware.UserAuth(), middleware.DisableCache(), middleware.SearchRateLimit(), controller.ExportSelfLogs)
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
+		logRoute.GET("/user_channel_stats", middleware.AdminAuth(), controller.GetUserChannelStats)
 		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), controller.GetChannelAffinityUsageCacheStats)
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)

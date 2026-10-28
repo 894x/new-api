@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -171,6 +172,26 @@ func sanitizeUserErrorLogs(c *gin.Context, logs []*model.Log) {
 		delete(other, "channel_type")
 		logItem.Other = common.MapToJsonStr(other)
 	}
+}
+
+func GetUserChannelStats(c *gin.Context) {
+	username := strings.TrimSpace(c.Query("username"))
+	if username == "" {
+		common.ApiError(c, errors.New("username is required"))
+		return
+	}
+	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
+	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	stats, err := model.GetUserChannelStats(username, startTimestamp, endTimestamp)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    stats,
+	})
 }
 
 func GetLogsStat(c *gin.Context) {

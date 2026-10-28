@@ -36,6 +36,13 @@ type SystemTaskHandler interface {
 	Run(ctx context.Context, task *model.SystemTask, runnerID string)
 }
 
+// NodeScopedSystemTaskHandler keeps tasks that require node-local resources
+// pending until an eligible runner can claim them.
+type NodeScopedSystemTaskHandler interface {
+	SystemTaskHandler
+	CanRunOnNode() bool
+}
+
 // ScheduledSystemTaskHandler is a SystemTaskHandler that the scheduler also
 // creates periodically when enabled and the configured interval has elapsed
 // since the last run.
@@ -236,6 +243,9 @@ func runSystemTaskClaimPass(runnerID string) {
 	for _, handler := range handlers {
 		task := pendingTasks[handler.Type()]
 		if task == nil {
+			continue
+		}
+		if scoped, ok := handler.(NodeScopedSystemTaskHandler); ok && !scoped.CanRunOnNode() {
 			continue
 		}
 		claimedTask, claimed, err := model.ClaimSystemTask(task.ID, handler.Type(), runnerID, systemTaskLockUntil())

@@ -21,6 +21,10 @@ const (
 	SystemTaskTypeModelUpdate    = "model_update"
 	SystemTaskTypeMidjourneyPoll = "midjourney_poll"
 	SystemTaskTypeAsyncTaskPoll  = "async_task_poll"
+	SystemTaskTypeChannelBalance = "channel_balance"
+	SystemTaskTypeUserQuota      = "user_quota_patrol"
+	SystemTaskTypeDailyReport    = "wecom_daily_report"
+	SystemTaskTypeWatchdog       = "channel_health_watchdog"
 )
 
 var ErrSystemTaskLockLost = errors.New("system task lock lost")
@@ -439,6 +443,25 @@ func ExpireStaleSystemTaskLocks(now int64) error {
 func ReleaseSystemTaskLock(taskID string, lockedBy string) error {
 	result := DB.Where("task_id = ? AND locked_by = ?", taskID, lockedBy).Delete(&SystemTaskLock{})
 	return result.Error
+}
+
+// AcquireSystemTaskLock takes the per-type lease outside the task claim flow,
+// for cross-instance singletons such as the WeCom AI bot long connection. It
+// follows the same create-or-steal-expired semantics as task claiming; a
+// previous holder that let its lease lapse has its running task (if any)
+// marked failed, and stale rows are reclaimed by ExpireStaleSystemTaskLocks.
+func AcquireSystemTaskLock(taskType string, taskID string, lockedBy string, lockUntil int64) (bool, error) {
+	acquired, expiredTaskID, err := acquireSystemTaskLock(taskType, taskID, lockedBy, common.GetTimestamp(), lockUntil)
+	if err != nil || !acquired {
+		return false, err
+	}
+	if expiredTaskID != "" && expiredTaskID != taskID {
+		if err := MarkSystemTaskLeaseExpired(expiredTaskID); err != nil {
+			_ = ReleaseSystemTaskLock(taskID, lockedBy)
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func FinishSystemTask(taskID string, lockedBy string, status SystemTaskStatus, resultPayload any, errorMessage string) error {

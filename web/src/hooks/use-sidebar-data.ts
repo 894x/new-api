@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import {
   Activity,
   Box,
+  ChartColumn,
   ClipboardList,
   CreditCard,
   FileText,
@@ -138,6 +139,15 @@ export function useSidebarData(): SidebarData {
             configUrls: ['/usage-logs/drawing', '/usage-logs/task'],
             icon: ListTodo,
           },
+          ...((user?.role ?? 0) >= ROLE.ADMIN
+            ? [
+                {
+                  title: t('User Channel Analytics'),
+                  url: '/usage-logs/user-analytics',
+                  icon: ChartColumn,
+                },
+              ]
+            : []),
         ],
       },
       {

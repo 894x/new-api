@@ -90,7 +90,7 @@ func GetOptions(c *gin.Context) {
 	optionValues := make(map[string]string)
 	common.OptionMapRWMutex.Lock()
 	for k, v := range common.OptionMap {
-		if k == "theme.frontend" || k == "billing_setting.billing_mode" || k == "billing_setting.billing_expr" {
+		if k == "theme.frontend" || k == "billing_setting.billing_mode" || k == "billing_setting.billing_expr" || k == operation_setting.WecomBotBotsOptionKey {
 			continue
 		}
 		value := common.Interface2String(v)
@@ -302,6 +302,142 @@ func UpdateOption(c *gin.Context) {
 				"success": false,
 				"message": "无法启用 OIDC 登录，请先填入 OIDC Client Id 以及 OIDC Client Secret！",
 			})
+			return
+		}
+	case "wecom_bot_setting.enabled":
+		if option.Value == "true" && !operation_setting.GetWecomBotSetting().HasEnabledBot() {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "无法启用企业微信机器人告警，请先添加并启用至少一个机器人！",
+			})
+			return
+		}
+	case "wecom_bot_setting.bots":
+		if _, err := operation_setting.ValidateWecomBotsJSON(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_bot_setting.webhook_api_key":
+		if err := operation_setting.ValidateWecomBotWebhookApiKey(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_bot_setting.mention_userids":
+		if err := operation_setting.ValidateWecomBotMentionUserids(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_bot_setting.error_cooldown_minutes":
+		if err := operation_setting.ValidateWecomErrorCooldownMinutes(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "balance_patrol_setting.channel_minutes", "balance_patrol_setting.user_minutes":
+		if err := operation_setting.ValidateBalancePatrolMinutes(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "balance_patrol_setting.low_balance_threshold":
+		if err := operation_setting.ValidateLowBalanceThreshold(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "balance_patrol_setting.critical_balance_threshold":
+		if err := operation_setting.ValidateCriticalBalanceThreshold(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "balance_patrol_setting.watchdog_minutes":
+		if err := operation_setting.ValidateWatchdogMinutes(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "balance_patrol_setting.watchdog_threshold":
+		if err := operation_setting.ValidateWatchdogThreshold(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "balance_patrol_setting.user_min_quota":
+		if err := operation_setting.ValidateBalancePatrolUserMinQuota(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "balance_patrol_setting.user_monitor_list":
+		if err := operation_setting.ValidateUserMonitorList(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "balance_patrol_setting.user_list_limit":
+		if err := operation_setting.ValidateBalancePatrolUserListLimit(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.enabled":
+		if option.Value == "true" && !operation_setting.GetWecomAIBotSetting().ReadyForEnable() {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "无法启用企业微信智能机器人，请先配置 BotID、Secret、模型渠道与模型名！",
+			})
+			return
+		}
+	case "wecom_aibot_setting.bot_id":
+		if err := operation_setting.ValidateWecomAIBotID(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.secret":
+		if err := operation_setting.ValidateWecomAIBotSecret(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.channel_id":
+		if err := operation_setting.ValidateWecomAIBotChannelID(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.model":
+		if err := operation_setting.ValidateWecomAIBotModel(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.max_tool_rounds":
+		if err := operation_setting.ValidateWecomAIBotToolRounds(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.session_rounds":
+		if err := operation_setting.ValidateWecomAIBotSessionRounds(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.session_ttl_minutes":
+		if err := operation_setting.ValidateWecomAIBotSessionTTL(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.user_whitelist":
+		if err := operation_setting.ValidateWecomAIBotUserWhitelist(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.welcome_text":
+		if err := operation_setting.ValidateWecomAIBotWelcomeText(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.admin_userids":
+		if err := operation_setting.ValidateWecomAIBotAdminUserids(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+	case "wecom_aibot_setting.report_targets":
+		if len(common.Interface2String(option.Value)) > 2048 {
+			common.ApiErrorMsg(c, "report targets are too long")
+			return
+		}
+	case "wecom_aibot_setting.report_hour":
+		if err := operation_setting.ValidateWecomAIBotReportHour(common.Interface2String(option.Value)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
 			return
 		}
 	case "LinuxDOOAuthEnabled":

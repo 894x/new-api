@@ -81,10 +81,29 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	} else {
 		logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.MaskSensitiveErrorWithStatusCode())))
 	}
+	// 会触发自动禁用的错误交给禁用告警通知；其余可记录错误实时推送企微机器人告警。
 	if !clientGone && ShouldDisableChannel(err) && channelError.AutoBan {
 		reason := err.MaskSensitiveErrorWithStatusCode()
 		gopool.Go(func() {
 			DisableChannel(channelError, reason)
+		})
+	} else if !clientGone && types.IsRecordErrorLog(err) {
+		alert := wecomBotErrorAlertInfo{
+			ChannelId:   channelError.ChannelId,
+			ChannelName: channelError.ChannelName,
+			StatusCode:  err.StatusCode,
+			ErrorCode:   string(err.GetErrorCode()),
+			Message:     err.MaskSensitiveErrorWithStatusCode(),
+		}
+		if relayInfo != nil {
+			alert.ModelName = relayInfo.OriginModelName
+			alert.Attempt = relayInfo.RetryIndex
+		}
+		if alert.ModelName == "" && c != nil {
+			alert.ModelName = c.GetString("original_model")
+		}
+		gopool.Go(func() {
+			notifyWecomBotChannelError(alert)
 		})
 	}
 

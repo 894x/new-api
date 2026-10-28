@@ -55,6 +55,40 @@ func (h *stubScheduledHandler) Enabled() bool           { return h.enabled }
 func (h *stubScheduledHandler) Interval() time.Duration { return h.interval }
 func (h *stubScheduledHandler) NewPayload() any         { return nil }
 
+type connectionScopedTestHandler struct {
+	*stubScheduledHandler
+	eligible bool
+}
+
+func (h *connectionScopedTestHandler) CanRunOnNode() bool { return h.eligible }
+
+func TestSystemTaskClaimWaitsForEligibleNode(t *testing.T) {
+	truncate(t)
+	ran := make(chan error, 1)
+	handler := &connectionScopedTestHandler{stubScheduledHandler: &stubScheduledHandler{
+		taskType: "test_connection_owner",
+		onRun: func(_ context.Context, task *model.SystemTask, runnerID string) {
+			ran <- model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusSucceeded, nil, "")
+		},
+	}}
+	withSystemTaskRegistry(t, handler)
+	task, err := model.CreateSystemTask(handler.Type(), nil, nil)
+	require.NoError(t, err)
+	runSystemTaskClaimPass("standby")
+	pending, err := model.GetSystemTaskByTaskID(task.TaskID)
+	require.NoError(t, err)
+	assert.Equal(t, model.SystemTaskStatusPending, pending.Status)
+	assert.Empty(t, pending.LockedBy)
+	handler.eligible = true
+	runSystemTaskClaimPass("connection-owner")
+	select {
+	case err := <-ran:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("eligible node did not execute the pending task")
+	}
+}
+
 func countSystemTasks(t *testing.T, taskType string) int64 {
 	t.Helper()
 	var count int64
