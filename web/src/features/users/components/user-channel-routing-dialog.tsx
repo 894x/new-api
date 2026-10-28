@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, GripVertical, Plus } from 'lucide-react'
-import { useEffect, useEffectEvent, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { useFieldArray, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -41,6 +41,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { toIntlLocale } from '@/i18n/languages'
 import {
@@ -71,24 +72,36 @@ type FormValues = z.infer<typeof schema>
 export function UserChannelRoutingRuleEditor(props: {
   userId: number
   model: string
-  channelGroups: string[]
+  keyGroups: string[]
+  configuredGroups: string[]
   readOnly?: boolean
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const { t } = useTranslation()
+  const groupInputID = useId()
   const dirtyGroups = useRef(new Set<string>())
+  const [groupToAdd, setGroupToAdd] = useState<string | null>(null)
+  const [addedGroups, setAddedGroups] = useState<string[]>([])
+  const visibleGroups = [
+    ...new Set([...props.configuredGroups, ...addedGroups]),
+  ].filter((group) => props.keyGroups.includes(group))
+  const availableGroups = props.keyGroups.filter(
+    (group) => !visibleGroups.includes(group)
+  )
   return (
     <div className='flex flex-col gap-3'>
       <p className='text-muted-foreground text-xs'>
-        {t('Channel priorities are independent for each outlet group.')}
+        {t(
+          'Channel priorities are independent for each Key group. Only public Key groups are listed.'
+        )}
       </p>
-      {props.channelGroups.map((group) => (
+      {visibleGroups.map((group) => (
         <section
           key={group}
           aria-label={group}
           className='min-w-0 rounded-lg border p-3'
         >
-          <h4 className='mb-3 text-sm font-medium break-all'>{group}</h4>
+          <h5 className='mb-3 text-sm font-medium break-all'>{group}</h5>
           <UserChannelRoutingGroupEditor
             userId={props.userId}
             model={props.model}
@@ -102,6 +115,48 @@ export function UserChannelRoutingRuleEditor(props: {
           />
         </section>
       ))}
+      {availableGroups.length > 0 && (
+        <div className='flex flex-col gap-2'>
+          <Label htmlFor={groupInputID}>{t('Key group')}</Label>
+          <div className='flex flex-wrap gap-2'>
+            <Combobox
+              id={groupInputID}
+              aria-label={t('Key group')}
+              className='min-w-0 flex-1'
+              options={availableGroups.map((group) => ({
+                value: group,
+                label: group,
+              }))}
+              value={groupToAdd}
+              onValueChange={setGroupToAdd}
+              disabled={props.readOnly}
+              placeholder={t('Select Key group')}
+            />
+            <Button
+              type='button'
+              variant='outline'
+              disabled={
+                props.readOnly ||
+                !groupToAdd ||
+                !availableGroups.includes(groupToAdd)
+              }
+              onClick={() => {
+                if (
+                  props.readOnly ||
+                  !groupToAdd ||
+                  !availableGroups.includes(groupToAdd)
+                ) {
+                  return
+                }
+                setAddedGroups((current) => [...current, groupToAdd])
+                setGroupToAdd(null)
+              }}
+            >
+              <Plus /> {t('Add Key group')}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -124,12 +179,7 @@ function UserChannelRoutingGroupEditor(props: {
   const query = useQuery({
     queryKey: ['user-channel-routing', props.userId, props.model, props.group],
     queryFn: () =>
-      getUserChannelRouting(
-        props.userId,
-        props.model,
-        [props.group],
-        props.group
-      ),
+      getUserChannelRouting(props.userId, props.model, undefined, props.group),
     enabled: props.model !== '' && canRead,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -252,6 +302,9 @@ export function UserChannelRoutingEditor(props: {
           props.config.model,
           props.config.routing_group ?? '',
         ],
+      })
+      await queryClient.invalidateQueries({
+        queryKey: ['user-channel-routing-models', props.userId],
       })
     },
     onError: (error) => handleServerError(error, t('Failed to save')),
@@ -421,7 +474,7 @@ export function UserChannelRoutingEditor(props: {
                   >
                     <GripVertical />
                   </Button>
-                  <span className='min-w-0 flex-1 font-medium break-all'>
+                  <span className='min-w-32 flex-1 font-medium break-all'>
                     {channelLabel}
                   </span>
                   {!original.available && (

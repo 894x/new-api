@@ -182,6 +182,9 @@ export interface UserChannelRoutingRow {
 
 export interface UserChannelRoutingConfig {
   models: string[]
+  configured_models?: string[]
+  configured_key_groups?: Record<string, string[]>
+  key_groups?: Record<string, string>
   model: string
   routing_group?: string
   revision: string

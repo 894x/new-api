@@ -35,6 +35,12 @@ import {
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
 import { MultiSelect } from '@/components/multi-select'
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
@@ -79,7 +85,7 @@ import {
 } from '../api'
 import { USER_ROLE } from '../constants'
 import type { User, UserGroupConfig } from '../types'
-import { UserChannelRoutingRuleEditor } from './user-channel-routing-dialog'
+import { UserModelChannelRouting } from './user-model-channel-routing'
 import { useUsers } from './users-provider'
 
 const createSchema = (t: (key: string) => string) =>
@@ -204,6 +210,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
     )
   const [confirmDedicatedOpen, setConfirmDedicatedOpen] = useState(false)
   const [previewKey, setPreviewKey] = useState('')
+  const [channelsVisited, setChannelsVisited] = useState(false)
   const [routingDirtyRows, setRoutingDirtyRows] = useState<Set<string>>(
     () => new Set()
   )
@@ -239,6 +246,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
       setRoutingDirtyRows(new Set())
     }
     if (!open) {
+      setChannelsVisited(false)
       form.reset(emptyValues)
       setPreviewKey('')
       setRoutingDirtyRows(new Set())
@@ -470,7 +478,12 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                       )}
                     </div>
                   )}
-                <Tabs defaultValue='discounts'>
+                <Tabs
+                  defaultValue='discounts'
+                  onValueChange={(value) => {
+                    if (value === 'channels') setChannelsVisited(true)
+                  }}
+                >
                   <TabsList className='grid w-full grid-cols-3'>
                     <TabsTrigger value='discounts'>
                       {t('Discounts')}
@@ -673,174 +686,193 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                     </SideDrawerSection>
                   </TabsContent>
 
-                  <TabsContent value='channels' className='pt-5'>
+                  <TabsContent
+                    value='channels'
+                    keepMounted
+                    className='space-y-5 pt-5'
+                  >
                     <SideDrawerSection>
                       <SideDrawerSectionHeader
-                        title={t('Model channel pools')}
+                        title={t('Model channel priorities')}
                         description={t(
-                          'Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.'
+                          'Add a model, then choose a public Key group to configure its channels and priorities for this customer.'
                         )}
                       />
-                      {channelRules.fields.length > 0 && (
-                        <>
-                          <p className='text-muted-foreground text-sm'>
-                            {t(
-                              'Drag channels to set priority. Higher values run first; equal values use channel weights. Switch off to pause a channel without losing its priority.'
-                            )}
-                          </p>
-                          <p className='text-muted-foreground text-xs'>
-                            {t(
-                              'User overrides take precedence over dynamic routing and session affinity. Group access, request compatibility, capacity limits, and fixed task channels still apply.'
-                            )}
-                          </p>
-                        </>
-                      )}
-                      {channelRules.fields.map((item, index) => (
-                        <div
-                          key={item.id}
-                          className='flex flex-col gap-3 rounded-lg border p-3'
-                        >
-                          <div className='flex items-start gap-2'>
-                            <FormField
-                              control={form.control}
-                              name={`channelRules.${index}.modelName`}
-                              render={({ field }) => (
-                                <FormItem className='flex-1'>
-                                  <FormLabel>{t('Model')}</FormLabel>
-                                  <FormControl>
-                                    <Input
-                                      {...field}
-                                      placeholder='gpt-5'
-                                      disabled={
-                                        editingDisabled ||
-                                        routingDirtyRows.has(item.id)
-                                      }
-                                    />
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-                            <Button
-                              type='button'
-                              variant='ghost'
-                              size='icon'
-                              className='mt-6'
-                              aria-label={t('Remove')}
-                              disabled={
-                                editingDisabled || routingDirtyRows.has(item.id)
-                              }
-                              onClick={() => channelRules.remove(index)}
-                            >
-                              <Trash2 />
-                            </Button>
-                          </div>
-                          <FormField
-                            control={form.control}
-                            name={`channelRules.${index}.groups`}
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>{t('Channel groups')}</FormLabel>
-                                <FormControl>
-                                  <MultiSelect
-                                    options={groupOptions}
-                                    selected={field.value}
-                                    onChange={field.onChange}
-                                    disabled={
-                                      editingDisabled ||
-                                      routingDirtyRows.has(item.id)
-                                    }
-                                    allowCreate
-                                    placeholder={t('Select channel groups')}
-                                  />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                          {user &&
-                            (channelRulesValue[index]?.modelName ?? '') !==
-                              '' && (
-                              <UserChannelRoutingRuleEditor
-                                readOnly={!canWrite}
-                                userId={user.id}
-                                model={
-                                  channelRulesValue[index]?.modelName ?? ''
-                                }
-                                channelGroups={
-                                  channelRulesValue[index]?.groups ?? []
-                                }
-                                onDirtyChange={(dirty) =>
-                                  setRoutingRowDirty(item.id, dirty)
-                                }
-                              />
-                            )}
-                          {previewKey === currentPreviewKey &&
-                            previewChannels.data?.data &&
-                            user && (
-                              <div className='flex flex-col gap-3'>
-                                <p className='text-muted-foreground text-sm'>
-                                  {t(
-                                    'Pool candidates for {{model}}: {{count}} (before token group filtering).',
-                                    {
-                                      model:
-                                        channelRulesValue[index]?.modelName ??
-                                        '',
-                                      count:
-                                        previewChannels.data.data[
-                                          channelRulesValue[index]?.modelName ??
-                                            ''
-                                        ]?.candidate_count ?? 0,
-                                    }
-                                  )}
-                                  {(channelRulesValue[index]?.groups.length ??
-                                    0) > 0 &&
-                                    previewChannels.data.data[
-                                      channelRulesValue[index]?.modelName ?? ''
-                                    ]?.candidate_count === 0 && (
-                                      <span className='text-destructive'>
-                                        {' '}
-                                        {t(
-                                          'No enabled channels match this model and its selected pools.'
-                                        )}
-                                      </span>
-                                    )}
-                                </p>
-                              </div>
-                            )}
-                        </div>
-                      ))}
-                      <Button
-                        type='button'
-                        variant='outline'
-                        disabled={editingDisabled || routingDirtyRows.size > 0}
-                        onClick={() =>
-                          channelRules.append({ modelName: '', groups: [] })
-                        }
-                      >
-                        <Plus /> {t('Add rule')}
-                      </Button>
-                      {channelRules.fields.length > 0 && (
-                        <Button
-                          type='button'
-                          variant='outline'
-                          disabled={
-                            previewChannels.isPending ||
-                            routingDirtyRows.size > 0
+                      <p className='text-muted-foreground text-sm'>
+                        {t(
+                          'Drag channels to set priority. Higher values run first; equal values use channel weights. Switch off to pause a channel without losing its priority.'
+                        )}
+                      </p>
+                      {channelsVisited && user && config && (
+                        <UserModelChannelRouting
+                          key={`${user.id}:${config.group}`}
+                          userId={user.id}
+                          poolModels={Object.keys(config.model_channel_groups)}
+                          readOnly={editingDisabled}
+                          onDirtyChange={(model, dirty) =>
+                            setRoutingRowDirty(`routing:${model}`, dirty)
                           }
-                          onClick={async () => {
-                            if (!(await form.trigger('channelRules'))) return
-                            const rules = form.getValues('channelRules')
-                            previewChannels.mutate({
-                              rules,
-                              key: JSON.stringify(rules),
-                            })
-                          }}
-                        >
-                          {t('Preview channel availability')}
-                        </Button>
+                        />
                       )}
                     </SideDrawerSection>
+                    <Accordion className='rounded-lg border px-3'>
+                      <AccordionItem value='resource-pools'>
+                        <AccordionTrigger>
+                          {t('Resource channel pool filters (advanced)')}
+                        </AccordionTrigger>
+                        <AccordionContent>
+                          <SideDrawerSection>
+                            <SideDrawerSectionHeader
+                              title={t('Model channel pools')}
+                              description={t(
+                                'Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.'
+                              )}
+                            />
+                            {channelRules.fields.map((item, index) => (
+                              <div
+                                key={item.id}
+                                className='flex flex-col gap-3 rounded-lg border p-3'
+                              >
+                                <div className='flex items-start gap-2'>
+                                  <FormField
+                                    control={form.control}
+                                    name={`channelRules.${index}.modelName`}
+                                    render={({ field }) => (
+                                      <FormItem className='flex-1'>
+                                        <FormLabel>{t('Model')}</FormLabel>
+                                        <FormControl>
+                                          <Input
+                                            {...field}
+                                            placeholder='gpt-5'
+                                            disabled={
+                                              editingDisabled ||
+                                              routingDirtyRows.size > 0
+                                            }
+                                          />
+                                        </FormControl>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+                                  <Button
+                                    type='button'
+                                    variant='ghost'
+                                    size='icon'
+                                    className='mt-6'
+                                    aria-label={t('Remove')}
+                                    disabled={
+                                      editingDisabled ||
+                                      routingDirtyRows.size > 0
+                                    }
+                                    onClick={() => channelRules.remove(index)}
+                                  >
+                                    <Trash2 />
+                                  </Button>
+                                </div>
+                                <FormField
+                                  control={form.control}
+                                  name={`channelRules.${index}.groups`}
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>
+                                        {t('Resource channel groups')}
+                                      </FormLabel>
+                                      <FormControl>
+                                        <MultiSelect
+                                          options={groupOptions}
+                                          selected={field.value}
+                                          onChange={field.onChange}
+                                          disabled={
+                                            editingDisabled ||
+                                            routingDirtyRows.size > 0
+                                          }
+                                          allowCreate
+                                          placeholder={t(
+                                            'Select channel groups'
+                                          )}
+                                        />
+                                      </FormControl>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                                {previewKey === currentPreviewKey &&
+                                  previewChannels.data?.data &&
+                                  user && (
+                                    <div className='flex flex-col gap-3'>
+                                      <p className='text-muted-foreground text-sm'>
+                                        {t(
+                                          'Pool candidates for {{model}}: {{count}} (before token group filtering).',
+                                          {
+                                            model:
+                                              channelRulesValue[index]
+                                                ?.modelName ?? '',
+                                            count:
+                                              previewChannels.data.data[
+                                                channelRulesValue[index]
+                                                  ?.modelName ?? ''
+                                              ]?.candidate_count ?? 0,
+                                          }
+                                        )}
+                                        {(channelRulesValue[index]?.groups
+                                          .length ?? 0) > 0 &&
+                                          previewChannels.data.data[
+                                            channelRulesValue[index]
+                                              ?.modelName ?? ''
+                                          ]?.candidate_count === 0 && (
+                                            <span className='text-destructive'>
+                                              {' '}
+                                              {t(
+                                                'No enabled channels match this model and its selected pools.'
+                                              )}
+                                            </span>
+                                          )}
+                                      </p>
+                                    </div>
+                                  )}
+                              </div>
+                            ))}
+                            <Button
+                              type='button'
+                              variant='outline'
+                              disabled={
+                                editingDisabled || routingDirtyRows.size > 0
+                              }
+                              onClick={() =>
+                                channelRules.append({
+                                  modelName: '',
+                                  groups: [],
+                                })
+                              }
+                            >
+                              <Plus /> {t('Add rule')}
+                            </Button>
+                            {channelRules.fields.length > 0 && (
+                              <Button
+                                type='button'
+                                variant='outline'
+                                disabled={
+                                  previewChannels.isPending ||
+                                  routingDirtyRows.size > 0
+                                }
+                                onClick={async () => {
+                                  if (!(await form.trigger('channelRules'))) {
+                                    return
+                                  }
+                                  const rules = form.getValues('channelRules')
+                                  previewChannels.mutate({
+                                    rules,
+                                    key: JSON.stringify(rules),
+                                  })
+                                }}
+                              >
+                                {t('Preview channel availability')}
+                              </Button>
+                            )}
+                          </SideDrawerSection>
+                        </AccordionContent>
+                      </AccordionItem>
+                    </Accordion>
                   </TabsContent>
                 </Tabs>
               </form>

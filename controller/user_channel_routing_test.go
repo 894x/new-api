@@ -373,3 +373,43 @@ func TestUserChannelRoutingGroupIsolationDatabaseMatrix(t *testing.T) {
 		}
 	}
 }
+
+func TestUserChannelRoutingCatalogSeparatesPublicKeyGroupsFromResourcePools(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+	previousUsable, previousRatios := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString()
+	previousSpecial := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()
+	t.Cleanup(func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousUsable))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+		ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Clear()
+		ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.AddAll(previousSpecial)
+	})
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"standard":"Standard","vip":"VIP","removed":"Removed","stale":"Stale","auto":"Auto"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"standard":1,"vip":1,"removed":1,"resource-pool":1,"customer":1}`))
+	ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Clear()
+	ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.AddAll(map[string]map[string]string{"customer": {"-:removed": "", "+:resource-pool": "Internal"}})
+	user := model.User{Username: "key-group-catalog", Group: "customer", AffCode: "key-group-catalog"}
+	require.NoError(t, db.Create(&user).Error)
+	channel := model.Channel{Id: 9301, Name: "Shared resource", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "standard,vip,resource-pool", Priority: common.GetPointer(int64(100))}
+	require.NoError(t, db.Create(&channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+	require.NoError(t, db.Create(&[]model.UserGroupChannelRoutingOverride{
+		{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: user.Id, Model: "gpt-5", ChannelId: channel.Id, Priority: common.GetPointer(int64(200))}, RoutingGroup: "vip"},
+		{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: user.Id, Model: "gpt-5", ChannelId: channel.Id, Priority: common.GetPointer(int64(100))}, RoutingGroup: "standard"},
+		{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: user.Id, Model: "internal-model", ChannelId: channel.Id, Priority: common.GetPointer(int64(300))}, RoutingGroup: "resource-pool"},
+	}).Error)
+	recorder := userRoutingRequestAtURL(t, user.Id, http.MethodGet, "/api/user/1/channel-routing-overrides", "", GetUserChannelRouting)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Data struct {
+			KeyGroups           map[string]string   `json:"key_groups"`
+			ConfiguredModels    []string            `json:"configured_models"`
+			ConfiguredKeyGroups map[string][]string `json:"configured_key_groups"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, map[string]string{"standard": "Standard", "vip": "VIP"}, response.Data.KeyGroups)
+	assert.Equal(t, []string{"gpt-5"}, response.Data.ConfiguredModels)
+	assert.Equal(t, map[string][]string{"gpt-5": {"standard", "vip"}}, response.Data.ConfiguredKeyGroups)
+}
