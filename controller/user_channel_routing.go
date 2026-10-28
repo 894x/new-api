@@ -30,11 +30,14 @@ type userChannelRoutingRow struct {
 }
 
 type userChannelRoutingResponse struct {
-	Models       []string                `json:"models"`
-	Model        string                  `json:"model"`
-	RoutingGroup string                  `json:"routing_group,omitempty"`
-	Revision     string                  `json:"revision"`
-	Channels     []userChannelRoutingRow `json:"channels"`
+	Models              []string                `json:"models"`
+	ConfiguredModels    []string                `json:"configured_models"`
+	ConfiguredKeyGroups map[string][]string     `json:"configured_key_groups"`
+	KeyGroups           map[string]string       `json:"key_groups"`
+	Model               string                  `json:"model"`
+	RoutingGroup        string                  `json:"routing_group,omitempty"`
+	Revision            string                  `json:"revision"`
+	Channels            []userChannelRoutingRow `json:"channels"`
 }
 
 // GET without model lists selectable and previously configured public models.
@@ -58,14 +61,22 @@ func GetUserChannelRouting(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	response := userChannelRoutingResponse{Models: []string{}, Model: modelName, RoutingGroup: routingGroup, Channels: []userChannelRoutingRow{}}
+	response := userChannelRoutingResponse{Models: []string{}, ConfiguredModels: []string{}, ConfiguredKeyGroups: map[string][]string{}, KeyGroups: map[string]string{}, Model: modelName, RoutingGroup: routingGroup, Channels: []userChannelRoutingRow{}}
 	groups := make([]string, 0)
-	for group := range service.GetUserUsableGroups(user.Group) {
+	usable := service.GetUserUsableGroups(user.Group)
+	for group := range usable {
 		if group != "auto" {
 			groups = append(groups, group)
 		}
 	}
 	if modelName == "" {
+		// Only globally published, currently usable Key groups belong in this
+		// editor. Resource pools and the implicit customer identity group do not.
+		for group, description := range setting.GetUserUsableGroupsCopy() {
+			if _, ok := usable[group]; ok && group != "auto" && ratio_setting.ContainsGroupRatio(group) {
+				response.KeyGroups[group] = description
+			}
+		}
 		models, err := service.GetUserGroupsEnabledModels(user.Group, groups)
 		if err != nil {
 			common.ApiError(c, err)
@@ -73,6 +84,7 @@ func GetUserChannelRouting(c *gin.Context) {
 		}
 		for _, override := range overrides {
 			models = append(models, override.Model)
+			response.ConfiguredModels = append(response.ConfiguredModels, override.Model)
 		}
 		groupOverrides, err := model.ListUserGroupChannelRoutingOverrides(userID, "")
 		if err != nil {
@@ -81,7 +93,17 @@ func GetUserChannelRouting(c *gin.Context) {
 		}
 		for _, override := range groupOverrides {
 			models = append(models, override.Model)
+			if _, public := response.KeyGroups[override.RoutingGroup]; public {
+				response.ConfiguredModels = append(response.ConfiguredModels, override.Model)
+				response.ConfiguredKeyGroups[override.Model] = append(response.ConfiguredKeyGroups[override.Model], override.RoutingGroup)
+			}
 		}
+		for modelName, groups := range response.ConfiguredKeyGroups {
+			slices.Sort(groups)
+			response.ConfiguredKeyGroups[modelName] = slices.Compact(groups)
+		}
+		slices.Sort(response.ConfiguredModels)
+		response.ConfiguredModels = slices.Compact(response.ConfiguredModels)
 		slices.Sort(models)
 		response.Models = slices.Compact(models)
 		common.ApiSuccess(c, response)

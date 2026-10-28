@@ -227,7 +227,13 @@ describe('User group quick configuration', () => {
         name: 'Enable Pool Alpha #11 for this user',
       })
     ).toHaveAttribute('aria-disabled', 'true')
-    expect(screen.getByRole('textbox', { name: 'Model' })).toBeDisabled()
+    expect(screen.getByRole('combobox', { name: 'Model' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add model' })).toBeDisabled()
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Resource channel pool filters (advanced)',
+      })
+    )
     expect(screen.getByRole('button', { name: 'Add rule' })).toBeDisabled()
     fireEvent.click(
       screen.getByRole('button', { name: 'Preview channel availability' })
@@ -445,12 +451,28 @@ describe('User group quick configuration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
-    vi.mocked(api.get).mockImplementation(async (url) => {
+    vi.mocked(api.get).mockImplementation(async (url, options) => {
       if (url === '/api/channel/models_enabled') {
         return { data: { success: true, data: [] } }
       }
       if (url === '/api/user/42/channel-routing-overrides') {
-        return { data: { success: true, data: routingConfig } }
+        return {
+          data: {
+            success: true,
+            data: {
+              ...routingConfig,
+              models: ['model-x', 'model-y'],
+              key_groups: { default: 'Default', vip: 'VIP' },
+              configured_models: ['model-x'],
+              configured_key_groups: { 'model-x': ['default'] },
+              routing_group: options?.params?.routing_group,
+              channels: routingConfig.channels.map((row) => ({
+                ...row,
+                configured: true,
+              })),
+            },
+          },
+        }
       }
       return { data: { success: true, data: sharedConfig } }
     })
@@ -526,6 +548,11 @@ describe('User group quick configuration', () => {
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Channels' }))
     fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Resource channel pool filters (advanced)',
+      })
+    )
+    fireEvent.click(
       screen.getByRole('button', { name: 'Preview channel availability' })
     )
 
@@ -543,7 +570,7 @@ describe('User group quick configuration', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows an independent outlet group editor as soon as a model has selected pools', async () => {
+  it('edits a model under a public Key group without using its resource pool as the routing group', async () => {
     vi.mocked(api.post).mockResolvedValue({
       data: {
         success: true,
@@ -554,17 +581,58 @@ describe('User group quick configuration', () => {
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Channels' }))
     expect(await screen.findByText('Pool Alpha #11')).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'pool-a' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'default' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'default' })).toBeVisible()
     expect(api.get).toHaveBeenCalledWith(
       '/api/user/42/channel-routing-overrides',
       {
         params: {
           model: 'model-x',
-          routing_group: 'pool-a',
-          channel_groups: JSON.stringify(['pool-a']),
+          routing_group: 'default',
         },
       }
     )
+  })
+
+  it('preserves added model and Key group drafts when switching away from Channels and back', async () => {
+    const operator = userEvent.setup()
+    renderGroupConfig()
+    await operator.click(await screen.findByRole('tab', { name: 'Channels' }))
+    const model = await screen.findByRole('region', { name: 'model-x' })
+    await operator.click(
+      within(model).getByRole('combobox', { name: 'Key group' })
+    )
+    await operator.click(screen.getByRole('option', { name: 'vip' }))
+    await operator.click(
+      within(model).getByRole('button', { name: 'Add Key group' })
+    )
+    const vip = await within(model).findByRole('region', { name: 'vip' })
+    fireEvent.change(
+      await within(vip).findByRole('spinbutton', {
+        name: 'Priority for Pool Alpha #11',
+      }),
+      { target: { value: '200' } }
+    )
+    await operator.type(
+      screen.getByRole('combobox', { name: 'Model' }),
+      'model-y'
+    )
+    await operator.click(screen.getByRole('button', { name: 'Add model' }))
+    await operator.click(screen.getByRole('tab', { name: 'Discounts' }))
+    await operator.click(screen.getByRole('tab', { name: 'Channels' }))
+    expect(screen.getByRole('heading', { name: 'model-y' })).toBeVisible()
+    const restored = within(
+      screen.getByRole('region', { name: 'model-x' })
+    ).getByRole('region', { name: 'vip' })
+    expect(
+      within(restored).getByRole('spinbutton', {
+        name: 'Priority for Pool Alpha #11',
+      })
+    ).toHaveValue(200)
+    expect(
+      within(restored).getByRole('button', { name: 'Save changes' })
+    ).toBeEnabled()
+    expect(api.patch).not.toHaveBeenCalled()
   })
 
   it('opens group configuration from the user editor without changing the user', async () => {

@@ -36,6 +36,7 @@ import {
   UserChannelRoutingEditor,
   UserChannelRoutingRuleEditor,
 } from '../user-channel-routing-dialog'
+import { UserModelChannelRouting } from '../user-model-channel-routing'
 
 vi.mock('@/lib/api', () => ({ api: { get: vi.fn(), patch: vi.fn() } }))
 
@@ -131,7 +132,7 @@ describe('user channel routing', () => {
     expect(api.patch).not.toHaveBeenCalled()
   })
 
-  it('saves one outlet group without changing the same channel or an unsaved draft in another group', async () => {
+  it('saves one Key group without changing the same channel or an unsaved draft in another group', async () => {
     vi.mocked(api.get).mockImplementation(async (_url, options) => {
       const group = options?.params?.routing_group as string
       return {
@@ -157,15 +158,21 @@ describe('user channel routing', () => {
         <UserChannelRoutingRuleEditor
           userId={42}
           model='gpt-5'
-          channelGroups={['pool-a', 'pool-b']}
+          keyGroups={['pool-a', 'pool-b', 'unconfigured']}
+          configuredGroups={['pool-a', 'pool-b']}
         />
       </QueryClientProvider>
     )
     const a = await screen.findByRole('region', { name: 'pool-a' })
-    const b = await screen.findByRole('region', { name: 'pool-b' })
     const inputA = await within(a).findByRole('spinbutton', {
       name: 'Priority for Alpha #1',
     })
+    const b = await screen.findByRole('region', { name: 'pool-b' })
+    expect(a).toBeVisible()
+    expect(b).toBeVisible()
+    expect(
+      screen.queryByRole('region', { name: 'unconfigured' })
+    ).not.toBeInTheDocument()
     const inputB = await within(b).findByRole('spinbutton', {
       name: 'Priority for Alpha #1',
     })
@@ -199,7 +206,7 @@ describe('user channel routing', () => {
     )
   })
 
-  it('adds a channel within its outlet group and saves it without adding it to another group', async () => {
+  it('adds a channel within its Key group and saves it without adding it to another group', async () => {
     const operator = userEvent.setup()
     vi.mocked(api.get).mockImplementation(async (_url, options) => ({
       data: {
@@ -222,12 +229,12 @@ describe('user channel routing', () => {
         <UserChannelRoutingRuleEditor
           userId={42}
           model='gpt-5'
-          channelGroups={['pool-a', 'pool-b']}
+          keyGroups={['pool-a', 'pool-b', 'unconfigured']}
+          configuredGroups={['pool-a', 'pool-b']}
         />
       </QueryClientProvider>
     )
     const a = await screen.findByRole('region', { name: 'pool-a' })
-    const b = screen.getByRole('region', { name: 'pool-b' })
     const selector = await within(a).findByRole('combobox', {
       name: 'Select channel',
     })
@@ -242,10 +249,6 @@ describe('user channel routing', () => {
     expect(
       within(a).getByRole('listitem', { name: 'Alpha #1' })
     ).toBeInTheDocument()
-    expect(within(b).queryByRole('listitem')).not.toBeInTheDocument()
-    expect(
-      within(b).getByRole('button', { name: 'Save changes' })
-    ).toBeDisabled()
     await operator.click(
       within(a).getByRole('button', { name: 'Save changes' })
     )
@@ -258,6 +261,11 @@ describe('user channel routing', () => {
         })
       )
     )
+    const b = await screen.findByRole('region', { name: 'pool-b' })
+    expect(within(b).queryByRole('listitem')).not.toBeInTheDocument()
+    expect(
+      within(b).getByRole('button', { name: 'Save changes' })
+    ).toBeDisabled()
   })
 
   it('dragging a channel persists descending user priorities and keeps paused rows', async () => {
@@ -406,6 +414,297 @@ describe('user channel routing', () => {
     expect(
       screen.queryByRole('button', { name: 'Save changes' })
     ).not.toBeInTheDocument()
+  })
+
+  it('adds a model without resource pools and only offers published Key groups', async () => {
+    const operator = userEvent.setup()
+    let configuredModels: string[] = []
+    vi.mocked(api.get).mockImplementation(async (_url, options) => ({
+      data: {
+        success: true,
+        data: options?.params?.model
+          ? {
+              ...config,
+              routing_group: options.params.routing_group,
+              channels: config.channels.map((row) => ({
+                ...row,
+                configured: true,
+              })),
+            }
+          : {
+              ...config,
+              models: ['gpt-5'],
+              configured_models: configuredModels,
+              configured_key_groups: configuredModels.length
+                ? { 'gpt-5': ['vip'] }
+                : {},
+              key_groups: { standard: 'Standard', vip: 'VIP' },
+            },
+      },
+    }))
+    vi.mocked(api.patch).mockImplementation(async () => {
+      configuredModels = ['gpt-5']
+      return { data: { success: true } }
+    })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const view = render(
+      <QueryClientProvider client={client}>
+        <UserModelChannelRouting
+          userId={42}
+          poolModels={[]}
+          onDirtyChange={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    const modelInput = await screen.findByRole('combobox', { name: 'Model' })
+    expect(
+      screen.queryByRole('combobox', { name: 'Key group' })
+    ).not.toBeInTheDocument()
+    await operator.type(modelInput, 'gpt-5')
+    await operator.click(screen.getByRole('button', { name: 'Add model' }))
+    expect(
+      await screen.findByRole('heading', { name: 'gpt-5' })
+    ).toBeInTheDocument()
+    const groupInput = screen.getByRole('combobox', { name: 'Key group' })
+    await operator.click(groupInput)
+    expect(
+      screen.getAllByRole('option').map((option) => option.textContent)
+    ).toEqual(['standard', 'vip'])
+    await operator.click(screen.getByRole('option', { name: 'vip' }))
+    expect(
+      screen.queryByRole('region', { name: 'vip' })
+    ).not.toBeInTheDocument()
+    await operator.click(screen.getByRole('button', { name: 'Add Key group' }))
+    const priority = await screen.findByRole('spinbutton', {
+      name: 'Priority for Alpha #1',
+    })
+    fireEvent.change(priority, { target: { value: '7' } })
+    await operator.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ model: 'gpt-5', routing_group: 'vip' })
+      )
+    )
+    expect(api.get).toHaveBeenCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      { params: { model: 'gpt-5', routing_group: 'vip' } }
+    )
+    view.unmount()
+    const reopenedClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={reopenedClient}>
+        <UserModelChannelRouting
+          userId={42}
+          poolModels={[]}
+          onDirtyChange={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    expect(
+      await screen.findByRole('heading', { name: 'gpt-5' })
+    ).toBeInTheDocument()
+    expect(await screen.findByRole('region', { name: 'vip' })).toBeVisible()
+    expect(
+      screen.queryByRole('region', { name: 'standard' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows all assigned public groups together inside their own model frame', async () => {
+    vi.mocked(api.get).mockImplementation(async (_url, options) => ({
+      data: {
+        success: true,
+        data: options?.params?.model
+          ? {
+              ...config,
+              routing_group: options.params.routing_group,
+              channels: [],
+            }
+          : {
+              ...config,
+              configured_models: ['gpt-5', 'gpt-6'],
+              key_groups: {
+                standard: 'Standard',
+                vip: 'VIP',
+                unassigned: 'Unassigned',
+              },
+              configured_key_groups: {
+                'gpt-5': ['standard', 'vip', 'internal-pool'],
+                'gpt-6': ['standard'],
+              },
+            },
+      },
+    }))
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <UserModelChannelRouting
+          userId={42}
+          poolModels={[]}
+          onDirtyChange={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    const model = await screen.findByRole('region', { name: 'gpt-5' })
+    expect(
+      within(model).getByRole('region', { name: 'standard' })
+    ).toBeVisible()
+    expect(within(model).getByRole('region', { name: 'vip' })).toBeVisible()
+    expect(
+      within(model).queryByRole('region', { name: 'unassigned' })
+    ).not.toBeInTheDocument()
+    expect(
+      within(model).queryByRole('region', { name: 'internal-pool' })
+    ).not.toBeInTheDocument()
+    const otherModel = screen.getByRole('region', { name: 'gpt-6' })
+    expect(
+      within(otherModel).getByRole('region', { name: 'standard' })
+    ).toBeVisible()
+    expect(
+      within(otherModel).queryByRole('region', { name: 'vip' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows an empty state when the customer has no public Key groups', async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: { success: true, data: { ...config, key_groups: {} } },
+    })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <UserModelChannelRouting
+          userId={42}
+          poolModels={['gpt-5']}
+          onDirtyChange={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    expect(
+      await screen.findByText('No public Key groups available')
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    expect(api.patch).not.toHaveBeenCalled()
+  })
+
+  it('preserves another group draft when saving triggers a failed background catalog refresh', async () => {
+    const operator = userEvent.setup()
+    let catalogFailed = false
+    vi.mocked(api.get).mockImplementation(async (_url, options) => {
+      if (!options?.params?.model) {
+        if (catalogFailed) throw new Error('catalog unavailable')
+        return {
+          data: {
+            success: true,
+            data: {
+              ...config,
+              configured_models: ['gpt-5'],
+              key_groups: { standard: 'Standard', vip: 'VIP' },
+              configured_key_groups: { 'gpt-5': ['standard', 'vip'] },
+            },
+          },
+        }
+      }
+      return {
+        data: {
+          success: true,
+          data: {
+            ...config,
+            routing_group: options.params.routing_group,
+            channels: config.channels.map((row) => ({
+              ...row,
+              configured: true,
+            })),
+          },
+        },
+      }
+    })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <UserModelChannelRouting
+          userId={42}
+          poolModels={[]}
+          onDirtyChange={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    const a = await screen.findByRole('region', { name: 'standard' })
+    const b = await screen.findByRole('region', { name: 'vip' })
+    fireEvent.change(
+      await within(b).findByRole('spinbutton', {
+        name: 'Priority for Alpha #1',
+      }),
+      { target: { value: '200' } }
+    )
+    fireEvent.change(
+      await within(a).findByRole('spinbutton', {
+        name: 'Priority for Alpha #1',
+      }),
+      { target: { value: '7' } }
+    )
+    catalogFailed = true
+    await operator.click(
+      within(a).getByRole('button', { name: 'Save changes' })
+    )
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    expect(
+      within(screen.getByRole('region', { name: 'vip' })).getByRole(
+        'spinbutton',
+        { name: 'Priority for Alpha #1' }
+      )
+    ).toHaveValue(200)
+    catalogFailed = false
+    await operator.click(retry)
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: 'Retry' })
+      ).not.toBeInTheDocument()
+    )
+    expect(
+      within(screen.getByRole('region', { name: 'vip' })).getByRole(
+        'spinbutton',
+        { name: 'Priority for Alpha #1' }
+      )
+    ).toHaveValue(200)
+  })
+
+  it('retries a failed model catalog without treating the error as an empty group list', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({
+      data: { success: false, message: 'unavailable' },
+    })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <UserModelChannelRouting
+          userId={42}
+          poolModels={[]}
+          onDirtyChange={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    expect(
+      screen.queryByText('No public Key groups available')
+    ).not.toBeInTheDocument()
+    vi.mocked(api.get).mockResolvedValue({
+      data: { success: true, data: { ...config, key_groups: {} } },
+    })
+    fireEvent.click(retry)
+    expect(
+      await screen.findByText('No public Key groups available')
+    ).toBeInTheDocument()
   })
 
   it('reverting a switch restores the clean state so model selection can resume', () => {
