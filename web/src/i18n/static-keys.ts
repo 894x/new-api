@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 // Static translation keys that don't get picked up by the t('...') regex.
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
+  '10 Minutes',
+  '3 Hours',
+  '6 Hours',
+  '12 Hours',
   'View customer group configuration',
   'Edit customer group configuration',
   'View customer group discounts, rate limits, channel policies, and user channel priorities.',

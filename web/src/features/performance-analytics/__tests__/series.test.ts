@@ -26,6 +26,66 @@ import { buildPerformanceChartOption } from '../chart-options'
 import * as analyticsLib from '../lib'
 
 describe('performance analytics chart series', () => {
+  test('uses measured channel averages and leaves missing historical fields unknown', () => {
+    const series = analyticsLib.buildLatencyChartSeries(
+      [
+        {
+          ts: 100,
+          latency: {
+            sample_count: 2,
+            avg_ms: 0.125,
+            p50_ms: 1,
+            p95_ms: 2,
+            p99_ms: 3,
+            max_ms: 0.375,
+          },
+        },
+        { ts: 200, latency: { sample_count: 0, avg_ms: 0, p50_ms: 0 } },
+      ],
+      String
+    )
+    expect(series.map(({ percentile, value }) => [percentile, value])).toEqual([
+      ['AVG', 0.125],
+      ['P50', 1],
+      ['P95', 2],
+      ['P99', 3],
+      ['MAX', 0.375],
+    ])
+  })
+
+  test('preserves independent named concurrency curves and missing buckets', () => {
+    const option = buildPerformanceChartOption({
+      title: 'Concurrency',
+      values: [
+        { ts: 100, time: 100, label: '100', series: 'Average', value: 0.125 },
+        { ts: 100, time: 100, label: '100', series: 'Peak', value: 2 },
+        { ts: 200, time: 200, label: '200', series: 'Peak', value: 0 },
+      ],
+      timestamps: [100, 200],
+      start: 100,
+      end: 200,
+      dark: false,
+      formatTime: String,
+      formatValue: String,
+    })
+    expect(option.series).toEqual([
+      expect.objectContaining({
+        name: 'Average',
+        data: [
+          [100000, 0.125],
+          [200000, null],
+        ],
+      }),
+      expect.objectContaining({
+        name: 'Peak',
+        data: [
+          [100000, 2],
+          [200000, 0],
+        ],
+      }),
+    ])
+  })
+
   test.each([
     'request_body_avg_bytes',
     'cache_write_tokens',
@@ -51,7 +111,9 @@ describe('performance analytics chart series', () => {
       ] as unknown as import('../types').PerformanceAnalyticsPoint[]
       expect(
         analyticsLib.buildPerformanceMetricSeries(points, metric, String)
-      ).toEqual([{ ts: 100, time: 100, label: '100', value: 0 }])
+      ).toEqual([
+        { ts: 100, time: 100, label: '100', percentile: 'AVG', value: 0 },
+      ])
     }
   )
   test.each([
@@ -72,7 +134,9 @@ describe('performance analytics chart series', () => {
       ] as unknown as import('../types').PerformanceAnalyticsPoint[]
       expect(
         analyticsLib.buildPerformanceMetricSeries(points, metric, String)
-      ).toEqual([{ ts: 100, time: 100, label: '100', value: 12.25 }])
+      ).toEqual([
+        { ts: 100, time: 100, label: '100', percentile: 'AVG', value: 12.25 },
+      ])
     }
   )
 
@@ -115,9 +179,12 @@ describe('performance analytics chart series', () => {
       [300000, 0],
     ])
     expect(series[0].connectNulls).toBe(false)
+    expect(option.dataZoom).toEqual([
+      expect.objectContaining({ type: 'inside' }),
+    ])
   })
   test.each(['request_body_avg_bytes', 'cache_hit_rate'] as const)(
-    'uses the request distribution for %s instead of the aggregate',
+    'keeps the %s distribution alongside the aggregate AVG',
     (metric) => {
       const points = [
         {
@@ -140,6 +207,7 @@ describe('performance analytics chart series', () => {
           .buildPerformanceMetricSeries(points, metric, String)
           .map((point) => [point.percentile, point.value])
       ).toEqual([
+        ['AVG', 999],
         ['P50', 1],
         ['P90', 2],
         ['P95', 3],
@@ -216,6 +284,7 @@ describe('performance analytics chart series', () => {
       { ts: 100, time: 100, label: '100', percentile: 'P95', value: 500 },
       { ts: 100, time: 100, label: '100', percentile: 'P99', value: 570 },
       { ts: 100, time: 100, label: '100', percentile: 'MAX', value: 573 },
+      { ts: 200, time: 200, label: '200', percentile: 'AVG', value: 499.5 },
     ])
   })
 
@@ -449,4 +518,69 @@ describe('performance analytics chart series', () => {
       ]
     )
   })
+})
+
+test('AVG curves use measured bucket totals while cache percentiles retain per-request distributions', () => {
+  const points = [
+    {
+      ts: 100,
+      cache_read_samples: 2,
+      cache_write_samples: 2,
+      cache_write_tokens: 125,
+      request_body_samples: 2,
+      request_body_avg_bytes: 12.5,
+      cache_hit_rate: 10,
+      metric_percentiles: {
+        cache_hit_rate: {
+          p50: 50,
+          p90: 90,
+          p95: 95,
+          p99: 99,
+          max: 100,
+          sample_count: 2,
+        },
+      },
+      ttft: {
+        p50_ms: 100,
+        p90_ms: 200,
+        p99_ms: 300,
+        avg_ms: 150.5,
+        sample_count: 2,
+      },
+      tpot: { p50_ms: 2, p90_ms: 8, p99_ms: 8, avg_ms: 2.6, sample_count: 2 },
+    },
+  ] as unknown as import('../types').PerformanceAnalyticsPoint[]
+  const cache = analyticsLib.buildPerformanceMetricSeries(
+    points,
+    'cache_hit_rate',
+    String
+  )
+  expect(cache.map((point) => [point.percentile, point.value])).toEqual([
+    ['AVG', 10],
+    ['P50', 50],
+    ['P90', 90],
+    ['P95', 95],
+    ['P99', 99],
+    ['MAX', 100],
+  ])
+  expect(
+    analyticsLib.buildPerformanceMetricSeries(
+      points,
+      'cache_write_tokens',
+      String
+    )[0]
+  ).toMatchObject({ percentile: 'AVG', value: 62.5 })
+  expect(
+    analyticsLib.buildPerformanceMetricSeries(
+      points,
+      'request_body_avg_bytes',
+      String
+    )[0]
+  ).toMatchObject({ percentile: 'AVG', value: 12.5 })
+  expect(
+    analyticsLib.buildPerformanceSeries(points, 'ttft', String)[0]
+  ).toMatchObject({ percentile: 'AVG', value: 150.5 })
+  expect(
+    analyticsLib.buildPerformanceSeries(points, 'tpot', String)[0]
+  ).toMatchObject({ percentile: 'AVG', value: 2.6 })
 })

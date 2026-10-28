@@ -104,7 +104,7 @@ export function PerformanceChart(props: {
   }, [context.reset])
 
   return (
-    <div className='relative h-72 min-w-0'>
+    <div className='relative h-56 min-w-0'>
       <div
         ref={host}
         role='img'

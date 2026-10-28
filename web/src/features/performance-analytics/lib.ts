@@ -21,12 +21,14 @@ import { formatNumber } from '@/lib/format'
 
 import type {
   PerformanceAnalyticsPoint,
+  PerformancePercentiles,
   PerformanceChartDatum,
   PerformanceMetric,
   PerformanceMetricChartDatum,
 } from './types'
 
 export const PERFORMANCE_CURVE_LABELS = [
+  'AVG',
   'P50',
   'P90',
   'P95',
@@ -34,6 +36,7 @@ export const PERFORMANCE_CURVE_LABELS = [
   'MAX',
 ] as const
 export const PERFORMANCE_CURVE_COLORS = [
+  '#06b6d4',
   '#3b82f6',
   '#10b981',
   '#f59e0b',
@@ -42,6 +45,7 @@ export const PERFORMANCE_CURVE_COLORS = [
 ]
 
 const PERCENTILE_FIELDS = [
+  ['AVG', 'avg_ms'],
   ['P50', 'p50_ms'],
   ['P90', 'p90_ms'],
   ['P95', 'p95_ms'],
@@ -139,8 +143,21 @@ export function buildPerformanceSeries(
   metric: 'ttft' | 'tpot',
   formatTime: (ts: number) => string
 ): PerformanceChartDatum[] {
+  return buildLatencyChartSeries(
+    points.map((point) => ({ ts: point.ts, latency: point[metric] })),
+    formatTime
+  )
+}
+
+export function buildLatencyChartSeries(
+  points: Array<{
+    ts: number
+    latency: Partial<PerformancePercentiles> & { sample_count: number }
+  }>,
+  formatTime: (ts: number) => string
+): PerformanceChartDatum[] {
   return points.flatMap((point) => {
-    const percentiles = point[metric]
+    const percentiles = point.latency
     if (percentiles.sample_count <= 0) return []
 
     return PERCENTILE_FIELDS.flatMap(([percentile, field]) => {
@@ -164,54 +181,44 @@ export function buildPerformanceMetricSeries(
   metric: PerformanceMetric,
   formatTime: (ts: number) => string
 ): PerformanceMetricChartDatum[] {
-  const hasDistributions = points.some(
-    (point) => point.metric_percentiles?.[metric] !== undefined
-  )
   return points.flatMap((point) => {
-    if (
-      metric === 'rpm' ||
-      metric === 'tpm' ||
-      metric === 'error_count' ||
-      !hasDistributions
-    ) {
+    const datum = { ts: point.ts, time: point.ts, label: formatTime(point.ts) }
+    if (metric === 'rpm' || metric === 'tpm' || metric === 'error_count') {
       const value = point[metric]
-      if (typeof value !== 'number' || !Number.isFinite(value)) return []
-      if (metric === 'cache_write_tokens' && !point.cache_write_samples) {
-        return []
-      }
-      if (metric === 'cache_hit_rate' && point.cache_read_samples === 0) {
-        return []
-      }
-      if (
-        metric === 'request_body_avg_bytes' &&
-        point.request_body_samples === 0
-      ) {
-        return []
-      }
-      return [
-        { ts: point.ts, time: point.ts, label: formatTime(point.ts), value },
-      ]
+      return Number.isFinite(value) ? [{ ...datum, value }] : []
     }
     const percentiles = point.metric_percentiles?.[metric]
-    if (!percentiles || percentiles.sample_count <= 0) return []
+    let average: number | null | undefined
+    if (metric === 'cache_hit_rate' && point.cache_read_samples !== 0) {
+      // The API ratio is total cache-read tokens / total input tokens, not
+      // the arithmetic mean of per-request hit rates or percentile values.
+      average = point.cache_hit_rate
+    }
+    if (
+      metric === 'request_body_avg_bytes' &&
+      point.request_body_samples !== 0
+    ) {
+      average = point.request_body_avg_bytes
+    }
+    if (
+      metric === 'cache_write_tokens' &&
+      typeof point.cache_write_tokens === 'number' &&
+      typeof point.cache_write_samples === 'number' &&
+      point.cache_write_samples > 0
+    ) {
+      average = point.cache_write_tokens / point.cache_write_samples
+    }
     return PERFORMANCE_CURVE_LABELS.flatMap((percentile) => {
-      const field = percentile.toLowerCase() as
-        | 'p50'
-        | 'p90'
-        | 'p95'
-        | 'p99'
-        | 'max'
-      const value = percentiles[field]
+      let value: number | null | undefined = average
+      if (percentile !== 'AVG') {
+        if (!percentiles || percentiles.sample_count <= 0) return []
+        value =
+          percentiles[
+            percentile.toLowerCase() as 'p50' | 'p90' | 'p95' | 'p99' | 'max'
+          ]
+      }
       if (typeof value !== 'number' || !Number.isFinite(value)) return []
-      return [
-        {
-          ts: point.ts,
-          time: point.ts,
-          label: formatTime(point.ts),
-          percentile,
-          value,
-        },
-      ]
+      return [{ ...datum, percentile, value }]
     })
   })
 }

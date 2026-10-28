@@ -17,17 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import {
-  Activity,
-  ChartNoAxesCombined,
-  Clock3,
-  RefreshCw,
-  Pause,
-  Play,
-  Radio,
-  RotateCcw,
-  Link2,
-} from 'lucide-react'
+import { Activity, ChartNoAxesCombined, Clock3, RefreshCw } from 'lucide-react'
 import {
   type ReactNode,
   useCallback,
@@ -75,13 +65,18 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { buildPerformanceAnalyticsParams } from '@/features/dashboard/lib/filters'
 import { formatUptimePct } from '@/features/performance-metrics/lib/format'
+import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
+import { dateToUnixTimestamp } from '@/lib/time'
 
 import { getPerformanceAnalytics, getPerformanceAnalyticsOptions } from './api'
 import { PerformanceChartContext } from './chart-context'
+import { PerformanceChartHeader } from './chart-header'
+import { PerformanceChartToolbar } from './chart-toolbar'
 import {
   buildPerformanceMetricSeries,
+  PERFORMANCE_CURVE_LABELS,
   buildPerformanceSeries,
   formatRequestBodySize,
   formatPerformanceTimestamp,
@@ -101,6 +96,9 @@ import type {
 const ALL_VALUE = '__all__'
 const RANGE_OPTIONS = [
   { seconds: 60 * 60, label: '1 Hour' },
+  { seconds: 3 * 60 * 60, label: '3 Hours' },
+  { seconds: 6 * 60 * 60, label: '6 Hours' },
+  { seconds: 12 * 60 * 60, label: '12 Hours' },
   { seconds: 24 * 60 * 60, label: '1 Day' },
   { seconds: 7 * 24 * 60 * 60, label: '7 Days' },
   { seconds: 29 * 24 * 60 * 60, label: '29 Days' },
@@ -108,7 +106,9 @@ const RANGE_OPTIONS = [
 const USER_MONITORING_RANGE_OPTIONS = [
   { seconds: 10 * 60, label: '10 Minutes' },
   { seconds: 60 * 60, label: '1 Hour' },
+  { seconds: 3 * 60 * 60, label: '3 Hours' },
   { seconds: 6 * 60 * 60, label: '6 Hours' },
+  { seconds: 12 * 60 * 60, label: '12 Hours' },
   { seconds: 24 * 60 * 60, label: '1 Day' },
 ] as const
 
@@ -125,11 +125,17 @@ export function PerformanceAnalytics({
   const [modelName, setModelName] = useState('')
   const [userId, setUserId] = useState<number>()
   const [tokenId, setTokenId] = useState<number>()
+  const [channelId, setChannelId] = useState<number>()
   const [rangeSeconds, setRangeSeconds] = useState(
     standalone ? 10 * 60 : 24 * 60 * 60
   )
   const [rangeEnd, setRangeEnd] = useState(() => Math.floor(Date.now() / 1000))
   const requestWindowEnd = useRef(rangeEnd)
+  const [customRange, setCustomRange] = useState<{
+    start: number
+    end: number
+  }>()
+  const [rangeError, setRangeError] = useState(false)
 
   const chartGroup = useId()
   const [live, setLive] = useState(true)
@@ -155,6 +161,7 @@ export function PerformanceAnalytics({
   const options = optionsQuery.data
   const models = useMemo(() => options?.models ?? [], [options?.models])
   const users = useMemo(() => options?.users ?? [], [options?.users])
+  const channels = useMemo(() => options?.channels ?? [], [options?.channels])
   const tokens = useMemo(() => options?.tokens ?? [], [options?.tokens])
 
   useEffect(() => {
@@ -184,14 +191,24 @@ export function PerformanceAnalytics({
       buildPerformanceAnalyticsParams(
         {
           model: modelName,
-          startTimestamp: rangeEnd - rangeSeconds,
-          endTimestamp: rangeEnd,
+          startTimestamp: customRange?.start ?? rangeEnd - rangeSeconds,
+          endTimestamp: customRange?.end ?? rangeEnd,
           userId,
           tokenId,
+          channelId,
         },
         isAdmin
       ),
-    [isAdmin, modelName, rangeEnd, rangeSeconds, tokenId, userId]
+    [
+      channelId,
+      customRange,
+      isAdmin,
+      modelName,
+      rangeEnd,
+      rangeSeconds,
+      tokenId,
+      userId,
+    ]
   )
 
   const analyticsQuery = useQuery({
@@ -202,6 +219,9 @@ export function PerformanceAnalytics({
       queryParams,
     ],
     queryFn: ({ signal }) => {
+      if (customRange) {
+        return getPerformanceAnalytics(queryParams, isAdmin, signal)
+      }
       const endTimestamp = live
         ? Math.floor(Date.now() / 1000)
         : requestWindowEnd.current
@@ -228,6 +248,9 @@ export function PerformanceAnalytics({
   })
 
   const handleRangeChange = useCallback((seconds: number) => {
+    setCustomRange(undefined)
+    setRangeError(false)
+    setLive(true)
     setRangeSeconds(seconds)
     setChartReset((value) => value + 1)
     const now = Math.floor(Date.now() / 1000)
@@ -236,6 +259,11 @@ export function PerformanceAnalytics({
   }, [])
 
   const handleRefresh = useCallback(() => {
+    if (customRange) {
+      void optionsQuery.refetch()
+      void analyticsQuery.refetch()
+      return
+    }
     const now = Math.floor(Date.now() / 1000)
     requestWindowEnd.current = now
     setRangeEnd(now)
@@ -243,12 +271,30 @@ export function PerformanceAnalytics({
     if (modelName && now === rangeEnd) {
       void analyticsQuery.refetch()
     }
-  }, [analyticsQuery, modelName, optionsQuery, rangeEnd])
+  }, [analyticsQuery, customRange, modelName, optionsQuery, rangeEnd])
 
   const resumeLive = () => {
-    setLive(true)
+    handleRangeChange(rangeSeconds)
+    if (!customRange) handleRefresh()
+  }
+
+  const handleCustomRangeChange = (range: { start?: Date; end?: Date }) => {
+    const start = range.start ? dateToUnixTimestamp(range.start) : Number.NaN
+    const end = range.end ? dateToUnixTimestamp(range.end) : Number.NaN
+    if (
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      start <= 0 ||
+      end <= start ||
+      end - start > 30 * 24 * 3600
+    ) {
+      setRangeError(true)
+      return
+    }
+    setRangeError(false)
+    setCustomRange({ start, end })
+    setLive(false)
     setChartReset((value) => value + 1)
-    handleRefresh()
   }
 
   const handleUserChange = useCallback((value: string | null) => {
@@ -268,7 +314,10 @@ export function PerformanceAnalytics({
     modelName,
     userId,
     tokenId,
+    isAdmin ? channelId : undefined,
     rangeSeconds,
+    customRange?.start,
+    customRange?.end,
   ])
   const [lastResult, setLastResult] = useState<{
     scope: string
@@ -337,36 +386,33 @@ export function PerformanceAnalytics({
             )}
           </p>
         )}
+        {data.source === 'usage_logs' && (
+          <p role='status' className='text-muted-foreground text-xs'>
+            {t(
+              'Channel statistics use recorded usage logs. Missing historical measurements are omitted.'
+            )}
+            {data.truncated && (
+              <span className='text-destructive ml-1'>
+                {t(
+                  'The channel log scan reached its limit; these results are partial. Narrow the time range.'
+                )}
+              </span>
+            )}
+          </p>
+        )}
         <SummaryCards
           summary={data.summary}
           locale={locale}
           errorsUnavailable={data.errors_unavailable}
         />
-        <div className='grid gap-3 xl:grid-cols-2'>
-          <MetricChart
-            title={t('Request body size')}
-            description={t('Application body bytes before upstream conversion')}
-            metric='request_body_avg_bytes'
-            points={data.series}
-            formatTime={formatTime}
-            formatValue={(value) => formatRequestBodySize(value, locale)}
-            formatTooltipValue={(value) =>
-              `${formatRequestBodySize(value, locale)} (${formatNumber(value, locale)} B)`
-            }
-          />
-          <MetricChart
-            title={t('Cache Write')}
-            description={t('Upstream cache write tokens')}
-            metric='cache_write_tokens'
-            points={data.series}
-            formatTime={formatTime}
-            formatValue={(value) => formatNumber(value, locale)}
-          />
-        </div>
-        <div className='grid gap-3 xl:grid-cols-2'>
+        <div
+          role='group'
+          aria-label={t('Latency and cache performance')}
+          className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'
+        >
           <LatencyChart
             title='TTFT'
-            description={t('Time to first streamed response')}
+            description={t('First response time')}
             metric='ttft'
             summary={data.summary.ttft}
             points={data.series}
@@ -380,16 +426,47 @@ export function PerformanceAnalytics({
             points={data.series}
             formatTime={formatTime}
           />
-        </div>
-        <div className='grid gap-3 xl:grid-cols-2'>
           <MetricChart
             title={t('Cache hit rate')}
             description={t('Share of input tokens served from cache')}
             metric='cache_hit_rate'
+            summary={data.summary}
             points={data.series}
             formatTime={formatTime}
             formatValue={formatUptimePct}
           />
+        </div>
+        <div
+          role='group'
+          aria-label={t('Request payload and cache writes')}
+          className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'
+        >
+          <MetricChart
+            title={t('Request body size')}
+            metric='request_body_avg_bytes'
+            summary={data.summary}
+            points={data.series}
+            formatTime={formatTime}
+            formatValue={(value) => formatRequestBodySize(value, locale)}
+            formatTooltipValue={(value) =>
+              `${formatRequestBodySize(value, locale)} (${formatNumber(value, locale)} B)`
+            }
+          />
+          <MetricChart
+            title={t('Cache Write')}
+            description={t('Upstream cache write tokens')}
+            metric='cache_write_tokens'
+            summary={data.summary}
+            points={data.series}
+            formatTime={formatTime}
+            formatValue={(value) => formatNumber(value, locale)}
+          />
+        </div>
+        <div
+          role='group'
+          aria-label={t('Throughput and errors')}
+          className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'
+        >
           <MetricChart
             title='RPM'
             description={t('Requests completed per minute')}
@@ -399,7 +476,6 @@ export function PerformanceAnalytics({
             formatValue={(value) => formatThroughput(value, locale)}
           />
           <MetricChart
-            className='xl:col-span-2'
             title='TPM'
             description={t('Input and output tokens processed per minute')}
             metric='tpm'
@@ -409,9 +485,8 @@ export function PerformanceAnalytics({
           />
           {!data.errors_unavailable && (
             <MetricChart
-              className='xl:col-span-2'
               title='Errors'
-              description={t('Errors recorded for this user and model')}
+              description={t('Errors recorded for the selected filters')}
               metric='error_count'
               points={data.series}
               formatTime={formatTime}
@@ -419,14 +494,15 @@ export function PerformanceAnalytics({
             />
           )}
         </div>
-        {!data.errors_unavailable && (!isAdmin || userId !== undefined) && (
-          <UserErrorSummary
-            groups={data.error_groups ?? []}
-            scannedLogs={data.scanned_logs}
-            truncated={data.truncated}
-            locale={locale}
-          />
-        )}
+        {!data.errors_unavailable &&
+          (!isAdmin || userId !== undefined || channelId !== undefined) && (
+            <UserErrorSummary
+              groups={data.error_groups ?? []}
+              scannedLogs={data.scanned_logs}
+              truncated={data.truncated}
+              locale={locale}
+            />
+          )}
       </>
     )
   }
@@ -443,8 +519,11 @@ export function PerformanceAnalytics({
     <PerformanceChartContext
       value={{
         group: `${chartGroup}-${resultScope}`,
-        start: data?.effective_start_timestamp ?? rangeEnd - rangeSeconds,
-        end: data?.effective_end_timestamp ?? rangeEnd,
+        start:
+          data?.effective_start_timestamp ??
+          customRange?.start ??
+          rangeEnd - rangeSeconds,
+        end: data?.effective_end_timestamp ?? customRange?.end ?? rangeEnd,
         reset: chartReset,
         onExplore: pauseLive,
       }}
@@ -474,7 +553,7 @@ export function PerformanceAnalytics({
               </span>
             </CardDescription>
           </CardHeader>
-          <CardContent className='flex flex-wrap items-end gap-2'>
+          <CardContent className='grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'>
             <FilterSelect
               label={t('Model')}
               value={modelName || null}
@@ -520,15 +599,35 @@ export function PerformanceAnalytics({
                 })),
               ]}
             />
-            <div className='space-y-1'>
+            {isAdmin && (
+              <FilterSelect
+                label={t('Channel')}
+                value={channelId ? String(channelId) : ALL_VALUE}
+                placeholder={t('All channels')}
+                onValueChange={(value) =>
+                  setChannelId(
+                    value && value !== ALL_VALUE ? Number(value) : undefined
+                  )
+                }
+                options={[
+                  { value: ALL_VALUE, label: t('All channels') },
+                  ...channels.map((channel) => ({
+                    value: String(channel.id),
+                    label: `${channel.name} (#${channel.id})`,
+                  })),
+                ]}
+              />
+            )}
+            <div className='min-w-0 space-y-1 sm:col-span-2 lg:col-span-3 xl:col-span-2'>
               <span className='text-muted-foreground block text-xs font-medium'>
                 {t('Time range')}
               </span>
               <Tabs
-                value={String(rangeSeconds)}
+                value={customRange ? 'custom' : String(rangeSeconds)}
+                className='max-w-full'
                 onValueChange={(value) => handleRangeChange(Number(value))}
               >
-                <TabsList>
+                <TabsList className='max-w-full flex-wrap group-data-horizontal/tabs:h-auto group-data-horizontal/tabs:min-h-8'>
                   {(standalone
                     ? USER_MONITORING_RANGE_OPTIONS
                     : RANGE_OPTIONS
@@ -536,7 +635,7 @@ export function PerformanceAnalytics({
                     <TabsTrigger
                       key={option.seconds}
                       value={String(option.seconds)}
-                      className='px-2.5 text-xs'
+                      className='h-6 px-2.5 text-xs'
                     >
                       {t(option.label)}
                     </TabsTrigger>
@@ -544,63 +643,48 @@ export function PerformanceAnalytics({
                 </TabsList>
               </Tabs>
             </div>
+            <div className='min-w-0 space-y-1'>
+              <span className='text-muted-foreground block text-xs font-medium'>
+                {t('Date Range')}
+              </span>
+              <CompactDateTimeRangePicker
+                start={
+                  customRange ? new Date(customRange.start * 1000) : undefined
+                }
+                end={customRange ? new Date(customRange.end * 1000) : undefined}
+                onChange={handleCustomRangeChange}
+                className='h-8 min-w-0 text-xs'
+              />
+            </div>
             <Button
               variant='outline'
               size='sm'
+              className='h-8 justify-self-start'
               onClick={handleRefresh}
               disabled={fetching}
             >
               <RefreshCw className={fetching ? 'animate-spin' : undefined} />
               {t('Refresh')}
             </Button>
+            {rangeError && (
+              <p
+                role='alert'
+                className='text-destructive text-sm sm:col-span-2 lg:col-span-3 xl:col-span-4'
+              >
+                {t('Select a valid time range of up to 30 days.')}
+              </p>
+            )}
           </CardContent>
         </Card>
 
-        <div className='bg-card flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border px-3 py-2 text-xs'>
-          <span className='flex items-center gap-2 font-medium' role='status'>
-            <Radio
-              className={
-                live
-                  ? 'size-3.5 text-emerald-500'
-                  : 'text-muted-foreground size-3.5'
-              }
-            />
-            {live
-              ? t('Live · every 15 seconds')
-              : t('Paused · exploring history')}
-          </span>
-          <span className='text-muted-foreground flex items-center gap-1.5'>
-            <Link2 className='size-3.5' />
-            {t('Linked crosshair and zoom')}
-          </span>
-          <span className='text-muted-foreground hidden xl:inline'>
-            {t('Drag to pan · Ctrl + scroll to zoom · keyboard + / −')}
-          </span>
-          <div className='ml-auto flex flex-wrap items-center gap-1'>
-            <Button
-              variant='ghost'
-              size='sm'
-              onClick={() => setChartReset((value) => value + 1)}
-            >
-              <RotateCcw />
-              {t('Reset zoom')}
-            </Button>
-            <Button
-              variant='outline'
-              size='sm'
-              onClick={live ? pauseLive : resumeLive}
-            >
-              {live ? <Pause /> : <Play />}
-              {live ? t('Pause live updates') : t('Back to latest')}
-            </Button>
-          </div>
-          {analyticsQuery.dataUpdatedAt > 0 && (
-            <span className='text-muted-foreground w-full sm:w-auto'>
-              {t('Last updated')}:{' '}
-              {formatTime(analyticsQuery.dataUpdatedAt / 1000)}
-            </span>
-          )}
-        </div>
+        <PerformanceChartToolbar
+          live={live}
+          onPause={pauseLive}
+          onResume={resumeLive}
+          onReset={() => setChartReset((value) => value + 1)}
+          updatedAt={analyticsQuery.dataUpdatedAt}
+          formatTime={formatTime}
+        />
         {analyticsContent}
       </div>
     </PerformanceChartContext>
@@ -616,7 +700,7 @@ function FilterSelect(props: {
   onValueChange: (value: string | null) => void
 }) {
   return (
-    <label className='min-w-40 flex-1 space-y-1 sm:max-w-64'>
+    <label className='min-w-0 space-y-1'>
       <span className='text-muted-foreground block text-xs font-medium'>
         {props.label}
       </span>
@@ -775,7 +859,7 @@ function UserErrorSummary({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{t('User error breakdown')}</CardTitle>
+        <CardTitle>{t('Error breakdown')}</CardTitle>
         <CardDescription>
           {t('Errors grouped by code, type, and HTTP status.')}
           {scannedLogs > 0 &&
@@ -848,29 +932,26 @@ function LatencyChart(props: {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>{t(props.title)}</CardTitle>
-        <CardDescription>{props.description}</CardDescription>
-      </CardHeader>
+      <PerformanceChartHeader
+        title={t(props.title)}
+        description={props.description}
+        formatValue={formatValue}
+        statistics={[
+          ['AVG', props.summary.avg_ms],
+          ['P50', props.summary.p50_ms],
+          ['P90', props.summary.p90_ms],
+          ['P95', props.summary.p95_ms],
+          ['P99', props.summary.p99_ms],
+          ['MAX', props.summary.max_ms],
+        ].map(([label, value]) => ({
+          label: String(label),
+          value:
+            props.summary.sample_count > 0 && typeof value === 'number'
+              ? value
+              : undefined,
+        }))}
+      />
       <CardContent>
-        <div className='mb-3 grid grid-cols-2 gap-2 sm:grid-cols-5'>
-          {[
-            ['P50', props.summary.p50_ms],
-            ['P90', props.summary.p90_ms],
-            ['P95', props.summary.p95_ms],
-            ['P99', props.summary.p99_ms],
-            ['MAX', props.summary.max_ms],
-          ].map(([label, value]) => (
-            <div key={String(label)} className='bg-muted/50 rounded-lg p-2'>
-              <div className='text-muted-foreground text-xs'>{label}</div>
-              <div className='font-mono text-sm font-semibold tabular-nums'>
-                {typeof value === 'number' && props.summary.sample_count > 0
-                  ? formatValue(value)
-                  : '—'}
-              </div>
-            </div>
-          ))}
-        </div>
         {series.length > 0 ? (
           <PerformanceChart
             title={t(props.title)}
@@ -885,7 +966,7 @@ function LatencyChart(props: {
             }
           />
         ) : (
-          <div className='text-muted-foreground flex h-72 items-center justify-center gap-2 text-sm'>
+          <div className='text-muted-foreground flex h-56 items-center justify-center gap-2 text-sm'>
             <Clock3 className='size-4' />
             {t('No performance data available')}
           </div>
@@ -897,8 +978,9 @@ function LatencyChart(props: {
 
 function MetricChart(props: {
   className?: string
+  summary?: PerformanceAnalyticsSummary
   title: string
-  description: string
+  description?: string
   metric: PerformanceMetric
   points: PerformanceAnalyticsPoint[]
   formatTime: (ts: number) => string
@@ -916,12 +998,27 @@ function MetricChart(props: {
     [props.formatTime, props.metric, props.points]
   )
 
+  const statistics = useMemo(() => {
+    if (!props.summary) return undefined
+    const summarySeries = buildPerformanceMetricSeries(
+      [{ ...props.summary, ts: 0 }],
+      props.metric,
+      String
+    )
+    return PERFORMANCE_CURVE_LABELS.map((label) => ({
+      label,
+      value: summarySeries.find((datum) => datum.percentile === label)?.value,
+    }))
+  }, [props.metric, props.summary])
+
   return (
     <Card className={props.className}>
-      <CardHeader>
-        <CardTitle>{t(props.title)}</CardTitle>
-        <CardDescription>{props.description}</CardDescription>
-      </CardHeader>
+      <PerformanceChartHeader
+        title={t(props.title)}
+        description={props.description}
+        formatValue={props.formatValue}
+        statistics={statistics}
+      />
       <CardContent>
         {series.length > 0 ? (
           <PerformanceChart
@@ -933,7 +1030,7 @@ function MetricChart(props: {
             formatTooltipValue={props.formatTooltipValue}
           />
         ) : (
-          <div className='text-muted-foreground flex h-72 items-center justify-center gap-2 text-sm'>
+          <div className='text-muted-foreground flex h-56 items-center justify-center gap-2 text-sm'>
             <Activity className='size-4' />
             {t('No performance data available')}
           </div>
@@ -953,15 +1050,19 @@ function PerformanceAnalyticsSkeleton() {
           )
         )}
       </div>
-      <div className='grid gap-3 xl:grid-cols-2'>
-        <Skeleton className='h-[430px] rounded-xl' />
-        <Skeleton className='h-[430px] rounded-xl' />
-      </div>
-      <div className='grid gap-3 xl:grid-cols-2'>
-        <Skeleton className='h-[390px] rounded-xl' />
-        <Skeleton className='h-[390px] rounded-xl' />
-        <Skeleton className='h-[390px] rounded-xl xl:col-span-2' />
-      </div>
+      {(
+        [
+          ['latency', 3],
+          ['request', 2],
+          ['traffic', 3],
+        ] as const
+      ).map(([row, count]) => (
+        <div key={row} className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
+          {Array.from({ length: count }, (_, index) => (
+            <Skeleton key={index} className='h-[320px] rounded-xl' />
+          ))}
+        </div>
+      ))}
     </div>
   )
 }

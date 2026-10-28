@@ -127,3 +127,51 @@ func TestChannelAnalyticsAggregatesErrorDimensions(t *testing.T) {
 	assert.Equal(t, int64(1), result.ErrorGroups[0].Count)
 	assert.Equal(t, int64(1), result.Summary.ErrorCount)
 }
+
+func TestChannelAnalyticsPreservesMeasuredAveragesAndFractionalTransportTiming(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	old := model.LOG_DB
+	model.LOG_DB = db
+	t.Cleanup(func() {
+		model.LOG_DB = old
+		sqlDB, err := db.DB()
+		if err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, sample := range []struct {
+		start, end int64
+		acquire    float64
+	}{{1000, 3200, .125}, {4000, 4800, .375}} {
+		payload, err := common.Marshal(map[string]any{
+			"admin_info": map[string]any{
+				"request_timing": common.RequestTimingSnapshot{
+					RequestReceivedAtMs: sample.start, RequestCompletedAtMs: sample.end,
+				},
+				"upstream_transport": []common.UpstreamTransportSnapshot{
+					{ChannelID: 15, AcquireMs: &sample.acquire},
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.NoError(t, db.Create(&model.Log{
+			ChannelId: 15, Type: model.LogTypeConsume,
+			CreatedAt: sample.end / 1000, Other: string(payload),
+		}).Error)
+	}
+	result, err := QueryChannelAnalytics(ChannelAnalyticsQueryParams{Context: context.Background(), ChannelId: 15, StartTs: 1, EndTs: 6, BucketSeconds: 1})
+	require.NoError(t, err)
+	require.NotNil(t, result.Summary.Latency.TotalMs.AvgMs)
+	assert.Equal(t, 1500.0, *result.Summary.Latency.TotalMs.AvgMs)
+	require.NotNil(t, result.Summary.Latency.TotalMs.MaxMs)
+	assert.Equal(t, 2200.0, *result.Summary.Latency.TotalMs.MaxMs)
+	assert.Equal(t, int64(3000), result.Summary.Latency.TotalMs.P90Ms)
+	require.NotNil(t, result.Summary.Latency.AcquireMs.AvgMs)
+	assert.Equal(t, .25, *result.Summary.Latency.AcquireMs.AvgMs)
+	require.NotNil(t, result.Summary.Latency.AcquireMs.MaxMs)
+	assert.Equal(t, .375, *result.Summary.Latency.AcquireMs.MaxMs)
+	assert.Nil(t, result.Summary.Latency.ProviderWaitMs.AvgMs)
+	assert.Nil(t, result.Summary.Latency.ProviderWaitMs.MaxMs)
+}

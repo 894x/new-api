@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 export type PerformancePercentiles = {
+  avg_ms?: number | null
   p50_ms: number
   p90_ms: number
   p95_ms?: number
@@ -63,6 +64,7 @@ export type PerformanceAnalyticsPoint = PerformanceAnalyticsSummary & {
 }
 
 export type PerformanceAnalyticsData = {
+  source?: 'usage_logs'
   errors_unavailable?: boolean
   model_name: string
   scanned_logs: number
@@ -93,6 +95,7 @@ export type PerformanceAnalyticsTokenOption = {
 }
 
 export type PerformanceAnalyticsOptions = {
+  channels?: Array<{ id: number; name: string }>
   models: string[]
   users: PerformanceAnalyticsUserOption[]
   tokens: PerformanceAnalyticsTokenOption[]
@@ -108,7 +111,7 @@ export type PerformanceChartDatum = {
   ts: number
   time: number
   label: string
-  percentile: 'P50' | 'P90' | 'P95' | 'P99' | 'MAX'
+  percentile: 'AVG' | 'P50' | 'P90' | 'P95' | 'P99' | 'MAX'
   value: number
 }
 
@@ -124,10 +127,14 @@ export type PerformanceMetricChartDatum = Omit<
   PerformanceChartDatum,
   'percentile'
 > & {
+  series?: string
   percentile?: PerformanceChartDatum['percentile']
 }
 
 export type ChannelAnalyticsPercentiles = {
+  avg_ms?: number | null
+  p90_ms?: number
+  max_ms?: number | null
   p50_ms: number
   p95_ms: number
   p99_ms: number

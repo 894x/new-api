@@ -1,22 +1,24 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { VChart } from '@visactor/react-vchart'
-import { Activity, RefreshCw } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { RefreshCw } from 'lucide-react'
 import {
   type ReactNode,
   useCallback,
   useEffect,
+  useId,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ErrorState } from '@/components/error-state'
 import { Button } from '@/components/ui/button'
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
+  CardDescription,
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
@@ -27,78 +29,114 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { formatLatency } from '@/features/performance-metrics/lib/format'
-import { toIntlLocale } from '@/i18n/languages'
-import { formatNumber } from '@/lib/format'
-import { useChartTheme } from '@/lib/use-chart-theme'
-import { VCHART_OPTION } from '@/lib/vchart'
+import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
+import { dateToUnixTimestamp } from '@/lib/time'
 
 import { getChannelPerformanceAnalytics, getHTTPTransportMetrics } from './api'
-import { buildPerformanceTimeAxis, formatPerformanceTimestamp } from './lib'
-import { TransportComparison } from './transport-comparison'
-import type {
-  ChannelAnalyticsData,
-  ChannelAnalyticsPoint,
-  HTTPTransportMetric,
-} from './types'
+import type { TransportHistoryPoint } from './channel-charts'
+import { ChannelDiagnosticsContent } from './channel-diagnostics-content'
+import { PerformanceChartContext } from './chart-context'
+import { PerformanceChartToolbar } from './chart-toolbar'
+import { formatPerformanceTimestamp } from './lib'
+import type { ChannelAnalyticsData } from './types'
 
 const CHANNEL_RANGE_OPTIONS = [
-  { seconds: 10 * 60, label: '10 Minutes', bucket: 10 },
-  { seconds: 60 * 60, label: '1 Hour', bucket: 60 },
-  { seconds: 6 * 60 * 60, label: '6 Hours', bucket: 300 },
-  { seconds: 24 * 60 * 60, label: '1 Day', bucket: 300 },
+  { seconds: 600, label: '10 Minutes', bucket: 10 },
+  { seconds: 3600, label: '1 Hour', bucket: 60 },
+  { seconds: 10800, label: '3 Hours', bucket: 300 },
+  { seconds: 21600, label: '6 Hours', bucket: 300 },
+  { seconds: 43200, label: '12 Hours', bucket: 300 },
+  { seconds: 86400, label: '1 Day', bucket: 300 },
 ] as const
 const ALL_CHANNELS_VALUE = '__all_channels__'
-
 export type ChannelMonitoringOption = {
   id: number
   name: string
   status: number
 }
-
 type ChannelRangeOption = (typeof CHANNEL_RANGE_OPTIONS)[number]
 
-export function ChannelPerformanceDiagnostics({
-  formatTime,
-  channelOptions,
-}: {
+export function ChannelPerformanceDiagnostics(props: {
   formatTime?: (ts: number) => string
   channelOptions?: ChannelMonitoringOption[]
 }) {
   const { t, i18n } = useTranslation()
+  const channelOptions = props.channelOptions
+  const formatTime = props.formatTime
   const [channelId, setChannelId] = useState<number>()
   const [range, setRange] = useState<ChannelRangeOption>(
     CHANNEL_RANGE_OPTIONS[0]
   )
   const [rangeEnd, setRangeEnd] = useState(() => Math.floor(Date.now() / 1000))
+  const [customRange, setCustomRange] = useState<{
+    start: number
+    end: number
+  }>()
+  const [rangeError, setRangeError] = useState(false)
+  const [live, setLive] = useState(true)
+  const [reset, setReset] = useState(0)
+  const requestEnd = useRef(rangeEnd)
+  const group = useId()
+  const pause = useCallback(() => setLive(false), [])
   const queryParams = useMemo(
     () => ({
       ...(channelId ? { channel_id: channelId } : {}),
-      start_timestamp: rangeEnd - range.seconds,
-      end_timestamp: rangeEnd,
-      bucket_seconds: range.bucket,
+      start_timestamp: customRange?.start ?? rangeEnd - range.seconds,
+      end_timestamp: customRange?.end ?? rangeEnd,
+      bucket_seconds: customRange
+        ? Math.max(
+            10,
+            Math.min(
+              300,
+              Math.ceil((customRange.end - customRange.start) / 120)
+            )
+          )
+        : range.bucket,
     }),
-    [channelId, range, rangeEnd]
+    [channelId, customRange, range, rangeEnd]
   )
   const query = useQuery({
     queryKey: ['performance-analytics', 'channel', queryParams],
-    queryFn: ({ signal }) =>
-      getChannelPerformanceAnalytics(queryParams, signal),
+    queryFn: ({ signal }) => {
+      if (customRange) {
+        return getChannelPerformanceAnalytics(queryParams, signal)
+      }
+      const end = live ? Math.floor(Date.now() / 1000) : requestEnd.current
+      requestEnd.current = end
+      return getChannelPerformanceAnalytics(
+        {
+          ...queryParams,
+          start_timestamp: end - range.seconds,
+          end_timestamp: end,
+        },
+        signal
+      )
+    },
     select: (response) => response.data,
-    placeholderData: keepPreviousData,
-    staleTime: 15_000,
+    refetchInterval: live ? 15000 : false,
+    refetchOnWindowFocus: live,
+    refetchOnReconnect: live,
+    staleTime: 15000,
     retry: false,
     meta: { errorToast: false, redirectOnServerError: false },
   })
+  const scope = JSON.stringify([
+    channelId,
+    range.seconds,
+    customRange?.start,
+    customRange?.end,
+  ])
+  const [lastResult, setLastResult] = useState<{
+    scope: string
+    data: ChannelAnalyticsData
+  }>()
+  useEffect(() => {
+    if (query.data) setLastResult({ scope, data: query.data })
+  }, [query.data, scope])
+  const data =
+    query.data ?? (lastResult?.scope === scope ? lastResult.data : undefined)
   useEffect(() => {
     if (
       channelOptions &&
@@ -109,626 +147,285 @@ export function ChannelPerformanceDiagnostics({
     }
   }, [channelId, channelOptions])
   const transportQuery = useQuery({
-    queryKey: ['performance-analytics', 'transport'],
+    queryKey: ['performance-analytics', 'transport', channelId],
     queryFn: ({ signal }) => getHTTPTransportMetrics(signal),
     select: (response) => response.data,
-    refetchInterval: 15_000,
-    staleTime: 5_000,
+    refetchInterval: live ? 15000 : false,
+    refetchOnWindowFocus: live,
+    refetchOnReconnect: live,
+    staleTime: 5000,
     retry: false,
     meta: { errorToast: false, redirectOnServerError: false },
   })
-  const [transportHistory, setTransportHistory] = useState<
-    Array<{ ts: number; connections: number; activeRequests: number }>
-  >([])
+  const [history, setHistory] = useState<{
+    channelId?: number
+    points: TransportHistoryPoint[]
+  }>({ points: [] })
   useEffect(() => {
     const metrics = transportQuery.data
     if (!metrics) return
-    const activeRequests = metrics.reduce((total, metric) => {
-      if (!channelId) return total + metric.active_requests
-      return (
-        total +
-        Object.entries(metric.active_by_channel ?? {}).reduce(
-          (channelTotal, [id, active]) =>
-            channelTotal + (Number(id) === channelId ? active : 0),
-          0
-        )
-      )
-    }, 0)
-    setTransportHistory((previous) =>
-      [
-        ...previous,
-        {
-          ts: Math.floor(Date.now() / 1000),
-          connections: metrics.reduce(
-            (total, metric) => total + metric.connections,
-            0
-          ),
-          activeRequests,
-        },
-      ].slice(-40)
+    const ts = Math.floor(Date.now() / 1000)
+    const connections = metrics.reduce(
+      (sum, metric) => sum + metric.connections,
+      0
     )
+    const activeRequests = metrics.reduce(
+      (sum, metric) =>
+        sum +
+        (channelId
+          ? (metric.active_by_channel?.[String(channelId)] ?? 0)
+          : metric.active_requests),
+      0
+    )
+    setHistory((previous) => ({
+      channelId,
+      points: [
+        ...(previous.channelId === channelId
+          ? previous.points.filter((point) => point.ts !== ts)
+          : []),
+        { ts, connections, activeRequests },
+      ].slice(-40),
+    }))
   }, [channelId, transportQuery.data, transportQuery.dataUpdatedAt])
-  const data = query.data
   const time = useCallback(
     (ts: number) =>
       formatTime?.(ts) ??
       formatPerformanceTimestamp(ts, i18n.resolvedLanguage || i18n.language),
     [formatTime, i18n.language, i18n.resolvedLanguage]
   )
-
   const updateChannel = useCallback((value: string | null) => {
+    const parsed = Number(value)
     setChannelId(
-      value && value !== ALL_CHANNELS_VALUE ? Number(value) : undefined
+      value &&
+        value !== ALL_CHANNELS_VALUE &&
+        Number.isInteger(parsed) &&
+        parsed > 0
+        ? parsed
+        : undefined
     )
-    setTransportHistory([])
-    setRangeEnd(Math.floor(Date.now() / 1000))
   }, [])
-
   const changeRange = useCallback((value: string) => {
     const next = CHANNEL_RANGE_OPTIONS.find(
       (option) => String(option.seconds) === value
     )
-    if (next) {
-      setRange(next)
-      setRangeEnd(Math.floor(Date.now() / 1000))
-    }
+    if (!next) return
+    setRange(next)
+    setCustomRange(undefined)
+    setRangeError(false)
+    setLive(true)
+    setReset((value) => value + 1)
+    const end = Math.floor(Date.now() / 1000)
+    requestEnd.current = end
+    setRangeEnd(end)
   }, [])
-
+  const changeCustomRange = (value: { start?: Date; end?: Date }) => {
+    const start = value.start ? dateToUnixTimestamp(value.start) : Number.NaN
+    const end = value.end ? dateToUnixTimestamp(value.end) : Number.NaN
+    if (
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      start <= 0 ||
+      end <= start ||
+      end - start > 86400
+    ) {
+      setRangeError(true)
+      return
+    }
+    setCustomRange({ start, end })
+    setRangeError(false)
+    setLive(false)
+    setReset((value) => value + 1)
+  }
+  const refresh = () => {
+    void transportQuery.refetch()
+    if (customRange) {
+      void query.refetch()
+      return
+    }
+    const end = Math.floor(Date.now() / 1000)
+    requestEnd.current = end
+    setRangeEnd(end)
+    if (end === rangeEnd) void query.refetch()
+  }
+  const resume = () => {
+    changeRange(String(range.seconds))
+    if (!customRange) refresh()
+  }
   let diagnosticsContent: ReactNode
-  if (query.isError) {
+  if (!data && query.isLoading) {
     diagnosticsContent = (
-      <Card>
-        <CardContent className='text-muted-foreground flex min-h-32 items-center justify-center text-sm'>
-          <Activity className='mr-2 size-4' />
-          {t('Failed to load performance data')}
-        </CardContent>
-      </Card>
+      <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
+        {Array.from({ length: 12 }, (_, index) => (
+          <Skeleton key={index} className='h-80 rounded-xl' />
+        ))}
+      </div>
+    )
+  } else if (!data && query.isError) {
+    diagnosticsContent = (
+      <ErrorState
+        title={t('Failed to load performance data')}
+        onRetry={refresh}
+      />
     )
   } else if (data) {
     diagnosticsContent = (
-      <ChannelDiagnosticsContent
-        data={data}
-        formatTime={time}
-        transport={transportQuery.data ?? []}
-        transportHistory={transportHistory}
-      />
-    )
-  } else {
-    diagnosticsContent = (
-      <Card>
-        <CardContent className='text-muted-foreground flex min-h-32 items-center justify-center text-sm'>
-          {t('No performance data available')}
-        </CardContent>
-      </Card>
-    )
-  }
-
-  return (
-    <div className='mt-4 space-y-3'>
-      <Card size='sm'>
-        <CardHeader>
-          <CardTitle>{t('Channel transport diagnostics')}</CardTitle>
-          <CardDescription>
+      <>
+        {query.isError && (
+          <p role='status' className='text-destructive text-sm'>
             {t(
-              'Shows active request concurrency, request-stage latency curves, and p50/p95/p99 statistics from admin timing data.'
+              'Performance data could not be refreshed. Showing the last result.'
             )}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className='flex flex-wrap items-end gap-2'>
-          {channelOptions ? (
-            <label className='w-56 space-y-1'>
-              <span className='text-muted-foreground block text-xs font-medium'>
-                {t('Channel')}
-              </span>
-              <Select
-                value={channelId ? String(channelId) : ALL_CHANNELS_VALUE}
-                onValueChange={updateChannel}
-              >
-                <SelectTrigger className='w-full'>
-                  <SelectValue placeholder={t('All channels')} />
-                </SelectTrigger>
-                <SelectContent align='start'>
-                  <SelectGroup>
-                    <SelectItem value={ALL_CHANNELS_VALUE}>
-                      {t('All channels')}
-                    </SelectItem>
-                    {channelOptions.map((channel) => (
-                      <SelectItem key={channel.id} value={String(channel.id)}>
-                        {channel.name} (#{channel.id})
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </label>
-          ) : (
-            <label className='w-36 space-y-1'>
-              <span className='text-muted-foreground block text-xs font-medium'>
-                {t('Channel ID')}
-              </span>
-              <Input
-                inputMode='numeric'
-                placeholder={t('All channels')}
-                value={channelId ? String(channelId) : ''}
-                onChange={(event) => {
-                  const parsed = Number.parseInt(event.target.value, 10)
-                  setChannelId(
-                    Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
-                  )
-                }}
-              />
-            </label>
-          )}
-          <div className='space-y-1'>
-            <span className='text-muted-foreground block text-xs font-medium'>
-              {t('Time range')}
-            </span>
-            <Tabs value={String(range.seconds)} onValueChange={changeRange}>
-              <TabsList>
-                {CHANNEL_RANGE_OPTIONS.map((option) => (
-                  <TabsTrigger
-                    key={option.seconds}
-                    value={String(option.seconds)}
-                    className='px-2.5 text-xs'
-                  >
-                    {t(option.label)}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
-          </div>
-          <Button
-            variant='outline'
-            size='sm'
-            onClick={() => {
-              setRangeEnd(Math.floor(Date.now() / 1000))
-            }}
-            disabled={query.isFetching}
-          >
-            <RefreshCw
-              className={query.isFetching ? 'animate-spin' : undefined}
-            />
-            {t('Refresh')}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {diagnosticsContent}
-    </div>
-  )
-}
-
-function ChannelDiagnosticsContent({
-  data,
-  formatTime,
-  transport,
-  transportHistory,
-}: {
-  data: ChannelAnalyticsData
-  formatTime: (ts: number) => string
-  transport: HTTPTransportMetric[]
-  transportHistory: Array<{
-    ts: number
-    connections: number
-    activeRequests: number
-  }>
-}) {
-  const { t, i18n } = useTranslation()
-  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
-  const summary = data.summary
-  const cards = [
-    [t('Requests'), formatNumber(summary.request_count, locale)],
-    [t('Errors'), formatNumber(summary.error_count, locale)],
-    [t('Average concurrency'), summary.active_concurrency.average.toFixed(2)],
-    [
-      t('Peak concurrency'),
-      formatNumber(summary.active_concurrency.maximum, locale),
-    ],
-    [t('Total p50'), formatLatency(summary.latency.total_ms.p50_ms)],
-    [t('Total p95'), formatLatency(summary.latency.total_ms.p95_ms)],
-    [t('Total p99'), formatLatency(summary.latency.total_ms.p99_ms)],
-  ]
-
-  return (
-    <>
-      <p className='text-muted-foreground text-xs'>
-        {t(
-          'Historical concurrency is reconstructed from completed log records; unfinished requests and truncated scans are not included. Percentiles are approximate histogram upper bounds.'
+          </p>
         )}
-      </p>
-      {data.truncated && (
-        <p role='alert' className='text-destructive text-sm'>
-          {t(
-            'Scan limit reached. These are partial statistics; select a shorter range or one channel.'
-          )}
-        </p>
-      )}
-      <div className='grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7'>
-        {cards.map(([label, value]) => (
-          <Card key={label} size='sm'>
-            <CardContent>
-              <div className='text-muted-foreground text-xs font-medium'>
-                {label}
-              </div>
-              <div className='mt-1 text-xl font-semibold tabular-nums'>
-                {value}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-      <ChannelErrorSummary groups={data.error_groups} locale={locale} />
-      <TransportPoolTable metrics={transport} />
-      <TransportHistoryChart
-        points={transportHistory}
-        formatTime={formatTime}
-      />
-      <TransportComparison groups={data.transport_groups ?? []} />
-      <div className='grid gap-3 xl:grid-cols-2'>
-        <ChannelConcurrencyChart points={data.series} formatTime={formatTime} />
-        <ChannelErrorChart points={data.series} formatTime={formatTime} />
-        <ChannelLatencyChart
-          title={t('Connection acquisition and write time')}
-          points={data.series}
-          metric='acquire_ms'
-          secondaryMetric='write_ms'
-          formatTime={formatTime}
-        />
-        <ChannelLatencyChart
-          title={t('Total request latency')}
-          points={data.series}
-          metric='total_ms'
-          formatTime={formatTime}
-        />
-        <ChannelLatencyChart
-          title={t('Upload and provider wait')}
-          points={data.series}
-          metric='upload_ms'
-          secondaryMetric='provider_wait_ms'
-          formatTime={formatTime}
-        />
-      </div>
-    </>
-  )
-}
-
-function ChannelErrorSummary({
-  groups,
-  locale,
-}: {
-  groups: ChannelAnalyticsData['error_groups']
-  locale?: Intl.LocalesArgument
-}) {
-  const { t } = useTranslation()
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('Error breakdown')}</CardTitle>
-        <CardDescription>
-          {t('Aggregated by error code, error type, and HTTP status.')}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {groups.length === 0 ? (
-          <div className='text-muted-foreground py-6 text-center text-sm'>
-            {t('No channel errors in this time range')}
-          </div>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('Code')}</TableHead>
-                <TableHead>{t('Type')}</TableHead>
-                <TableHead>{t('Status Code')}</TableHead>
-                <TableHead className='text-right'>{t('Count')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {groups.map((group) => (
-                <TableRow
-                  key={`${group.error_code}-${group.error_type}-${group.status_code}`}
-                >
-                  <TableCell className='font-mono'>
-                    {group.error_code}
-                  </TableCell>
-                  <TableCell>{group.error_type}</TableCell>
-                  <TableCell>{group.status_code || '—'}</TableCell>
-                  <TableCell className='text-right'>
-                    {formatNumber(group.count, locale)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+        {transportQuery.isError && (
+          <p role='status' className='text-muted-foreground text-sm'>
+            {t(
+              'Live transport data could not be refreshed. Showing the last sample.'
+            )}
+          </p>
         )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function ChannelErrorChart({
-  points,
-  formatTime,
-}: {
-  points: ChannelAnalyticsPoint[]
-  formatTime: (ts: number) => string
-}) {
-  const { t } = useTranslation()
-  const chart = useChannelChartTheme()
-  const values = points.map((point) => ({
-    time: point.ts,
-    label: formatTime(point.ts),
-    metric: t('Errors'),
-    value: point.error_count,
-  }))
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('Errors over time')}</CardTitle>
-        <CardDescription>
-          {t('Error count by completed request bucket.')}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className='h-80'>
-        <VChart
-          key={`channel-errors-${chart.resolvedTheme}`}
-          spec={lineSpec(values, chart, formatTime, true)}
-          option={VCHART_OPTION}
+        <ChannelDiagnosticsContent
+          data={data}
+          formatTime={time}
+          transport={transportQuery.data ?? []}
+          transportHistory={
+            history.channelId === channelId ? history.points : []
+          }
         />
-      </CardContent>
-    </Card>
-  )
-}
-
-function TransportHistoryChart({
-  points,
-  formatTime,
-}: {
-  points: Array<{ ts: number; connections: number; activeRequests: number }>
-  formatTime: (ts: number) => string
-}) {
-  const { t } = useTranslation()
-  const chart = useChannelChartTheme()
-  const values = points.flatMap((point) => [
-    {
-      time: point.ts,
-      label: formatTime(point.ts),
-      metric: t('Shared pool connections'),
-      value: point.connections,
-    },
-    {
-      time: point.ts,
-      label: formatTime(point.ts),
-      metric: t('Active requests'),
-      value: point.activeRequests,
-    },
-  ])
-  if (points.length < 2) return null
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('Live transport curve')}</CardTitle>
-        <CardDescription>
-          {t(
-            'Live curves are browser-session samples. Connections cover all shared pools; active requests follow the selected channel and include streaming response lifetime.'
-          )}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className='h-72'>
-        <VChart
-          key={`transport-history-${chart.resolvedTheme}`}
-          spec={lineSpec(values, chart, formatTime, true)}
-          option={VCHART_OPTION}
-        />
-      </CardContent>
-    </Card>
-  )
-}
-
-function TransportPoolTable({ metrics }: { metrics: HTTPTransportMetric[] }) {
-  const { t } = useTranslation()
-  if (metrics.length === 0) return null
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('Live HTTP transport pools')}</CardTitle>
-        <CardDescription>
-          {t(
-            'Connections are reported at shared pool/shard scope; active requests are attributed to channels.'
-          )}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className='overflow-x-auto'>
-        <table className='w-full min-w-[640px] text-sm'>
-          <thead className='text-muted-foreground text-left text-xs'>
-            <tr>
-              <th className='pr-4 pb-2'>{t('Pool')}</th>
-              <th className='pr-4 pb-2'>{t('Protocol')}</th>
-              <th className='pr-4 pb-2'>{t('Shard')}</th>
-              <th className='pr-4 pb-2'>{t('Connections')}</th>
-              <th className='pr-4 pb-2'>{t('Active requests')}</th>
-              <th className='pb-2'>{t('Last negotiated')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {metrics.map((metric) => (
-              <tr key={metric.pool_id} className='border-t'>
-                <td className='py-2 pr-4 font-mono'>#{metric.pool_id}</td>
-                <td className='py-2 pr-4'>{metric.protocol}</td>
-                <td className='py-2 pr-4'>
-                  {metric.shard + 1} / {metric.shards}
-                </td>
-                <td className='py-2 pr-4 tabular-nums'>{metric.connections}</td>
-                <td className='py-2 pr-4 tabular-nums'>
-                  {metric.active_requests}
-                </td>
-                <td className='py-2'>{metric.last_protocol || '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </CardContent>
-    </Card>
-  )
-}
-
-function ChannelConcurrencyChart({
-  points,
-  formatTime,
-}: {
-  points: ChannelAnalyticsPoint[]
-  formatTime: (ts: number) => string
-}) {
-  const { t } = useTranslation()
-  const chart = useChannelChartTheme()
-  const values = points.flatMap((point) => [
-    {
-      time: point.ts,
-      label: formatTime(point.ts),
-      metric: t('Average'),
-      value: point.active_concurrency.average,
-    },
-    {
-      time: point.ts,
-      label: formatTime(point.ts),
-      metric: t('Peak'),
-      value: point.active_concurrency.maximum,
-    },
-  ])
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('Active request concurrency')}</CardTitle>
-        <CardDescription>
-          {t(
-            'Historical concurrency is reconstructed from completed log records; unfinished requests and truncated scans are not included. Percentiles are approximate histogram upper bounds.'
-          )}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className='h-80'>
-        <VChart
-          key={`channel-concurrency-${chart.resolvedTheme}`}
-          spec={lineSpec(values, chart, formatTime, true)}
-          option={VCHART_OPTION}
-        />
-      </CardContent>
-    </Card>
-  )
-}
-
-function ChannelLatencyChart({
-  title,
-  points,
-  metric,
-  secondaryMetric,
-  formatTime,
-}: {
-  title: string
-  points: ChannelAnalyticsPoint[]
-  metric: keyof ChannelAnalyticsPoint['latency']
-  secondaryMetric?: keyof ChannelAnalyticsPoint['latency']
-  formatTime: (ts: number) => string
-}) {
-  const chart = useChannelChartTheme()
-  const fields = [metric, secondaryMetric].filter(
-    (field): field is keyof ChannelAnalyticsPoint['latency'] => Boolean(field)
-  )
-  const values = points.flatMap((point) =>
-    fields.flatMap((field) => {
-      const percentiles = point.latency[field]
-      if (!percentiles || percentiles.sample_count === 0) return []
-      return (['p50_ms', 'p95_ms', 'p99_ms'] as const).map((percentile) => ({
-        time: point.ts,
-        label: formatTime(point.ts),
-        metric: `${field}-${percentile.replace('_ms', '').toUpperCase()}`,
-        value: percentiles[percentile],
-      }))
-    })
-  )
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>p50 / p95 / p99</CardDescription>
-      </CardHeader>
-      <CardContent className='h-80'>
-        <VChart
-          key={`${String(metric)}-${String(secondaryMetric)}-${chart.resolvedTheme}`}
-          spec={lineSpec(values, chart, formatTime, false)}
-          option={VCHART_OPTION}
-        />
-      </CardContent>
-    </Card>
-  )
-}
-
-function useChannelChartTheme() {
-  const { resolvedTheme } = useChartTheme()
-  const chartTextColor =
-    resolvedTheme === 'dark'
-      ? 'rgba(255, 255, 255, 0.68)'
-      : 'rgba(15, 23, 42, 0.58)'
-  const chartGridColor =
-    resolvedTheme === 'dark'
-      ? 'rgba(255, 255, 255, 0.12)'
-      : 'rgba(15, 23, 42, 0.12)'
-  return { resolvedTheme, chartTextColor, chartGridColor }
-}
-
-function lineSpec(
-  values: Array<Record<string, string | number>>,
-  chart: ReturnType<typeof useChannelChartTheme>,
-  formatTime: (ts: number) => string,
-  integer: boolean
-) {
-  return {
-    type: 'line' as const,
-    data: [{ id: 'channel-diagnostics', values }],
-    xField: 'time',
-    yField: 'value',
-    seriesField: 'metric',
-    point: { visible: values.length <= 60 },
-    legends: { visible: true, orient: 'top', position: 'end' },
-    axes: [
-      buildPerformanceTimeAxis(
-        formatTime,
-        chart.chartTextColor,
-        values.map((point) => Number(point.time))
-      ),
-      {
-        orient: 'left',
-        label: {
-          formatMethod: (value: number | string) =>
-            integer
-              ? String(Math.round(Number(value)))
-              : formatLatency(Number(value)),
-          style: { fill: chart.chartTextColor, fontSize: 10 },
-        },
-        grid: {
-          visible: true,
-          style: { lineDash: [3, 3], stroke: chart.chartGridColor },
-        },
-      },
-    ],
-    tooltip: {
-      dimension: {
-        title: {
-          value: (datum: Record<string, unknown>) => String(datum?.label ?? ''),
-        },
-        content: [
-          {
-            key: (datum: Record<string, unknown>) =>
-              String(datum?.metric ?? ''),
-            value: (datum: Record<string, unknown>) =>
-              integer
-                ? String(Math.round(Number(datum?.value)))
-                : formatLatency(Number(datum?.value)),
-          },
-        ],
-      },
-    },
-    animationAppear: { duration: 300 },
-    theme: chart.resolvedTheme === 'dark' ? 'dark' : 'light',
-    background: 'transparent',
+      </>
+    )
   }
+  return (
+    <PerformanceChartContext
+      value={{
+        group: `${group}-${scope}`,
+        start: data?.effective_start_timestamp ?? queryParams.start_timestamp,
+        end: data?.effective_end_timestamp ?? queryParams.end_timestamp,
+        reset,
+        onExplore: pause,
+      }}
+    >
+      <div className='space-y-3 sm:space-y-4'>
+        <Card size='sm'>
+          <CardHeader>
+            <CardTitle>{t('Channel transport diagnostics')}</CardTitle>
+            <CardDescription>
+              {t(
+                'Analyze request-stage latency, concurrency, transport pools, and channel errors.'
+              )}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className='grid items-end gap-3 md:grid-cols-2 xl:grid-cols-[minmax(12rem,1fr)_auto_minmax(16rem,1fr)_auto]'>
+            {channelOptions ? (
+              <label className='min-w-0 space-y-1'>
+                <span className='text-muted-foreground block text-xs font-medium'>
+                  {t('Channel')}
+                </span>
+                <Select
+                  value={channelId ? String(channelId) : ALL_CHANNELS_VALUE}
+                  onValueChange={updateChannel}
+                >
+                  <SelectTrigger className='w-full'>
+                    <SelectValue placeholder={t('All channels')}>
+                      {channelId
+                        ? `${channelOptions.find((channel) => channel.id === channelId)?.name ?? ''} (#${channelId})`
+                        : t('All channels')}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent align='start'>
+                    <SelectGroup>
+                      <SelectItem value={ALL_CHANNELS_VALUE}>
+                        {t('All channels')}
+                      </SelectItem>
+                      {channelOptions.map((channel) => (
+                        <SelectItem key={channel.id} value={String(channel.id)}>
+                          {channel.name} (#{channel.id})
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </label>
+            ) : (
+              <label className='min-w-0 space-y-1'>
+                <span className='text-muted-foreground block text-xs font-medium'>
+                  {t('Channel ID')}
+                </span>
+                <Input
+                  inputMode='numeric'
+                  placeholder={t('All channels')}
+                  value={channelId ? String(channelId) : ''}
+                  onChange={(event) => updateChannel(event.target.value)}
+                />
+              </label>
+            )}
+            <div className='space-y-1'>
+              <span className='text-muted-foreground block text-xs font-medium'>
+                {t('Time range')}
+              </span>
+              <Tabs
+                value={customRange ? 'custom' : String(range.seconds)}
+                onValueChange={changeRange}
+              >
+                <TabsList className='max-w-full flex-wrap group-data-horizontal/tabs:h-auto group-data-horizontal/tabs:min-h-8'>
+                  {CHANNEL_RANGE_OPTIONS.map((option) => (
+                    <TabsTrigger
+                      key={option.seconds}
+                      value={String(option.seconds)}
+                      className='h-6 px-2.5 text-xs'
+                    >
+                      {t(option.label)}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            </div>
+            <div className='min-w-0 space-y-1'>
+              <span className='text-muted-foreground block text-xs font-medium'>
+                {t('Date Range')}
+              </span>
+              <CompactDateTimeRangePicker
+                presets={['today']}
+                start={
+                  customRange ? new Date(customRange.start * 1000) : undefined
+                }
+                end={customRange ? new Date(customRange.end * 1000) : undefined}
+                onChange={changeCustomRange}
+                className='h-8 min-w-0 text-xs'
+              />
+            </div>
+            <Button
+              variant='outline'
+              size='sm'
+              className='h-8 justify-self-start'
+              onClick={refresh}
+              disabled={query.isFetching || transportQuery.isFetching}
+            >
+              <RefreshCw
+                className={query.isFetching ? 'animate-spin' : undefined}
+              />
+              {t('Refresh')}
+            </Button>
+            {rangeError && (
+              <p
+                role='alert'
+                className='text-destructive text-sm md:col-span-2 xl:col-span-4'
+              >
+                {t('Select a valid time range of up to 24 hours.')}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+        <PerformanceChartToolbar
+          live={live}
+          onPause={pause}
+          onResume={resume}
+          onReset={() => setReset((value) => value + 1)}
+          updatedAt={query.dataUpdatedAt}
+          formatTime={time}
+        />
+        {diagnosticsContent}
+      </div>
+    </PerformanceChartContext>
+  )
 }

@@ -32,9 +32,14 @@ export function buildPerformanceChartOption(props: {
   formatValue: (value: number) => string
   formatTooltipValue?: (value: number) => string
 }): EChartsCoreOption {
-  const names = props.values.some((point) => point.percentile)
-    ? [...PERFORMANCE_CURVE_LABELS]
-    : [props.title]
+  let names = [props.title]
+  if (props.values.some((point) => point.series)) {
+    names = [
+      ...new Set(props.values.map((point) => point.series ?? props.title)),
+    ]
+  } else if (props.values.some((point) => point.percentile)) {
+    names = [...PERFORMANCE_CURVE_LABELS]
+  }
   const text = props.dark ? '#a1a1aa' : '#64748b'
   const grid = props.dark ? '#ffffff14' : '#0f172a0f'
   const timestamps = [...new Set(props.timestamps)].sort((a, b) => a - b)
@@ -44,7 +49,7 @@ export function buildPerformanceChartOption(props: {
     animationDuration: 350,
     animationDurationUpdate: 300,
     aria: { enabled: true, description: props.title },
-    grid: { top: 42, left: 12, right: 16, bottom: 62, containLabel: true },
+    grid: { top: 42, left: 12, right: 16, bottom: 16, containLabel: true },
     legend: {
       top: 0,
       right: 4,
@@ -113,28 +118,14 @@ export function buildPerformanceChartOption(props: {
         moveOnMouseMove: true,
         preventDefaultMouseMove: false,
       },
-      {
-        id: 'slider',
-        type: 'slider',
-        xAxisIndex: 0,
-        filterMode: 'none',
-        bottom: 4,
-        height: 22,
-        borderColor: 'transparent',
-        brushSelect: false,
-        showDetail: false,
-        textStyle: { color: text },
-        fillerColor: props.dark ? '#3b82f633' : '#3b82f61a',
-        dataBackground: {
-          lineStyle: { color: '#94a3b8' },
-          areaStyle: { color: grid },
-        },
-      },
     ],
     series: names.map((name, index) => {
       const values = new Map(
         props.values
-          .filter((point) => (point.percentile ?? props.title) === name)
+          .filter(
+            (point) =>
+              (point.series ?? point.percentile ?? props.title) === name
+          )
           .map((point) => [point.ts, point.value])
       )
       return {
