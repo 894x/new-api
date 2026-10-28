@@ -63,8 +63,13 @@ import { GroupModelSpecialRatioEditor } from '@/features/system-settings/models/
 import { billingGroupModelRatiosSchema } from '@/features/system-settings/models/lib/group-model-special-ratios'
 import { RateLimitModelRulesEditor } from '@/features/system-settings/request-limits/rate-limit-model-rules-editor'
 import { MAX_REQUEST_RATE_LIMIT } from '@/features/system-settings/request-limits/rate-limit-validation'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  canAccessUserGroupConfig,
+} from '@/lib/admin-permissions'
 import { handleServerError } from '@/lib/handle-server-error'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   createDedicatedUserGroup,
@@ -188,6 +193,15 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const { setCurrentRow, triggerRefresh } = useUsers()
+  const currentUser = useAuthStore((state) => state.auth.user)
+  const canRead = !!user && canAccessUserGroupConfig(currentUser, user.role)
+  const canWrite =
+    !!user &&
+    canAccessUserGroupConfig(
+      currentUser,
+      user.role,
+      ADMIN_PERMISSION_ACTIONS.WRITE
+    )
   const [confirmDedicatedOpen, setConfirmDedicatedOpen] = useState(false)
   const [previewKey, setPreviewKey] = useState('')
   const [routingDirtyRows, setRoutingDirtyRows] = useState<Set<string>>(
@@ -207,9 +221,14 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
     queryKey: ['user-group-config', user?.id],
     queryFn: async () => {
       if (!user) throw new Error('User is required')
+      if (
+        !canAccessUserGroupConfig(useAuthStore.getState().auth.user, user.role)
+      ) {
+        throw new Error(t('No permission to perform this action'))
+      }
       return requireServerSuccess(await getUserGroupConfig(user.id))
     },
-    enabled: open && !!user,
+    enabled: open && canRead,
   })
   const config = query.data?.data
 
@@ -240,6 +259,15 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
   const save = useMutation({
     mutationFn: async (values: FormValues) => {
       if (!user) throw new Error('User is required')
+      if (
+        !canAccessUserGroupConfig(
+          useAuthStore.getState().auth.user,
+          user.role,
+          ADMIN_PERMISSION_ACTIONS.WRITE
+        )
+      ) {
+        throw new Error(t('No permission to perform this action'))
+      }
       if (!config) throw new Error('Configuration is required')
       const result = await updateUserGroupConfig(user.id, {
         group: config.group,
@@ -267,7 +295,13 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
       })
       return requireServerSuccess(result)
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result.data) {
+        queryClient.setQueryData(
+          ['user-group-config', result.data.user_id],
+          result
+        )
+      }
       toast.success(t('Customer group configuration saved'))
       triggerRefresh()
       onOpenChange(false)
@@ -278,6 +312,15 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
   const createDedicated = useMutation({
     mutationFn: async () => {
       if (!user || !config) throw new Error('Configuration is required')
+      if (
+        !canAccessUserGroupConfig(
+          useAuthStore.getState().auth.user,
+          user.role,
+          ADMIN_PERMISSION_ACTIONS.WRITE
+        )
+      ) {
+        throw new Error(t('No permission to perform this action'))
+      }
       return requireServerSuccess(
         await createDedicatedUserGroup(user.id, config.group, config.revision)
       )
@@ -308,6 +351,11 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
       key: string
     }) => {
       if (!user || !config) throw new Error('Configuration is required')
+      if (
+        !canAccessUserGroupConfig(useAuthStore.getState().auth.user, user.role)
+      ) {
+        throw new Error(t('No permission to perform this action'))
+      }
       return requireServerSuccess(
         await previewUserGroupChannels(
           user.id,
@@ -331,6 +379,9 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
       return next
     })
   }
+
+  if (!canRead) return null
+  const editingDisabled = !canWrite || save.isPending
 
   return (
     <>
@@ -372,6 +423,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
             <Form {...form}>
               <form
                 id='user-group-config-form'
+                aria-label={t('Customer group configuration')}
                 className={sideDrawerFormClassName()}
                 onSubmit={form.handleSubmit((values) => save.mutate(values))}
               >
@@ -401,7 +453,9 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                         type='button'
                         variant='outline'
                         disabled={
-                          form.formState.isDirty || createDedicated.isPending
+                          !canWrite ||
+                          form.formState.isDirty ||
+                          createDedicated.isPending
                         }
                         onClick={() => setConfirmDedicatedOpen(true)}
                       >
@@ -448,6 +502,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                                 <FormLabel>{t('Billing group')}</FormLabel>
                                 <FormControl>
                                   <Combobox
+                                    disabled={editingDisabled}
                                     options={groupOptions}
                                     value={field.value || null}
                                     onValueChange={(value) =>
@@ -468,6 +523,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                                 <FormLabel>{t('Ratio')}</FormLabel>
                                 <FormControl>
                                   <Input
+                                    disabled={editingDisabled}
                                     type='number'
                                     min={0}
                                     step={0.0001}
@@ -486,6 +542,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                             variant='ghost'
                             size='icon'
                             aria-label={t('Remove')}
+                            disabled={editingDisabled}
                             onClick={() => discounts.remove(index)}
                           >
                             <Trash2 />
@@ -495,6 +552,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                       <Button
                         type='button'
                         variant='outline'
+                        disabled={editingDisabled}
                         onClick={() =>
                           discounts.append({ targetGroup: '', ratio: 1 })
                         }
@@ -512,12 +570,13 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                         render={({ field }) => (
                           <FormItem>
                             <GroupModelSpecialRatioEditor
+                              key={canWrite ? 'editable' : 'read-only'}
                               value={field.value}
                               groupOptions={groupOptions.map(
                                 (group) => group.value
                               )}
                               onChange={field.onChange}
-                              disabled={save.isPending}
+                              disabled={editingDisabled}
                             />
                             <FormMessage />
                           </FormItem>
@@ -560,6 +619,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                             </div>
                             <FormControl>
                               <Switch
+                                disabled={editingDisabled}
                                 checked={field.value}
                                 onCheckedChange={field.onChange}
                               />
@@ -587,7 +647,10 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                                     type='number'
                                     min={name === 'maxSuccess' ? 1 : 0}
                                     step={1}
-                                    disabled={!form.watch('rateLimitEnabled')}
+                                    disabled={
+                                      editingDisabled ||
+                                      !form.watch('rateLimitEnabled')
+                                    }
                                     {...field}
                                     onChange={(event) =>
                                       field.onChange(Number(event.target.value))
@@ -600,7 +663,11 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                           />
                         ))}
                       </div>
-                      <fieldset disabled={!form.watch('rateLimitEnabled')}>
+                      <fieldset
+                        disabled={
+                          editingDisabled || !form.watch('rateLimitEnabled')
+                        }
+                      >
                         <RateLimitModelRulesEditor />
                       </fieldset>
                     </SideDrawerSection>
@@ -644,7 +711,10 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                                     <Input
                                       {...field}
                                       placeholder='gpt-5'
-                                      disabled={routingDirtyRows.has(item.id)}
+                                      disabled={
+                                        editingDisabled ||
+                                        routingDirtyRows.has(item.id)
+                                      }
                                     />
                                   </FormControl>
                                   <FormMessage />
@@ -657,7 +727,9 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                               size='icon'
                               className='mt-6'
                               aria-label={t('Remove')}
-                              disabled={routingDirtyRows.has(item.id)}
+                              disabled={
+                                editingDisabled || routingDirtyRows.has(item.id)
+                              }
                               onClick={() => channelRules.remove(index)}
                             >
                               <Trash2 />
@@ -674,7 +746,10 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                                     options={groupOptions}
                                     selected={field.value}
                                     onChange={field.onChange}
-                                    disabled={routingDirtyRows.has(item.id)}
+                                    disabled={
+                                      editingDisabled ||
+                                      routingDirtyRows.has(item.id)
+                                    }
                                     allowCreate
                                     placeholder={t('Select channel groups')}
                                   />
@@ -687,6 +762,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                             (channelRulesValue[index]?.modelName ?? '') !==
                               '' && (
                               <UserChannelRoutingRuleEditor
+                                readOnly={!canWrite}
                                 userId={user.id}
                                 model={
                                   channelRulesValue[index]?.modelName ?? ''
@@ -737,7 +813,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                       <Button
                         type='button'
                         variant='outline'
-                        disabled={routingDirtyRows.size > 0}
+                        disabled={editingDisabled || routingDirtyRows.size > 0}
                         onClick={() =>
                           channelRules.append({ modelName: '', groups: [] })
                         }
@@ -778,7 +854,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
             <Button
               type='submit'
               form='user-group-config-form'
-              disabled={!config || save.isPending || routingDirtyRows.size > 0}
+              disabled={editingDisabled || !config || routingDirtyRows.size > 0}
             >
               {save.isPending ? t('Saving...') : t('Save changes')}
             </Button>
@@ -795,6 +871,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
         )}
         confirmText={t('Create dedicated group')}
         isLoading={createDedicated.isPending}
+        disabled={!canWrite}
         handleConfirm={() => createDedicated.mutate()}
       />
     </>

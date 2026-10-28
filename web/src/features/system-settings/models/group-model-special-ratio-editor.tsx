@@ -29,7 +29,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { getEnabledModels } from '@/features/channels/api'
 import { toIntlLocale } from '@/i18n/languages'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   billingGroupModelRatiosSchema,
@@ -60,6 +66,13 @@ export function GroupModelSpecialRatioEditor(props: Props) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const formID = useId()
+  const canReadChannels = useAuthStore((state) =>
+    hasPermission(
+      state.auth.user,
+      ADMIN_PERMISSION_RESOURCES.CHANNEL,
+      ADMIN_PERMISSION_ACTIONS.READ
+    )
+  )
   const [draft, setDraft] = useState<Rule | null>(null)
   const [original, setOriginal] = useState<{
     group: string
@@ -68,7 +81,7 @@ export function GroupModelSpecialRatioEditor(props: Props) {
   const modelsQuery = useQuery({
     queryKey: ['enabled-models'],
     queryFn: async () => requireServerSuccess(await getEnabledModels()),
-    enabled: draft !== null,
+    enabled: draft !== null && canReadChannels,
     staleTime: 60_000,
   })
   const rows = Object.entries(props.value).flatMap(([group, models]) =>

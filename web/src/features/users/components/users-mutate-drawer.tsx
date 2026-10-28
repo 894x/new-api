@@ -67,6 +67,7 @@ import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
   ADMIN_ROLE_KEY,
+  canAccessUserGroupConfig,
   EMPTY_PERMISSION_CATALOG,
   hasPermission,
   normalizeAdminPermissions,
@@ -119,6 +120,8 @@ export function UsersMutateDrawer({
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
   const isAdmin = (currentUser?.role ?? 0) >= ROLE.ADMIN
   const canEditAdminPermissions = currentUser?.role === ROLE.SUPER_ADMIN
+  const canReadGroupConfig =
+    !!currentRow && canAccessUserGroupConfig(currentUser, currentRow.role)
 
   // Fetch groups
   const { data: groupsData } = useQuery({
@@ -203,7 +206,14 @@ export function UsersMutateDrawer({
             ? t(SUCCESS_MESSAGES.USER_UPDATED)
             : t(SUCCESS_MESSAGES.USER_CREATED)
         )
-        if (openGroupConfig && currentRow) {
+        if (
+          openGroupConfig &&
+          currentRow &&
+          canAccessUserGroupConfig(
+            useAuthStore.getState().auth.user,
+            currentRow.role
+          )
+        ) {
           setCurrentRow({
             ...currentRow,
             group: data.group || currentRow.group,
@@ -408,17 +418,27 @@ export function UsersMutateDrawer({
                       </FormItem>
                     )}
                   />
-                  {canEditAdminPermissions && (
+                  {canReadGroupConfig && (
                     <Button
                       type='button'
                       variant='outline'
                       disabled={isSubmitting}
                       onClick={() => {
+                        if (
+                          !currentRow ||
+                          !canAccessUserGroupConfig(
+                            useAuthStore.getState().auth.user,
+                            currentRow.role
+                          )
+                        ) {
+                          return
+                        }
                         if (form.formState.isDirty) {
                           void form.handleSubmit((values) =>
                             onSubmit(values, true)
                           )()
                         } else {
+                          setCurrentRow(currentRow)
                           setOpen('group-config')
                         }
                       }}

@@ -48,6 +48,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
+import { canAccessUserGroupConfig } from '@/lib/admin-permissions'
 import { handleServerError } from '@/lib/handle-server-error'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
@@ -89,6 +90,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   }
 
   const handleGroupConfig = () => {
+    if (
+      !canAccessUserGroupConfig(useAuthStore.getState().auth.user, user.role)
+    ) {
+      return
+    }
     setCurrentRow(user)
     setOpen('group-config')
   }
@@ -230,7 +236,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuShortcut>
         </DropdownMenuItem>
 
-        {currentUser?.role === ROLE.SUPER_ADMIN && (
+        {canAccessUserGroupConfig(currentUser, user.role) && (
           <DropdownMenuItem onClick={handleGroupConfig}>
             {t('Customer group configuration')}
             <DropdownMenuShortcut>

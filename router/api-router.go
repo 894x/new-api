@@ -192,15 +192,15 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
 			}
 
-			rootUserRoute := userRoute.Group("/")
-			rootUserRoute.Use(middleware.RootAuth())
+			groupConfigRoute := userRoute.Group("/:id")
+			groupConfigRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.UserGroupConfigRead), controller.AuthorizeUserGroupConfigTarget)
 			{
-				rootUserRoute.GET("/:id/group-config", middleware.DisableCache(), controller.GetUserGroupConfig)
-				rootUserRoute.GET("/:id/channel-routing-overrides", middleware.DisableCache(), controller.GetUserChannelRouting)
-				rootUserRoute.PATCH("/:id/channel-routing-overrides", middleware.DisableCache(), controller.PatchUserChannelRouting)
-				rootUserRoute.PUT("/:id/group-config", middleware.DisableCache(), controller.UpdateUserGroupConfig)
-				rootUserRoute.POST("/:id/group-config/dedicated", middleware.DisableCache(), controller.CreateDedicatedUserGroup)
-				rootUserRoute.POST("/:id/group-config/preview", middleware.DisableCache(), controller.PreviewUserGroupChannels)
+				groupConfigRoute.GET("/group-config", middleware.DisableCache(), controller.GetUserGroupConfig)
+				groupConfigRoute.GET("/channel-routing-overrides", middleware.DisableCache(), controller.GetUserChannelRouting)
+				groupConfigRoute.PATCH("/channel-routing-overrides", middleware.RequirePermission(authz.UserGroupConfigWrite), middleware.DisableCache(), controller.PatchUserChannelRouting)
+				groupConfigRoute.PUT("/group-config", middleware.RequirePermission(authz.UserGroupConfigWrite), middleware.DisableCache(), controller.UpdateUserGroupConfig)
+				groupConfigRoute.POST("/group-config/dedicated", middleware.RequirePermission(authz.UserGroupConfigWrite), middleware.DisableCache(), controller.CreateDedicatedUserGroup)
+				groupConfigRoute.POST("/group-config/preview", middleware.DisableCache(), controller.PreviewUserGroupChannels)
 			}
 		}
 

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"testing"
 
@@ -20,6 +21,8 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -134,13 +137,30 @@ func setupManagedUserE2E(t *testing.T) *managedUserE2EFixture {
 	previousSecret, previousMaster := common.SessionSecret, common.IsMasterNode
 	previousSetup, previousNewUserQuota := constant.Setup, common.QuotaForNewUser
 
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	var dialector gorm.Dialector = sqlite.Open("file:" + t.Name() + "?mode=memory&cache=shared")
+	databaseType := common.DatabaseTypeSQLite
+	switch os.Getenv("TEST_MANAGED_USER_DIALECT") {
+	case "", "sqlite":
+	case "mysql":
+		dsn := os.Getenv("TEST_MYSQL_DSN")
+		require.NotEmpty(t, dsn, "TEST_MYSQL_DSN is required for the external test database")
+		dialector = mysql.Open(dsn)
+		databaseType = common.DatabaseTypeMySQL
+	case "postgres":
+		dsn := os.Getenv("TEST_POSTGRES_DSN")
+		require.NotEmpty(t, dsn, "TEST_POSTGRES_DSN is required for the external test database")
+		dialector = postgres.Open(dsn)
+		databaseType = common.DatabaseTypePostgreSQL
+	default:
+		t.Fatalf("unsupported TEST_MANAGED_USER_DIALECT %q", os.Getenv("TEST_MANAGED_USER_DIALECT"))
+	}
+	db, err := gorm.Open(dialector, &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	model.DB, model.LOG_DB = db, db
-	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	common.SetDatabaseTypes(databaseType, databaseType)
 	common.RedisEnabled = false
 	common.MemoryCacheEnabled = false
 	common.SessionSecret = "managed-user-e2e-secret"

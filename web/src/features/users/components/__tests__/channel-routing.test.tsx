@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -28,6 +29,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
 import type { UserChannelRoutingConfig } from '../../types'
 import {
@@ -86,7 +88,47 @@ function renderEditor(data = config, onDirtyChange = vi.fn()) {
 describe('user channel routing', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
     vi.mocked(api.patch).mockResolvedValue({ data: { success: true } })
+  })
+
+  it('disables a dirty routing draft and rejects reordering after write permission is revoked', () => {
+    const actor = {
+      id: 1,
+      username: 'operator',
+      role: 10,
+      permissions: {
+        admin_permissions: { user_group_config: { read: true, write: true } },
+      },
+    }
+    useAuthStore.getState().auth.setUser(actor)
+    renderEditor()
+    const priority = screen.getByRole('spinbutton', {
+      name: 'Priority for Alpha #1',
+    })
+    fireEvent.change(priority, { target: { value: '7' } })
+    act(() =>
+      useAuthStore.getState().auth.setUser({
+        ...actor,
+        permissions: {
+          admin_permissions: {
+            user_group_config: { read: true, write: false },
+          },
+        },
+      })
+    )
+    expect(priority).toBeDisabled()
+    const reorder = screen.getByRole('button', { name: 'Reorder Beta #2' })
+    expect(reorder).toBeDisabled()
+    expect(reorder).toHaveAttribute('draggable', 'false')
+    fireEvent.keyDown(reorder, { key: 'ArrowUp' })
+    fireEvent.dragStart(reorder, { dataTransfer: { setData: vi.fn() } })
+    fireEvent.drop(screen.getByRole('listitem', { name: 'Alpha #1' }))
+    expect(screen.getAllByRole('listitem')[0]).toHaveAccessibleName('Alpha #1')
+    expect(priority).toHaveValue(7)
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(api.patch).not.toHaveBeenCalled()
   })
 
   it('saves one outlet group without changing the same channel or an unsaved draft in another group', async () => {

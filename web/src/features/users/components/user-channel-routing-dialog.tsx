@@ -43,9 +43,16 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { toIntlLocale } from '@/i18n/languages'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
 import { formatNumber } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
+import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { getUserChannelRouting, patchUserChannelRouting } from '../api'
 import type { UserChannelRoutingConfig } from '../types'
@@ -65,6 +72,7 @@ export function UserChannelRoutingRuleEditor(props: {
   userId: number
   model: string
   channelGroups: string[]
+  readOnly?: boolean
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const { t } = useTranslation()
@@ -85,6 +93,7 @@ export function UserChannelRoutingRuleEditor(props: {
             userId={props.userId}
             model={props.model}
             group={group}
+            readOnly={props.readOnly}
             onDirtyChange={(dirty) => {
               if (dirty) dirtyGroups.current.add(group)
               else dirtyGroups.current.delete(group)
@@ -101,8 +110,17 @@ function UserChannelRoutingGroupEditor(props: {
   userId: number
   model: string
   group: string
+  readOnly?: boolean
   onDirtyChange: (dirty: boolean) => void
 }) {
+  const currentUser = useAuthStore((state) => state.auth.user)
+  const canRead =
+    (currentUser?.role ?? 0) >= ROLE.ADMIN &&
+    hasPermission(
+      currentUser,
+      ADMIN_PERMISSION_RESOURCES.USER_GROUP_CONFIG,
+      ADMIN_PERMISSION_ACTIONS.READ
+    )
   const query = useQuery({
     queryKey: ['user-channel-routing', props.userId, props.model, props.group],
     queryFn: () =>
@@ -112,11 +130,12 @@ function UserChannelRoutingGroupEditor(props: {
         [props.group],
         props.group
       ),
-    enabled: props.model !== '',
+    enabled: props.model !== '' && canRead,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   })
 
+  if (!canRead) return null
   if (query.isPending) return <LoadingState />
   if (query.isError) {
     return <ErrorState onRetry={() => void query.refetch()} />
@@ -128,6 +147,7 @@ function UserChannelRoutingGroupEditor(props: {
       key={`${props.userId}:${props.model}:${props.group}:${query.dataUpdatedAt}`}
       userId={props.userId}
       config={query.data.data}
+      readOnly={props.readOnly}
       onDirtyChange={props.onDirtyChange}
       onReload={() => {
         props.onDirtyChange?.(false)
@@ -142,10 +162,25 @@ export function UserChannelRoutingEditor(props: {
   config: UserChannelRoutingConfig
   onDirtyChange: (dirty: boolean) => void
   onReload: () => void
+  readOnly?: boolean
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const queryClient = useQueryClient()
+  const currentUser = useAuthStore((state) => state.auth.user)
+  const canWrite =
+    !props.readOnly &&
+    (currentUser?.role ?? 0) >= ROLE.ADMIN &&
+    hasPermission(
+      currentUser,
+      ADMIN_PERMISSION_RESOURCES.USER_GROUP_CONFIG,
+      ADMIN_PERMISSION_ACTIONS.READ
+    ) &&
+    hasPermission(
+      currentUser,
+      ADMIN_PERMISSION_RESOURCES.USER_GROUP_CONFIG,
+      ADMIN_PERMISSION_ACTIONS.WRITE
+    )
   const [dragged, setDragged] = useState<number | null>(null)
   const [dropTarget, setDropTarget] = useState<number | null>(null)
   const [channelToAdd, setChannelToAdd] = useState<string | null>(null)
@@ -173,8 +208,25 @@ export function UserChannelRoutingEditor(props: {
     props.config.channels.map((row) => [row.channel_id, row])
   )
   const save = useMutation({
-    mutationFn: (data: FormValues) =>
-      patchUserChannelRouting(props.userId, {
+    mutationFn: (data: FormValues) => {
+      const actor = useAuthStore.getState().auth.user
+      if (
+        props.readOnly ||
+        (actor?.role ?? 0) < ROLE.ADMIN ||
+        !hasPermission(
+          actor,
+          ADMIN_PERMISSION_RESOURCES.USER_GROUP_CONFIG,
+          ADMIN_PERMISSION_ACTIONS.READ
+        ) ||
+        !hasPermission(
+          actor,
+          ADMIN_PERMISSION_RESOURCES.USER_GROUP_CONFIG,
+          ADMIN_PERMISSION_ACTIONS.WRITE
+        )
+      ) {
+        throw new Error(t('No permission to perform this action'))
+      }
+      return patchUserChannelRouting(props.userId, {
         model: props.config.model,
         ...(props.config.routing_group
           ? { routing_group: props.config.routing_group }
@@ -188,7 +240,8 @@ export function UserChannelRoutingEditor(props: {
             (props.config.routing_group && !original?.configured)
           )
         }),
-      }),
+      })
+    },
     onSuccess: async () => {
       toast.success(t('Saved successfully'))
       props.onDirtyChange(false)
@@ -216,10 +269,11 @@ export function UserChannelRoutingEditor(props: {
     notifyDirty(dirty)
   }, [dirty])
   useEffect(() => () => notifyDirty(false), [])
+  const editingDisabled = !canWrite || save.isPending
 
   function reorder(from: number, to: number) {
     if (
-      save.isPending ||
+      editingDisabled ||
       from === to ||
       from < 0 ||
       to < 0 ||
@@ -262,15 +316,16 @@ export function UserChannelRoutingEditor(props: {
                 }))}
               value={channelToAdd}
               onValueChange={setChannelToAdd}
-              disabled={save.isPending}
+              disabled={editingDisabled}
               aria-label={t('Select channel')}
               placeholder={t('Select channel')}
             />
             <Button
               type='button'
               variant='outline'
-              disabled={save.isPending || !channelToAdd}
+              disabled={editingDisabled || !channelToAdd}
               onClick={() => {
+                if (editingDisabled) return
                 const candidate = originalById.get(Number(channelToAdd))
                 if (
                   !candidate ||
@@ -306,7 +361,7 @@ export function UserChannelRoutingEditor(props: {
                 key={item.id}
                 aria-label={channelLabel}
                 onDragOver={(event) => {
-                  if (dragged !== null && !save.isPending) {
+                  if (dragged !== null && !editingDisabled) {
                     event.preventDefault()
                     setDropTarget(index)
                   }
@@ -329,13 +384,17 @@ export function UserChannelRoutingEditor(props: {
                     type='button'
                     variant='ghost'
                     size='icon-sm'
-                    draggable={!save.isPending && rows.fields.length > 1}
-                    disabled={save.isPending || rows.fields.length < 2}
+                    draggable={!editingDisabled && rows.fields.length > 1}
+                    disabled={editingDisabled || rows.fields.length < 2}
                     className='cursor-grab'
                     aria-label={t('Reorder {{channel}}', {
                       channel: channelLabel,
                     })}
                     onDragStart={(event) => {
+                      if (editingDisabled) {
+                        event.preventDefault()
+                        return
+                      }
                       event.dataTransfer.effectAllowed = 'move'
                       event.dataTransfer.setData(
                         'text/plain',
@@ -384,7 +443,7 @@ export function UserChannelRoutingEditor(props: {
                         <FormControl>
                           <Switch
                             checked={field.value}
-                            disabled={save.isPending}
+                            disabled={editingDisabled}
                             onCheckedChange={(value) => {
                               field.onChange(value)
                             }}
@@ -400,7 +459,7 @@ export function UserChannelRoutingEditor(props: {
                     type='button'
                     variant='ghost'
                     size='icon-sm'
-                    disabled={save.isPending || index === 0}
+                    disabled={editingDisabled || index === 0}
                     aria-label={t('Move {{channel}} up', {
                       channel: channelLabel,
                     })}
@@ -413,7 +472,7 @@ export function UserChannelRoutingEditor(props: {
                     variant='ghost'
                     size='icon-sm'
                     disabled={
-                      save.isPending || index === rows.fields.length - 1
+                      editingDisabled || index === rows.fields.length - 1
                     }
                     aria-label={t('Move {{channel}} down', {
                       channel: channelLabel,
@@ -453,7 +512,7 @@ export function UserChannelRoutingEditor(props: {
                             min={0}
                             max={2147483647}
                             step={1}
-                            disabled={save.isPending}
+                            disabled={editingDisabled}
                             aria-label={t('Priority for {{channel}}', {
                               channel: channelLabel,
                             })}
@@ -475,7 +534,7 @@ export function UserChannelRoutingEditor(props: {
                   <Button
                     type='button'
                     variant='outline'
-                    disabled={save.isPending || row.priority_override === null}
+                    disabled={editingDisabled || row.priority_override === null}
                     onClick={() => {
                       form.setValue(
                         `channels.${index}.priority_override`,
@@ -515,7 +574,7 @@ export function UserChannelRoutingEditor(props: {
           </Button>
           <Button
             type='button'
-            disabled={save.isPending || !dirty}
+            disabled={editingDisabled || !dirty}
             onClick={() =>
               void form.handleSubmit((data) => save.mutate(data))()
             }

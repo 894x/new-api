@@ -27,6 +27,7 @@ export const ADMIN_PERMISSION_RESOURCES = {
   AUDIT: 'audit',
   CHANNEL: 'channel',
   USER: 'user',
+  USER_GROUP_CONFIG: 'user_group_config',
   TASK_PLUGIN: 'task_plugin',
 } as const
 
@@ -86,6 +87,23 @@ export function hasPermission(
   if (!user) return false
   if (user.role === ROLE.SUPER_ADMIN) return true
   return user.permissions?.admin_permissions?.[resource]?.[action] === true
+}
+
+export function canAccessUserGroupConfig(
+  user: AuthUser | null | undefined,
+  targetRole: number,
+  action: 'read' | 'write' = ADMIN_PERMISSION_ACTIONS.READ
+): boolean {
+  if (!user || user.role < ROLE.ADMIN) return false
+  if (user.role !== ROLE.SUPER_ADMIN && user.role <= targetRole) return false
+  return (
+    hasPermission(
+      user,
+      ADMIN_PERMISSION_RESOURCES.USER_GROUP_CONFIG,
+      ADMIN_PERMISSION_ACTIONS.READ
+    ) &&
+    hasPermission(user, ADMIN_PERMISSION_RESOURCES.USER_GROUP_CONFIG, action)
+  )
 }
 
 // roleGrants returns the baseline grant matrix for the given role key.

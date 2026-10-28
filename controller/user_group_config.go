@@ -33,6 +33,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -88,6 +89,30 @@ type previewUserGroupChannelsRequest struct {
 
 type channelPoolPreview struct {
 	CandidateCount int `json:"candidate_count"`
+}
+
+// AuthorizeUserGroupConfigTarget preserves the user-management role hierarchy
+// for every customer group configuration endpoint.
+func AuthorizeUserGroupConfigTarget(c *gin.Context) {
+	userID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || userID <= 0 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid user id"})
+		return
+	}
+	user, err := model.GetUserById(userID, false)
+	if err != nil {
+		common.ApiError(c, err)
+		c.Abort()
+		return
+	}
+	if !canManageTargetRole(c.GetInt("role"), user.Role) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
+		})
+		return
+	}
+	c.Next()
 }
 
 // PreviewUserGroupChannels counts enabled channel candidates in each draft

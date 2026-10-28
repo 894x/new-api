@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 // Static translation keys that don't get picked up by the t('...') regex.
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
+  'View customer group configuration',
+  'Edit customer group configuration',
+  'View customer group discounts, rate limits, channel policies, and user channel priorities.',
+  'Edit customer group discounts, rate limits, channel policies, and user channel priorities. Changes to a shared group affect every user in that group. Requires view permission.',
   'DNSPod server configuration is incomplete or invalid.',
   'DNSPod configuration changed. Refresh and review it before saving again.',
   'A shared Redis connection is required to apply DNS weights.',
