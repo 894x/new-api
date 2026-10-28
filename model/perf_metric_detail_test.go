@@ -3,15 +3,15 @@ package model
 import (
 	"context"
 	"fmt"
-	"github.com/QuantumNous/new-api/common"
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
 	"os"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -35,11 +35,11 @@ func TestUpsertPerfAnalyticsBucketAddsRepeatedFlushes(t *testing.T) {
 	}
 	require.NoError(t, UpsertPerfAnalyticsBucket(first, []PerfMetricHistogram{{
 		ModelName: "gpt-test", UserId: 7, TokenId: 11, BucketTs: 100,
-		Metric: "ttft", UpperBoundMs: 250, Count: 2,
+		Metric: "ttft", UpperBoundMs: 250, Count: 2, MaxValue: 221, MaxSamples: 2,
 	}}))
 	require.NoError(t, UpsertPerfAnalyticsBucket(second, []PerfMetricHistogram{{
 		ModelName: "gpt-test", UserId: 7, TokenId: 11, BucketTs: 100,
-		Metric: "ttft", UpperBoundMs: 250, Count: 3,
+		Metric: "ttft", UpperBoundMs: 250, Count: 3, MaxValue: 244, MaxSamples: 3,
 	}}))
 
 	var detail PerfMetricDetail
@@ -56,6 +56,8 @@ func TestUpsertPerfAnalyticsBucketAddsRepeatedFlushes(t *testing.T) {
 	var histogram PerfMetricHistogram
 	require.NoError(t, DB.First(&histogram).Error)
 	assert.Equal(t, int64(5), histogram.Count)
+	assert.Equal(t, int64(244), histogram.MaxValue)
+	assert.Equal(t, int64(5), histogram.MaxSamples)
 
 	require.NoError(t, UpsertPerfAnalyticsBucket(&PerfMetricDetail{
 		ModelName: "gpt-test", UserId: 8, TokenId: 22, BucketTs: 100,
@@ -114,24 +116,19 @@ func TestUpsertPerfAnalyticsBucketsAddsRowsInBatches(t *testing.T) {
 	assert.Equal(t, int64(10), histogramCount)
 }
 
-// Schema from the existing fork before lightweight metrics were added.
-type legacyPerfMetricDetail struct {
-	Id              int    `json:"id" gorm:"primaryKey"`
-	ModelName       string `json:"model_name" gorm:"size:128;uniqueIndex:idx_perf_detail_dimension_bucket,priority:1;index:idx_perf_detail_model_bucket,priority:1;index:idx_perf_detail_user_model_bucket,priority:2"`
-	UserId          int    `json:"user_id" gorm:"uniqueIndex:idx_perf_detail_dimension_bucket,priority:2;index:idx_perf_detail_user_model_bucket,priority:1"`
-	TokenId         int    `json:"token_id" gorm:"uniqueIndex:idx_perf_detail_dimension_bucket,priority:3"`
-	BucketTs        int64  `json:"bucket_ts" gorm:"uniqueIndex:idx_perf_detail_dimension_bucket,priority:4;index:idx_perf_detail_model_bucket,priority:2;index:idx_perf_detail_user_model_bucket,priority:3;index:idx_perf_detail_bucket"`
-	RequestCount    int64  `json:"-" gorm:"default:0"`
-	SuccessCount    int64  `json:"-" gorm:"default:0"`
-	TtftCount       int64  `json:"-" gorm:"default:0"`
-	TpotCount       int64  `json:"-" gorm:"default:0"`
-	InputTokens     int64  `json:"-" gorm:"default:0"`
-	OutputTokens    int64  `json:"-" gorm:"default:0"`
-	TotalTokens     int64  `json:"-" gorm:"default:0"`
-	CacheReadTokens int64  `json:"-" gorm:"default:0"`
+// Histogram schema from main before measured maxima were persisted.
+type legacyPerfMetricHistogram struct {
+	Id           int    `json:"id" gorm:"primaryKey"`
+	ModelName    string `json:"model_name" gorm:"size:128;uniqueIndex:idx_perf_hist_dimension_bucket,priority:1;index:idx_perf_hist_model_bucket,priority:1;index:idx_perf_hist_user_model_bucket,priority:2"`
+	UserId       int    `json:"user_id" gorm:"uniqueIndex:idx_perf_hist_dimension_bucket,priority:2;index:idx_perf_hist_user_model_bucket,priority:1"`
+	TokenId      int    `json:"token_id" gorm:"uniqueIndex:idx_perf_hist_dimension_bucket,priority:3"`
+	BucketTs     int64  `json:"bucket_ts" gorm:"uniqueIndex:idx_perf_hist_dimension_bucket,priority:4;index:idx_perf_hist_model_bucket,priority:2;index:idx_perf_hist_user_model_bucket,priority:3;index:idx_perf_hist_bucket"`
+	Metric       string `json:"metric" gorm:"size:8;uniqueIndex:idx_perf_hist_dimension_bucket,priority:5"`
+	UpperBoundMs int64  `json:"upper_bound_ms" gorm:"uniqueIndex:idx_perf_hist_dimension_bucket,priority:6"`
+	Count        int64  `json:"-" gorm:"default:0"`
 }
 
-func (legacyPerfMetricDetail) TableName() string { return "perf_metric_details" }
+func (legacyPerfMetricHistogram) TableName() string { return "perf_metric_histograms" }
 
 // DSNs must name isolated codex_perf databases; no production database is used.
 func TestPerfAnalyticsDatabaseMatrix(t *testing.T) {
@@ -177,36 +174,79 @@ func TestPerfAnalyticsDatabaseMatrix(t *testing.T) {
 				t.Run(fmt.Sprintf("upgrade_%t", upgrade), func(t *testing.T) {
 					require.NoError(t, db.Migrator().DropTable(&PerfMetricHistogram{}, &PerfMetricDetail{}))
 					if upgrade {
-						require.NoError(t, db.AutoMigrate(&legacyPerfMetricDetail{}, &PerfMetricHistogram{}))
-						require.NoError(t, db.Create(&legacyPerfMetricDetail{ModelName: "matrix", UserId: 7, TokenId: 11, BucketTs: 100, RequestCount: 2, InputTokens: 200, CacheReadTokens: 40}).Error)
+						require.NoError(t, db.AutoMigrate(&PerfMetricDetail{}, &legacyPerfMetricHistogram{}))
+						require.NoError(t, db.Create(&PerfMetricDetail{
+							ModelName: "matrix", UserId: 7, TokenId: 11, BucketTs: 100,
+							RequestCount: 2, InputTokens: 200, CacheReadTokens: 40,
+							RequestBodySamples: 1, RequestBodyBytes: 4096, RequestBodyMaxBytes: 4096,
+							CacheWriteSamples: 1, CacheWriteTokens: 9, CacheWrite5mTokens: 4, CacheWrite1hTokens: 5,
+						}).Error)
+						require.NoError(t, db.Create(&legacyPerfMetricHistogram{ModelName: "matrix", UserId: 7, TokenId: 11, BucketTs: 100, Metric: "ttft", UpperBoundMs: 250, Count: 2}).Error)
 					}
-					// Both a release without these custom tables and the existing fork upgrade
-					// run the affected startup migration twice.
+					// Exercise a fresh install and the previous main schema, migrating twice.
 					for range 2 {
 						require.NoError(t, db.AutoMigrate(&PerfMetricDetail{}, &PerfMetricHistogram{}))
 					}
+					for _, model := range []any{&PerfMetricDetail{}, &PerfMetricHistogram{}} {
+						prefix := "idx_perf_detail_"
+						if _, histogram := model.(*PerfMetricHistogram); histogram {
+							prefix = "idx_perf_hist_"
+						}
+						for _, index := range []string{"dimension_bucket", "model_bucket", "user_model_bucket", "bucket"} {
+							assert.True(t, db.Migrator().HasIndex(model, prefix+index), prefix+index)
+						}
+					}
+					require.True(t, db.Migrator().HasColumn(&PerfMetricHistogram{}, "MaxValue"))
+					require.True(t, db.Migrator().HasColumn(&PerfMetricHistogram{}, "MaxSamples"))
+					if upgrade {
+						var legacy PerfMetricHistogram
+						require.NoError(t, db.First(&legacy).Error)
+						assert.Equal(t, int64(2), legacy.Count)
+						assert.Zero(t, legacy.MaxValue, "migration cannot reconstruct a historical maximum")
+						assert.Zero(t, legacy.MaxSamples, "historical samples must remain unmeasured")
+					}
 					row := PerfMetricDetail{ModelName: "matrix", UserId: 7, TokenId: 11, BucketTs: 100, RequestCount: 1, RequestBodySamples: 1, RequestBodyBytes: 2048, RequestBodyMaxBytes: 2048, CacheWriteSamples: 1, CacheWriteTokens: 30, CacheWrite5mTokens: 10, CacheWrite1hTokens: 20}
-					require.NoError(t, UpsertPerfAnalyticsBucket(&row, nil))
+					require.NoError(t, UpsertPerfAnalyticsBucket(&row, []PerfMetricHistogram{{ModelName: "matrix", UserId: 7, TokenId: 11, BucketTs: 100, Metric: "ttft", UpperBoundMs: 250, Count: 1, MaxSamples: 1, MaxValue: 233}}))
 					row.Id = 0
 					row.RequestBodyBytes = 1024
 					row.RequestBodyMaxBytes = 1024
-					require.NoError(t, UpsertPerfAnalyticsBucket(&row, nil))
-					details, _, err := GetPerfAnalyticsBuckets(PerfMetricDetailFilter{Context: context.Background(), ModelName: "matrix", UserId: 7, TokenId: 11, StartTs: 1, EndTs: 200, BucketSeconds: 300})
+					require.NoError(t, UpsertPerfAnalyticsBucket(&row, []PerfMetricHistogram{{ModelName: "matrix", UserId: 7, TokenId: 11, BucketTs: 100, Metric: "ttft", UpperBoundMs: 250, Count: 1, MaxSamples: 1, MaxValue: 211}}))
+					details, histograms, err := GetPerfAnalyticsBuckets(PerfMetricDetailFilter{Context: context.Background(), ModelName: "matrix", UserId: 7, TokenId: 11, StartTs: 1, EndTs: 200, BucketSeconds: 300})
 					require.NoError(t, err)
 					require.Len(t, details, 1)
+					require.Len(t, histograms, 1)
+					assert.Equal(t, int64(233), histograms[0].MaxValue)
+					assert.Equal(t, int64(2), histograms[0].MaxSamples)
+					histogramCount := int64(2)
+					if upgrade {
+						histogramCount += 2
+					}
+					assert.Equal(t, histogramCount, histograms[0].Count)
 					expected := int64(2)
 					if upgrade {
 						expected = 4
 					}
 					assert.Equal(t, expected, details[0].RequestCount)
-					assert.Equal(t, int64(2), details[0].RequestBodySamples)
-					assert.Equal(t, int64(3072), details[0].RequestBodyBytes)
-					assert.Equal(t, int64(2048), details[0].RequestBodyMaxBytes)
-					assert.Equal(t, int64(60), details[0].CacheWriteTokens)
-					assert.Equal(t, int64(20), details[0].CacheWrite5mTokens)
-					assert.Equal(t, int64(40), details[0].CacheWrite1hTokens)
+					expectedBodySamples, expectedBodyBytes, expectedBodyMax := int64(2), int64(3072), int64(2048)
+					expectedWrites, expectedWrites5m, expectedWrites1h := int64(60), int64(20), int64(40)
+					if upgrade {
+						expectedBodySamples++
+						expectedBodyBytes += 4096
+						expectedBodyMax = 4096
+						expectedWrites += 9
+						expectedWrites5m += 4
+						expectedWrites1h += 5
+					}
+					assert.Equal(t, expectedBodySamples, details[0].RequestBodySamples)
+					assert.Equal(t, expectedBodyBytes, details[0].RequestBodyBytes)
+					assert.Equal(t, expectedBodyMax, details[0].RequestBodyMaxBytes)
+					assert.Equal(t, expectedWrites, details[0].CacheWriteTokens)
+					assert.Equal(t, expectedWrites5m, details[0].CacheWrite5mTokens)
+					assert.Equal(t, expectedWrites1h, details[0].CacheWrite1hTokens)
 					duplicate := PerfMetricDetail{ModelName: "matrix", UserId: 7, TokenId: 11, BucketTs: 100}
 					require.Error(t, db.Create(&duplicate).Error, "dimension uniqueness survives migration")
+					duplicateHistogram := PerfMetricHistogram{ModelName: "matrix", UserId: 7, TokenId: 11, BucketTs: 100, Metric: "ttft", UpperBoundMs: 250}
+					require.Error(t, db.Create(&duplicateHistogram).Error, "histogram dimension uniqueness survives migration")
 					if upgrade {
 						assert.Equal(t, int64(200), details[0].InputTokens)
 						assert.Equal(t, int64(40), details[0].CacheReadTokens)

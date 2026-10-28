@@ -1,6 +1,8 @@
 package perfmetrics
 
 import (
+	"maps"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,8 +34,7 @@ type atomicDetailBucket struct {
 	cacheWrite5mTokens   atomic.Int64
 	cacheWrite1hTokens   atomic.Int64
 
-	ttftBuckets [len(histogramUpperBoundsMs)]atomic.Int64
-	tpotBuckets [len(histogramUpperBoundsMs)]atomic.Int64
+	histograms map[detailHistogramKey]histogramObservation
 }
 
 func recordDetail(sample Sample, recordedAt time.Time) {
@@ -63,6 +64,9 @@ func (bucket *atomicDetailBucket) add(sample Sample) bool {
 		return false
 	}
 
+	if bucket.histograms == nil {
+		bucket.histograms = make(map[detailHistogramKey]histogramObservation)
+	}
 	bucket.requestCount.Add(1)
 	if sample.Success {
 		bucket.successCount.Add(1)
@@ -70,7 +74,7 @@ func (bucket *atomicDetailBucket) add(sample Sample) bool {
 	if sample.HasTtft && sample.TtftMs >= 0 {
 		bucket.ttftCount.Add(1)
 		bucket.ttftSumMs.Add(sample.TtftMs)
-		bucket.ttftBuckets[histogramBucketIndex(sample.TtftMs)].Add(1)
+		bucket.observe(metricTtft, sample.TtftMs)
 	}
 	if sample.HasTpot && sample.TpotMs >= 0 {
 		bucket.tpotCount.Add(1)
@@ -79,7 +83,7 @@ func (bucket *atomicDetailBucket) add(sample Sample) bool {
 			bucket.tpotGenerationTokens.Add(sample.OutputTokens - 1)
 			bucket.tpotAverageCount.Add(1)
 		}
-		bucket.tpotBuckets[histogramBucketIndex(sample.TpotMs)].Add(1)
+		bucket.observe(metricTpot, sample.TpotMs)
 	}
 	if sample.InputTokens > 0 {
 		bucket.inputTokens.Add(sample.InputTokens)
@@ -94,14 +98,20 @@ func (bucket *atomicDetailBucket) add(sample Sample) bool {
 		bucket.cacheReadTokens.Add(sample.CacheReadTokens)
 	}
 	if sample.RequestBodyBytes != nil && *sample.RequestBodyBytes >= 0 {
+		bucket.observe(metricBody, *sample.RequestBodyBytes)
 		bucket.requestBodySamples.Add(1)
 		bucket.requestBodyBytes.Add(*sample.RequestBodyBytes)
 		bucket.requestBodyMaxBytes.Store(max(bucket.requestBodyMaxBytes.Load(), *sample.RequestBodyBytes))
 	}
 	if sample.CacheReadKnown || sample.CacheReadTokens > 0 {
+		if sample.InputTokens > 0 {
+			ratio := float64(min(max(sample.CacheReadTokens, 0), sample.InputTokens)) / float64(sample.InputTokens)
+			bucket.observe(metricCacheHit, int64(math.Round(ratio*10000)))
+		}
 		bucket.cacheReadSamples.Add(1)
 	}
 	if sample.CacheWriteKnown || sample.CacheWriteTokens > 0 {
+		bucket.observe(metricCacheWrite, max(sample.CacheWriteTokens, 0))
 		bucket.cacheWriteSamples.Add(1)
 	}
 	bucket.cacheWriteTokens.Add(max(sample.CacheWriteTokens, 0))
@@ -142,10 +152,8 @@ func (bucket *atomicDetailBucket) drain(seal bool) (detailCounters, bool) {
 		cacheWrite5mTokens:   bucket.cacheWrite5mTokens.Swap(0),
 		cacheWrite1hTokens:   bucket.cacheWrite1hTokens.Swap(0),
 	}
-	for i := range histogramUpperBoundsMs {
-		counters.ttftBuckets[i] = bucket.ttftBuckets[i].Swap(0)
-		counters.tpotBuckets[i] = bucket.tpotBuckets[i].Swap(0)
-	}
+	counters.histograms = bucket.histograms
+	bucket.histograms = nil
 	return counters, true
 }
 
@@ -178,10 +186,7 @@ func (bucket *atomicDetailBucket) snapshot() detailCounters {
 		cacheWrite5mTokens:   bucket.cacheWrite5mTokens.Load(),
 		cacheWrite1hTokens:   bucket.cacheWrite1hTokens.Load(),
 	}
-	for i := range histogramUpperBoundsMs {
-		counters.ttftBuckets[i] = bucket.ttftBuckets[i].Load()
-		counters.tpotBuckets[i] = bucket.tpotBuckets[i].Load()
-	}
+	counters.histograms = maps.Clone(bucket.histograms)
 	return counters
 }
 
@@ -212,10 +217,10 @@ func (bucket *atomicDetailBucket) addCounters(counters detailCounters) bool {
 	bucket.cacheWriteSamples.Add(counters.cacheWriteSamples)
 	bucket.cacheWrite5mTokens.Add(counters.cacheWrite5mTokens)
 	bucket.cacheWrite1hTokens.Add(counters.cacheWrite1hTokens)
-	for i := range histogramUpperBoundsMs {
-		bucket.ttftBuckets[i].Add(counters.ttftBuckets[i])
-		bucket.tpotBuckets[i].Add(counters.tpotBuckets[i])
+	if bucket.histograms == nil {
+		bucket.histograms = make(map[detailHistogramKey]histogramObservation)
 	}
+	mergeHistogramObservations(bucket.histograms, counters.histograms)
 	return true
 }
 
@@ -228,14 +233,4 @@ func restoreDetailCounters(key detailBucketKey, counters detailCounters) {
 		}
 		detailHotBuckets.CompareAndDelete(key, bucket)
 	}
-}
-
-func histogramBucketIndex(valueMs int64) int {
-	index := len(histogramUpperBoundsMs) - 1
-	for i, upperBoundMs := range histogramUpperBoundsMs {
-		if valueMs <= upperBoundMs {
-			return i
-		}
-	}
-	return index
 }

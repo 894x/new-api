@@ -41,7 +41,9 @@ type AnalyticsPercentiles struct {
 	AvgMs       *float64 `json:"avg_ms"`
 	P50Ms       int64    `json:"p50_ms"`
 	P90Ms       int64    `json:"p90_ms"`
+	P95Ms       int64    `json:"p95_ms"`
 	P99Ms       int64    `json:"p99_ms"`
+	MaxMs       *int64   `json:"max_ms"`
 	SampleCount int64    `json:"sample_count"`
 }
 
@@ -71,16 +73,17 @@ type AnalyticsPoint struct {
 }
 
 type AnalyticsUsage struct {
-	RequestBodySamples  int64    `json:"request_body_samples"`
-	RequestBodyBytes    int64    `json:"request_body_bytes"`
-	RequestBodyMaxBytes int64    `json:"request_body_max_bytes"`
-	CacheReadSamples    int64    `json:"cache_read_samples"`
-	CacheWriteTokens    int64    `json:"cache_write_tokens"`
-	CacheWriteSamples   int64    `json:"cache_write_samples"`
-	CacheWrite5mTokens  int64    `json:"cache_write_5m_tokens"`
-	CacheWrite1hTokens  int64    `json:"cache_write_1h_tokens"`
-	CacheReadTokens     int64    `json:"cache_read_tokens"`
-	RequestBodyAvgBytes *float64 `json:"request_body_avg_bytes"`
+	MetricPercentiles   map[string]AnalyticsValuePercentiles `json:"metric_percentiles"`
+	RequestBodySamples  int64                                `json:"request_body_samples"`
+	RequestBodyBytes    int64                                `json:"request_body_bytes"`
+	RequestBodyMaxBytes int64                                `json:"request_body_max_bytes"`
+	CacheReadSamples    int64                                `json:"cache_read_samples"`
+	CacheWriteTokens    int64                                `json:"cache_write_tokens"`
+	CacheWriteSamples   int64                                `json:"cache_write_samples"`
+	CacheWrite5mTokens  int64                                `json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens  int64                                `json:"cache_write_1h_tokens"`
+	CacheReadTokens     int64                                `json:"cache_read_tokens"`
+	RequestBodyAvgBytes *float64                             `json:"request_body_avg_bytes"`
 }
 
 type AnalyticsResult struct {
@@ -122,10 +125,9 @@ type detailCounters struct {
 	cacheWrite5mTokens   int64
 	cacheWrite1hTokens   int64
 
-	ttftCount   int64
-	tpotCount   int64
-	ttftBuckets [len(histogramUpperBoundsMs)]int64
-	tpotBuckets [len(histogramUpperBoundsMs)]int64
+	ttftCount  int64
+	tpotCount  int64
+	histograms map[detailHistogramKey]histogramObservation
 }
 
 type analyticsAccumulator struct {
@@ -149,8 +151,7 @@ type analyticsAccumulator struct {
 	cacheWrite5mTokens   int64
 	cacheWrite1hTokens   int64
 
-	ttft map[int64]int64
-	tpot map[int64]int64
+	histograms map[string]map[int64]histogramObservation
 }
 
 func QueryAnalytics(params AnalyticsQueryParams) (AnalyticsResult, error) {
@@ -227,7 +228,7 @@ func QueryAnalytics(params AnalyticsQueryParams) (AnalyticsResult, error) {
 
 		}
 		for _, histogram := range histograms {
-			addHistogramCount(analyticsPointAccumulator(series, histogram.BucketTs), histogram.Metric, histogram.UpperBoundMs, histogram.Count)
+			addHistogramCount(analyticsPointAccumulator(series, histogram.BucketTs), histogram.Metric, histogram.UpperBoundMs, histogramObservation{count: histogram.Count, maxValue: histogram.MaxValue, maxSamples: histogram.MaxSamples})
 		}
 		detailSnapshotMu.RLock()
 		if generation != detailFlushGeneration {
@@ -317,15 +318,8 @@ func addDetailCounters(target *analyticsAccumulator, source detailCounters) {
 	target.cacheWrite5mTokens += source.cacheWrite5mTokens
 	target.cacheWrite1hTokens += source.cacheWrite1hTokens
 
-	for i, count := range source.ttftBuckets {
-		if count > 0 {
-			target.ttft[histogramUpperBoundsMs[i]] += count
-		}
-	}
-	for i, count := range source.tpotBuckets {
-		if count > 0 {
-			target.tpot[histogramUpperBoundsMs[i]] += count
-		}
+	for key, observation := range source.histograms {
+		addHistogramCount(target, key.metric, key.upperBound, observation)
 	}
 }
 
@@ -380,31 +374,39 @@ func analyticsPointAccumulator(series map[int64]*analyticsAccumulator, ts int64)
 
 func newAnalyticsAccumulator() *analyticsAccumulator {
 	return &analyticsAccumulator{
-		ttft: make(map[int64]int64),
-		tpot: make(map[int64]int64),
+		histograms: make(map[string]map[int64]histogramObservation),
 	}
 }
 
-func addHistogramCount(accumulator *analyticsAccumulator, metric string, upperBoundMs int64, count int64) {
-	if count <= 0 {
+func addHistogramCount(accumulator *analyticsAccumulator, metric string, bound int64, observation histogramObservation) {
+	if observation.count <= 0 {
 		return
 	}
 	switch metric {
-	case metricTtft:
-		accumulator.ttft[upperBoundMs] += count
-	case metricTpot:
-		accumulator.tpot[upperBoundMs] += count
 	case metricTtftSum:
-		accumulator.ttftSumMs += count
+		accumulator.ttftSumMs += observation.count
+		return
 	case metricTpotTokens:
-		accumulator.tpotGenerationTokens += count
+		accumulator.tpotGenerationTokens += observation.count
+		return
 	case metricTpotSum:
-		accumulator.tpotGenerationMs += count
+		accumulator.tpotGenerationMs += observation.count
+		return
 	case metricTtftAverageCount:
-		accumulator.ttftAverageCount += count
+		accumulator.ttftAverageCount += observation.count
+		return
 	case metricTpotAverageCount:
-		accumulator.tpotAverageCount += count
+		accumulator.tpotAverageCount += observation.count
+		return
 	}
+	if accumulator.histograms[metric] == nil {
+		accumulator.histograms[metric] = make(map[int64]histogramObservation)
+	}
+	current := accumulator.histograms[metric][bound]
+	current.count += observation.count
+	current.maxValue = max(current.maxValue, observation.maxValue)
+	current.maxSamples += observation.maxSamples
+	accumulator.histograms[metric][bound] = current
 }
 
 func mergeAnalyticsAccumulator(target *analyticsAccumulator, source *analyticsAccumulator) {
@@ -428,11 +430,10 @@ func mergeAnalyticsAccumulator(target *analyticsAccumulator, source *analyticsAc
 	target.cacheWrite5mTokens += source.cacheWrite5mTokens
 	target.cacheWrite1hTokens += source.cacheWrite1hTokens
 
-	for upperBoundMs, count := range source.ttft {
-		target.ttft[upperBoundMs] += count
-	}
-	for upperBoundMs, count := range source.tpot {
-		target.tpot[upperBoundMs] += count
+	for metric, histogram := range source.histograms {
+		for bound, observation := range histogram {
+			addHistogramCount(target, metric, bound, observation)
+		}
 	}
 }
 
@@ -446,8 +447,8 @@ func buildAnalyticsPoint(ts int64, bucketSeconds int64, accumulator *analyticsAc
 		Rpm:            analyticsPerMinute(accumulator.requestCount, bucketSeconds),
 		Tpm:            analyticsPerMinute(accumulator.totalTokens, bucketSeconds),
 		CacheHitRate:   analyticsCacheHitRate(accumulator),
-		Ttft:           analyticsLatencyPercentiles(accumulator.ttft, accumulator.ttftSumMs, accumulator.ttftAverageCount, accumulator.ttftAverageCount),
-		Tpot:           analyticsLatencyPercentiles(accumulator.tpot, accumulator.tpotGenerationMs, accumulator.tpotAverageCount, accumulator.tpotGenerationTokens),
+		Ttft:           analyticsLatencyPercentiles(accumulator.histograms[metricTtft], accumulator.ttftSumMs, accumulator.ttftAverageCount, accumulator.ttftAverageCount),
+		Tpot:           analyticsLatencyPercentiles(accumulator.histograms[metricTpot], accumulator.tpotGenerationMs, accumulator.tpotAverageCount, accumulator.tpotGenerationTokens),
 	}
 }
 
@@ -460,8 +461,8 @@ func buildAnalyticsSummary(durationSeconds int64, accumulator *analyticsAccumula
 		Rpm:            analyticsPerMinute(accumulator.requestCount, durationSeconds),
 		Tpm:            analyticsPerMinute(accumulator.totalTokens, durationSeconds),
 		CacheHitRate:   analyticsCacheHitRate(accumulator),
-		Ttft:           analyticsLatencyPercentiles(accumulator.ttft, accumulator.ttftSumMs, accumulator.ttftAverageCount, accumulator.ttftAverageCount),
-		Tpot:           analyticsLatencyPercentiles(accumulator.tpot, accumulator.tpotGenerationMs, accumulator.tpotAverageCount, accumulator.tpotGenerationTokens),
+		Ttft:           analyticsLatencyPercentiles(accumulator.histograms[metricTtft], accumulator.ttftSumMs, accumulator.ttftAverageCount, accumulator.ttftAverageCount),
+		Tpot:           analyticsLatencyPercentiles(accumulator.histograms[metricTpot], accumulator.tpotGenerationMs, accumulator.tpotAverageCount, accumulator.tpotGenerationTokens),
 	}
 }
 
@@ -487,17 +488,20 @@ func analyticsSuccessRate(accumulator *analyticsAccumulator) float64 {
 	return math.Round(float64(accumulator.successCount)/float64(accumulator.requestCount)*10000) / 100
 }
 
-func histogramPercentiles(histogram map[int64]int64) AnalyticsPercentiles {
-	var sampleCount int64
-	for _, count := range histogram {
-		sampleCount += count
+func histogramPercentiles(histogram map[int64]histogramObservation) AnalyticsPercentiles {
+	values := valuePercentiles(histogram, 1)
+	result := AnalyticsPercentiles{
+		P50Ms: int64(values.P50), P90Ms: int64(values.P90), P95Ms: int64(values.P95), P99Ms: int64(values.P99), SampleCount: values.SampleCount,
 	}
-	return AnalyticsPercentiles{
-		P50Ms:       histogramPercentile(histogram, sampleCount, 0.50),
-		P90Ms:       histogramPercentile(histogram, sampleCount, 0.90),
-		P99Ms:       histogramPercentile(histogram, sampleCount, 0.99),
-		SampleCount: sampleCount,
+	if values.Max != nil {
+		maximum := int64(*values.Max)
+		// Preserve integer maxima even above float64's exact integer range.
+		for _, observation := range histogram {
+			maximum = max(maximum, observation.maxValue)
+		}
+		result.MaxMs = &maximum
 	}
+	return result
 }
 
 func histogramPercentile(histogram map[int64]int64, sampleCount int64, percentile float64) int64 {
@@ -522,6 +526,7 @@ func histogramPercentile(histogram map[int64]int64, sampleCount int64, percentil
 
 func buildAnalyticsUsage(a *analyticsAccumulator) AnalyticsUsage {
 	result := AnalyticsUsage{
+		MetricPercentiles:   buildMetricPercentiles(a),
 		CacheReadTokens:     a.cacheReadTokens,
 		RequestBodySamples:  a.requestBodySamples,
 		RequestBodyBytes:    a.requestBodyBytes,
@@ -541,7 +546,7 @@ func buildAnalyticsUsage(a *analyticsAccumulator) AnalyticsUsage {
 
 // Legacy buckets have percentile counts but no recorded sums. Only expose an
 // average when every sample in the requested bucket has a measured sum.
-func analyticsLatencyPercentiles(histogram map[int64]int64, sumMs, averageCount, weight int64) AnalyticsPercentiles {
+func analyticsLatencyPercentiles(histogram map[int64]histogramObservation, sumMs, averageCount, weight int64) AnalyticsPercentiles {
 	result := histogramPercentiles(histogram)
 	if weight > 0 && averageCount > 0 && averageCount == result.SampleCount {
 		average := float64(sumMs) / float64(weight)

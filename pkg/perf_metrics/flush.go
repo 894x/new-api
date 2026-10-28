@@ -115,22 +115,13 @@ func flushDetailBuckets() {
 			return true
 		}
 
-		histograms := make([]model.PerfMetricHistogram, 0, len(histogramUpperBoundsMs)*2)
-		for i, upperBoundMs := range histogramUpperBoundsMs {
-			if drained.ttftBuckets[i] > 0 {
-				histograms = append(histograms, model.PerfMetricHistogram{
-					ModelName: bucketKey.model, UserId: bucketKey.userId, TokenId: bucketKey.tokenId,
-					BucketTs: bucketKey.bucketTs, Metric: metricTtft, UpperBoundMs: upperBoundMs,
-					Count: drained.ttftBuckets[i],
-				})
-			}
-			if drained.tpotBuckets[i] > 0 {
-				histograms = append(histograms, model.PerfMetricHistogram{
-					ModelName: bucketKey.model, UserId: bucketKey.userId, TokenId: bucketKey.tokenId,
-					BucketTs: bucketKey.bucketTs, Metric: metricTpot, UpperBoundMs: upperBoundMs,
-					Count: drained.tpotBuckets[i],
-				})
-			}
+		histograms := make([]model.PerfMetricHistogram, 0, len(drained.histograms))
+		for key, observation := range drained.histograms {
+			histograms = append(histograms, model.PerfMetricHistogram{
+				ModelName: bucketKey.model, UserId: bucketKey.userId, TokenId: bucketKey.tokenId,
+				BucketTs: bucketKey.bucketTs, Metric: key.metric, UpperBoundMs: key.upperBound,
+				Count: observation.count, MaxValue: observation.maxValue, MaxSamples: observation.maxSamples,
+			})
 		}
 		// Sufficient statistics share the existing dimension/bucket transaction.
 		// Separate metric names keep them out of the latency histogram and preserve

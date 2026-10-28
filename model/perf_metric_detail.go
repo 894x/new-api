@@ -48,6 +48,8 @@ type PerfMetricHistogram struct {
 	Metric       string `json:"metric" gorm:"size:8;uniqueIndex:idx_perf_hist_dimension_bucket,priority:5"`
 	UpperBoundMs int64  `json:"upper_bound_ms" gorm:"uniqueIndex:idx_perf_hist_dimension_bucket,priority:6"`
 	Count        int64  `json:"-" gorm:"default:0"`
+	MaxValue     int64  `json:"-" gorm:"default:0"`
+	MaxSamples   int64  `json:"-" gorm:"default:0"`
 }
 
 func (PerfMetricHistogram) TableName() string {
@@ -125,7 +127,7 @@ func UpsertPerfAnalyticsBuckets(details []PerfMetricDetail, histograms []PerfMet
 					{Name: "metric"},
 					{Name: "upper_bound_ms"},
 				},
-				DoUpdates: perfMetricAdditiveAssignments("perf_metric_histograms", []string{"count"}),
+				DoUpdates: perfMetricAdditiveAssignments("perf_metric_histograms", []string{"count", "max_samples"}),
 			}).CreateInBatches(&histograms, 100).Error; err != nil {
 				return err
 			}
@@ -146,13 +148,16 @@ func perfMetricAdditiveAssignments(tableName string, columns []string) clause.Se
 			Value:  gorm.Expr(tableName + "." + column + " + " + insertedValue),
 		})
 	}
-	if tableName == "perf_metric_details" {
-		inserted := "excluded.request_body_max_bytes"
-		if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
-			inserted = "VALUES(request_body_max_bytes)"
-		}
-		assignments = append(assignments, clause.Assignment{Column: clause.Column{Name: "request_body_max_bytes"}, Value: gorm.Expr("CASE WHEN " + tableName + ".request_body_max_bytes > " + inserted + " THEN " + tableName + ".request_body_max_bytes ELSE " + inserted + " END")})
+	maxColumn := "request_body_max_bytes"
+	if tableName == "perf_metric_histograms" {
+		maxColumn = "max_value"
 	}
+	inserted := "excluded." + maxColumn
+	if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
+		inserted = "VALUES(" + maxColumn + ")"
+	}
+	current := tableName + "." + maxColumn
+	assignments = append(assignments, clause.Assignment{Column: clause.Column{Name: maxColumn}, Value: gorm.Expr("CASE WHEN " + current + " > " + inserted + " THEN " + current + " ELSE " + inserted + " END")})
 	return assignments
 }
 
@@ -180,7 +185,7 @@ func getPerfMetricHistograms(db *gorm.DB, filter PerfMetricDetailFilter) ([]Perf
 	query := applyPerfMetricDetailFilter(db.Model(&PerfMetricHistogram{}), filter)
 	bucketExpression := perfMetricBucketExpression(filter.BucketSeconds)
 	return histograms, query.
-		Select(bucketExpression + " AS bucket_ts, metric, upper_bound_ms, SUM(count) AS count").
+		Select(bucketExpression + " AS bucket_ts, metric, upper_bound_ms, SUM(count) AS count, MAX(max_value) AS max_value, SUM(max_samples) AS max_samples").
 		Group(bucketExpression + ", metric, upper_bound_ms").
 		Order("bucket_ts ASC, metric ASC, upper_bound_ms ASC").
 		Find(&histograms).Error

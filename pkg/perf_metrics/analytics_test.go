@@ -143,8 +143,9 @@ func TestRecordRelaySampleFeedsVisibleTtftAndTpotPercentiles(t *testing.T) {
 	assert.Equal(t, int64(1), result.Summary.RequestCount)
 	assert.Equal(t, 100.0, result.Summary.SuccessRate)
 	avgTtft, avgTpot := 250.0, 80.0
-	assert.Equal(t, AnalyticsPercentiles{AvgMs: &avgTtft, P50Ms: 250, P90Ms: 250, P99Ms: 250, SampleCount: 1}, result.Summary.Ttft)
-	assert.Equal(t, AnalyticsPercentiles{AvgMs: &avgTpot, P50Ms: 80, P90Ms: 80, P99Ms: 80, SampleCount: 1}, result.Summary.Tpot)
+	maxTtft, maxTpot := int64(250), int64(80)
+	assert.Equal(t, AnalyticsPercentiles{AvgMs: &avgTtft, P50Ms: 250, P90Ms: 250, P95Ms: 250, P99Ms: 250, MaxMs: &maxTtft, SampleCount: 1}, result.Summary.Ttft)
+	assert.Equal(t, AnalyticsPercentiles{AvgMs: &avgTpot, P50Ms: 80, P90Ms: 80, P95Ms: 80, P99Ms: 80, MaxMs: &maxTpot, SampleCount: 1}, result.Summary.Tpot)
 }
 
 func TestRecordRelaySampleDoesNotInventStreamingMetricsForNonStreamRequests(t *testing.T) {
@@ -251,7 +252,8 @@ func TestQueryAnalyticsIncludesActiveDetailBucket(t *testing.T) {
 	assert.Equal(t, int64(2), result.Summary.RequestCount)
 	assert.Equal(t, 50.0, result.Summary.SuccessRate)
 	avgTtft := 150.0
-	assert.Equal(t, AnalyticsPercentiles{AvgMs: &avgTtft, P50Ms: 100, P90Ms: 250, P99Ms: 250, SampleCount: 2}, result.Summary.Ttft)
+	maximum := int64(200)
+	assert.Equal(t, AnalyticsPercentiles{AvgMs: &avgTtft, P50Ms: 100, P90Ms: 200, P95Ms: 200, P99Ms: 200, MaxMs: &maximum, SampleCount: 2}, result.Summary.Ttft)
 
 	flushDetailBuckets()
 	result, err = QueryAnalytics(params)
@@ -380,4 +382,82 @@ func TestSealedCompletedBucketRetriesBoundarySample(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, int64(1), drained.requestCount)
 	assert.Equal(t, int64(1), drained.successCount)
+}
+
+func TestAnalyticsRequestDistributionsSurviveFlushRetry(t *testing.T) {
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PerfMetricDetail{}, &model.PerfMetricHistogram{}))
+	model.DB, model.LOG_DB = db, nil
+	detailHotBuckets = sync.Map{}
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		detailHotBuckets = sync.Map{}
+		sqlDB, err := db.DB()
+		require.NoError(t, err)
+		require.NoError(t, sqlDB.Close())
+	})
+	for _, fixture := range []struct{ value, count int64 }{{0, 50}, {100, 40}, {200, 5}, {400, 4}, {573, 1}} {
+		for range fixture.count {
+			size := fixture.value
+			recordDetail(Sample{Model: "distribution", UserId: 7, TokenId: 11, Success: true,
+				RequestBodyBytes: &size, CacheWriteKnown: true, CacheWriteTokens: size,
+				CacheReadKnown: true, InputTokens: 1000, CacheReadTokens: size,
+				HasTtft: true, TtftMs: size + 1, HasTpot: true, TpotMs: size + 1,
+			}, time.Unix(600, 0))
+		}
+	}
+	// Unknown observations are excluded from distributions, while measured zeros remain.
+	recordDetail(Sample{Model: "distribution", UserId: 7, TokenId: 11}, time.Unix(600, 0))
+	params := AnalyticsQueryParams{Model: "distribution", UserId: 7, StartTs: 300, EndTs: 900}
+	before, err := QueryAnalytics(params)
+	require.NoError(t, err)
+	maximum := 573.0
+	expected := AnalyticsValuePercentiles{P50: 0, P90: 104, P95: 208, P99: 416, Max: &maximum, SampleCount: 100}
+	assert.Equal(t, expected, before.Summary.MetricPercentiles["cache_write_tokens"])
+	assert.Equal(t, expected, before.Summary.MetricPercentiles["request_body_avg_bytes"])
+	hit := before.Summary.MetricPercentiles["cache_hit_rate"]
+	assert.Equal(t, int64(100), hit.SampleCount)
+	assert.InDelta(t, 57.3, *hit.Max, 0.001)
+	assert.Equal(t, int64(574), *before.Summary.Ttft.MaxMs)
+	assert.Equal(t, int64(250), before.Summary.Ttft.P95Ms)
+	// TPOT averages require measured generation duration and output token weights.
+	ttftDistribution := before.Summary.Ttft
+	ttftDistribution.AvgMs = nil
+	assert.Equal(t, ttftDistribution, before.Summary.Tpot)
+	require.Len(t, before.Series, 1)
+	assert.Equal(t, expected, before.Series[0].MetricPercentiles["cache_write_tokens"])
+
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("test:fail_histogram", func(tx *gorm.DB) {
+		if tx.Statement.Table == "perf_metric_histograms" {
+			tx.AddError(errors.New("test histogram write failure"))
+		}
+	}))
+	flushDetailBuckets()
+	afterFailure, err := QueryAnalytics(params)
+	require.NoError(t, err)
+	assert.Equal(t, before, afterFailure, "failed transaction restores every distribution and exact maximum")
+	require.NoError(t, db.Callback().Create().Remove("test:fail_histogram"))
+	flushDetailBuckets()
+	flushDetailBuckets()
+	afterFlush, err := QueryAnalytics(params)
+	require.NoError(t, err)
+	assert.Equal(t, before, afterFlush, "persistence and repeated flushes preserve the API result")
+}
+
+func TestAnalyticsLegacyMaximumIsUnknownAndNewLongTailsKeepExactMaximum(t *testing.T) {
+	legacy := histogramPercentiles(map[int64]histogramObservation{250: {count: 1}})
+	assert.Equal(t, int64(250), legacy.P95Ms)
+	assert.Nil(t, legacy.MaxMs)
+	mixed := histogramPercentiles(map[int64]histogramObservation{250: {count: 2, maxSamples: 1, maxValue: 201}})
+	assert.Nil(t, mixed.MaxMs, "a new observation cannot reconstruct a legacy maximum")
+	bucket := &atomicDetailBucket{}
+	require.True(t, bucket.add(Sample{HasTtft: true, TtftMs: 800001}))
+	accumulator := newAnalyticsAccumulator()
+	addDetailCounters(accumulator, bucket.snapshot())
+	point := buildAnalyticsPoint(600, 300, accumulator)
+	require.NotNil(t, point.Ttft.MaxMs)
+	assert.Equal(t, int64(800001), *point.Ttft.MaxMs)
+	assert.Equal(t, int64(800001), point.Ttft.P99Ms)
 }
