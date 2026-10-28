@@ -1,17 +1,65 @@
 package router
 
 import (
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/controller"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChannelResourceGroupRequiresRoot(t *testing.T) {
+	fixture := setupManagedUserE2E(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.AuditLog{}))
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", fixture.managerA.Id).Update("role", common.RoleAdminUser).Error)
+	for _, userID := range []int{0, fixture.unprivileged.Id, fixture.managerA.Id} {
+		status, _ := fixture.request(t, http.MethodPost, "/api/channel/1/resource-group", userID, map[string]any{"group_name": "资源-Vendor"})
+		assert.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, status)
+	}
+	status, _ := fixture.request(t, http.MethodPost, "/api/channel/invalid/resource-group", fixture.root.Id, map[string]any{"group_name": "资源-Vendor"})
+	assert.Equal(t, http.StatusBadRequest, status)
+
+	oldRatios := ratio_setting.GroupRatio2JSONString()
+	oldTiered := ratio_setting.ModelTieredRatios2JSONString()
+	common.OptionMapRWMutex.Lock()
+	oldOptions := maps.Clone(common.OptionMap)
+	common.OptionMap = maps.Clone(oldOptions)
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupPricingConfiguration(oldRatios, oldTiered))
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = oldOptions
+		common.OptionMapRWMutex.Unlock()
+	})
+	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.Option{}))
+	channel := model.Channel{Name: "Vendor", Type: 1, Key: "resource-group-channel-secret", Group: "default", Models: "model-a", Status: common.ChannelStatusEnabled}
+	require.NoError(t, model.DB.Create(&channel).Error)
+	status, response := fixture.request(t, http.MethodPost, "/api/channel/"+strconv.Itoa(channel.Id)+"/resource-group", fixture.root.Id, map[string]any{"group_name": "资源-Vendor"})
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, true, response["success"])
+	data := response["data"].(map[string]any)
+	assert.Equal(t, "资源-Vendor", data["group_name"])
+	assert.Equal(t, []any{"default", "资源-Vendor"}, data["channel_groups"])
+	encoded, err := common.Marshal(response)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), channel.Key)
+	var audits []model.AuditLog
+	require.NoError(t, model.DB.Where("action = ?", "channel.resource_group").Find(&audits).Error)
+	assert.Len(t, audits, 1)
+}
 
 func TestChannelDefaultBaseURLsRequireReadPermission(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodGet, "/default_base_urls", authz.ChannelRead, controller.GetChannelDefaultBaseURLs)

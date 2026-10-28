@@ -53,6 +53,44 @@ const channelActionConfig = (
   skipErrorHandler: true,
 })
 
+export type ResourceGroupConflict = {
+  group_name: string
+  ratio: number
+  channels: { id: number; name: string }[]
+}
+
+type ChannelResourceGroupResponse =
+  | {
+      success: true
+      data: {
+        group_name: string
+        channel_groups: string[]
+        created: boolean
+        ratio: number
+      }
+    }
+  | {
+      success: false
+      code: 'RESOURCE_GROUP_EXISTS'
+      message: string
+      data: ResourceGroupConflict
+    }
+
+export async function createChannelResourceGroup(
+  channelId: number,
+  request: { group_name: string; reuse_existing: boolean }
+): Promise<ChannelResourceGroupResponse> {
+  const response = await api.post<ChannelResourceGroupResponse>(
+    `/api/channel/${channelId}/resource-group`,
+    request,
+    channelActionConfig({
+      validateStatus: (status) =>
+        (status >= 200 && status < 300) || status === 409,
+    })
+  )
+  return response.data
+}
+
 export async function getInferenceStatus(
   channelId: number,
   provider: 'vllm' | 'sglang',

@@ -130,6 +130,51 @@ function ConfigurationHarness(props: {
   )
 }
 
+test('root can create a resource group from the editor without discarding unsaved fields', async () => {
+  const user = userEvent.setup()
+  vi.spyOn(api, 'post').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        group_name: '资源-Existing channel',
+        channel_groups: ['default', '资源-Existing channel'],
+        created: true,
+        ratio: 1,
+      },
+    },
+  })
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  const name = await screen.findByDisplayValue('Existing channel')
+  await user.clear(name)
+  await user.type(name, 'Unsaved channel name')
+  await user.click(
+    screen.getByRole('button', { name: 'Create resource group' })
+  )
+  expect(screen.getByRole('textbox', { name: 'Group name' })).toHaveValue(
+    '资源-Existing channel'
+  )
+  await user.click(screen.getByRole('button', { name: 'Create and associate' }))
+  await waitFor(() =>
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  )
+  expect(name).toHaveValue('Unsaved channel name')
+  expect(screen.getByText('资源-Existing channel')).toBeVisible()
+})
+
+test('ordinary administrators cannot see the system resource group creation action', async () => {
+  useAuthStore.setState({
+    auth: {
+      ...originalAuth,
+      user: { id: 2, username: 'admin', role: ROLE.ADMIN },
+    },
+  })
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  expect(
+    screen.queryByRole('button', { name: 'Create resource group' })
+  ).not.toBeInTheDocument()
+})
+
 beforeEach(() => {
   pluginOptions = plugins
   editingChannel = channelSchema.parse({

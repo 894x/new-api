@@ -17,6 +17,8 @@ type permissionRoute struct {
 }
 
 func registerChannelRoutes(apiRouter *gin.RouterGroup) {
+	// This operation also writes system group settings, which are root-only.
+	apiRouter.POST("/channel/:id/resource-group", middleware.RootAuth(), controller.CreateChannelResourceGroup)
 	channelRoute := apiRouter.Group("/channel")
 	channelRoute.Use(middleware.AdminAuth())
 
