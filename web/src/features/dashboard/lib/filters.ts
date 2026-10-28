@@ -174,6 +174,7 @@ export interface PerformanceAnalyticsFilterState {
   endTimestamp: number
   userId?: number
   tokenId?: number
+  channelId?: number
 }
 
 export interface PerformanceAnalyticsQueryParams {
@@ -182,6 +183,7 @@ export interface PerformanceAnalyticsQueryParams {
   end_timestamp: number
   user_id?: number
   token_id?: number
+  channel_id?: number
 }
 
 export function buildPerformanceAnalyticsParams(
@@ -199,6 +201,10 @@ export function buildPerformanceAnalyticsParams(
       params.token_id = filters.tokenId
     }
     return params
+  }
+
+  if (filters.channelId && filters.channelId > 0) {
+    params.channel_id = filters.channelId
   }
 
   if (filters.userId && filters.userId > 0) {

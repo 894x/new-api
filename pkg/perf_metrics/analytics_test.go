@@ -33,8 +33,8 @@ func TestAnalyticsLightweightFactsSurviveFlushAndRetryWithoutCapture(t *testing.
 	now := time.Now()
 	// A rolling upgrade can append new measurements to an existing old bucket.
 	require.NoError(t, db.Create(&model.PerfMetricDetail{ModelName: "facts", UserId: 7, TokenId: 11, BucketTs: bucketStart(now.Unix()), RequestCount: 2, InputTokens: 200, CacheReadTokens: 40}).Error)
-	for _, size := range []int64{1024, 3072} {
-		recordDetail(Sample{Model: "facts", UserId: 7, TokenId: 11, Success: true, RequestBodyBytes: &size, InputTokens: 100, CacheReadTokens: 40, CacheWriteTokens: 30, CacheWrite5mTokens: 10, CacheWrite1hTokens: 20}, now)
+	for i, size := range []int64{1024, 3072} {
+		recordDetail(Sample{Model: "facts", UserId: 7, TokenId: 11, Success: true, RequestBodyBytes: &size, HasTtft: true, TtftMs: []int64{641, 645}[i], HasTpot: true, TpotMs: []int64{8, 2}[i], GenerationMs: []int64{8, 18}[i], OutputTokens: []int64{2, 10}[i], InputTokens: 100, CacheReadTokens: 40, CacheWriteTokens: 30, CacheWrite5mTokens: 10, CacheWrite1hTokens: 20}, now)
 	}
 	// An older/missing measurement must not become a zero-byte observation.
 	recordDetail(Sample{Model: "facts", UserId: 7, TokenId: 11, Success: true}, now)
@@ -60,6 +60,14 @@ func TestAnalyticsLightweightFactsSurviveFlushAndRetryWithoutCapture(t *testing.
 	assert.Equal(t, int64(20), result.Summary.CacheWrite5mTokens)
 	assert.Equal(t, int64(40), result.Summary.CacheWrite1hTokens)
 	assert.Equal(t, 30.0, result.Summary.CacheHitRate)
+	require.NotNil(t, result.Summary.Ttft.AvgMs)
+	require.NotNil(t, result.Summary.Tpot.AvgMs)
+	assert.Equal(t, 643.0, *result.Summary.Ttft.AvgMs)
+	assert.Equal(t, 2.6, *result.Summary.Tpot.AvgMs)
+	require.NoError(t, db.Create(&model.PerfMetricHistogram{ModelName: "facts", UserId: 7, TokenId: 11, BucketTs: bucketStart(now.Unix()), Metric: "ttft", UpperBoundMs: 1000, Count: 1}).Error)
+	mixed, err := QueryAnalytics(params)
+	require.NoError(t, err)
+	assert.Nil(t, mixed.Summary.Ttft.AvgMs, "partial historical sums must not become an average for all samples")
 
 }
 
@@ -134,8 +142,9 @@ func TestRecordRelaySampleFeedsVisibleTtftAndTpotPercentiles(t *testing.T) {
 	require.Len(t, result.Series, 1)
 	assert.Equal(t, int64(1), result.Summary.RequestCount)
 	assert.Equal(t, 100.0, result.Summary.SuccessRate)
-	assert.Equal(t, AnalyticsPercentiles{P50Ms: 250, P90Ms: 250, P99Ms: 250, SampleCount: 1}, result.Summary.Ttft)
-	assert.Equal(t, AnalyticsPercentiles{P50Ms: 80, P90Ms: 80, P99Ms: 80, SampleCount: 1}, result.Summary.Tpot)
+	avgTtft, avgTpot := 250.0, 80.0
+	assert.Equal(t, AnalyticsPercentiles{AvgMs: &avgTtft, P50Ms: 250, P90Ms: 250, P99Ms: 250, SampleCount: 1}, result.Summary.Ttft)
+	assert.Equal(t, AnalyticsPercentiles{AvgMs: &avgTpot, P50Ms: 80, P90Ms: 80, P99Ms: 80, SampleCount: 1}, result.Summary.Tpot)
 }
 
 func TestRecordRelaySampleDoesNotInventStreamingMetricsForNonStreamRequests(t *testing.T) {
@@ -241,7 +250,8 @@ func TestQueryAnalyticsIncludesActiveDetailBucket(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), result.Summary.RequestCount)
 	assert.Equal(t, 50.0, result.Summary.SuccessRate)
-	assert.Equal(t, AnalyticsPercentiles{P50Ms: 100, P90Ms: 250, P99Ms: 250, SampleCount: 2}, result.Summary.Ttft)
+	avgTtft := 150.0
+	assert.Equal(t, AnalyticsPercentiles{AvgMs: &avgTtft, P50Ms: 100, P90Ms: 250, P99Ms: 250, SampleCount: 2}, result.Summary.Ttft)
 
 	flushDetailBuckets()
 	result, err = QueryAnalytics(params)

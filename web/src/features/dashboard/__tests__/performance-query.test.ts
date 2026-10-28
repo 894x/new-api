@@ -29,6 +29,7 @@ type BuildPerformanceAnalyticsParams = (
     endTimestamp: number
     userId?: number
     tokenId?: number
+    channelId?: number
   },
   isAdmin: boolean
 ) => Record<string, string | number>
@@ -51,6 +52,7 @@ describe('performance analytics query scoping', () => {
           startTimestamp: 100,
           endTimestamp: 200,
           userId: 99,
+          channelId: 7,
           tokenId: 11,
         },
         false
@@ -71,17 +73,20 @@ describe('performance analytics query scoping', () => {
       startTimestamp: 100,
       endTimestamp: 200,
       tokenId: 22,
+      channelId: 7,
     }
 
     assert.deepEqual(buildParams(filters, true), {
       model: 'gpt-test',
       start_timestamp: 100,
       end_timestamp: 200,
+      channel_id: 7,
     })
     assert.deepEqual(buildParams({ ...filters, userId: 2 }, true), {
       model: 'gpt-test',
       start_timestamp: 100,
       end_timestamp: 200,
+      channel_id: 7,
       user_id: 2,
       token_id: 22,
     })

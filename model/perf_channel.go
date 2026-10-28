@@ -6,13 +6,16 @@ import "context"
 // analytics. The request timing payload lives in Log.Other, so the query
 // intentionally selects only the fields needed for aggregation.
 type PerfChannelLog struct {
-	Id        int64  `gorm:"column:id"`
-	UserId    int    `gorm:"column:user_id"`
-	ChannelId int    `gorm:"column:channel_id"`
-	CreatedAt int64  `gorm:"column:created_at"`
-	Type      int    `gorm:"column:type"`
-	UseTime   int    `gorm:"column:use_time"`
-	Other     string `gorm:"column:other"`
+	Id               int64  `gorm:"column:id"`
+	UserId           int    `gorm:"column:user_id"`
+	ChannelId        int    `gorm:"column:channel_id"`
+	CreatedAt        int64  `gorm:"column:created_at"`
+	Type             int    `gorm:"column:type"`
+	UseTime          int    `gorm:"column:use_time"`
+	Other            string `gorm:"column:other"`
+	PromptTokens     int64  `gorm:"column:prompt_tokens"`
+	CompletionTokens int64  `gorm:"column:completion_tokens"`
+	IsStream         bool   `gorm:"column:is_stream"`
 }
 
 // VisitPerfChannelLogs caps both rows and decoded payload bytes; pagination never
@@ -39,6 +42,11 @@ func VisitPerfUserLogs(ctx context.Context, userID int, modelName string, tokenI
 	}, visit)
 }
 
+// VisitPerfAnalyticsChannelLogs applies all panel filters in the bounded log scan.
+func VisitPerfAnalyticsChannelLogs(ctx context.Context, channelID, userID int, modelName string, tokenID int, startTs, endTs int64, visit func(PerfChannelLog)) (int, bool, error) {
+	return visitPerfLogs(ctx, perfLogFilter{ChannelId: channelID, UserId: userID, ModelName: modelName, TokenId: tokenID, StartTs: startTs, EndTs: endTs}, visit)
+}
+
 type perfLogFilter struct {
 	ChannelId int
 	UserId    int
@@ -54,7 +62,7 @@ func visitPerfLogs(ctx context.Context, filter perfLogFilter, visit func(PerfCha
 	count, payloadBytes := 0, 0
 	for {
 		query := LOG_DB.WithContext(ctx).Model(&Log{}).
-			Select("id, user_id, channel_id, created_at, type, use_time, other")
+			Select("id, user_id, channel_id, created_at, type, use_time, other, prompt_tokens, completion_tokens, is_stream")
 		if filter.ErrorOnly {
 			query = query.Where("type = ?", LogTypeError)
 		} else {

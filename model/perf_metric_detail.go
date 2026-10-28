@@ -75,10 +75,16 @@ type PerfAnalyticsTokenOption struct {
 	Name   string `json:"name"`
 }
 
+type PerfAnalyticsChannelOption struct {
+	Id   int    `json:"id"`
+	Name string `json:"name"`
+}
+
 type PerfAnalyticsOptions struct {
-	Models []string                   `json:"models"`
-	Users  []PerfAnalyticsUserOption  `json:"users"`
-	Tokens []PerfAnalyticsTokenOption `json:"tokens"`
+	Channels []PerfAnalyticsChannelOption `json:"channels,omitempty"`
+	Models   []string                     `json:"models"`
+	Users    []PerfAnalyticsUserOption    `json:"users"`
+	Tokens   []PerfAnalyticsTokenOption   `json:"tokens"`
 }
 
 func UpsertPerfAnalyticsBucket(detail *PerfMetricDetail, histograms []PerfMetricHistogram) error {
@@ -286,6 +292,9 @@ func GetPerfAnalyticsOptions(ctx context.Context, userId int, includeUsers bool)
 	}
 
 	if includeUsers {
+		if err := db.Model(&Channel{}).Select("id, name").Order("name ASC, id ASC").Scan(&options.Channels).Error; err != nil {
+			return options, err
+		}
 		userIds := db.Model(&PerfMetricDetail{}).Distinct("user_id").Select("user_id")
 		if err := db.Model(&User{}).
 			Select("id, username").

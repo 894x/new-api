@@ -44,7 +44,7 @@ export function buildPerformanceChartOption(props: {
     animationDuration: 350,
     animationDurationUpdate: 300,
     aria: { enabled: true, description: props.title },
-    grid: { top: 42, left: 12, right: 16, bottom: 62, containLabel: true },
+    grid: { top: 42, left: 12, right: 16, bottom: 16, containLabel: true },
     legend: {
       top: 0,
       right: 4,
@@ -112,23 +112,6 @@ export function buildPerformanceChartOption(props: {
         zoomOnMouseWheel: 'ctrl',
         moveOnMouseMove: true,
         preventDefaultMouseMove: false,
-      },
-      {
-        id: 'slider',
-        type: 'slider',
-        xAxisIndex: 0,
-        filterMode: 'none',
-        bottom: 4,
-        height: 22,
-        borderColor: 'transparent',
-        brushSelect: false,
-        showDetail: false,
-        textStyle: { color: text },
-        fillerColor: props.dark ? '#3b82f633' : '#3b82f61a',
-        dataBackground: {
-          lineStyle: { color: '#94a3b8' },
-          areaStyle: { color: grid },
-        },
       },
     ],
     series: names.map((name, index) => {

@@ -132,6 +132,23 @@ func flushDetailBuckets() {
 				})
 			}
 		}
+		// Sufficient statistics share the existing dimension/bucket transaction.
+		// Separate metric names keep them out of the latency histogram and preserve
+		// compatibility with existing schemas and readers from older releases.
+		for _, statistic := range []struct {
+			metric         string
+			value, samples int64
+		}{
+			{metricTtftSum, drained.ttftSumMs, drained.ttftCount},
+			{metricTpotSum, drained.tpotGenerationMs, drained.tpotCount},
+			{metricTtftAverageCount, drained.ttftCount, drained.ttftCount},
+			{metricTpotAverageCount, drained.tpotAverageCount, drained.tpotAverageCount},
+			{metricTpotTokens, drained.tpotGenerationTokens, drained.tpotAverageCount},
+		} {
+			if statistic.samples > 0 {
+				histograms = append(histograms, model.PerfMetricHistogram{ModelName: bucketKey.model, UserId: bucketKey.userId, TokenId: bucketKey.tokenId, BucketTs: bucketKey.bucketTs, Metric: statistic.metric, UpperBoundMs: 0, Count: statistic.value})
+			}
+		}
 		pending = append(pending, pendingDetailFlush{
 			key:      bucketKey,
 			counters: drained,

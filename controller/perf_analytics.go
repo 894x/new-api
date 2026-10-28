@@ -106,6 +106,15 @@ func GetPerfAnalyticsAdminOptions(c *gin.Context) {
 }
 
 func getPerfAnalytics(c *gin.Context, userId int, admin bool) {
+	if _, supplied := c.GetQuery("channel_id"); supplied && !admin {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Channel filtering requires administrator access"})
+		return
+	}
+	channelID, ok := parsePositiveQueryInt(c, "channel_id")
+	if !ok {
+		return
+	}
+
 	modelName := strings.TrimSpace(c.Query("model"))
 	if modelName == "" || len(modelName) > 128 {
 		perfAnalyticsBadRequest(c, "model is required")
@@ -136,6 +145,24 @@ func getPerfAnalytics(c *gin.Context, userId int, admin bool) {
 		}
 	}
 
+	if channelID > 0 {
+		select {
+		case channelAnalyticsScan <- struct{}{}:
+			defer func() { <-channelAnalyticsScan }()
+		default:
+			c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": "Channel diagnostics are busy; retry shortly"})
+			return
+		}
+		result, err := perfmetrics.QueryChannelMetrics(channelID, perfmetrics.AnalyticsQueryParams{
+			Context: c.Request.Context(), Model: modelName, UserId: userId, TokenId: tokenId, StartTs: startTs, EndTs: endTs,
+		})
+		if err != nil {
+			perfAnalyticsInternalError(c, "failed to query channel metrics", err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
+		return
+	}
 	result, err := perfmetrics.QueryAnalytics(perfmetrics.AnalyticsQueryParams{
 		Context: c.Request.Context(),
 		Model:   modelName, UserId: userId, TokenId: tokenId, StartTs: startTs, EndTs: endTs,

@@ -13,8 +13,13 @@ import (
 )
 
 const (
-	metricTtft = "ttft"
-	metricTpot = "tpot"
+	metricTtft             = "ttft"
+	metricTpot             = "tpot"
+	metricTtftSum          = "ttft_sum"
+	metricTpotSum          = "tpot_sum"
+	metricTtftAverageCount = "ttft_n"
+	metricTpotAverageCount = "tpot_n"
+	metricTpotTokens       = "tpot_tok"
 )
 
 var histogramUpperBoundsMs = [...]int64{
@@ -33,10 +38,11 @@ type AnalyticsQueryParams struct {
 }
 
 type AnalyticsPercentiles struct {
-	P50Ms       int64 `json:"p50_ms"`
-	P90Ms       int64 `json:"p90_ms"`
-	P99Ms       int64 `json:"p99_ms"`
-	SampleCount int64 `json:"sample_count"`
+	AvgMs       *float64 `json:"avg_ms"`
+	P50Ms       int64    `json:"p50_ms"`
+	P90Ms       int64    `json:"p90_ms"`
+	P99Ms       int64    `json:"p99_ms"`
+	SampleCount int64    `json:"sample_count"`
 }
 
 type AnalyticsSummary struct {
@@ -97,20 +103,24 @@ type detailBucketKey struct {
 }
 
 type detailCounters struct {
-	requestCount        int64
-	successCount        int64
-	inputTokens         int64
-	outputTokens        int64
-	totalTokens         int64
-	cacheReadTokens     int64
-	requestBodySamples  int64
-	requestBodyBytes    int64
-	requestBodyMaxBytes int64
-	cacheReadSamples    int64
-	cacheWriteTokens    int64
-	cacheWriteSamples   int64
-	cacheWrite5mTokens  int64
-	cacheWrite1hTokens  int64
+	tpotGenerationTokens int64
+	tpotAverageCount     int64
+	ttftSumMs            int64
+	tpotGenerationMs     int64
+	requestCount         int64
+	successCount         int64
+	inputTokens          int64
+	outputTokens         int64
+	totalTokens          int64
+	cacheReadTokens      int64
+	requestBodySamples   int64
+	requestBodyBytes     int64
+	requestBodyMaxBytes  int64
+	cacheReadSamples     int64
+	cacheWriteTokens     int64
+	cacheWriteSamples    int64
+	cacheWrite5mTokens   int64
+	cacheWrite1hTokens   int64
 
 	ttftCount   int64
 	tpotCount   int64
@@ -119,20 +129,25 @@ type detailCounters struct {
 }
 
 type analyticsAccumulator struct {
-	requestCount        int64
-	errorCount          int64
-	successCount        int64
-	inputTokens         int64
-	totalTokens         int64
-	cacheReadTokens     int64
-	requestBodySamples  int64
-	requestBodyBytes    int64
-	requestBodyMaxBytes int64
-	cacheReadSamples    int64
-	cacheWriteTokens    int64
-	cacheWriteSamples   int64
-	cacheWrite5mTokens  int64
-	cacheWrite1hTokens  int64
+	tpotGenerationTokens int64
+	ttftSumMs            int64
+	tpotGenerationMs     int64
+	ttftAverageCount     int64
+	tpotAverageCount     int64
+	requestCount         int64
+	errorCount           int64
+	successCount         int64
+	inputTokens          int64
+	totalTokens          int64
+	cacheReadTokens      int64
+	requestBodySamples   int64
+	requestBodyBytes     int64
+	requestBodyMaxBytes  int64
+	cacheReadSamples     int64
+	cacheWriteTokens     int64
+	cacheWriteSamples    int64
+	cacheWrite5mTokens   int64
+	cacheWrite1hTokens   int64
 
 	ttft map[int64]int64
 	tpot map[int64]int64
@@ -283,6 +298,11 @@ func mergeActiveDetailBuckets(series map[int64]*analyticsAccumulator, params Ana
 }
 
 func addDetailCounters(target *analyticsAccumulator, source detailCounters) {
+	target.ttftSumMs += source.ttftSumMs
+	target.tpotGenerationMs += source.tpotGenerationMs
+	target.ttftAverageCount += source.ttftCount
+	target.tpotAverageCount += source.tpotAverageCount
+	target.tpotGenerationTokens += source.tpotGenerationTokens
 	target.requestCount += source.requestCount
 	target.successCount += source.successCount
 	target.inputTokens += source.inputTokens
@@ -374,10 +394,25 @@ func addHistogramCount(accumulator *analyticsAccumulator, metric string, upperBo
 		accumulator.ttft[upperBoundMs] += count
 	case metricTpot:
 		accumulator.tpot[upperBoundMs] += count
+	case metricTtftSum:
+		accumulator.ttftSumMs += count
+	case metricTpotTokens:
+		accumulator.tpotGenerationTokens += count
+	case metricTpotSum:
+		accumulator.tpotGenerationMs += count
+	case metricTtftAverageCount:
+		accumulator.ttftAverageCount += count
+	case metricTpotAverageCount:
+		accumulator.tpotAverageCount += count
 	}
 }
 
 func mergeAnalyticsAccumulator(target *analyticsAccumulator, source *analyticsAccumulator) {
+	target.ttftSumMs += source.ttftSumMs
+	target.tpotGenerationMs += source.tpotGenerationMs
+	target.ttftAverageCount += source.ttftAverageCount
+	target.tpotAverageCount += source.tpotAverageCount
+	target.tpotGenerationTokens += source.tpotGenerationTokens
 	target.requestCount += source.requestCount
 	target.errorCount += source.errorCount
 	target.successCount += source.successCount
@@ -411,8 +446,8 @@ func buildAnalyticsPoint(ts int64, bucketSeconds int64, accumulator *analyticsAc
 		Rpm:            analyticsPerMinute(accumulator.requestCount, bucketSeconds),
 		Tpm:            analyticsPerMinute(accumulator.totalTokens, bucketSeconds),
 		CacheHitRate:   analyticsCacheHitRate(accumulator),
-		Ttft:           histogramPercentiles(accumulator.ttft),
-		Tpot:           histogramPercentiles(accumulator.tpot),
+		Ttft:           analyticsLatencyPercentiles(accumulator.ttft, accumulator.ttftSumMs, accumulator.ttftAverageCount, accumulator.ttftAverageCount),
+		Tpot:           analyticsLatencyPercentiles(accumulator.tpot, accumulator.tpotGenerationMs, accumulator.tpotAverageCount, accumulator.tpotGenerationTokens),
 	}
 }
 
@@ -425,8 +460,8 @@ func buildAnalyticsSummary(durationSeconds int64, accumulator *analyticsAccumula
 		Rpm:            analyticsPerMinute(accumulator.requestCount, durationSeconds),
 		Tpm:            analyticsPerMinute(accumulator.totalTokens, durationSeconds),
 		CacheHitRate:   analyticsCacheHitRate(accumulator),
-		Ttft:           histogramPercentiles(accumulator.ttft),
-		Tpot:           histogramPercentiles(accumulator.tpot),
+		Ttft:           analyticsLatencyPercentiles(accumulator.ttft, accumulator.ttftSumMs, accumulator.ttftAverageCount, accumulator.ttftAverageCount),
+		Tpot:           analyticsLatencyPercentiles(accumulator.tpot, accumulator.tpotGenerationMs, accumulator.tpotAverageCount, accumulator.tpotGenerationTokens),
 	}
 }
 
@@ -500,6 +535,17 @@ func buildAnalyticsUsage(a *analyticsAccumulator) AnalyticsUsage {
 	if a.requestBodySamples > 0 {
 		average := float64(a.requestBodyBytes) / float64(a.requestBodySamples)
 		result.RequestBodyAvgBytes = &average
+	}
+	return result
+}
+
+// Legacy buckets have percentile counts but no recorded sums. Only expose an
+// average when every sample in the requested bucket has a measured sum.
+func analyticsLatencyPercentiles(histogram map[int64]int64, sumMs, averageCount, weight int64) AnalyticsPercentiles {
+	result := histogramPercentiles(histogram)
+	if weight > 0 && averageCount > 0 && averageCount == result.SampleCount {
+		average := float64(sumMs) / float64(weight)
+		result.AvgMs = &average
 	}
 	return result
 }
