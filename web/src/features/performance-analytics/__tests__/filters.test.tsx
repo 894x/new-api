@@ -17,7 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
 
@@ -37,6 +44,9 @@ vi.mock('react-i18next', () => ({
 }))
 
 vi.mock('@visactor/react-vchart', () => ({ VChart: () => null }))
+vi.mock('@visactor/vchart', () => ({
+  ThemeManager: { setCurrentTheme: vi.fn() },
+}))
 
 const {
   getPerformanceAnalytics,
@@ -145,6 +155,45 @@ beforeEach(() => {
   )
 })
 
+test('automatically refreshes the main panel, freezes on pause, and resumes at the latest window', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(1_800_000_000_000)
+  const view = renderAnalytics()
+  try {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(getPerformanceAnalytics).toHaveBeenLastCalledWith(
+      expect.objectContaining({ end_timestamp: 1_800_000_015 }),
+      true,
+      expect.any(AbortSignal)
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Pause live updates' }))
+    expect(screen.getByText('Paused · exploring history')).toBeVisible()
+    const requests = getPerformanceAnalytics.mock.calls.length
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000)
+    })
+    expect(getPerformanceAnalytics).toHaveBeenCalledTimes(requests)
+    fireEvent.click(screen.getByRole('button', { name: 'Back to latest' }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(screen.getByText('Live · every 15 seconds')).toBeVisible()
+    expect(getPerformanceAnalytics).toHaveBeenLastCalledWith(
+      expect.objectContaining({ end_timestamp: 1_800_000_045 }),
+      true,
+      expect.any(AbortSignal)
+    )
+  } finally {
+    view.unmount()
+    vi.useRealTimers()
+  }
+})
+
 test('retains the last statistics and filters after a refresh fails', async () => {
   getPerformanceAnalytics.mockResolvedValue(
     response({
@@ -221,6 +270,40 @@ test('shows missing measurements as unknown while retaining explicitly measured 
     expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
   )
   expect(screen.getAllByText('0 B')).toHaveLength(2)
+})
+
+test('shows P95 and measured MAX alongside the existing latency percentiles', async () => {
+  getPerformanceAnalytics.mockResolvedValue(
+    response({
+      ...emptyAnalytics,
+      summary: {
+        ...emptyAnalytics.summary,
+        request_count: 1,
+        ttft: {
+          p50_ms: 1000,
+          p90_ms: 2000,
+          p95_ms: 3000,
+          p99_ms: 4000,
+          max_ms: 4500,
+          sample_count: 1,
+        },
+        tpot: {
+          p50_ms: 10,
+          p90_ms: 20,
+          p95_ms: 30,
+          p99_ms: 40,
+          max_ms: null,
+          sample_count: 1,
+        },
+      },
+    })
+  )
+  renderAnalytics()
+  await screen.findByText('Average RPM')
+  expect(screen.getAllByText('P95')).toHaveLength(2)
+  expect(screen.getAllByText('MAX')).toHaveLength(2)
+  expect(screen.getByText('3 s')).toBeInTheDocument()
+  expect(screen.getByText('4.5 s')).toBeInTheDocument()
 })
 
 test('keeps the first selected user while scoped options are loading', async () => {

@@ -18,13 +18,207 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 
-import { describe, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 
 import { toIntlLocale } from '@/i18n/languages'
 
+import { buildPerformanceChartOption } from '../chart-options'
 import * as analyticsLib from '../lib'
 
 describe('performance analytics chart series', () => {
+  test.each([
+    'request_body_avg_bytes',
+    'cache_write_tokens',
+    'cache_hit_rate',
+  ] as const)(
+    'preserves measured zeroes and omits unknown legacy %s samples',
+    (metric) => {
+      const points = [
+        {
+          ts: 100,
+          [metric]: 0,
+          request_body_samples: 1,
+          cache_write_samples: 1,
+          cache_read_samples: 1,
+        },
+        {
+          ts: 200,
+          [metric]: 0,
+          request_body_samples: 0,
+          cache_write_samples: 0,
+          cache_read_samples: 0,
+        },
+      ] as unknown as import('../types').PerformanceAnalyticsPoint[]
+      expect(
+        analyticsLib.buildPerformanceMetricSeries(points, metric, String)
+      ).toEqual([{ ts: 100, time: 100, label: '100', value: 0 }])
+    }
+  )
+  test.each([
+    'request_body_avg_bytes',
+    'cache_write_tokens',
+    'cache_hit_rate',
+  ] as const)(
+    'keeps the known aggregate for %s when an older API has no distributions',
+    (metric) => {
+      const points = [
+        {
+          ts: 100,
+          [metric]: 12.25,
+          request_body_samples: 1,
+          cache_write_samples: 1,
+          cache_read_samples: 1,
+        },
+      ] as unknown as import('../types').PerformanceAnalyticsPoint[]
+      expect(
+        analyticsLib.buildPerformanceMetricSeries(points, metric, String)
+      ).toEqual([{ ts: 100, time: 100, label: '100', value: 12.25 }])
+    }
+  )
+
+  test.each(['zhCN', 'zhTW', 'en', 'fr', 'ru', 'ja', 'vi', 'invalid-language'])(
+    'preserves latency precision and measured zeroes in %s',
+    (language) => {
+      const locale = toIntlLocale(language)
+      expect(analyticsLib.formatPerformanceLatency(24.125, locale)).toBe(
+        `${Intl.NumberFormat(locale, { maximumFractionDigits: 3 }).format(24.125)} ms`
+      )
+      expect(analyticsLib.formatPerformanceLatency(0, locale)).toBe('0 ms')
+      expect(analyticsLib.formatTtftSeconds(1241, locale)).toBe(
+        `${Intl.NumberFormat(locale, { maximumFractionDigits: 3 }).format(1.241)} s`
+      )
+      expect(analyticsLib.formatPerformanceLatency(-1, locale)).toBe('—')
+    }
+  )
+
+  test('keeps missing metric samples as gaps and retains decimal values in ECharts', () => {
+    const option = buildPerformanceChartOption({
+      title: 'RPM',
+      values: [
+        { ts: 100, time: 100, label: '100', value: 1.2345 },
+        { ts: 300, time: 300, label: '300', value: 0 },
+      ],
+      timestamps: [100, 200, 300],
+      start: 100,
+      end: 300,
+      dark: false,
+      formatTime: String,
+      formatValue: String,
+    })
+    const series = option.series as Array<{
+      data: Array<[number, number | null]>
+      connectNulls: boolean
+    }>
+    expect(series[0].data).toEqual([
+      [100000, 1.2345],
+      [200000, null],
+      [300000, 0],
+    ])
+    expect(series[0].connectNulls).toBe(false)
+  })
+  test.each(['request_body_avg_bytes', 'cache_hit_rate'] as const)(
+    'uses the request distribution for %s instead of the aggregate',
+    (metric) => {
+      const points = [
+        {
+          ts: 100,
+          [metric]: 999,
+          metric_percentiles: {
+            [metric]: {
+              p50: 1,
+              p90: 2,
+              p95: 3,
+              p99: 4,
+              max: 5,
+              sample_count: 10,
+            },
+          },
+        },
+      ] as unknown as import('../types').PerformanceAnalyticsPoint[]
+      expect(
+        analyticsLib
+          .buildPerformanceMetricSeries(points, metric, String)
+          .map((point) => [point.percentile, point.value])
+      ).toEqual([
+        ['P50', 1],
+        ['P90', 2],
+        ['P95', 3],
+        ['P99', 4],
+        ['MAX', 5],
+      ])
+    }
+  )
+
+  test('omits unavailable maxima and non-finite percentiles instead of drawing zeroes', () => {
+    const points = [
+      {
+        ts: 100,
+        metric_percentiles: {
+          cache_write_tokens: {
+            p50: 0,
+            p90: Infinity,
+            p95: Number.NaN,
+            p99: 10,
+            max: null,
+            sample_count: 1,
+          },
+        },
+      },
+    ] as unknown as import('../types').PerformanceAnalyticsPoint[]
+    expect(
+      analyticsLib
+        .buildPerformanceMetricSeries(points, 'cache_write_tokens', String)
+        .map((point) => [point.percentile, point.value])
+    ).toEqual([
+      ['P50', 0],
+      ['P99', 10],
+    ])
+  })
+  test('shows five independent cache-write curves and preserves known zero samples', () => {
+    const points = [
+      {
+        ts: 100,
+        metric_percentiles: {
+          cache_write_tokens: {
+            p50: 0,
+            p90: 400,
+            p95: 500,
+            p99: 570,
+            max: 573,
+            sample_count: 20,
+          },
+        },
+      },
+      { ts: 200, cache_write_tokens: 999, cache_write_samples: 2 },
+      {
+        ts: 300,
+        metric_percentiles: {
+          cache_write_tokens: {
+            p50: 0,
+            p90: 0,
+            p95: 0,
+            p99: 0,
+            max: 0,
+            sample_count: 0,
+          },
+        },
+      },
+    ] as unknown as import('../types').PerformanceAnalyticsPoint[]
+    expect(
+      analyticsLib.buildPerformanceMetricSeries(
+        points,
+        'cache_write_tokens',
+        String
+      )
+    ).toEqual([
+      { ts: 100, time: 100, label: '100', percentile: 'P50', value: 0 },
+      { ts: 100, time: 100, label: '100', percentile: 'P90', value: 400 },
+      { ts: 100, time: 100, label: '100', percentile: 'P95', value: 500 },
+      { ts: 100, time: 100, label: '100', percentile: 'P99', value: 570 },
+      { ts: 100, time: 100, label: '100', percentile: 'MAX', value: 573 },
+    ])
+  })
+
   test('formats body sizes without rounding small payloads to zero and accepts all interface languages', () => {
     for (const language of [
       'en',
@@ -54,10 +248,11 @@ describe('performance analytics chart series', () => {
     assert.equal(axis.min, 1_799_999_850)
     assert.equal(axis.max, 1_800_000_150)
   })
-  test('formats TTFT in seconds with one decimal place', () => {
-    assert.equal(analyticsLib.formatTtftSeconds(50), '0.1 s')
-    assert.equal(analyticsLib.formatTtftSeconds(1_240), '1.2 s')
-    assert.equal(analyticsLib.formatTtftSeconds(0), '—')
+  test('preserves millisecond precision when displaying TTFT in seconds', () => {
+    assert.equal(analyticsLib.formatTtftSeconds(50), '0.05 s')
+    assert.equal(analyticsLib.formatTtftSeconds(1_241), '1.241 s')
+    assert.equal(analyticsLib.formatTtftSeconds(0), '0 s')
+    assert.equal(analyticsLib.formatTtftSeconds(Number.NaN), '—')
   })
 
   test('does not force Unix timestamp axes to start at zero', () => {
@@ -77,7 +272,7 @@ describe('performance analytics chart series', () => {
     assert.equal(axis.zero, false)
   })
 
-  test('maps throughput and cache metrics onto scalar chart points', () => {
+  test('keeps throughput metrics as scalar chart points', () => {
     const buildPerformanceMetricSeries = (
       analyticsLib as Record<string, unknown>
     ).buildPerformanceMetricSeries as
@@ -97,11 +292,11 @@ describe('performance analytics chart series', () => {
           { ts: 100, rpm: 12.5, tpm: 6400, cache_hit_rate: 35.25 },
           { ts: 200, rpm: 0, tpm: 0, cache_hit_rate: 0 },
         ],
-        'cache_hit_rate',
+        'rpm',
         (ts) => `time-${ts}`
       ),
       [
-        { ts: 100, time: 100, label: 'time-100', value: 35.25 },
+        { ts: 100, time: 100, label: 'time-100', value: 12.5 },
         { ts: 200, time: 200, label: 'time-200', value: 0 },
       ]
     )
@@ -175,7 +370,7 @@ describe('performance analytics chart series', () => {
     assert.equal(series[0]?.time, 1_700_000_000)
   })
 
-  test('expands each sampled bucket into P50, P90, and P99 curves', () => {
+  test('expands each sampled bucket into P50, P90, P95, P99, and MAX curves', () => {
     const buildPerformanceSeries = (analyticsLib as Record<string, unknown>)
       .buildPerformanceSeries as
       | ((
@@ -196,7 +391,9 @@ describe('performance analytics chart series', () => {
             ttft: {
               p50_ms: 120,
               p90_ms: 500,
+              p95_ms: 800,
               p99_ms: 1000,
+              max_ms: 1200,
               sample_count: 8,
             },
           },
@@ -232,8 +429,22 @@ describe('performance analytics chart series', () => {
           ts: 100,
           time: 100,
           label: 'time-100',
+          percentile: 'P95',
+          value: 800,
+        },
+        {
+          ts: 100,
+          time: 100,
+          label: 'time-100',
           percentile: 'P99',
           value: 1000,
+        },
+        {
+          ts: 100,
+          time: 100,
+          label: 'time-100',
+          percentile: 'MAX',
+          value: 1200,
         },
       ]
     )
