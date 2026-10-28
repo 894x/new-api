@@ -36,6 +36,10 @@ type UserSortOptions struct {
 func NewUserSortOptions(sortBy string, sortOrder string) UserSortOptions {
 	normalizedSortBy := strings.ToLower(strings.TrimSpace(sortBy))
 	normalizedSortOrder := strings.ToLower(strings.TrimSpace(sortOrder))
+	if normalizedSortBy == "" {
+		normalizedSortBy = "quota"
+		normalizedSortOrder = "desc"
+	}
 	if _, ok := userSortColumns[normalizedSortBy]; !ok {
 		normalizedSortBy = "id"
 		normalizedSortOrder = "desc"
