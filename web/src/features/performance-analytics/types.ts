@@ -19,11 +19,25 @@ For commercial licensing, please contact support@quantumnous.com
 export type PerformancePercentiles = {
   p50_ms: number
   p90_ms: number
+  p95_ms?: number
+  max_ms?: number | null
   p99_ms: number
   sample_count: number
 }
 
+export type PerformanceValuePercentiles = {
+  p50: number
+  p90: number
+  p95: number
+  p99: number
+  max: number | null
+  sample_count: number
+}
+
 export type PerformanceAnalyticsSummary = {
+  metric_percentiles?: Partial<
+    Record<PerformanceMetric, PerformanceValuePercentiles>
+  >
   request_body_samples?: number
   request_body_bytes?: number
   request_body_max_bytes?: number
@@ -94,7 +108,7 @@ export type PerformanceChartDatum = {
   ts: number
   time: number
   label: string
-  percentile: 'P50' | 'P90' | 'P99'
+  percentile: 'P50' | 'P90' | 'P95' | 'P99' | 'MAX'
   value: number
 }
 
@@ -106,11 +120,11 @@ export type PerformanceMetric =
   | 'request_body_avg_bytes'
   | 'cache_write_tokens'
 
-export type PerformanceMetricChartDatum = {
-  ts: number
-  time: number
-  label: string
-  value: number
+export type PerformanceMetricChartDatum = Omit<
+  PerformanceChartDatum,
+  'percentile'
+> & {
+  percentile?: PerformanceChartDatum['percentile']
 }
 
 export type ChannelAnalyticsPercentiles = {

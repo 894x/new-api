@@ -26,10 +26,27 @@ import type {
   PerformanceMetricChartDatum,
 } from './types'
 
+export const PERFORMANCE_CURVE_LABELS = [
+  'P50',
+  'P90',
+  'P95',
+  'P99',
+  'MAX',
+] as const
+export const PERFORMANCE_CURVE_COLORS = [
+  '#3b82f6',
+  '#10b981',
+  '#f59e0b',
+  '#8b5cf6',
+  '#ef4444',
+]
+
 const PERCENTILE_FIELDS = [
   ['P50', 'p50_ms'],
   ['P90', 'p90_ms'],
+  ['P95', 'p95_ms'],
   ['P99', 'p99_ms'],
+  ['MAX', 'max_ms'],
 ] as const
 
 export function formatRequestBodySize(
@@ -67,9 +84,22 @@ export function formatPerformanceTimestamp(
   }).format(new Date(timestamp * 1000))
 }
 
-export function formatTtftSeconds(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '—'
-  return `${(ms / 1_000).toFixed(1)} s`
+export function formatTtftSeconds(
+  ms: number,
+  locale?: Intl.LocalesArgument
+): string {
+  if (!Number.isFinite(ms) || ms < 0) return '—'
+  // Seconds need three fractional digits to preserve collected millisecond precision.
+  return `${Intl.NumberFormat(locale, { maximumFractionDigits: 3 }).format(ms / 1_000)} s`
+}
+
+export function formatPerformanceLatency(
+  ms: number,
+  locale?: Intl.LocalesArgument
+): string {
+  if (!Number.isFinite(ms) || ms < 0) return '—'
+  if (ms >= 1_000) return formatTtftSeconds(ms, locale)
+  return `${Intl.NumberFormat(locale, { maximumFractionDigits: 3 }).format(ms)} ms`
 }
 
 export function buildPerformanceTimeAxis(
@@ -113,13 +143,19 @@ export function buildPerformanceSeries(
     const percentiles = point[metric]
     if (percentiles.sample_count <= 0) return []
 
-    return PERCENTILE_FIELDS.map(([percentile, field]) => ({
-      ts: point.ts,
-      time: point.ts,
-      label: formatTime(point.ts),
-      percentile,
-      value: percentiles[field],
-    }))
+    return PERCENTILE_FIELDS.flatMap(([percentile, field]) => {
+      const value = percentiles[field]
+      if (typeof value !== 'number' || !Number.isFinite(value)) return []
+      return [
+        {
+          ts: point.ts,
+          time: point.ts,
+          label: formatTime(point.ts),
+          percentile,
+          value,
+        },
+      ]
+    })
   })
 }
 
@@ -128,13 +164,54 @@ export function buildPerformanceMetricSeries(
   metric: PerformanceMetric,
   formatTime: (ts: number) => string
 ): PerformanceMetricChartDatum[] {
+  const hasDistributions = points.some(
+    (point) => point.metric_percentiles?.[metric] !== undefined
+  )
   return points.flatMap((point) => {
-    const value = point[metric]
-    if (typeof value !== 'number' || !Number.isFinite(value)) return []
-    if (metric === 'cache_write_tokens' && !point.cache_write_samples) return []
-    if (metric === 'cache_hit_rate' && point.cache_read_samples === 0) return []
-    return [
-      { ts: point.ts, time: point.ts, label: formatTime(point.ts), value },
-    ]
+    if (
+      metric === 'rpm' ||
+      metric === 'tpm' ||
+      metric === 'error_count' ||
+      !hasDistributions
+    ) {
+      const value = point[metric]
+      if (typeof value !== 'number' || !Number.isFinite(value)) return []
+      if (metric === 'cache_write_tokens' && !point.cache_write_samples) {
+        return []
+      }
+      if (metric === 'cache_hit_rate' && point.cache_read_samples === 0) {
+        return []
+      }
+      if (
+        metric === 'request_body_avg_bytes' &&
+        point.request_body_samples === 0
+      ) {
+        return []
+      }
+      return [
+        { ts: point.ts, time: point.ts, label: formatTime(point.ts), value },
+      ]
+    }
+    const percentiles = point.metric_percentiles?.[metric]
+    if (!percentiles || percentiles.sample_count <= 0) return []
+    return PERFORMANCE_CURVE_LABELS.flatMap((percentile) => {
+      const field = percentile.toLowerCase() as
+        | 'p50'
+        | 'p90'
+        | 'p95'
+        | 'p99'
+        | 'max'
+      const value = percentiles[field]
+      if (typeof value !== 'number' || !Number.isFinite(value)) return []
+      return [
+        {
+          ts: point.ts,
+          time: point.ts,
+          label: formatTime(point.ts),
+          percentile,
+          value,
+        },
+      ]
+    })
   })
 }
