@@ -8011,6 +8011,19 @@
     "Completion Tokens": "输出 Token",
     "First Used": "首次使用",
     "RPM/TPM are realtime rates over the last 60 seconds": "RPM/TPM 为最近 60 秒的实时速率",
-    "Select a user to view per-channel usage": "请先选择用户，查看其各渠道用量"
+    "Select a user to view per-channel usage": "请先选择用户，查看其各渠道用量",
+    "Send test message": "发送测试",
+    "Test message sent, please check the WeCom group": "测试消息已发送，请到企微群确认",
+    "Manage bots that receive channel alerts; each bot can subscribe to specific alert types": "管理接收渠道告警的机器人；每台机器人可订阅特定告警类型",
+    "Alert subscriptions": "告警订阅",
+    "Leave empty to receive all alert types": "留空接收全部告警类型",
+    "Channel auto-disabled alerts": "渠道自动禁用告警",
+    "Channel re-enabled alerts": "渠道恢复启用告警",
+    "Balance patrol alerts": "余额巡检告警",
+    "Channel watchdog alerts": "渠道错误频率告警",
+    "Message style": "消息样式",
+    "Markdown": "Markdown",
+    "Template card": "模板卡片",
+    "Template card style does not support mentions and falls back to Markdown when a mention list is configured": "模板卡片不支持 @ 提醒；配置了提醒名单时自动回退 Markdown"
   }
 }

@@ -94,5 +94,11 @@ func notifyWecomBotChannelUnhealthy(channelId int, channelName string, count int
 		lines = append(lines, fmt.Sprintf("上轮抑制窗口内累计：%d 次", suppressed))
 	}
 	lines = append(lines, fmt.Sprintf("时间：%s", time.Now().Format("2006-01-02 15:04:05")))
-	enqueueWecomBotAlert(wecomBotAlert{title: "渠道错误频率异常", color: "warning", lines: lines})
+	enqueueWecomBotAlert(wecomBotAlert{
+		title:    "渠道错误频率异常",
+		color:    "warning",
+		lines:    lines,
+		category: operation_setting.WecomBotCategoryWatchdog,
+		scope:    fmt.Sprintf("channel:%d", channelId),
+	})
 }

@@ -30,6 +30,7 @@ import { StaticDataTable } from '@/components/data-table/static/static-data-tabl
 import { StaticRowActions } from '@/components/data-table/static/static-row-actions'
 import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Form,
   FormControl,
@@ -40,6 +41,13 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { handleServerError } from '@/lib/handle-server-error'
 
@@ -47,11 +55,21 @@ import {
   createWecomBot,
   deleteWecomBot,
   getWecomBots,
+  testWecomBot,
   updateWecomBot,
 } from '../api'
 import type { WecomBot } from '../types'
 
 const wecomMentionTokenPattern = /^[A-Za-z0-9_@.-]{1,64}$/
+
+// 告警类型目录：value 与后端 WecomBotCategory 常量一致
+const WECOM_BOT_ALERT_CATEGORIES = [
+  { value: 'channel_error', labelKey: 'Channel error alerts' },
+  { value: 'channel_disabled', labelKey: 'Channel auto-disabled alerts' },
+  { value: 'channel_enabled', labelKey: 'Channel re-enabled alerts' },
+  { value: 'balance_patrol', labelKey: 'Balance patrol alerts' },
+  { value: 'watchdog', labelKey: 'Channel watchdog alerts' },
+] as const
 
 const botSchema = (t: (key: string) => string) =>
   z.object({
@@ -68,6 +86,8 @@ const botSchema = (t: (key: string) => string) =>
         .every((token) => wecomMentionTokenPattern.test(token))
     }, t('Mention list accepts comma-separated WeCom userids or @all')),
     enabled: z.boolean(),
+    subscriptions: z.array(z.string()),
+    message_style: z.string(),
   })
 
 type BotFormValues = z.infer<ReturnType<typeof botSchema>>
@@ -94,6 +114,8 @@ export function WecomBotList() {
       webhook_api_key: '',
       mention_userids: '',
       enabled: true,
+      subscriptions: [],
+      message_style: 'markdown',
     },
   })
 
@@ -110,6 +132,8 @@ export function WecomBotList() {
         webhook_api_key: values.webhook_api_key.trim(),
         mention_userids: values.mention_userids.trim(),
         enabled: values.enabled,
+        subscriptions: values.subscriptions,
+        message_style: values.message_style,
       }
       if (editingBot) {
         return updateWecomBot(editingBot.id, request)
@@ -132,6 +156,8 @@ export function WecomBotList() {
         webhook_api_key: '',
         mention_userids: bot.mention_userids,
         enabled: !bot.enabled,
+        subscriptions: bot.subscriptions ?? [],
+        message_style: bot.message_style || 'markdown',
       }),
     onSuccess: () => {
       invalidateBots()
@@ -150,6 +176,14 @@ export function WecomBotList() {
     onError: notifyError,
   })
 
+  const testMutation = useMutation({
+    mutationFn: (id: string) => testWecomBot(id),
+    onSuccess: () => {
+      toast.success(t('Test message sent, please check the WeCom group'))
+    },
+    onError: (error) => handleServerError(error),
+  })
+
   const handleAdd = () => {
     setEditingBot(null)
     form.reset({
@@ -157,6 +191,8 @@ export function WecomBotList() {
       webhook_api_key: '',
       mention_userids: '',
       enabled: true,
+      subscriptions: [],
+      message_style: 'markdown',
     })
     setShowDialog(true)
   }
@@ -168,6 +204,8 @@ export function WecomBotList() {
       webhook_api_key: '',
       mention_userids: bot.mention_userids,
       enabled: bot.enabled,
+      subscriptions: bot.subscriptions ?? [],
+      message_style: bot.message_style || 'markdown',
     })
     setShowDialog(true)
   }
@@ -189,7 +227,7 @@ export function WecomBotList() {
           <h4 className='font-medium'>{t('WeCom bot list')}</h4>
           <p className='text-muted-foreground mt-1 text-xs'>
             {t(
-              'Manage bots that receive channel alerts; alerts are broadcast to all enabled bots'
+              'Manage bots that receive channel alerts; each bot can subscribe to specific alert types'
             )}
           </p>
         </div>
@@ -222,6 +260,26 @@ export function WecomBotList() {
             cell: (bot) => bot.mention_userids || '-',
           },
           {
+            id: 'subscriptions',
+            header: t('Alert subscriptions'),
+            cellClassName: 'max-w-xs truncate',
+            cell: (bot) => {
+              const subscriptions = bot.subscriptions ?? []
+              if (subscriptions.length === 0) {
+                return <span className='text-muted-foreground'>{t('All')}</span>
+              }
+              return subscriptions
+                .map(
+                  (value) =>
+                    WECOM_BOT_ALERT_CATEGORIES.find(
+                      (category) => category.value === value
+                    )?.labelKey ?? value
+                )
+                .map((labelKey) => t(labelKey))
+                .join(', ')
+            },
+          },
+          {
             id: 'enabled',
             header: t('Enabled'),
             cell: (bot) => (
@@ -237,13 +295,24 @@ export function WecomBotList() {
             id: 'actions',
             header: t('Actions'),
             cell: (bot) => (
-              <StaticRowActions
-                editLabel={t('Edit')}
-                deleteLabel={t('Delete')}
-                menuLabel={t('Open menu')}
-                onEdit={() => handleEdit(bot)}
-                onDelete={() => setDeletingBot(bot)}
-              />
+              <div className='flex items-center gap-2'>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={() => testMutation.mutate(bot.id)}
+                  disabled={testMutation.isPending}
+                  aria-busy={testMutation.isPending}
+                >
+                  {t('Send test message')}
+                </Button>
+                <StaticRowActions
+                  editLabel={t('Edit')}
+                  deleteLabel={t('Delete')}
+                  menuLabel={t('Open menu')}
+                  onEdit={() => handleEdit(bot)}
+                  onDelete={() => setDeletingBot(bot)}
+                />
+              </div>
             ),
           },
         ]}
@@ -342,6 +411,70 @@ export function WecomBotList() {
                   <FormDescription>
                     {t('Comma-separated WeCom userids to @mention, or @all')}
                   </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='message_style'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Message style')}</FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger className='w-full'>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value='markdown'>{t('Markdown')}</SelectItem>
+                      <SelectItem value='card'>
+                        {t('Template card')}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>
+                    {t(
+                      'Template card style does not support mentions and falls back to Markdown when a mention list is configured'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='subscriptions'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Alert subscriptions')}</FormLabel>
+                  <FormDescription>
+                    {t('Leave empty to receive all alert types')}
+                  </FormDescription>
+                  <div className='grid grid-cols-1 gap-2 sm:grid-cols-2'>
+                    {WECOM_BOT_ALERT_CATEGORIES.map((category) => {
+                      const checked = field.value.includes(category.value)
+                      return (
+                        <label
+                          key={category.value}
+                          className='flex cursor-pointer items-center gap-2 text-sm font-normal'
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(next) =>
+                              field.onChange(
+                                next
+                                  ? [...field.value, category.value]
+                                  : field.value.filter(
+                                      (value) => value !== category.value
+                                    )
+                              )
+                            }
+                          />
+                          {t(category.labelKey)}
+                        </label>
+                      )
+                    })}
+                  </div>
                   <FormMessage />
                 </FormItem>
               )}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
@@ -14,18 +15,22 @@ import (
 
 // WecomBotResponse 管理页展示结构：Webhook 掩码显示，不返回完整凭据。
 type WecomBotResponse struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	WebhookMasked  string `json:"webhook_masked"`
-	MentionUserids string `json:"mention_userids"`
-	Enabled        bool   `json:"enabled"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	WebhookMasked  string   `json:"webhook_masked"`
+	MentionUserids string   `json:"mention_userids"`
+	Enabled        bool     `json:"enabled"`
+	Subscriptions  []string `json:"subscriptions"`
+	MessageStyle   string   `json:"message_style"`
 }
 
 type wecomBotPayload struct {
-	Name           string `json:"name"`
-	WebhookApiKey  string `json:"webhook_api_key"`
-	MentionUserids string `json:"mention_userids"`
-	Enabled        bool   `json:"enabled"`
+	Name           string   `json:"name"`
+	WebhookApiKey  string   `json:"webhook_api_key"`
+	MentionUserids string   `json:"mention_userids"`
+	Enabled        bool     `json:"enabled"`
+	Subscriptions  []string `json:"subscriptions"`
+	MessageStyle   string   `json:"message_style"`
 }
 
 func toWecomBotResponse(bot operation_setting.WecomBotConfig) WecomBotResponse {
@@ -35,6 +40,8 @@ func toWecomBotResponse(bot operation_setting.WecomBotConfig) WecomBotResponse {
 		WebhookMasked:  maskWecomBotWebhook(bot.WebhookApiKey),
 		MentionUserids: bot.MentionUserids,
 		Enabled:        bot.Enabled,
+		Subscriptions:  bot.Subscriptions,
+		MessageStyle:   operation_setting.NormalizeWecomBotMessageStyle(bot.MessageStyle),
 	}
 }
 
@@ -89,6 +96,8 @@ func CreateWecomBot(c *gin.Context) {
 		WebhookApiKey:  payload.WebhookApiKey,
 		MentionUserids: payload.MentionUserids,
 		Enabled:        payload.Enabled,
+		Subscriptions:  payload.Subscriptions,
+		MessageStyle:   payload.MessageStyle,
 	})
 	normalized, err := saveWecomBots(bots)
 	if err != nil {
@@ -118,6 +127,8 @@ func UpdateWecomBot(c *gin.Context) {
 		bot.Name = payload.Name
 		bot.MentionUserids = payload.MentionUserids
 		bot.Enabled = payload.Enabled
+		bot.Subscriptions = payload.Subscriptions
+		bot.MessageStyle = payload.MessageStyle
 		if strings.TrimSpace(payload.WebhookApiKey) != "" {
 			bot.WebhookApiKey = payload.WebhookApiKey
 		}
@@ -158,6 +169,28 @@ func DeleteWecomBot(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// TestWecomBot 向指定机器人发送测试消息，验证 Webhook 连通性。
+func TestWecomBot(c *gin.Context) {
+	id := c.Param("id")
+	setting := operation_setting.GetWecomBotSetting()
+	for _, bot := range setting.Bots {
+		if bot.ID != id {
+			continue
+		}
+		if strings.TrimSpace(bot.WebhookApiKey) == "" {
+			common.ApiErrorMsg(c, "机器人未配置 Webhook")
+			return
+		}
+		if err := service.SendWecomBotTest(bot); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
+		common.ApiSuccess(c, nil)
+		return
+	}
+	common.ApiErrorMsg(c, "机器人不存在")
 }
 
 // saveWecomBots 校验并持久化机器人列表，返回规范化结果。

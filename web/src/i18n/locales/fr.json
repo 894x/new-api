@@ -8011,6 +8011,19 @@
     "Completion Tokens": "Jetons de complétion",
     "First Used": "Première utilisation",
     "RPM/TPM are realtime rates over the last 60 seconds": "Les RPM/TPM sont des débits en temps réel des 60 dernières secondes",
-    "Select a user to view per-channel usage": "Sélectionnez un utilisateur pour voir son utilisation par canal"
+    "Select a user to view per-channel usage": "Sélectionnez un utilisateur pour voir son utilisation par canal",
+    "Send test message": "Envoyer un test",
+    "Test message sent, please check the WeCom group": "Message de test envoyé, vérifiez le groupe WeCom",
+    "Manage bots that receive channel alerts; each bot can subscribe to specific alert types": "Gérez les robots qui reçoivent les alertes de canal ; chaque robot peut souscrire à des types d'alerte spécifiques",
+    "Alert subscriptions": "Abonnements aux alertes",
+    "Leave empty to receive all alert types": "Laissez vide pour recevoir tous les types d'alerte",
+    "Channel auto-disabled alerts": "Alertes de désactivation automatique des canaux",
+    "Channel re-enabled alerts": "Alertes de réactivation des canaux",
+    "Balance patrol alerts": "Alertes de patrol de solde",
+    "Channel watchdog alerts": "Alertes de surveillance des erreurs de canal",
+    "Message style": "Style de message",
+    "Markdown": "Markdown",
+    "Template card": "Carte modèle",
+    "Template card style does not support mentions and falls back to Markdown when a mention list is configured": "Le style carte modèle ne prend pas en charge les mentions ; il revient au Markdown si une liste de mentions est configurée"
   }
 }

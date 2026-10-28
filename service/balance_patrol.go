@@ -109,7 +109,13 @@ func NotifyWecomBotChannelLowBalance(channelName string, channelId int, balance 
 		lines = append(lines, fmt.Sprintf("持续低余额：%s内已抑制 %d 次提醒", window, suppressed))
 	}
 	lines = append(lines, fmt.Sprintf("时间：%s", time.Now().Format("2006-01-02 15:04:05")))
-	enqueueWecomBotAlert(wecomBotAlert{title: title, color: "warning", lines: lines})
+	enqueueWecomBotAlert(wecomBotAlert{
+		title:    title,
+		color:    "warning",
+		lines:    lines,
+		category: operation_setting.WecomBotCategoryBalancePatrol,
+		scope:    fmt.Sprintf("channel:%d", channelId),
+	})
 }
 
 // channelBalanceExhaustionDays 依据数据看板近 7 天的渠道消费预估余额耗尽天数；
@@ -192,7 +198,12 @@ func RunUserQuotaPatrolCheck(ctx context.Context) (*UserQuotaPatrolSummary, erro
 			fmt.Sprintf("余额最低：%s", lowest.String()),
 			fmt.Sprintf("时间：%s", time.Now().Format("2006-01-02 15:04:05")),
 		}
-		enqueueWecomBotAlert(wecomBotAlert{title: "用户低余额巡检", color: "warning", lines: lines})
+		enqueueWecomBotAlert(wecomBotAlert{
+			title:    "用户低余额巡检",
+			color:    "warning",
+			lines:    lines,
+			category: operation_setting.WecomBotCategoryBalancePatrol,
+		})
 	}
 	return summary, nil
 }

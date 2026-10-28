@@ -8011,6 +8011,19 @@
     "Completion Tokens": "Token đầu ra",
     "First Used": "Sử dụng lần đầu",
     "RPM/TPM are realtime rates over the last 60 seconds": "RPM/TPM là tốc độ thời gian thực trong 60 giây gần nhất",
-    "Select a user to view per-channel usage": "Chọn người dùng để xem mức sử dụng theo từng kênh"
+    "Select a user to view per-channel usage": "Chọn người dùng để xem mức sử dụng theo từng kênh",
+    "Send test message": "Gửi kiểm tra",
+    "Test message sent, please check the WeCom group": "Đã gửi tin nhắn kiểm tra, vui lòng kiểm tra nhóm WeCom",
+    "Manage bots that receive channel alerts; each bot can subscribe to specific alert types": "Quản lý bot nhận cảnh báo kênh; mỗi bot có thể đăng ký các loại cảnh báo cụ thể",
+    "Alert subscriptions": "Đăng ký cảnh báo",
+    "Leave empty to receive all alert types": "Để trống để nhận mọi loại cảnh báo",
+    "Channel auto-disabled alerts": "Cảnh báo kênh tự động vô hiệu hóa",
+    "Channel re-enabled alerts": "Cảnh báo kích hoạt lại kênh",
+    "Balance patrol alerts": "Cảnh báo tuần tra số dư",
+    "Channel watchdog alerts": "Cảnh báo tần suất lỗi kênh",
+    "Message style": "Kiểu tin nhắn",
+    "Markdown": "Markdown",
+    "Template card": "Thẻ mẫu",
+    "Template card style does not support mentions and falls back to Markdown when a mention list is configured": "Thẻ mẫu không hỗ trợ nhắc nhở; tự động chuyển về Markdown khi có danh sách nhắc"
   }
 }

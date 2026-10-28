@@ -8011,6 +8011,19 @@
     "Completion Tokens": "Выходные токены",
     "First Used": "Первое использование",
     "RPM/TPM are realtime rates over the last 60 seconds": "RPM/TPM — скорость в реальном времени за последние 60 секунд",
-    "Select a user to view per-channel usage": "Выберите пользователя, чтобы увидеть использование по каналам"
+    "Select a user to view per-channel usage": "Выберите пользователя, чтобы увидеть использование по каналам",
+    "Send test message": "Отправить тест",
+    "Test message sent, please check the WeCom group": "Тестовое сообщение отправлено, проверьте группу WeCom",
+    "Manage bots that receive channel alerts; each bot can subscribe to specific alert types": "Управляйте роботами, получающими оповещения о каналах; каждый робот может подписываться на определённые типы оповещений",
+    "Alert subscriptions": "Подписки на оповещения",
+    "Leave empty to receive all alert types": "Оставьте пустым, чтобы получать все типы оповещений",
+    "Channel auto-disabled alerts": "Оповещения об автоотключении каналов",
+    "Channel re-enabled alerts": "Оповещения о возобновлении работы каналов",
+    "Balance patrol alerts": "Оповещения патруля баланса",
+    "Channel watchdog alerts": "Оповещения наблюдателя за ошибками каналов",
+    "Message style": "Стиль сообщений",
+    "Markdown": "Markdown",
+    "Template card": "Карточка-шаблон",
+    "Template card style does not support mentions and falls back to Markdown when a mention list is configured": "Стиль карточки-шаблона не поддерживает упоминания; при наличии списка упоминаний используется Markdown"
   }
 }

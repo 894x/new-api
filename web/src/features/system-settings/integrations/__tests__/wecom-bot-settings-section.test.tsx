@@ -155,6 +155,8 @@ test('creates a bot through the management dialog', async () => {
       webhook_api_key: 'key-123',
       mention_userids: '',
       enabled: true,
+      subscriptions: [],
+      message_style: 'markdown',
     })
   )
 })
@@ -175,6 +177,8 @@ test('keeps the existing webhook when left blank on edit', async () => {
       webhook_api_key: '',
       mention_userids: 'zhangsan',
       enabled: true,
+      subscriptions: [],
+      message_style: 'markdown',
     })
   )
 })

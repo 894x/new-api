@@ -190,10 +190,138 @@ func buildWecomAIBotRequest(modelName string, req *wecomaibot.ChatRequest) *dto.
 }
 
 // WireWecomAIBot 注入智能机器人依赖：对话模型驱动（adaptor 直驱，免计费）与
-// 渠道余额实时刷新工具（复用渠道余额查询链路）。必须在 wecomaibot.Start 之前调用。
+// 渠道余额实时刷新、告警静默管理工具。必须在 wecomaibot.Start 之前调用。
 func WireWecomAIBot() {
 	wecomaibot.SetLLMDriver(wecomAIBotLLMDriver{})
 	wecomaibot.RegisterTool(wecomAIBotRefreshBalanceTool())
+	wecomaibot.RegisterTool(wecomAIBotSilenceTool())
+	wecomaibot.RegisterTool(wecomAIBotListSilencesTool())
+	wecomaibot.RegisterTool(wecomAIBotUnsilenceTool())
+}
+
+const wecomAIBotMaxSilenceMinutes = 7 * 24 * 60
+
+// wecomAIBotSilenceTool 静默/免打扰指令：指定渠道（或全部）在一段时间内不再推送告警。
+func wecomAIBotSilenceTool() wecomaibot.Tool {
+	return wecomaibot.Tool{
+		Name:        "silence_channel_alerts",
+		AdminOnly:   true,
+		Description: "静默企微渠道告警（免打扰）：在指定时间内不再推送该渠道或全部渠道的告警。channel_id 省略时静默全部告警。minutes 范围 1 到 10080（7 天），默认 60。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"channel_id": map[string]any{"type": "integer", "description": "渠道 ID，省略则静默全部渠道"},
+				"minutes":    map[string]any{"type": "integer", "description": "静默时长（分钟），默认 60，最长 10080"},
+				"reason":     map[string]any{"type": "string", "description": "静默原因，例如：维护窗口"},
+			},
+			"required": []string{"minutes"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			minutes := 60
+			if value, ok := args["minutes"].(float64); ok {
+				minutes = int(value)
+			}
+			if minutes < 1 || minutes > wecomAIBotMaxSilenceMinutes {
+				return nil, fmt.Errorf("minutes must be between 1 and %d", wecomAIBotMaxSilenceMinutes)
+			}
+			channelID := 0
+			if value, ok := args["channel_id"].(float64); ok {
+				channelID = int(value)
+			}
+			scope := "all"
+			channelName := ""
+			if channelID > 0 {
+				channel, err := model.GetChannelById(channelID, true)
+				if err != nil {
+					return nil, fmt.Errorf("channel #%d not found", channelID)
+				}
+				scope = fmt.Sprintf("channel:%d", channelID)
+				channelName = channel.Name
+			}
+			reason, _ := args["reason"].(string)
+			until := time.Now().Add(time.Duration(minutes) * time.Minute)
+			if err := service.SetWecomBotAlertSilence(scope, until, reason, "wecom ai bot"); err != nil {
+				return nil, err
+			}
+			result := map[string]any{
+				"silenced": true,
+				"scope":    scope,
+				"until":    until.Format("2006-01-02 15:04:05"),
+				"minutes":  minutes,
+			}
+			if channelName != "" {
+				result["channel_name"] = channelName
+			}
+			return result, nil
+		},
+	}
+}
+
+// wecomAIBotListSilencesTool 查看当前生效中的静默规则。
+func wecomAIBotListSilencesTool() wecomaibot.Tool {
+	return wecomaibot.Tool{
+		Name:        "list_alert_silences",
+		AdminOnly:   true,
+		Description: "查看当前生效中的告警静默规则（渠道、截止时间、原因）。",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			silences := service.ListWecomBotAlertSilences()
+			if len(silences) == 0 {
+				return map[string]any{"silences": []any{}, "message": "当前没有生效中的告警静默规则"}, nil
+			}
+			items := make([]map[string]any, 0, len(silences))
+			for _, silence := range silences {
+				items = append(items, map[string]any{
+					"scope":  silence.Scope,
+					"reason": silence.Reason,
+					"until":  silence.Until.Format("2006-01-02 15:04:05"),
+				})
+			}
+			return map[string]any{"silences": items}, nil
+		},
+	}
+}
+
+// wecomAIBotUnsilenceTool 解除静默：指定渠道或全部。
+func wecomAIBotUnsilenceTool() wecomaibot.Tool {
+	return wecomaibot.Tool{
+		Name:        "unsilence_channel_alerts",
+		AdminOnly:   true,
+		Description: "解除告警静默（恢复正常推送）。channel_id 省略时解除全部静默规则。",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"channel_id": map[string]any{"type": "integer", "description": "渠道 ID，省略则解除全部"},
+			},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			channelID := 0
+			if value, ok := args["channel_id"].(float64); ok {
+				channelID = int(value)
+			}
+			removed := 0
+			scope := "all"
+			if channelID > 0 {
+				scope = fmt.Sprintf("channel:%d", channelID)
+				if service.ClearWecomBotAlertSilence(scope) {
+					removed = 1
+				}
+			} else {
+				for _, silence := range service.ListWecomBotAlertSilences() {
+					if service.ClearWecomBotAlertSilence(silence.Scope) {
+						removed++
+					}
+				}
+			}
+			return map[string]any{
+				"removed": removed,
+				"scope":   scope,
+			}, nil
+		},
+	}
 }
 
 // wecomAIBotRefreshBalanceTool 把渠道实时余额查询包装为对话工具：结果写回

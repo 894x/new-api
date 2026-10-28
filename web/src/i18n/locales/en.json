@@ -8011,6 +8011,19 @@
     "Completion Tokens": "Completion Tokens",
     "First Used": "First Used",
     "RPM/TPM are realtime rates over the last 60 seconds": "RPM/TPM are realtime rates over the last 60 seconds",
-    "Select a user to view per-channel usage": "Select a user to view per-channel usage"
+    "Select a user to view per-channel usage": "Select a user to view per-channel usage",
+    "Send test message": "Send test message",
+    "Test message sent, please check the WeCom group": "Test message sent, please check the WeCom group",
+    "Manage bots that receive channel alerts; each bot can subscribe to specific alert types": "Manage bots that receive channel alerts; each bot can subscribe to specific alert types",
+    "Alert subscriptions": "Alert subscriptions",
+    "Leave empty to receive all alert types": "Leave empty to receive all alert types",
+    "Channel auto-disabled alerts": "Channel auto-disabled alerts",
+    "Channel re-enabled alerts": "Channel re-enabled alerts",
+    "Balance patrol alerts": "Balance patrol alerts",
+    "Channel watchdog alerts": "Channel watchdog alerts",
+    "Message style": "Message style",
+    "Markdown": "Markdown",
+    "Template card": "Template card",
+    "Template card style does not support mentions and falls back to Markdown when a mention list is configured": "Template card style does not support mentions and falls back to Markdown when a mention list is configured"
   }
 }

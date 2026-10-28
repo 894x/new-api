@@ -284,6 +284,7 @@ func SetApiRouter(router *gin.Engine) {
 			wecomBotRoute.GET("/", controller.GetWecomBots)
 			wecomBotRoute.PUT("/", controller.CreateWecomBot)
 			wecomBotRoute.POST("/:id", controller.UpdateWecomBot)
+			wecomBotRoute.POST("/:id/test", controller.TestWecomBot)
 			wecomBotRoute.DELETE("/:id", controller.DeleteWecomBot)
 		}
 		// WeCom AI bot (long-connection conversational query) management (root only)

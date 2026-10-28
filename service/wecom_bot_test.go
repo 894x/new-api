@@ -112,7 +112,7 @@ func TestBuildWecomBotPayloadMarkdown(t *testing.T) {
 		color: "warning",
 		lines: []string{"渠道：OpenAI-01（#12）", "状态码：500"},
 	}
-	payload, err := buildWecomBotPayload(alert, nil)
+	payload, err := buildWecomBotPayload(alert, nil, "")
 	require.NoError(t, err)
 	var mirror wecomRequestMirror
 	require.NoError(t, common.Unmarshal(payload, &mirror))
@@ -125,7 +125,7 @@ func TestBuildWecomBotPayloadMarkdown(t *testing.T) {
 
 func TestBuildWecomBotPayloadMarkdownWithMentions(t *testing.T) {
 	alert := wecomBotAlert{title: "渠道异常告警", color: "warning", lines: []string{"渠道：A（#1）"}}
-	payload, err := buildWecomBotPayload(alert, []string{"zhangsan", "lisi"})
+	payload, err := buildWecomBotPayload(alert, []string{"zhangsan", "lisi"}, "")
 	require.NoError(t, err)
 	var mirror wecomRequestMirror
 	require.NoError(t, common.Unmarshal(payload, &mirror))
@@ -136,7 +136,7 @@ func TestBuildWecomBotPayloadMarkdownWithMentions(t *testing.T) {
 
 func TestBuildWecomBotPayloadMentionAllFallsBackToText(t *testing.T) {
 	alert := wecomBotAlert{title: "渠道已被自动禁用", color: "warning", lines: []string{"渠道：A（#1）"}}
-	payload, err := buildWecomBotPayload(alert, []string{"@all"})
+	payload, err := buildWecomBotPayload(alert, []string{"@all"}, "")
 	require.NoError(t, err)
 	var mirror wecomRequestMirror
 	require.NoError(t, common.Unmarshal(payload, &mirror))
@@ -341,6 +341,8 @@ func TestNotifyWecomBotChannelErrorGating(t *testing.T) {
 		alert, ok := waitForWecomBotAlert(t, captured)
 		require.True(t, ok)
 		assert.Equal(t, "渠道异常告警", alert.title)
+		assert.Equal(t, operation_setting.WecomBotCategoryChannelError, alert.category)
+		assert.Equal(t, "channel:12", alert.scope)
 		joined := strings.Join(alert.lines, "\n")
 		assert.Contains(t, joined, "渠道：OpenAI-01（#12）")
 		assert.Contains(t, joined, "状态码：500")
@@ -670,4 +672,152 @@ func TestWecomBotAfterConfigUpdateMigration(t *testing.T) {
 		require.Len(t, setting.Bots, 1)
 		assert.Empty(t, setting.Bots[0].Name)
 	})
+}
+
+type wecomCardMirror struct {
+	MsgType      string `json:"msgtype"`
+	TemplateCard struct {
+		CardType  string `json:"card_type"`
+		MainTitle struct {
+			Title string `json:"title"`
+		} `json:"main_title"`
+		SubTitleText          string `json:"sub_title_text"`
+		HorizontalContentList []struct {
+			KeyName string `json:"keyname"`
+			Value   string `json:"value"`
+		} `json:"horizontal_content_list"`
+		CardAction struct {
+			Type int    `json:"type"`
+			URL  string `json:"url"`
+		} `json:"card_action"`
+	} `json:"template_card"`
+}
+
+func TestBuildWecomBotPayloadCard(t *testing.T) {
+	alert := wecomBotAlert{
+		title: "渠道异常告警",
+		lines: []string{
+			"渠道：OpenAI-01（#12）",
+			"状态码：500",
+			"纯文本行没有冒号分隔",
+			"错误信息：" + strings.Repeat("错", 40),
+			"时间：2026-10-25 15:04:05",
+			"额外行1：值1",
+			"额外行2：值2",
+			"额外行3：值3",
+		},
+	}
+	payload, err := buildWecomBotPayload(alert, nil, operation_setting.WecomBotStyleCard)
+	require.NoError(t, err)
+	var mirror wecomCardMirror
+	require.NoError(t, common.Unmarshal(payload, &mirror))
+	assert.Equal(t, "template_card", mirror.MsgType)
+	assert.Equal(t, "text_notice", mirror.TemplateCard.CardType)
+	assert.Equal(t, "渠道异常告警", mirror.TemplateCard.MainTitle.Title)
+	// card_action 为企微必填：type=1 跳转链接
+	assert.Equal(t, 1, mirror.TemplateCard.CardAction.Type)
+	assert.NotEmpty(t, mirror.TemplateCard.CardAction.URL)
+	// 键值行最多 6 行，溢出与无法拆分的行进入副标题
+	require.Len(t, mirror.TemplateCard.HorizontalContentList, 6)
+	assert.Equal(t, "渠道", mirror.TemplateCard.HorizontalContentList[0].KeyName)
+	assert.Equal(t, "OpenAI-01（#12）", mirror.TemplateCard.HorizontalContentList[0].Value)
+	// 键值超长按官方限制截断
+	assert.LessOrEqual(t, len([]rune(mirror.TemplateCard.HorizontalContentList[3].Value)), wecomBotCardValueMaxRunes)
+	assert.Contains(t, mirror.TemplateCard.SubTitleText, "纯文本行没有冒号分隔")
+	assert.Contains(t, mirror.TemplateCard.SubTitleText, "额外行3：值3")
+}
+
+func TestBuildWecomBotPayloadCardWithMentionsFallsBackToMarkdown(t *testing.T) {
+	alert := wecomBotAlert{title: "渠道异常告警", lines: []string{"渠道：A（#1）"}}
+	payload, err := buildWecomBotPayload(alert, []string{"zhangsan"}, operation_setting.WecomBotStyleCard)
+	require.NoError(t, err)
+	var mirror wecomRequestMirror
+	require.NoError(t, common.Unmarshal(payload, &mirror))
+	assert.Equal(t, "markdown", mirror.MsgType)
+	assert.Contains(t, mirror.Markdown.Content, "<@zhangsan>")
+}
+
+func TestSendWecomBotAlertSubscriptionRouting(t *testing.T) {
+	InitHttpClient()
+	fetchSetting := system_setting.GetFetchSetting()
+	originalFetch := *fetchSetting
+	fetchSetting.EnableSSRFProtection = false
+	t.Cleanup(func() { *fetchSetting = originalFetch })
+
+	var opsHits, allHits atomic.Int32
+	opsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		opsHits.Add(1)
+		_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
+	}))
+	t.Cleanup(opsServer.Close)
+	allServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		allHits.Add(1)
+		_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
+	}))
+	t.Cleanup(allServer.Close)
+
+	withWecomBotSetting(t, func(setting *operation_setting.WecomBotSetting) {
+		setting.Bots = []operation_setting.WecomBotConfig{
+			{ID: "ops", Name: "运维群", WebhookApiKey: opsServer.URL, Enabled: true,
+				Subscriptions: []string{operation_setting.WecomBotCategoryWatchdog}},
+			{ID: "all", Name: "全量群", WebhookApiKey: allServer.URL, Enabled: true},
+		}
+	})
+
+	// 未订阅渠道错误的机器人跳过；未配置订阅的机器人接收全部
+	require.NoError(t, sendWecomBotAlert(wecomBotAlert{
+		title: "渠道异常告警", category: operation_setting.WecomBotCategoryChannelError,
+	}))
+	assert.Equal(t, int32(0), opsHits.Load())
+	assert.Equal(t, int32(1), allHits.Load())
+
+	require.NoError(t, sendWecomBotAlert(wecomBotAlert{
+		title: "渠道错误频率异常", category: operation_setting.WecomBotCategoryWatchdog,
+	}))
+	assert.Equal(t, int32(1), opsHits.Load())
+	assert.Equal(t, int32(2), allHits.Load())
+}
+
+func TestWecomBotAlertSilences(t *testing.T) {
+	withWecomBotMemoryCooldown(t)
+	memWecomBotSilences.Range(func(key, value any) bool {
+		memWecomBotSilences.Delete(key)
+		return true
+	})
+
+	require.NoError(t, SetWecomBotAlertSilence("channel:5", time.Now().Add(time.Hour), "维护窗口", "admin"))
+	// 渠道命中，其他渠道与全局不受影响
+	assert.True(t, isWecomBotAlertSilenced("channel:5"))
+	assert.False(t, isWecomBotAlertSilenced("channel:6"))
+	assert.False(t, isWecomBotAlertSilenced(""))
+	// 非法 scope 拒绝写入
+	require.Error(t, SetWecomBotAlertSilence("bad scope", time.Now().Add(time.Hour), "", ""))
+	require.Error(t, SetWecomBotAlertSilence("channel:5", time.Now().Add(-time.Hour), "", ""))
+
+	// 过期项从列表清除并不再静默
+	expired := wecomBotSilenceRecord{Reason: "expired", Until: time.Now().Add(-time.Minute).Unix()}
+	memWecomBotSilences.Store("channel:9", expired)
+	silences := ListWecomBotAlertSilences()
+	require.Len(t, silences, 1)
+	assert.False(t, isWecomBotAlertSilenced("channel:9"))
+
+	// 全局静默覆盖所有渠道与无渠道维度的告警
+	require.NoError(t, SetWecomBotAlertSilence("all", time.Now().Add(2*time.Hour), "", ""))
+	assert.True(t, isWecomBotAlertSilenced("channel:6"))
+	assert.True(t, isWecomBotAlertSilenced(""))
+
+	silences = ListWecomBotAlertSilences()
+	require.Len(t, silences, 2)
+	// 按截止时间升序，先到期的在前
+	assert.Equal(t, "channel:5", silences[0].Scope)
+	assert.Equal(t, "all", silences[1].Scope)
+	assert.Equal(t, "维护窗口", silences[0].Reason)
+
+	// 解除静默：全局静默仍生效时渠道依旧被静默，清除全局后恢复
+	assert.True(t, ClearWecomBotAlertSilence("channel:5"))
+	assert.True(t, isWecomBotAlertSilenced("channel:5"))
+	assert.True(t, ClearWecomBotAlertSilence("all"))
+	assert.False(t, isWecomBotAlertSilenced("channel:5"))
+	assert.False(t, isWecomBotAlertSilenced(""))
+	assert.False(t, ClearWecomBotAlertSilence("channel:5"))
 }

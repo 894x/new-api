@@ -440,6 +440,8 @@ export type WecomBot = {
   webhook_masked: string
   mention_userids: string
   enabled: boolean
+  subscriptions: string[]
+  message_style: string
 }
 
 export type WecomBotMutationRequest = {
@@ -447,6 +449,8 @@ export type WecomBotMutationRequest = {
   webhook_api_key: string
   mention_userids: string
   enabled: boolean
+  subscriptions: string[]
+  message_style: string
 }
 
 export type WecomBotListResponse = {

@@ -8011,6 +8011,19 @@
     "Completion Tokens": "出力トークン",
     "First Used": "初回使用",
     "RPM/TPM are realtime rates over the last 60 seconds": "RPM/TPM は直近 60 秒のリアルタイム速度",
-    "Select a user to view per-channel usage": "ユーザーを選択するとチャネル別の使用量を表示します"
+    "Select a user to view per-channel usage": "ユーザーを選択するとチャネル別の使用量を表示します",
+    "Send test message": "テスト送信",
+    "Test message sent, please check the WeCom group": "テストメッセージを送信しました。WeComグループでご確認ください",
+    "Manage bots that receive channel alerts; each bot can subscribe to specific alert types": "チャネルアラートを受信するボットを管理します。各ボットは特定のアラート種別を購読できます",
+    "Alert subscriptions": "アラート購読",
+    "Leave empty to receive all alert types": "空欄で全種類のアラートを受信します",
+    "Channel auto-disabled alerts": "チャネル自動無効化アラート",
+    "Channel re-enabled alerts": "チャネル再有効化アラート",
+    "Balance patrol alerts": "残高パトロールアラート",
+    "Channel watchdog alerts": "チャネルエラー頻度アラート",
+    "Message style": "メッセージ形式",
+    "Markdown": "Markdown",
+    "Template card": "テンプレートカード",
+    "Template card style does not support mentions and falls back to Markdown when a mention list is configured": "テンプレートカードはメンション非対応です。メンション設定時は自動的に Markdown へフォールバックします"
   }
 }

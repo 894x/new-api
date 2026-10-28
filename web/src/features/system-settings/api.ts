@@ -181,6 +181,11 @@ export async function deleteWecomBot(id: string) {
   return res.data
 }
 
+export async function testWecomBot(id: string) {
+  const res = await api.post(`/api/wecom-bot/${id}/test`)
+  return res.data
+}
+
 export async function getWecomAIBotConfig() {
   const res = await api.get<WecomAIBotConfigResponse>(
     '/api/wecom-aibot/config'

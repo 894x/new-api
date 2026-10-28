@@ -13,12 +13,64 @@ import (
 )
 
 // WecomBotConfig 一台企业微信群机器人：WebhookApiKey 存储裸机器人 Key 或官方完整 Webhook 地址。
+// Subscriptions 为订阅的告警类型（空 = 全部）；MessageStyle 为消息样式（markdown / card）。
 type WecomBotConfig struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	WebhookApiKey  string `json:"webhook_api_key"`
-	MentionUserids string `json:"mention_userids"`
-	Enabled        bool   `json:"enabled"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	WebhookApiKey  string   `json:"webhook_api_key"`
+	MentionUserids string   `json:"mention_userids"`
+	Enabled        bool     `json:"enabled"`
+	Subscriptions  []string `json:"subscriptions"`
+	MessageStyle   string   `json:"message_style"`
+}
+
+// 告警类型常量，用于机器人订阅路由。
+const (
+	WecomBotCategoryChannelError    = "channel_error"
+	WecomBotCategoryChannelDisabled = "channel_disabled"
+	WecomBotCategoryChannelEnabled  = "channel_enabled"
+	WecomBotCategoryBalancePatrol   = "balance_patrol"
+	WecomBotCategoryWatchdog        = "watchdog"
+)
+
+// 消息样式常量。
+const (
+	WecomBotStyleMarkdown = "markdown"
+	WecomBotStyleCard     = "card"
+)
+
+var wecomBotCategories = []string{
+	WecomBotCategoryChannelError,
+	WecomBotCategoryChannelDisabled,
+	WecomBotCategoryChannelEnabled,
+	WecomBotCategoryBalancePatrol,
+	WecomBotCategoryWatchdog,
+}
+
+// NormalizeWecomBotSubscriptions 去重、丢弃未知类型；结果为空表示订阅全部。
+func NormalizeWecomBotSubscriptions(subs []string) []string {
+	if len(subs) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(subs))
+	for _, sub := range subs {
+		if slices.Contains(wecomBotCategories, sub) && !slices.Contains(normalized, sub) {
+			normalized = append(normalized, sub)
+		}
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+// NormalizeWecomBotMessageStyle 规范消息样式，空值视为 markdown。
+func NormalizeWecomBotMessageStyle(style string) string {
+	style = strings.ToLower(strings.TrimSpace(style))
+	if style == WecomBotStyleCard {
+		return WecomBotStyleCard
+	}
+	return WecomBotStyleMarkdown
 }
 
 // WecomBotSetting 企业微信群机器人渠道告警（渠道监控机器人）配置。
@@ -188,6 +240,8 @@ func NormalizeWecomBots(bots []WecomBotConfig) ([]WecomBotConfig, error) {
 		if err := ValidateWecomBotMentionUserids(bot.MentionUserids); err != nil {
 			return nil, fmt.Errorf("wecom bot %q: %w", bot.Name, err)
 		}
+		bot.Subscriptions = NormalizeWecomBotSubscriptions(bot.Subscriptions)
+		bot.MessageStyle = NormalizeWecomBotMessageStyle(bot.MessageStyle)
 		if bot.ID == "" {
 			bot.ID = common.GetUUID()
 		}
