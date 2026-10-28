@@ -19,6 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 // Static translation keys that don't get picked up by the t('...') regex.
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
+  'Charged quota',
+  'Consumption type',
   'DNSPod server configuration is incomplete or invalid.',
   'DNSPod configuration changed. Refresh and review it before saving again.',
   'A shared Redis connection is required to apply DNS weights.',

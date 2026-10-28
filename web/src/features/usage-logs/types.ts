@@ -509,7 +509,7 @@ export interface GetLogsParams {
   upstream_request_id?: string
 }
 
-export type LogExportView = 'upstream' | 'downstream'
+export type LogExportView = 'upstream' | 'downstream' | 'self'
 
 export interface LogExportRequest extends Omit<
   GetLogsParams,

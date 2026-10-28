@@ -92,7 +92,9 @@ export const getUserLogStats = (
 export async function exportLogs(
   request: LogExportRequest
 ): Promise<{ blob: Blob; filename: string }> {
-  const response = await api.post('/api/log/export', request, {
+  const endpoint =
+    request.view === 'self' ? '/api/log/self/export' : '/api/log/export'
+  const response = await api.post(endpoint, request, {
     responseType: 'blob',
     skipBusinessError: true,
     skipErrorHandler: true,
