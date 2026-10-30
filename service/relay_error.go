@@ -23,7 +23,7 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 	if err == nil {
 		return PolicyDecision{Action: "stop", Reason: "request_completed", Source: "system"}
 	}
-	if err.GetErrorCode() == types.ErrorCodeClientGone {
+	if err.GetErrorCode() == types.ErrorCodeClientGone || (c.Request != nil && c.Request.Context().Err() != nil) {
 		return PolicyDecision{Action: "stop", Reason: "client_gone", Source: "client"}
 	}
 	if c.Writer.Written() || types.IsResponseCommittedError(err) {

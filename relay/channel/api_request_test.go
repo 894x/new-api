@@ -99,6 +99,111 @@ func TestNewTaskAPIRequestInheritsClientCancellation(t *testing.T) {
 	require.ErrorIs(t, upstream.Context().Err(), context.Canceled)
 }
 
+func TestRelayRequestClientCancellationClosesUpstream(t *testing.T) {
+	service.InitHttpClient()
+	for _, dispatch := range []struct {
+		name string
+		send func(Adaptor, *gin.Context, *relaycommon.RelayInfo, io.Reader) (*http.Response, error)
+	}{
+		{name: "JSON", send: DoApiRequest},
+		{name: "form", send: DoFormRequest},
+	} {
+		for _, stage := range []string{"before headers", "after headers"} {
+			t.Run(dispatch.name+"/"+stage, func(t *testing.T) {
+				started := make(chan struct{})
+				upstreamCanceled := make(chan struct{})
+				release := make(chan struct{})
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, err := io.Copy(io.Discard, r.Body)
+					assert.NoError(t, err)
+					if stage == "after headers" {
+						w.Header().Set("Content-Type", "text/event-stream")
+						w.WriteHeader(http.StatusOK)
+						w.(http.Flusher).Flush()
+					}
+					close(started)
+					select {
+					case <-r.Context().Done():
+						close(upstreamCanceled)
+					case <-release:
+					}
+				}))
+				t.Cleanup(server.Close)
+				t.Cleanup(func() { close(release) })
+				c, info := newAttemptBoundaryFixture(server.URL)
+				requestContext, cancel := context.WithCancel(c.Request.Context())
+				t.Cleanup(cancel)
+				c.Request = c.Request.WithContext(requestContext)
+				type result struct {
+					response *http.Response
+					err      error
+				}
+				completed := make(chan result, 1)
+				go func() {
+					resp, err := dispatch.send(&attemptBoundaryAdaptor{requestURL: server.URL}, c, info, strings.NewReader(`{}`))
+					completed <- result{response: resp, err: err}
+				}()
+				select {
+				case <-started:
+				case <-time.After(3 * time.Second):
+					t.Fatal("upstream request did not arrive")
+				}
+				var response *http.Response
+				if stage == "after headers" {
+					select {
+					case outcome := <-completed:
+						require.NoError(t, outcome.err)
+						require.NotNil(t, outcome.response)
+						response = outcome.response
+						t.Cleanup(func() { _ = response.Body.Close() })
+					case <-time.After(3 * time.Second):
+						t.Fatal("relay did not receive upstream headers")
+					}
+				}
+				cancel()
+				select {
+				case <-upstreamCanceled:
+				case <-time.After(3 * time.Second):
+					t.Fatal("client cancellation did not close the upstream request")
+				}
+				if response != nil {
+					_, err := io.ReadAll(response.Body)
+					assert.ErrorIs(t, err, context.Canceled)
+					return
+				}
+				select {
+				case outcome := <-completed:
+					require.ErrorIs(t, outcome.err, context.Canceled)
+					apiErr := relaytypes.NewOpenAIError(outcome.err, relaytypes.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+					assert.Equal(t, relaytypes.ErrorCodeClientGone, apiErr.GetErrorCode())
+					assert.Equal(t, 499, apiErr.StatusCode)
+					assert.True(t, relaytypes.IsSkipRetryError(apiErr))
+				case <-time.After(3 * time.Second):
+					t.Fatal("relay request did not return after client cancellation")
+				}
+			})
+		}
+	}
+}
+
+func TestDoRequestKeepsUpstreamCancellationSeparateFromClientGone(t *testing.T) {
+	service.InitHttpClient()
+	c, info := newAttemptBoundaryFixture("https://provider.invalid/v1/chat/completions")
+	upstreamContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	req, err := http.NewRequestWithContext(upstreamContext, http.MethodPost, "https://provider.invalid/v1/chat/completions", strings.NewReader(`{}`))
+	require.NoError(t, err)
+
+	_, err = DoRequest(c, req, info)
+
+	require.Error(t, err)
+	require.NoError(t, c.Request.Context().Err())
+	var apiErr *relaytypes.NewAPIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, relaytypes.ErrorCodeDoRequestFailed, apiErr.GetErrorCode())
+	assert.Equal(t, http.StatusInternalServerError, apiErr.StatusCode)
+}
+
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()
 
