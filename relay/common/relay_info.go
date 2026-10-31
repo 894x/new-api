@@ -139,10 +139,12 @@ type RelayInfo struct {
 	StartTime         time.Time
 	FirstResponseTime time.Time
 	RequestTiming     *common.RequestTiming
-	isFirstResponse   bool
-	attemptMu         sync.Mutex
-	currentAttempt    dynamicRoutingAttempt
-	attemptNow        func() time.Time
+	// UpstreamRequestStarted tracks dispatch even when dynamic routing is disabled.
+	UpstreamRequestStarted bool
+	isFirstResponse        bool
+	attemptMu              sync.Mutex
+	currentAttempt         dynamicRoutingAttempt
+	attemptNow             func() time.Time
 	//SendLastReasoningResponse bool
 	IsStream               bool
 	IsGeminiBatchEmbedding bool
@@ -195,6 +197,8 @@ type RelayInfo struct {
 	// Billing 是计费会话，封装了预扣费/结算/退款的统一生命周期。
 	// 初始免费组可为 nil；若 auto 重试切换到付费组，会在发送前创建。
 	Billing BillingSettler
+	// ClientGoneInputBilled prevents repeating local cancellation settlement.
+	ClientGoneInputBilled bool
 	// BillingSource indicates whether this request is billed from wallet quota or subscription.
 	// "" or "wallet" => wallet; "subscription" => subscription
 	BillingSource string
@@ -361,6 +365,7 @@ func (info *RelayInfo) RequestedImageCount() int {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	info.UpstreamRequestStarted = false
 	info.ResponseModel = nil
 	info.FinalRequestRelayFormat = ""
 	info.RequestConversionChain = nil
@@ -1146,6 +1151,7 @@ func (info *RelayInfo) MarkAttemptUpstreamStarted() {
 	}
 	info.attemptMu.Lock()
 	defer info.attemptMu.Unlock()
+	info.UpstreamRequestStarted = true
 	if !info.currentAttempt.enabled || info.currentAttempt.reachedUpstream {
 		return
 	}

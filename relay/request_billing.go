@@ -71,13 +71,44 @@ func PrepareRequestBilling(c *gin.Context, info *relaycommon.RelayInfo) *types.N
 	return service.PreConsumeBilling(c, priceData.QuotaToPreConsume, info)
 }
 
-// RefundFailedRequestBilling applies the common final-failure policy after all
-// eligible attempts have ended. A settled BillingSession never refunds again.
+// RefundFailedRequestBilling settles dispatched text requests canceled by the
+// client from local input usage, and refunds other final failures.
 func RefundFailedRequestBilling(c *gin.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError) *types.NewAPIError {
 	if apiErr == nil {
 		return nil
 	}
 	apiErr = service.NormalizeViolationFeeError(apiErr)
+	if info.ClientGoneInputBilled {
+		return apiErr
+	}
+	if apiErr.GetErrorCode() == types.ErrorCodeClientGone && info.UpstreamRequestStarted &&
+		!info.StreamStatus.ResponseFailed() {
+		switch info.Request.(type) {
+		case *dto.GeneralOpenAIRequest, *dto.OpenAIResponsesRequest, *dto.OpenAIResponsesCompactionRequest,
+			*dto.ClaudeRequest, *dto.GeminiChatRequest:
+			// No usable usage reached the normal settlement path. Keep the
+			// input estimate only; cancellation cannot establish output usage.
+			promptTokens := info.GetEstimatePromptTokens()
+			if promptTokens == 0 {
+				var err error
+				promptTokens, err = service.CountRequestToken(c, info.Request.GetTokenCountMeta(), info)
+				if err != nil {
+					logger.LogError(c, "count canceled request input tokens: "+err.Error())
+					break
+				}
+			}
+			usage := service.ResponseText2Usage(c, "", info.GetUpstreamModelName(), promptTokens)
+			if info.StreamStatus == nil {
+				info.StreamStatus = relaycommon.NewStreamStatus()
+			}
+			info.StreamStatus.SetClientGone(apiErr)
+			// PostTextConsumeQuota owns settlement and reports ambiguous billing
+			// failures. Do not subsequently refund or repeat that operation.
+			info.ClientGoneInputBilled = true
+			service.PostTextConsumeQuota(c, info, usage, nil)
+			return apiErr
+		}
+	}
 	if info.Billing != nil {
 		info.Billing.Refund(c)
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	openaichannel "github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -132,6 +133,7 @@ func TestResponsesTerminalStopsOpenTransport(t *testing.T) {
 
 func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 	service.InitHttpClient()
+	service.InitTokenEncoders()
 	oldDB, oldLogDB := model.DB, model.LOG_DB
 	oldMainType, oldLogType := common.MainDatabaseType(), common.LogDatabaseType()
 	oldBatch, oldRedis, oldConsume, oldErrors := common.BatchUpdateEnabled, common.RedisEnabled, common.LogConsumeEnabled, constant.ErrorLogEnabled
@@ -148,20 +150,33 @@ func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 		charged, estimated   bool
 		withoutCancel        bool
 		responses, converted bool
+		inputOnly            bool
+		beforeHeaders        bool
+		beforeDispatch       bool
+		withoutEstimate      bool
+		nonStream            bool
+		tiered               bool
 	}{
 		{name: "usage before write failure keeps cache", body: "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":20,\"total_tokens\":1020,\"prompt_tokens_details\":{\"cached_tokens\":800}}}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n", charged: true},
 		{name: "reasoning and partial output are estimated", body: "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Let me think about this question.\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"The answer is forty two.\"}}]}\n\n", charged: true, estimated: true},
 		{name: "input usage keeps cache and estimates missing output", body: "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}],\"usage\":{\"prompt_tokens\":1000,\"prompt_tokens_details\":{\"cached_tokens\":800}}}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n", charged: true, estimated: true, withoutCancel: true},
 		{name: "final usage write failure settles prepaid balance", body: "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":20,\"total_tokens\":1020,\"prompt_tokens_details\":{\"cached_tokens\":800}}}\n\ndata: [DONE]\n\n", after: 1, prepaid: 1500, charged: true},
-		{name: "role only cancellation has no billable output", body: "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"choices\":[]}\n\n"},
-		{name: "role only cancellation on final write has no billable output", prepaid: 1500, body: "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: [DONE]\n\n"},
+		{name: "role only cancellation bills local input", charged: true, estimated: true, inputOnly: true, body: "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"choices\":[]}\n\n"},
+		{name: "role only cancellation on final write bills local input", charged: true, estimated: true, inputOnly: true, prepaid: 1500, body: "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: [DONE]\n\n"},
+		{name: "cancellation before headers bills local input", charged: true, estimated: true, inputOnly: true, beforeHeaders: true, prepaid: 1500},
+		{name: "tiered cancellation before headers bills input with zero output", charged: true, estimated: true, inputOnly: true, beforeHeaders: true, prepaid: 1500, tiered: true},
+		{name: "non stream cancellation before headers bills local input", charged: true, estimated: true, inputOnly: true, beforeHeaders: true, nonStream: true, prepaid: 1500},
+		{name: "cancellation without an input estimate counts locally", charged: true, estimated: true, inputOnly: true, beforeHeaders: true, withoutEstimate: true},
+		{name: "cancellation before dispatch refunds reservation", beforeDispatch: true, prepaid: 1500},
 		{name: "malformed upstream error during disconnect remains a failure", body: "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {malformed}\n\n"},
 		{name: "upstream error stays uncharged", body: "data: {\"error\":{\"message\":\"upstream failed\",\"type\":\"upstream_error\",\"code\":\"failed\"},\"status_code\":502}\n\n"},
-		{name: "upstream error during disconnect stays an upstream failure", body: "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"error\":{\"message\":\"upstream failed\",\"type\":\"upstream_error\",\"code\":\"failed\"},\"status_code\":502}\n\n"},
+		{name: "upstream error during disconnect stays an upstream failure", prepaid: 1500, body: "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"error\":{\"message\":\"upstream failed\",\"type\":\"upstream_error\",\"code\":\"failed\"},\"status_code\":502}\n\n"},
 		{name: "native Responses terminal usage survives first write failure", responses: true, charged: true, body: "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":1000,\"output_tokens\":20,\"total_tokens\":1020,\"input_tokens_details\":{\"cached_tokens\":800}}}}\n\n"},
 		{name: "converted Responses terminal usage survives first write failure", converted: true, charged: true, prepaid: 1500, body: "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":1000,\"output_tokens\":20,\"total_tokens\":1020,\"input_tokens_details\":{\"cached_tokens\":800}}}}\n\n"},
 		{name: "converted Responses partial output is estimated", converted: true, charged: true, estimated: true, body: "data: {\"type\":\"response.output_text.delta\",\"delta\":\"The answer is forty two.\"}\n\n"},
-		{name: "converted Responses role only cancellation on final write is uncharged", converted: true, after: 1, body: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-test\"}}\n\n"},
+		{name: "converted Responses role only cancellation on final write bills local input", charged: true, estimated: true, inputOnly: true, converted: true, after: 1, body: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-test\"}}\n\n"},
+		{name: "native Responses cancellation before headers bills local input", charged: true, estimated: true, inputOnly: true, responses: true, beforeHeaders: true, prepaid: 1500},
+		{name: "converted Responses cancellation before headers bills local input", charged: true, estimated: true, inputOnly: true, converted: true, beforeHeaders: true},
 		{name: "native Responses upstream error remains a failure", responses: true, body: "data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"type\":\"server_error\",\"code\":\"server_error\",\"message\":\"upstream failed\"}},\"status_code\":502}\n\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,6 +198,15 @@ func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 			}
 			db, err := gorm.Open(dialector, &gorm.Config{})
 			require.NoError(t, err)
+			if caseIndex == 0 {
+				query := "SELECT VERSION()"
+				if databaseType == common.DatabaseTypeSQLite {
+					query = "SELECT sqlite_version()"
+				}
+				var version string
+				require.NoError(t, db.Raw(query).Scan(&version).Error)
+				t.Logf("database version: %s", version)
+			}
 			sqlDB, err := db.DB()
 			require.NoError(t, err)
 			sqlDB.SetMaxOpenConns(1)
@@ -200,20 +224,26 @@ func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 			require.NoError(t, db.Create(&model.User{Id: 701, Username: "disconnect-test", Quota: balance, Group: "default"}).Error)
 			require.NoError(t, db.Create(&model.Token{Id: 702, UserId: 701, Key: "disconnect-test-key", RemainQuota: balance}).Error)
 			require.NoError(t, db.Create(&model.Channel{Id: 703, Name: "disconnect-test"}).Error)
+			requestCtx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.False(t, tc.beforeDispatch, "a canceled request must not reach upstream")
 				if tc.converted || tc.responses {
 					assert.Equal(t, "/v1/responses", r.URL.Path)
 				} else {
 					assert.Equal(t, "/v1/chat/completions", r.URL.Path)
 				}
 				_, _ = io.Copy(io.Discard, r.Body)
+				if tc.beforeHeaders {
+					cancel()
+					<-r.Context().Done()
+					return
+				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				_, _ = io.WriteString(w, tc.body)
 			}))
 			t.Cleanup(upstream.Close)
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			requestCtx, cancel := context.WithCancel(context.Background())
-			defer cancel()
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hello"}]}`)).WithContext(requestCtx)
 			writer := &disconnectingStreamWriter{ResponseWriter: c.Writer, cancel: cancel, after: tc.after}
 			if tc.withoutCancel {
@@ -236,7 +266,7 @@ func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 			info := &relaycommon.RelayInfo{
 				RelayFormat: types.RelayFormatOpenAI, RelayMode: relayconstant.RelayModeChatCompletions,
 				RequestURLPath:  "/v1/chat/completions",
-				Request:         &dto.GeneralOpenAIRequest{Model: "gpt-test", Stream: common.GetPointer(true)},
+				Request:         &dto.GeneralOpenAIRequest{Model: "gpt-test", Stream: common.GetPointer(true), Messages: []dto.Message{{Role: "user", Content: "hello"}}},
 				OriginModelName: "gpt-test", UserId: 701, TokenId: 702, TokenKey: "disconnect-test-key",
 				UserGroup: "default", UsingGroup: "default", RequestId: c.GetString(common.RequestIdKey), StartTime: time.Now(),
 				IsStream: true, ForcePreConsume: true,
@@ -245,6 +275,13 @@ func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 			info.PriceData.ModelRatio, info.PriceData.CompletionRatio, info.PriceData.CacheRatio = 1, 1, 0.1
 			info.PriceData.GroupRatioInfo.GroupRatio = 1
 			info.SetEstimatePromptTokens(1000)
+			if tc.tiered {
+				const expr = `tier("input", p * 2 + c * 1000)`
+				info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{
+					BillingMode: "tiered_expr", ExprString: expr, ExprHash: billingexpr.ExprHashString(expr),
+					GroupRatio: 1, QuotaPerUnit: common.QuotaPerUnit,
+				}
+			}
 			if tc.responses {
 				c.Request.URL.Path = "/v1/responses"
 				info.RequestURLPath = "/v1/responses"
@@ -252,7 +289,25 @@ func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 				info.RelayMode = relayconstant.RelayModeResponses
 				info.Request = &dto.OpenAIResponsesRequest{Model: "gpt-test", Stream: common.GetPointer(true), Input: []byte(`"hello"`)}
 			}
+			if tc.nonStream {
+				info.IsStream = false
+				info.Request.(*dto.GeneralOpenAIRequest).Stream = common.GetPointer(false)
+				common.SetContextKey(c, constant.ContextKeyIsStream, false)
+			}
+			wantPrompt := 1000
+			if tc.withoutEstimate {
+				var err error
+				wantPrompt, err = service.CountRequestToken(c, info.Request.GetTokenCountMeta(), info)
+				require.NoError(t, err)
+				require.Positive(t, wantPrompt)
+				info.SetEstimatePromptTokens(0)
+			}
 			require.Nil(t, service.PreConsumeBilling(c, tc.prepaid, info))
+			if tc.beforeDispatch {
+				// A previous failed attempt must not make this attempt billable.
+				info.MarkAttemptUpstreamStarted()
+				cancel()
+			}
 
 			var apiErr *types.NewAPIError
 			if tc.responses {
@@ -260,12 +315,12 @@ func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 			} else {
 				apiErr = TextHelper(c, info)
 			}
-			if tc.charged {
+			if tc.charged && !tc.inputOnly {
 				require.Nil(t, apiErr)
 			} else {
 				require.NotNil(t, apiErr)
 			}
-			if tc.charged || strings.Contains(tc.name, "cancellation") {
+			if tc.charged && !tc.beforeHeaders {
 				assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
 				assert.Equal(t, perfmetrics.OutcomeIgnored, perfmetrics.ClassifyRelayOutcome(context.Background(), info, apiErr))
 			}
@@ -297,9 +352,11 @@ func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 					failed = &logs[i]
 				}
 			}
-			if strings.Contains(tc.name, "cancellation") {
+			if strings.Contains(tc.name, "cancellation") && !tc.beforeDispatch {
 				require.NotNil(t, failed)
-				assert.Equal(t, "client_gone", gjson.Get(failed.Other, "stream_status.end_reason").String())
+				if !tc.beforeHeaders {
+					assert.Equal(t, "client_gone", gjson.Get(failed.Other, "stream_status.end_reason").String())
+				}
 				assert.Equal(t, int64(499), gjson.Get(failed.Other, "status_code").Int())
 			}
 			var user model.User
@@ -320,8 +377,13 @@ func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 				return
 			}
 			require.NotNil(t, consumed)
-			assert.Nil(t, failed)
-			assert.Len(t, logs, 1)
+			if tc.inputOnly {
+				require.NotNil(t, failed)
+				assert.Len(t, logs, 2)
+			} else {
+				assert.Nil(t, failed)
+				assert.Len(t, logs, 1)
+			}
 			for _, event := range service.RequestPolicy(c).Events() {
 				assert.NotEqual(t, "failure", event.Decision.Action)
 			}
@@ -331,9 +393,17 @@ func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 			if tc.after > 0 {
 				assert.Equal(t, http.StatusOK, c.Writer.Status())
 			}
-			assert.Equal(t, 1000, consumed.PromptTokens)
-			assert.Greater(t, consumed.CompletionTokens, 0)
-			assert.Equal(t, "client_gone", gjson.Get(consumed.Other, "stream_status.end_reason").String())
+			assert.Equal(t, wantPrompt, consumed.PromptTokens)
+			if tc.inputOnly {
+				assert.Zero(t, consumed.CompletionTokens)
+				assert.Equal(t, wantPrompt, consumed.Quota)
+				assert.Zero(t, gjson.Get(consumed.Other, "cache_tokens").Int())
+			} else {
+				assert.Greater(t, consumed.CompletionTokens, 0)
+			}
+			if info.IsStream {
+				assert.Equal(t, "client_gone", gjson.Get(consumed.Other, "stream_status.end_reason").String())
+			}
 			if tc.estimated {
 				assert.True(t, gjson.Get(consumed.Other, "admin_info.local_count_tokens").Bool())
 				if strings.Contains(tc.name, "keeps cache") {
@@ -352,6 +422,9 @@ func TestTextStreamDisconnectSettlesObservedUsage(t *testing.T) {
 			RefundFailedRequestBilling(c, info, apiErr)
 			require.NoError(t, db.First(&user, 701).Error)
 			assert.Equal(t, balance-consumed.Quota, user.Quota)
+			var consumeCount int64
+			require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&consumeCount).Error)
+			assert.Equal(t, int64(1), consumeCount)
 		})
 	}
 }
