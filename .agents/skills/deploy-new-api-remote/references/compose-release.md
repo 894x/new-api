@@ -28,6 +28,27 @@ image ID/OCI revision, Linux amd64 binary hash and frontend entry asset. Keep th
 release directory outside every instance checkout. An empty application VERSION
 does not replace these identity checks.
 
+## External resource supervision is required
+
+Read [resource-safety.md](resource-safety.md) before running any helper command,
+including `inspect` and `verify`. Establish the baseline, per-host budgets,
+supervised monitor, and cancellation ownership outside this helper. Keep the
+monitor running through backup validation, replacement, log reads, and final
+acceptance; a `passed` receipt does not prove resource safety or full coverage.
+
+The helper's streaming PostgreSQL dump is only one part of resource protection.
+Its startup-log subprocess currently captures output in memory with a time
+selector and no byte cap. Do not treat that selector as a memory bound or assume
+the helper enforces host budgets or cancels expensive producers on an alert.
+Until that path has enforced streaming byte/time limits, use the manual workflow
+with bounded log inspection rather than running the unbounded path in production.
+Do not bypass acceptance checks to obtain a passing receipt.
+
+If an external monitor alerts, stop advancing and cancel only the identified
+auxiliary producer. Reconcile any interrupted mutation or automatic rollback
+against actual routes/containers before retrying. Preserve failure markers,
+snapshots, services, and the healthy route; continue monitoring during recovery.
+
 ## Manifest
 
 Create a private `release.json` alongside the helper's receipts. Populate hashes,

@@ -1,11 +1,38 @@
 ---
 name: deploy-new-api-remote
-description: Deploy or roll back a pinned new-api commit on a remote server, with verified backups, graceful traffic switching, and retention of only the current and previous release. Use for remote releases and retirement of historical application instances while preserving data services and independent environments.
+description: Deploy or roll back a pinned new-api commit on a remote server, with continuous resource monitoring, verified backups, graceful traffic switching, and retention of only the current and previous release. Use for remote releases and retirement of historical application instances while preserving data services and independent environments.
 ---
 
 # Deploy New API Remotely
 
 Deploy one verified commit to the authorized environment. Treat source delivery, build, backup, traffic switching, verification, and historical-instance retirement as separate gates.
+
+## Resource safety throughout deployment
+
+Read [references/resource-safety.md](references/resource-safety.md) before adding
+server-side work, including discovery commands that can return large output.
+Record a resource baseline and start low-overhead monitoring on every affected
+host before builds, backups, validation, or new application slots. Include the
+shared database host even when a backup runs from a peer.
+
+Budget peak overlap, not just steady-state usage: existing applications, green
+and temporary role-transition slots, database/cache, build or backup jobs, log
+readers, and operating-system headroom. Define host-specific warning/stop
+thresholds and owned auxiliary jobs to cancel before launching them. If capacity
+is insufficient, offload or serialize the work; do not stop a healthy service to
+make room. Recheck the budget before every additional slot or expensive phase.
+
+Monitor available memory, process/container usage, memory pressure, swap, CPU,
+I/O, disk capacity, service latency/health, and OOM/restart deltas. Check monitor
+freshness at every gate. An alert must stop further rollout and the responsible
+auxiliary producer, not merely write a marker and exit. Keep monitoring while
+reconciling the incident, preserving live services and the healthy route.
+
+Keep monitoring through request draining, retirement, bounded startup/shutdown
+log inspection, and final acceptance. Use streaming reads with byte limits and
+timeouts for logs and other large output. Preserve every alert and its resolution;
+HTTP 200 or recovered memory alone does not erase a resource incident. Missing
+monitor coverage or truncated verification must be reported explicitly.
 
 ## Blue/green retention policy
 
@@ -62,6 +89,8 @@ Restricted rollback configuration/data backups necessarily retain runtime secret
 Use the manual workflow below for other database/proxy layouts or additional
 runtime mounts. A helper rejection identifies a contract that needs inspection;
 do not remove its guard just to continue.
+The helper does not replace the resource monitoring and bounded-output gates;
+read its reference for current limitations before running any command.
 
 ## Collect the deployment contract
 
@@ -76,6 +105,8 @@ Resolve these values before making external changes:
 - image name/tag and build arguments
 - health/API URL and expected response
 - services and data that must remain unchanged
+- affected hosts, resource budgets, monitoring ownership, warning/stop thresholds,
+  and the exact auxiliary jobs that may be cancelled on pressure
 - authorized domain aliases, the current and previous release identities, and the
   historical application instances authorized for retirement
 
@@ -107,6 +138,8 @@ After connecting, inspect the live host rather than trusting remembered paths or
 - locate the actual checkout and Compose file set used by the target
 - resolve each application's database/Redis peer IDs and background-task role;
   identify all routes and established connections that use a historical slot
+- record resource baselines and recent OOM events; verify monitor heartbeats and
+  enough capacity for the next phase, including temporary overlapping slots
 
 Resolve the absolute target path before any recursive move, backup, or replacement. Report and stop if discovery conflicts with the user's requested target.
 
@@ -119,7 +152,10 @@ Resolve the absolute target path before any recursive move, backup, or replaceme
 5. Stamp or verify `org.opencontainers.image.revision=<full-sha>` when the build supports OCI labels.
 6. Record the resulting image tag, image ID/digest, and revision label. Do not reuse a mutable tag as the only deployment identity.
 
-Building is non-disruptive; do not replace the running application until the build succeeds.
+Builds consume shared memory, CPU, and I/O even while the application keeps
+running. Pass the resource gate before building, apply verified job limits, and
+prefer an authorized idle builder or a local build when production headroom is
+tight. Do not replace the running application until the build succeeds.
 
 If registry access fails and the required builder images are unavailable, use a
 clean local checkout at the pinned SHA to build the frontend and Linux binary.
@@ -156,6 +192,12 @@ Immediately before replacing the application:
 - capture the exact command or configuration needed to restore the previous application image
 - validate every material backup: check nonzero size, archive integrity, and database dump integrity such as `gzip -t`
 
+Use an online consistent native backup without stopping, pausing, or freezing
+services. Stream dump, compression, transfer, and validation with bounded
+buffers and controlled concurrency/rate. Monitor both source and destination;
+off-host output does not remove database-side load. Use format-compatible
+validators and reuse a completed valid dump when only the checker needs changing.
+
 Do not proceed if the backup is missing or unverifiable. A copied source tree alone is not a data backup.
 
 ## 5. Replace only the authorized application
@@ -164,6 +206,9 @@ For blue/green releases, follow the retention reference: start the new slot on
 an unused loopback port, accept it before switching the authorized routes, and
 keep the previous image as a healthy standby. Retire older slots only after
 traffic and tasks drain. Preserve both versions' static resources.
+Before creating each green or role-transition clone, recheck peak memory capacity
+and verify the new container's effective limits. Keep the monitor active through
+the entire handoff; a healthy probe does not replace the resource gate.
 
 Acceptance before switching includes the dashboard: fetch the green slot's
 actual HTML entry, every referenced JS/CSS file, and one lazy-loaded page;
@@ -190,7 +235,8 @@ Confirm all of the following with current evidence:
 
 - the target container is running and healthy
 - its image ID and OCI revision match the requested commit
-- startup logs contain no migration, connection, or panic errors
+- bounded startup-log inspection finds no migration, connection, or panic errors;
+  record the inspected window and any missing or truncated output
 - the health endpoint and a representative API request return the expected semantic result
 - every authorized public hostname renders the dashboard and a lazy-loaded page;
   their referenced JS/CSS return actual assets with the expected type and hash
@@ -198,8 +244,11 @@ Confirm all of the following with current evidence:
 - target database and Redis container IDs/restart counts are unchanged unless authorized
 - every protected application, database, Redis, and neighboring instance is unchanged
 - persistent data remains available
+- resource monitoring covers all phases, alerts and recovery are documented, and
+  the final stable observation has no new OOM or unexpected service restart
 
 An HTTP response alone does not prove the correct commit is running. Verify both runtime identity and behavior.
+Keep the monitor running for retirement and the final audit, including log reads.
 
 ## 7. Retire historical application instances
 
@@ -212,10 +261,18 @@ single background master, every affected hostname, and protected services again.
 If any slot still has live traffic or task ownership that cannot drain safely,
 leave it running temporarily and report the unresolved retirement; do not claim
 retention is complete.
+Continue resource monitoring through draining and bounded shutdown-log checks.
+Do not force requests to end or kill healthy slots to recover deployment headroom.
 
 ## 8. Roll back on failure
 
-If verification fails, stop further rollout and restore the previous application image/configuration using the recorded rollback point. Recreate only the target application and repeat health, API, and protected-service checks. Restore data only when data was actually changed and the user authorized that recovery step.
+If application acceptance fails, stop further rollout and restore the previous application image/configuration using the recorded rollback point. Recreate only the target application and repeat health, API, and protected-service checks. Restore data only when data was actually changed and the user authorized that recovery step.
+
+For resource pressure from an auxiliary job, cancel that job first and inspect
+current service health. If the serving release remains healthy, preserve it while
+reconciling the alert. If a route change caused unavailability, immediately
+restore the verified healthy route gracefully. Do not add replacement containers
+or repeat expensive diagnostics while capacity is below the agreed budget.
 
 ## Report the handoff
 
@@ -231,5 +288,8 @@ Return a concise deployment record containing:
 - current/previous slot roles, stopped historical container IDs, disabled restart
   policies, and any remaining old traffic or background-task owners
 - any verification not completed
+- monitoring window and gaps, host-specific thresholds, baseline/minimum available
+  memory and observed usage peaks, OOM/restart deltas, and every alert's action
+  and resolution; record output limits and incomplete log windows
 
 Never include passwords, tokens, private keys, database credentials, or unredacted environment contents.

@@ -5,6 +5,20 @@ slots. The Compose helper supports application replacement within its declared
 profile; it does not provide this retention stage. Keep credentials in memory
 and restricted runtime backups, and preserve the original acceptance receipts.
 
+## Resource gate for overlapping slots
+
+Read [resource-safety.md](resource-safety.md) before discovery/build/backup work.
+Establish host-specific budgets and start supervised monitoring on every affected
+host, including shared data peers. Recheck capacity before each green or standby/
+master transition clone: the peak may exceed the final two-slot footprint.
+Verify effective limits on new slots and offload or defer work if it cannot fit.
+Do not stop a healthy slot or force request draining to create headroom.
+
+Keep monitoring through role handoff, natural draining, historical retirement,
+bounded log reads, and final acceptance. On pressure, stop the responsible owned
+auxiliary work and further rollout while preserving services and the healthy
+route. Keep the monitor alive and retain alerts with their recovery evidence.
+
 ## Identify the deployment lineage
 
 - Resolve the current traffic slot from the loaded proxy configuration and its
@@ -144,3 +158,6 @@ retired IDs, drain/task evidence, backup and refreshed rollback paths, HTTP
 monitoring results, and any incomplete step. Claims about a single task master
 apply only to the authorized lineage. Report other hostname masters separately;
 do not describe their shared database as having only one master.
+Include resource minima/peaks, OOM/restart deltas, monitor coverage, and alert
+resolution. Complete the stable observation after the final log/resource audit
+before stopping this deployment's monitor.
