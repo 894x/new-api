@@ -176,28 +176,35 @@ export function UserRoutingWorkspace(props: {
           (filtered.length === 0 ? (
             <EmptyState title={t('No available routing pools')} />
           ) : (
-            <div className='grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,21rem),1fr))] items-start gap-4'>
+            <div
+              role='list'
+              aria-label={t('User routing pools')}
+              className='min-w-0 columns-[32rem] gap-4'
+            >
               {filtered
                 .slice((currentPage - 1) * pageSize, currentPage * pageSize)
                 .map((entry) => {
                   const key = `${entry.model}\u0000${entry.group}`
                   return (
-                    <UserPoolCard
+                    <div
                       key={key}
-                      userId={props.userId}
-                      model={entry.model}
-                      group={entry.group}
-                      groupLabel={
-                        entry.group
-                          ? `${data.key_groups?.[entry.group] || entry.group} · ${entry.group}`
-                          : t('All public groups (legacy)')
-                      }
-                      onDirtyChange={(value) =>
-                        setDirtyCards((old) =>
-                          old[key] === value ? old : { ...old, [key]: value }
-                        )
-                      }
-                    />
+                      role='listitem'
+                      className='mb-4 inline-block w-full break-inside-avoid align-top'
+                    >
+                      <UserPoolCard
+                        userId={props.userId}
+                        model={entry.model}
+                        group={entry.group}
+                        groupLabel={
+                          entry.group || t('All public groups (legacy)')
+                        }
+                        onDirtyChange={(value) =>
+                          setDirtyCards((old) =>
+                            old[key] === value ? old : { ...old, [key]: value }
+                          )
+                        }
+                      />
+                    </div>
                   )
                 })}
             </div>

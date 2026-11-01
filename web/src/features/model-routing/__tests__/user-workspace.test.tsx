@@ -142,13 +142,14 @@ async function mountWorkspace() {
   return {
     client,
     dirty,
-    card: await screen.findByRole('region', { name: 'kimi-k3 · VIP · vip' }),
+    card: await screen.findByRole('region', { name: 'kimi-k3 · vip' }),
   }
 }
 
 test('shows the user identity and effective inherited priorities and weights without writing overrides', async () => {
   mockPool()
   const { card } = await mountWorkspace()
+  expect(within(card).getByText('vip')).toBeVisible()
   expect(await screen.findByText('acme')).toBeVisible()
   expect(within(card).getByText('Default routing pool')).toBeVisible()
   expect(
@@ -185,6 +186,22 @@ test('shows the user identity and effective inherited priorities and weights wit
     await screen.findByRole('option', { name: 'All models' })
   )
   expect(model).toHaveValue('All models')
+})
+
+test('user pool cards flow into responsive columns without splitting across columns', async () => {
+  mockPool()
+  const { card } = await mountWorkspace()
+  const list = screen.getByRole('list', { name: 'User routing pools' })
+  expect(list).toHaveClass('columns-[32rem]', 'gap-4')
+  expect(list).not.toHaveClass('grid')
+  const item = within(list).getByRole('listitem')
+  expect(item).toHaveClass(
+    'inline-block',
+    'w-full',
+    'break-inside-avoid',
+    'mb-4'
+  )
+  expect(item).toContainElement(card)
 })
 
 test('creates a user snapshot with explicit zero priority and weight while preserving excluded default channels', async () => {
