@@ -20,6 +20,7 @@ type UserChannelRoutingOverride struct {
 	Model     string `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
 	ChannelId int    `json:"channel_id" gorm:"primaryKey;autoIncrement:false"`
 	Priority  *int64 `json:"priority_override" gorm:"bigint"`
+	Weight    *uint  `json:"weight_override" gorm:"bigint"`
 	Disabled  bool   `json:"disabled"`
 }
 
@@ -44,9 +45,11 @@ func ListUserGroupChannelRoutingOverrides(userID int, modelName string) ([]UserG
 }
 
 type UserChannelRoutingPatch struct {
-	ChannelId int    `json:"channel_id"`
-	Priority  *int64 `json:"priority_override"`
-	Enabled   *bool  `json:"enabled"`
+	ChannelId     int    `json:"channel_id"`
+	Priority      *int64 `json:"priority_override"`
+	Weight        *uint  `json:"weight_override"`
+	InheritWeight bool   `json:"inherit_weight"`
+	Enabled       *bool  `json:"enabled"`
 }
 
 var ErrUserChannelRoutingConflict = errors.New("user channel routing changed; reload the configuration")
@@ -89,7 +92,7 @@ func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revisi
 	seen := make(map[int]struct{}, len(patches))
 	for _, patch := range patches {
 		_, duplicate := seen[patch.ChannelId]
-		if patch.ChannelId <= 0 || duplicate || patch.Enabled == nil || (patch.Priority != nil && (*patch.Priority < 0 || *patch.Priority > 2147483647)) {
+		if patch.ChannelId <= 0 || duplicate || patch.Enabled == nil || (patch.Priority != nil && (*patch.Priority < 0 || *patch.Priority > 2147483647)) || (patch.Weight != nil && *patch.Weight > MaxChannelWeight) {
 			return ErrInvalidUserChannelRouting
 		}
 		seen[patch.ChannelId] = struct{}{}
@@ -117,7 +120,16 @@ func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revisi
 			return ErrUserChannelRoutingConflict
 		}
 		for _, patch := range patches {
-			if routingGroup == "" && patch.Priority == nil && *patch.Enabled {
+			// Older editors omit weight; preserve it unless inheritance is explicit.
+			if patch.Weight == nil && !patch.InheritWeight {
+				for _, existing := range rows {
+					if existing.ChannelId == patch.ChannelId {
+						patch.Weight = existing.Weight
+						break
+					}
+				}
+			}
+			if routingGroup == "" && patch.Priority == nil && patch.Weight == nil && *patch.Enabled {
 				if err := tx.Where("user_id = ? AND model = ? AND channel_id = ?", userID, modelName, patch.ChannelId).Delete(&UserChannelRoutingOverride{}).Error; err != nil {
 					return err
 				}
@@ -134,7 +146,7 @@ func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revisi
 			if routingGroup != "" && !slices.Contains(channel.GetGroups(), routingGroup) {
 				return fmt.Errorf("%w: channel %d does not belong to group %s", ErrInvalidUserChannelRouting, patch.ChannelId, routingGroup)
 			}
-			row := UserChannelRoutingOverride{UserId: userID, Model: modelName, ChannelId: patch.ChannelId, Priority: patch.Priority, Disabled: !*patch.Enabled}
+			row := UserChannelRoutingOverride{UserId: userID, Model: modelName, ChannelId: patch.ChannelId, Priority: patch.Priority, Weight: patch.Weight, Disabled: !*patch.Enabled}
 			columns := []clause.Column{{Name: "user_id"}, {Name: "model"}, {Name: "channel_id"}}
 			var record any = &row
 			if routingGroup != "" {
@@ -143,11 +155,43 @@ func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revisi
 			}
 			if err := tx.Clauses(clause.OnConflict{
 				Columns:   columns,
-				DoUpdates: clause.AssignmentColumns([]string{"priority", "disabled"}),
+				DoUpdates: clause.AssignmentColumns([]string{"priority", "weight", "disabled"}),
 			}).Create(record).Error; err != nil {
 				return err
 			}
 		}
 		return nil
+	})
+}
+
+// Reset removes the complete scoped overlay, including stale channel records.
+// The same user lock and revision as edits protect concurrent administrators.
+func ResetUserChannelRoutingForGroup(userID int, modelName, routingGroup, revision string) error {
+	if userID <= 0 || modelName == "" || len(modelName) > 255 || strings.TrimSpace(modelName) != modelName || revision == "" || len(routingGroup) > 64 || strings.TrimSpace(routingGroup) != routingGroup || routingGroup == "auto" || strings.ContainsAny(routingGroup, ",\x00\r\n") {
+		return ErrInvalidUserChannelRouting
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var user User
+		if err := lockForUpdate(tx).Select("id").First(&user, userID).Error; err != nil {
+			return err
+		}
+		query := tx.Where("user_id = ? AND model = ?", userID, modelName)
+		var record any = &UserChannelRoutingOverride{}
+		if routingGroup != "" {
+			record = &UserGroupChannelRoutingOverride{}
+			query = query.Where("routing_group = ?", routingGroup)
+		}
+		rows := make([]UserChannelRoutingOverride, 0)
+		if err := query.Model(record).Order("model, channel_id").Find(&rows).Error; err != nil {
+			return err
+		}
+		current, err := UserChannelRoutingRevision(rows)
+		if err != nil {
+			return err
+		}
+		if current != revision {
+			return ErrUserChannelRoutingConflict
+		}
+		return query.Delete(record).Error
 	})
 }

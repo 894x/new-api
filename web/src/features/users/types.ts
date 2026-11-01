@@ -174,6 +174,9 @@ export interface UserChannelRoutingRow {
   model_priority: number | null
   inherited_priority: number
   priority_override: number | null
+  weight_override?: number | null
+  inherited_weight?: number
+  effective_weight?: number
   effective_priority: number
   enabled: boolean
   available: boolean
@@ -195,10 +198,11 @@ export interface UserChannelRoutingPatch {
   model: string
   routing_group?: string
   revision: string
-  overrides: Pick<
+  reset?: boolean
+  overrides: (Pick<
     UserChannelRoutingRow,
-    'channel_id' | 'priority_override' | 'enabled'
-  >[]
+    'channel_id' | 'priority_override' | 'enabled' | 'weight_override'
+  > & { inherit_weight?: boolean })[]
 }
 
 export interface UserGroupConfig {

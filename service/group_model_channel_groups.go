@@ -6,21 +6,10 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 )
 
 var ErrGroupModelChannelDenied = errors.New("the user's group does not allow this channel for the requested model")
-
-// GroupModelAllowedChannelIDs returns the union of the configured pools.
-// nil means unrestricted; a non-nil empty map must remain deny-all.
-func GroupModelAllowedChannelIDs(userGroup, modelName string) (map[int]struct{}, error) {
-	groups, configured := setting.GetGroupModelChannelGroups(userGroup, modelName)
-	if !configured {
-		return nil, nil
-	}
-	return ChannelGroupsAllowedChannelIDs(groups, modelName)
-}
 
 // ChannelGroupsAllowedChannelIDs resolves the union of enabled channels in the
 // selected channel groups for one public model. An empty, non-nil selection is
@@ -46,19 +35,7 @@ func (p *RetryParam) SelectionFilters(group string) (model.ChannelSelectionFilte
 	if err != nil {
 		return model.ChannelSelectionFilters{}, err
 	}
-	allowed, err := GroupModelAllowedChannelIDs(common.GetContextKeyString(p.Ctx, constant.ContextKeyUserGroup), p.ModelName)
-	if err != nil {
-		return model.ChannelSelectionFilters{}, err
-	}
-	if allowed == nil {
-		allowed = p.AllowedChannelIds
-	} else if p.AllowedChannelIds != nil {
-		for id := range allowed {
-			if _, ok := p.AllowedChannelIds[id]; !ok {
-				delete(allowed, id)
-			}
-		}
-	}
+	allowed := p.AllowedChannelIds
 	pool, err := p.ModelRoutingPool(group)
 	if err != nil {
 		return model.ChannelSelectionFilters{}, err
@@ -81,19 +58,10 @@ func (p *RetryParam) SelectionFilters(group string) (model.ChannelSelectionFilte
 // never grants access outside the token's own candidate groups.
 func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName string) error {
 	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-	allowed, err := GroupModelAllowedChannelIDs(userGroup, modelName)
-	if err != nil {
-		return err
-	}
-	if allowed != nil {
-		if _, ok := allowed[channelID]; !ok {
-			return ErrGroupModelChannelDenied
-		}
-	}
 	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	selectedGroup := common.GetContextKeyString(c, constant.ContextKeyAutoGroup)
 	param := &RetryParam{Ctx: c, ModelName: modelName}
-	if allowed == nil && group == "auto" {
+	if group == "auto" {
 		legacy, err := param.UserChannelRouting()
 		if err != nil {
 			return err
@@ -148,7 +116,7 @@ func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName
 		if poolErr != nil {
 			return poolErr
 		}
-		if permitted && !routing[channelID].Disabled && (allowed == nil && pool == nil || model.IsChannelEnabledForGroupModel(group, modelName, channelID)) {
+		if permitted && !routing[channelID].Disabled && (pool == nil || model.IsChannelEnabledForGroupModel(group, modelName, channelID)) {
 			return nil
 		}
 		return ErrGroupModelChannelDenied
@@ -172,28 +140,15 @@ func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName
 	return ErrGroupModelChannelDenied
 }
 
-// GetUserGroupsEnabledModels exposes only models with an actual channel in
-// both the user's model pools and one of the requested token groups.
-func GetUserGroupsEnabledModels(userGroup string, groups []string) ([]string, error) {
+// GetUserGroupsEnabledModels exposes models with an enabled channel in the
+// requested public groups. Routing pools control channel membership separately.
+func GetUserGroupsEnabledModels(_ string, groups []string) ([]string, error) {
 	seen := make(map[string]bool)
 	models := make([]string, 0)
 	for _, group := range groups {
 		for _, modelName := range model.GetGroupEnabledModels(group) {
 			if seen[modelName] {
 				continue
-			}
-			allowed, err := GroupModelAllowedChannelIDs(userGroup, modelName)
-			if err != nil {
-				return nil, err
-			}
-			if allowed != nil {
-				candidates, err := model.ListChannelSelectionCandidates(group, modelName, model.ChannelSelectionFilters{AllowedChannelIds: allowed})
-				if err != nil {
-					return nil, err
-				}
-				if len(candidates) == 0 {
-					continue
-				}
 			}
 			seen[modelName] = true
 			models = append(models, modelName)

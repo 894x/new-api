@@ -24,6 +24,11 @@ import { UserGroupConfigDrawer } from '../user-group-config-drawer'
 import { UsersMutateDrawer } from '../users-mutate-drawer'
 import { UsersProvider, useUsers } from '../users-provider'
 
+const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }))
+vi.mock('@tanstack/react-router', async (original) => ({
+  ...(await original<typeof import('@tanstack/react-router')>()),
+  useNavigate: () => navigate,
+}))
 vi.mock('@/lib/api', () => ({
   api: { get: vi.fn(), patch: vi.fn(), put: vi.fn(), post: vi.fn() },
 }))
@@ -218,32 +223,13 @@ describe('User group quick configuration', () => {
     ).toBeDisabled()
     fireEvent.click(screen.getByRole('tab', { name: 'Channels' }))
     expect(
-      await screen.findByRole('spinbutton', {
-        name: 'Priority for Pool Alpha #11',
-      })
-    ).toBeDisabled()
+      await screen.findByRole('button', { name: 'Manage routing pools' })
+    ).toBeEnabled()
     expect(
-      screen.getByRole('switch', {
-        name: 'Enable Pool Alpha #11 for this user',
-      })
-    ).toHaveAttribute('aria-disabled', 'true')
-    expect(screen.getByRole('combobox', { name: 'Model' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Add model' })).toBeDisabled()
-    fireEvent.click(
-      screen.getByRole('button', {
+      screen.queryByRole('button', {
         name: 'Resource channel pool filters (advanced)',
       })
-    )
-    expect(screen.getByRole('button', { name: 'Add rule' })).toBeDisabled()
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Preview channel availability' })
-    )
-    await waitFor(() =>
-      expect(api.post).toHaveBeenCalledWith(
-        '/api/user/42/group-config/preview',
-        expect.any(Object)
-      )
-    )
+    ).not.toBeInTheDocument()
     fireEvent.submit(
       screen.getByRole('form', { name: 'Customer group configuration' })
     )
@@ -537,104 +523,56 @@ describe('User group quick configuration', () => {
     ).toBeInTheDocument()
   })
 
-  it('warns when a selected model pool has no enabled channel candidates', async () => {
-    vi.mocked(api.post).mockResolvedValue({
-      data: {
-        success: true,
-        data: { 'model-x': { candidate_count: 0 } },
-      },
-    })
+  it('uses the routing workspace as the sole channel configuration entry', async () => {
     renderGroupConfig()
-
     fireEvent.click(await screen.findByRole('tab', { name: 'Channels' }))
-    fireEvent.click(
-      screen.getByRole('button', {
+    expect(
+      await screen.findByRole('button', { name: 'Manage routing pools' })
+    ).toBeEnabled()
+    expect(
+      screen.queryByRole('button', {
         name: 'Resource channel pool filters (advanced)',
       })
-    )
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Preview channel availability' })
-    )
-
-    await waitFor(() =>
-      expect(api.post).toHaveBeenCalledWith(
-        '/api/user/42/group-config/preview',
-        {
-          group: 'default',
-          model_channel_groups: { 'model-x': ['pool-a'] },
-        }
-      )
-    )
+    ).not.toBeInTheDocument()
     expect(
-      await screen.findByText(/No enabled channels match this model/)
-    ).toBeInTheDocument()
+      screen.queryByRole('button', { name: 'Preview channel availability' })
+    ).not.toBeInTheDocument()
+    expect(api.post).not.toHaveBeenCalled()
   })
-
-  it('edits a model under a public Key group without using its resource pool as the routing group', async () => {
-    vi.mocked(api.post).mockResolvedValue({
-      data: {
-        success: true,
-        data: { 'model-x': { candidate_count: 1 } },
-      },
-    })
+  it('shows a routing summary and opens the full workspace for the selected user', async () => {
     renderGroupConfig()
-
     fireEvent.click(await screen.findByRole('tab', { name: 'Channels' }))
-    expect(await screen.findByText('Pool Alpha #11')).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'default' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'default' })).toBeVisible()
-    expect(api.get).toHaveBeenCalledWith(
-      '/api/user/42/channel-routing-overrides',
-      {
-        params: {
-          model: 'model-x',
-          routing_group: 'default',
-        },
-      }
-    )
-  })
-
-  it('preserves added model and Key group drafts when switching away from Channels and back', async () => {
-    const operator = userEvent.setup()
-    renderGroupConfig()
-    await operator.click(await screen.findByRole('tab', { name: 'Channels' }))
-    const model = await screen.findByRole('region', { name: 'model-x' })
-    await operator.click(
-      within(model).getByRole('combobox', { name: 'Key group' })
-    )
-    await operator.click(screen.getByRole('option', { name: 'vip' }))
-    await operator.click(
-      within(model).getByRole('button', { name: 'Add Key group' })
-    )
-    const vip = await within(model).findByRole('region', { name: 'vip' })
-    fireEvent.change(
-      await within(vip).findByRole('spinbutton', {
-        name: 'Priority for Pool Alpha #11',
-      }),
-      { target: { value: '200' } }
-    )
-    await operator.type(
-      screen.getByRole('combobox', { name: 'Model' }),
-      'model-y'
-    )
-    await operator.click(screen.getByRole('button', { name: 'Add model' }))
-    await operator.click(screen.getByRole('tab', { name: 'Discounts' }))
-    await operator.click(screen.getByRole('tab', { name: 'Channels' }))
-    expect(screen.getByRole('heading', { name: 'model-y' })).toBeVisible()
-    const restored = within(
-      screen.getByRole('region', { name: 'model-x' })
-    ).getByRole('region', { name: 'vip' })
     expect(
-      within(restored).getByRole('spinbutton', {
-        name: 'Priority for Pool Alpha #11',
-      })
-    ).toHaveValue(200)
+      await screen.findByText(
+        'This user has dedicated routing overrides. Manage them in the routing pool workspace.'
+      )
+    ).toBeVisible()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Manage routing pools' })
+    )
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/model-channel-matrix',
+      search: { user_id: 42 },
+    })
     expect(
-      within(restored).getByRole('button', { name: 'Save changes' })
-    ).toBeEnabled()
+      screen.queryByRole('spinbutton', { name: 'Priority for Pool Alpha #11' })
+    ).not.toBeInTheDocument()
     expect(api.patch).not.toHaveBeenCalled()
   })
 
+  it('retains group form drafts and disables workspace navigation until they are saved or reset', async () => {
+    renderGroupConfig()
+    fireEvent.change(await screen.findByRole('spinbutton', { name: 'Ratio' }), {
+      target: { value: '0.5' },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: 'Channels' }))
+    expect(
+      await screen.findByRole('button', { name: 'Manage routing pools' })
+    ).toBeDisabled()
+    fireEvent.click(screen.getByRole('tab', { name: 'Discounts' }))
+    expect(screen.getByRole('spinbutton', { name: 'Ratio' })).toHaveValue(0.5)
+    expect(api.patch).not.toHaveBeenCalled()
+  })
   it('opens group configuration from the user editor without changing the user', async () => {
     renderUserEditor()
 

@@ -24,7 +24,6 @@ import { EmptyState } from '@/components/empty-state'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
-import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -138,13 +137,20 @@ export function ModelRoutingWorkspace(props: {
         )}
       </p>
       <div className='flex shrink-0 flex-wrap items-center gap-2'>
-        <Input
+        <Combobox
+          options={[
+            { value: '', label: t('All models') },
+            ...(catalog.data?.models ?? []).map((value) => ({
+              value,
+              label: value,
+            })),
+          ]}
           value={filters.model}
           disabled={dirty}
-          onChange={(event) => updateFilters({ model: event.target.value })}
+          onValueChange={(value) => updateFilters({ model: value ?? '' })}
           placeholder={t('Search models')}
           aria-label={t('Search models')}
-          className='min-w-40 flex-1 sm:max-w-72'
+          className='h-8 min-w-40 flex-1 sm:max-w-72'
         />
         <Combobox
           options={[
@@ -207,11 +213,6 @@ export function ModelRoutingWorkspace(props: {
           {t('Refresh')}
         </Button>
       </div>
-      {dirty && (
-        <p role='status' className='text-muted-foreground shrink-0 text-xs'>
-          {t('Save or reset edited cards before changing filters or views.')}
-        </p>
-      )}
       {catalog.isError && (
         <Alert>
           <AlertDescription>
@@ -284,13 +285,28 @@ export function ModelRoutingWorkspace(props: {
           ))}
       </div>
       {pools.data && (
-        <div className='flex shrink-0 items-center justify-between gap-3'>
-          <span className='text-muted-foreground text-xs'>
-            {t('Routing pools: {{total}}', {
-              total: formatNumber(pools.data.total, locale),
-            })}
-          </span>
-          <div className='flex items-center gap-2'>
+        <div className='flex min-w-0 shrink-0 items-center justify-between gap-3'>
+          <div className='flex min-w-0 flex-1 items-center gap-3 text-xs'>
+            <span className='text-muted-foreground shrink-0'>
+              {t('Routing pools: {{total}}', {
+                total: formatNumber(pools.data.total, locale),
+              })}
+            </span>
+            {dirty && (
+              <p
+                role='status'
+                className='text-muted-foreground truncate'
+                title={t(
+                  'Save or reset edited cards before changing filters or views.'
+                )}
+              >
+                {t(
+                  'Save or reset edited cards before changing filters or views.'
+                )}
+              </p>
+            )}
+          </div>
+          <div className='flex shrink-0 items-center gap-2'>
             <Button
               type='button'
               variant='outline'

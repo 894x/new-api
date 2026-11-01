@@ -45,11 +45,13 @@ func setupGroupModelChannelPolicyTest(t *testing.T) *gorm.DB {
 	// A disallowed high-priority channel must not prevent X from being selected.
 	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 4102).Update("priority", 100).Error)
 	require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", 4102).Update("priority", 100).Error)
+	pool := model.ModelRoutingPool{RoutingGroup: "vip", Model: "model-a", Mode: model.RoutingModePriority, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 4101, Priority: 0, Weight: 100, Enabled: true}}}
+	require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
 	model.InitChannelCache()
 	return db
 }
 
-func TestGroupModelChannelIntersectionAllowsSharedChannelAcrossDifferentGroups(t *testing.T) {
+func TestRoutingPoolReplacesResourceFiltersAndEnforcesPublicGroupMembership(t *testing.T) {
 	for _, cache := range []bool{true, false} {
 		for _, dynamic := range []bool{true, false} {
 			t.Run(fmt.Sprintf("cache=%t/dynamic=%t", cache, dynamic), func(t *testing.T) {
@@ -69,13 +71,13 @@ func TestGroupModelChannelIntersectionAllowsSharedChannelAcrossDifferentGroups(t
 				assert.ErrorIs(t, ValidateSelectedChannelGroupPolicy(ctx, 4103, "model-a"), ErrGroupModelChannelDenied)
 				models, err := GetUserGroupsEnabledModels("default", []string{"vip"})
 				require.NoError(t, err)
-				assert.Equal(t, []string{"model-a"}, models)
+				assert.ElementsMatch(t, []string{"model-a", "denied"}, models, "legacy resource filters no longer hide models")
 			})
 		}
 	}
 }
 
-func TestGroupModelChannelIntersectionComposesAssetsAutoAndCapacitySpillover(t *testing.T) {
+func TestRoutingPoolComposesAssetsAutoAndCapacitySpillover(t *testing.T) {
 	setupGroupModelChannelPolicyTest(t)
 	ctx := newChannelSelectContext()
 	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "auto")
@@ -102,22 +104,37 @@ func TestGroupModelChannelIntersectionComposesAssetsAutoAndCapacitySpillover(t *
 	assert.Nil(t, channel, "an empty intersection must not fall back to unrestricted routing")
 }
 
-func TestGroupModelChannelIntersectionReloadsPolicyAndPreservesUnconfiguredModels(t *testing.T) {
+func TestRoutingPoolReloadsMembershipAndIgnoresLegacyResourceFilters(t *testing.T) {
 	setupGroupModelChannelPolicyTest(t)
 	ctx := newChannelSelectContext()
 	param := &RetryParam{Ctx: ctx, TokenGroup: "vip", ModelName: "model-a"}
 	require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"default":{"model-a":[]}}`))
 	channel, _, err := CacheGetRandomSatisfiedChannel(param)
 	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 4101, channel.Id, "legacy resource filters do not restrict the routing pool")
+	pool, err := model.GetModelRoutingPool("vip", "model-a")
+	require.NoError(t, err)
+	require.NotNil(t, pool)
+	revision := pool.Revision
+	pool.Channels = []model.ModelRoutingPoolChannel{}
+	require.NoError(t, model.SaveModelRoutingPool(pool, revision))
+	param = &RetryParam{Ctx: ctx, TokenGroup: "vip", ModelName: "model-a"}
+	channel, _, err = CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
 	assert.Nil(t, channel)
 
-	require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"default":{"model-a":["pool","vip"]}}`))
+	revision = pool.Revision
+	pool.Channels = []model.ModelRoutingPoolChannel{{ChannelID: 4102, Priority: 100, Weight: 10, Enabled: true}}
+	require.NoError(t, model.SaveModelRoutingPool(pool, revision))
+	param = &RetryParam{Ctx: ctx, TokenGroup: "vip", ModelName: "model-a"}
 	channel, _, err = CacheGetRandomSatisfiedChannel(param)
 	require.NoError(t, err)
 	require.NotNil(t, channel)
-	assert.Equal(t, 4102, channel.Id, "multiple policy pools form a union before intersection")
+	assert.Equal(t, 4102, channel.Id, "a new request sees the edited pool")
 
 	param.ModelName = "denied"
+	param = &RetryParam{Ctx: ctx, TokenGroup: "vip", ModelName: "denied"}
 	channel, _, err = CacheGetRandomSatisfiedChannel(param)
 	require.NoError(t, err)
 	require.NotNil(t, channel)

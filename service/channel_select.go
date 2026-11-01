@@ -378,7 +378,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 	if retry.TokenGroup == "auto" {
 		for _, group := range GetRequestAutoGroups(c, common.GetContextKeyString(c, constant.ContextKeyUserGroup)) {
 			for _, row := range retry.userGroupRouting {
-				if row.RoutingGroup == group && (row.Priority != nil || row.Disabled) {
+				if row.RoutingGroup == group && (row.Priority != nil || row.Weight != nil || row.Disabled) {
 					hasUserRouting = true
 				}
 			}

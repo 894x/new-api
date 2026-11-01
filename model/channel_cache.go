@@ -275,6 +275,9 @@ func filterCachedChannelSelectionCandidates(routings []cachedChannelRouting, fil
 			if override.Priority != nil {
 				routing.Priority = *override.Priority
 			}
+			if override.Weight != nil {
+				routing.Weight = *override.Weight
+			}
 			personalized = append(personalized, routing)
 		}
 		routings = personalized

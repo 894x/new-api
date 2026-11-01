@@ -75,7 +75,7 @@ test('mounts usable filters while catalog and routing pools load independently',
   )
   mountWorkspace()
   expect(
-    await screen.findByRole('textbox', { name: 'Search models' })
+    await screen.findByRole('combobox', { name: 'Search models' })
   ).toBeEnabled()
   expect(
     screen.getByRole('combobox', { name: 'Filter scheduling strategy' })
@@ -104,11 +104,24 @@ test('mounts usable filters while catalog and routing pools load independently',
     resolveCatalog({
       data: {
         success: true,
-        data: { groups: { standard: 'Standard' }, models: ['kimi-k3'] },
+        data: {
+          groups: { standard: 'Standard' },
+          models: ['kimi-k3', 'gpt-4o'],
+        },
       },
     })
   )
-  expect(screen.getByRole('textbox', { name: 'Search models' })).toBeEnabled()
+  const model = screen.getByRole('combobox', { name: 'Search models' })
+  expect(model).toBeEnabled()
+  await userEvent.click(model)
+  await userEvent.clear(model)
+  await userEvent.type(model, 'kimi')
+  expect(await screen.findByRole('option', { name: 'kimi-k3' })).toBeVisible()
+  expect(
+    screen.queryByRole('option', { name: 'gpt-4o' })
+  ).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('option', { name: 'kimi-k3' }))
+  expect(model).toHaveValue('kimi-k3')
 })
 
 test('retains edited cards and locks filtering until the administrator resets the draft', async () => {
@@ -151,18 +164,35 @@ test('retains edited cards and locks filtering until the administrator resets th
   const priority = await screen.findByRole('spinbutton', {
     name: 'Priority for Alpha',
   })
+  expect(
+    screen.queryByText(
+      'Save or reset edited cards before changing filters or views.'
+    )
+  ).not.toBeInTheDocument()
   fireEvent.change(priority, { target: { value: '7' } })
   await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true))
-  expect(screen.getByRole('textbox', { name: 'Search models' })).toBeDisabled()
+  expect(
+    screen.getByText(
+      'Save or reset edited cards before changing filters or views.'
+    )
+  ).toBeVisible()
+  expect(screen.getByRole('combobox', { name: 'Search models' })).toBeDisabled()
   await act(async () => {
     await client.invalidateQueries({ queryKey: ['model-routing-pools'] })
   })
   expect(priority).toHaveValue(7)
   await userEvent.click(screen.getByRole('button', { name: 'Reset' }))
   await waitFor(() =>
-    expect(screen.getByRole('textbox', { name: 'Search models' })).toBeEnabled()
+    expect(
+      screen.getByRole('combobox', { name: 'Search models' })
+    ).toBeEnabled()
   )
   expect(priority).toHaveValue(100)
+  expect(
+    screen.queryByText(
+      'Save or reset edited cards before changing filters or views.'
+    )
+  ).not.toBeInTheDocument()
 })
 
 test('an administrator without channel read permission cannot fetch or configure routing pools', async () => {

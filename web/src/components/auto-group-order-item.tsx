@@ -40,7 +40,7 @@ type AutoGroupOrderItemProps = {
   leading?: ReactNode
   children?: ReactNode
   onMove: (index: number, direction: 'up' | 'down') => void
-  onRemove: (group: string) => void
+  onRemove?: (group: string) => void
 }
 
 export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
@@ -127,20 +127,22 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
             aria-hidden='true'
           />
         </Button>
-        <Button
-          type='button'
-          variant='ghost'
-          size='icon-sm'
-          aria-label={t('Remove {{group}}', { group: props.group })}
-          disabled={props.disabled}
-          onClick={() => props.onRemove(props.group)}
-        >
-          <HugeiconsIcon
-            icon={Cancel01Icon}
-            strokeWidth={2}
-            aria-hidden='true'
-          />
-        </Button>
+        {props.onRemove && (
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon-sm'
+            aria-label={t('Remove {{group}}', { group: props.group })}
+            disabled={props.disabled}
+            onClick={() => props.onRemove?.(props.group)}
+          >
+            <HugeiconsIcon
+              icon={Cancel01Icon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+          </Button>
+        )}
       </div>
     </Reorder.Item>
   )

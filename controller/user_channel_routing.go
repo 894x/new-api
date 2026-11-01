@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -27,17 +28,29 @@ type userChannelRoutingRow struct {
 	Enabled           bool   `json:"enabled"`
 	Available         bool   `json:"available"`
 	Configured        bool   `json:"configured"`
+	WeightOverride    *uint  `json:"weight_override"`
+	InheritedWeight   uint   `json:"inherited_weight"`
+	EffectiveWeight   uint   `json:"effective_weight"`
 }
 
 type userChannelRoutingResponse struct {
-	Models              []string                `json:"models"`
-	ConfiguredModels    []string                `json:"configured_models"`
-	ConfiguredKeyGroups map[string][]string     `json:"configured_key_groups"`
-	KeyGroups           map[string]string       `json:"key_groups"`
-	Model               string                  `json:"model"`
-	RoutingGroup        string                  `json:"routing_group,omitempty"`
-	Revision            string                  `json:"revision"`
-	Channels            []userChannelRoutingRow `json:"channels"`
+	Models              []string                        `json:"models"`
+	ConfiguredModels    []string                        `json:"configured_models"`
+	ConfiguredKeyGroups map[string][]string             `json:"configured_key_groups"`
+	KeyGroups           map[string]string               `json:"key_groups"`
+	Model               string                          `json:"model"`
+	RoutingGroup        string                          `json:"routing_group,omitempty"`
+	Revision            string                          `json:"revision"`
+	Channels            []userChannelRoutingRow         `json:"channels"`
+	UserID              int                             `json:"user_id"`
+	Username            string                          `json:"username"`
+	UserRole            int                             `json:"user_role"`
+	ModelGroups         map[string][]string             `json:"model_groups,omitempty"`
+	LegacyModels        []string                        `json:"legacy_models,omitempty"`
+	Source              string                          `json:"source,omitempty"`
+	Mode                string                          `json:"mode,omitempty"`
+	Configured          bool                            `json:"configured"`
+	PoolChannels        []model.ModelRoutingPoolChannel `json:"pool_channels,omitempty"`
 }
 
 // GET without model lists selectable and previously configured public models.
@@ -62,6 +75,7 @@ func GetUserChannelRouting(c *gin.Context) {
 		return
 	}
 	response := userChannelRoutingResponse{Models: []string{}, ConfiguredModels: []string{}, ConfiguredKeyGroups: map[string][]string{}, KeyGroups: map[string]string{}, Model: modelName, RoutingGroup: routingGroup, Channels: []userChannelRoutingRow{}}
+	response.UserID, response.Username, response.UserRole = user.Id, user.Username, user.Role
 	groups := make([]string, 0)
 	usable := service.GetUserUsableGroups(user.Group)
 	for group := range usable {
@@ -85,6 +99,7 @@ func GetUserChannelRouting(c *gin.Context) {
 		for _, override := range overrides {
 			models = append(models, override.Model)
 			response.ConfiguredModels = append(response.ConfiguredModels, override.Model)
+			response.LegacyModels = append(response.LegacyModels, override.Model)
 		}
 		groupOverrides, err := model.ListUserGroupChannelRoutingOverrides(userID, "")
 		if err != nil {
@@ -106,6 +121,25 @@ func GetUserChannelRouting(c *gin.Context) {
 		response.ConfiguredModels = slices.Compact(response.ConfiguredModels)
 		slices.Sort(models)
 		response.Models = slices.Compact(models)
+		if c.Query("view") == "pool" {
+			response.ModelGroups = make(map[string][]string)
+			for group := range response.KeyGroups {
+				for _, name := range model.GetGroupEnabledModels(group) {
+					if slices.Contains(response.Models, name) {
+						response.ModelGroups[name] = append(response.ModelGroups[name], group)
+					}
+				}
+			}
+			for name, groups := range response.ConfiguredKeyGroups {
+				response.ModelGroups[name] = append(response.ModelGroups[name], groups...)
+			}
+			for name, groups := range response.ModelGroups {
+				slices.Sort(groups)
+				response.ModelGroups[name] = slices.Compact(groups)
+			}
+			slices.Sort(response.LegacyModels)
+			response.LegacyModels = slices.Compact(response.LegacyModels)
+		}
 		common.ApiSuccess(c, response)
 		return
 	}
@@ -132,8 +166,9 @@ func GetUserChannelRouting(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	response.Configured = len(overrides) > 0
 	draftChannelGroups := false
-	allowed, err := service.GroupModelAllowedChannelIDs(user.Group, modelName)
+	var allowed map[int]struct{}
 	if rawGroups, ok := c.GetQuery("channel_groups"); ok {
 		draftChannelGroups = true
 		var groups []string
@@ -151,10 +186,10 @@ func GetUserChannelRouting(c *gin.Context) {
 			return
 		}
 		allowed, err = service.ChannelGroupsAllowedChannelIDs(groups, modelName)
-	}
-	if err != nil {
-		common.ApiError(c, err)
-		return
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	}
 	available := make(map[int]struct{})
 	for _, group := range groups {
@@ -176,6 +211,20 @@ func GetUserChannelRouting(c *gin.Context) {
 		modelNames = append(modelNames, normalized)
 	}
 	seen := make(map[int]bool)
+	poolMembers := make(map[int]bool)
+	if c.Query("view") == "pool" && routingGroup != "" {
+		members, err := model.ListModelRoutingPoolCandidates(routingGroup, modelName)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		for _, member := range members {
+			_, permitted := allowed[member.ChannelID]
+			if allowed == nil || permitted {
+				poolMembers[member.ChannelID] = true
+			}
+		}
+	}
 	for _, name := range modelNames {
 		routes, err := model.ListModelChannelRoutings(name)
 		if err != nil {
@@ -186,13 +235,17 @@ func GetUserChannelRouting(c *gin.Context) {
 			override, configured := overrideByID[route.ChannelId]
 			legacy, hasLegacy := legacyByID[route.ChannelId]
 			_, usable := available[route.ChannelId]
-			if seen[route.ChannelId] || (!usable && (routingGroup != "" || draftChannelGroups || !configured)) {
+			if seen[route.ChannelId] || c.Query("view") != "pool" && !usable && (routingGroup != "" || draftChannelGroups || !configured) || c.Query("view") == "pool" && !usable && !configured && !poolMembers[route.ChannelId] {
 				continue
 			}
 			seen[route.ChannelId] = true
 			inherited := route.EffectivePriority
+			inheritedWeight := route.EffectiveWeight
 			if legacy.Priority != nil {
 				inherited = *legacy.Priority
+			}
+			if legacy.Weight != nil {
+				inheritedWeight = *legacy.Weight
 			}
 			if !configured && hasLegacy {
 				override.Disabled = legacy.Disabled
@@ -201,8 +254,12 @@ func GetUserChannelRouting(c *gin.Context) {
 				DefaultPriority: route.DefaultPriority, ModelPriority: route.PriorityOverride,
 				InheritedPriority: inherited, EffectivePriority: inherited,
 				PriorityOverride: override.Priority, Enabled: !override.Disabled, Available: usable, Configured: configured || hasLegacy}
+			row.WeightOverride, row.InheritedWeight, row.EffectiveWeight = override.Weight, inheritedWeight, inheritedWeight
 			if override.Priority != nil {
 				row.EffectivePriority = *override.Priority
+			}
+			if override.Weight != nil {
+				row.EffectiveWeight = *override.Weight
 			}
 			response.Channels = append(response.Channels, row)
 		}
@@ -218,6 +275,73 @@ func GetUserChannelRouting(c *gin.Context) {
 				response.Channels = append(response.Channels, row)
 			}
 		}
+	}
+	if c.Query("view") == "pool" {
+		previewContext := c.Copy()
+		common.SetContextKey(previewContext, constant.ContextKeyUserId, userID)
+		common.SetContextKey(previewContext, constant.ContextKeyUserGroup, user.Group)
+		param := &service.RetryParam{Ctx: previewContext, ModelName: modelName}
+		response.Source, response.Mode = "channel_defaults", model.RoutingModePriority
+		if service.DynamicRoutingEnabled() {
+			response.Mode = model.RoutingModeSmart
+		}
+		pool, err := param.ModelRoutingPool(routingGroup)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if pool != nil {
+			response.Source, response.Mode = "default_pool", pool.Mode
+		}
+		resolved, err := param.UserChannelRoutingForGroup(routingGroup)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if len(resolved) > 0 {
+			response.Source = "legacy"
+			if response.Configured && routingGroup != "" {
+				response.Source = "user"
+			}
+		}
+		effective := make(map[int]model.Ability)
+		for _, group := range groups {
+			filters, err := param.SelectionFilters(group)
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			filters.AllowedChannelIds = allowed
+			candidates, err := model.ListChannelSelectionCandidates(group, modelName, filters)
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			for _, candidate := range candidates {
+				effective[candidate.ChannelId] = candidate
+			}
+		}
+		response.PoolChannels = make([]model.ModelRoutingPoolChannel, 0, len(response.Channels))
+		for i := range response.Channels {
+			row := &response.Channels[i]
+			candidate, enabled := effective[row.ChannelID]
+			if enabled {
+				row.EffectivePriority, row.EffectiveWeight = 0, candidate.Weight
+				if candidate.Priority != nil {
+					row.EffectivePriority = *candidate.Priority
+				}
+			}
+			response.PoolChannels = append(response.PoolChannels, model.ModelRoutingPoolChannel{ChannelID: row.ChannelID, Priority: row.EffectivePriority, Weight: row.EffectiveWeight, Enabled: enabled})
+		}
+		slices.SortStableFunc(response.PoolChannels, func(a, b model.ModelRoutingPoolChannel) int {
+			if a.Priority > b.Priority {
+				return -1
+			}
+			if a.Priority < b.Priority {
+				return 1
+			}
+			return a.ChannelID - b.ChannelID
+		})
 	}
 	slices.SortStableFunc(response.Channels, func(a, b userChannelRoutingRow) int {
 		if a.EffectivePriority > b.EffectivePriority {
@@ -238,12 +362,22 @@ func PatchUserChannelRouting(c *gin.Context) {
 		RoutingGroup string                          `json:"routing_group"`
 		Revision     string                          `json:"revision"`
 		Overrides    []model.UserChannelRoutingPatch `json:"overrides"`
+		Reset        bool                            `json:"reset"`
 	}
 	if err != nil || userID <= 0 || common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10), &request) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid user channel routing"})
 		return
 	}
-	if err := model.PatchUserChannelRoutingForGroup(userID, request.Model, request.RoutingGroup, request.Revision, request.Overrides); err != nil {
+	if request.Reset && len(request.Overrides) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "reset cannot include overrides"})
+		return
+	}
+	if request.Reset {
+		err = model.ResetUserChannelRoutingForGroup(userID, request.Model, request.RoutingGroup, request.Revision)
+	} else {
+		err = model.PatchUserChannelRoutingForGroup(userID, request.Model, request.RoutingGroup, request.Revision, request.Overrides)
+	}
+	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, model.ErrUserChannelRoutingConflict) {
 			status = http.StatusConflict
@@ -254,6 +388,6 @@ func PatchUserChannelRouting(c *gin.Context) {
 		c.JSON(status, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	recordManageAuditFor(c, userID, "user.channel_routing.update", map[string]any{"model": request.Model, "routing_group": request.RoutingGroup, "channels": len(request.Overrides)})
+	recordManageAuditFor(c, userID, "user.channel_routing.update", map[string]any{"model": request.Model, "routing_group": request.RoutingGroup, "channels": len(request.Overrides), "reset": request.Reset})
 	common.ApiSuccess(c, nil)
 }

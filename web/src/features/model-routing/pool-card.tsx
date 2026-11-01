@@ -197,10 +197,18 @@ export function PoolCard(props: {
               candidates={available}
               disabled={disabled}
               onChange={(channels) =>
-                form.setValue('channels', channels, {
-                  shouldDirty: true,
-                  shouldValidate: true,
-                })
+                form.setValue(
+                  'channels',
+                  channels.map((channel) => ({
+                    ...channel,
+                    priority: channel.priority ?? 0,
+                    weight: channel.weight ?? 0,
+                  })),
+                  {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  }
+                )
               }
             />
           )}

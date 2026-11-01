@@ -23,14 +23,25 @@ import { AutoGroupOrderItem } from '@/components/auto-group-order-item'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { cn } from '@/lib/utils'
 
 import type { PoolCandidate, PoolChannel } from './api'
 
+export interface PoolChannelDraft extends Omit<
+  PoolChannel,
+  'priority' | 'weight'
+> {
+  priority: number | null
+  weight: number | null
+}
+
 export function PoolChannelList(props: {
-  channels: PoolChannel[]
+  channels: PoolChannelDraft[]
   candidates: PoolCandidate[]
   disabled: boolean
-  onChange: (channels: PoolChannel[]) => void
+  allowInheritance?: boolean
+  removable?: boolean
+  onChange: (channels: PoolChannelDraft[]) => void
 }) {
   const { t } = useTranslation()
   const candidates = new Map(
@@ -59,7 +70,7 @@ export function PoolChannelList(props: {
     reorder(ids)
   }
 
-  function update(id: number, patch: Partial<PoolChannel>) {
+  function update(id: number, patch: Partial<PoolChannelDraft>) {
     if (!props.disabled) {
       props.onChange(
         props.channels.map((entry) =>
@@ -73,10 +84,15 @@ export function PoolChannelList(props: {
     <div className='space-y-2'>
       <div
         aria-hidden='true'
-        className='text-muted-foreground hidden items-center gap-3 pr-28 pl-10 text-xs sm:flex'
+        className={cn(
+          'text-muted-foreground hidden items-center gap-3 pl-10 text-xs sm:flex',
+          props.removable === false ? 'pr-20' : 'pr-28'
+        )}
       >
         <span className='min-w-0 flex-1'>{t('Channel Name')}</span>
-        <span className='w-20 shrink-0'>{t('Base priority')}</span>
+        <span className='w-20 shrink-0'>
+          {props.allowInheritance ? t('User priority') : t('Base priority')}
+        </span>
         <span className='w-16 shrink-0'>{t('Weight')}</span>
         <span className='w-12 shrink-0'>{t('Enabled in pool')}</span>
       </div>
@@ -111,24 +127,38 @@ export function PoolChannelList(props: {
               count={props.channels.length}
               disabled={props.disabled}
               onMove={move}
-              onRemove={() =>
-                props.onChange(
-                  props.channels.filter(
-                    (channel) => channel.channel_id !== entry.channel_id
-                  )
-                )
+              onRemove={
+                props.removable === false
+                  ? undefined
+                  : () =>
+                      props.onChange(
+                        props.channels.filter(
+                          (channel) => channel.channel_id !== entry.channel_id
+                        )
+                      )
               }
             >
               <div className='flex w-full flex-wrap items-center gap-3 sm:w-auto sm:shrink-0'>
                 <label className='flex items-center gap-2 text-xs'>
-                  <span className='sm:sr-only'>{t('Base priority')}</span>
+                  <span className='sm:sr-only'>
+                    {props.allowInheritance
+                      ? t('User priority')
+                      : t('Base priority')}
+                  </span>
                   <Input
                     type='number'
                     min={0}
                     max={2147483647}
                     step={1}
                     value={
-                      Number.isFinite(entry.priority) ? entry.priority : ''
+                      entry.priority !== null && Number.isFinite(entry.priority)
+                        ? entry.priority
+                        : ''
+                    }
+                    placeholder={
+                      props.allowInheritance
+                        ? String(candidate?.priority ?? 0)
+                        : undefined
                     }
                     disabled={props.disabled}
                     className='h-8 w-20'
@@ -137,7 +167,10 @@ export function PoolChannelList(props: {
                     })}
                     onChange={(event) =>
                       update(entry.channel_id, {
-                        priority: event.target.valueAsNumber,
+                        priority:
+                          props.allowInheritance && event.target.value === ''
+                            ? null
+                            : event.target.valueAsNumber,
                       })
                     }
                   />
@@ -149,13 +182,25 @@ export function PoolChannelList(props: {
                     min={0}
                     max={2147483637}
                     step={1}
-                    value={Number.isFinite(entry.weight) ? entry.weight : ''}
+                    value={
+                      entry.weight !== null && Number.isFinite(entry.weight)
+                        ? entry.weight
+                        : ''
+                    }
+                    placeholder={
+                      props.allowInheritance
+                        ? String(candidate?.weight ?? 0)
+                        : undefined
+                    }
                     disabled={props.disabled}
                     className='h-8 w-16'
                     aria-label={t('Weight for {{channel}}', { channel: name })}
                     onChange={(event) =>
                       update(entry.channel_id, {
-                        weight: event.target.valueAsNumber,
+                        weight:
+                          props.allowInheritance && event.target.value === ''
+                            ? null
+                            : event.target.valueAsNumber,
                       })
                     }
                   />

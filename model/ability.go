@@ -79,7 +79,7 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 func GetGroupEnabledModels(group string) []string {
 	var models []string
 	// Find distinct models
-	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
+	DB.Model(&Ability{}).Where(map[string]any{"group": group, "enabled": true}).Distinct("model").Pluck("model", &models)
 	return models
 }
 
@@ -229,6 +229,9 @@ func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelec
 			}
 			if override.Priority != nil {
 				ability.Priority = common.GetPointer(*override.Priority)
+			}
+			if override.Weight != nil {
+				ability.Weight = *override.Weight
 			}
 			personalized = append(personalized, ability)
 		}

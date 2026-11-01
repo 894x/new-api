@@ -16,10 +16,46 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { UserChannelRoutingConfig } from '@/features/users/types'
 import { api } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
 export type RoutingMode = 'priority' | 'smart'
+
+export interface UserRoutingPoolConfig extends UserChannelRoutingConfig {
+  user_id: number
+  username: string
+  user_role: number
+  model_groups?: Record<string, string[]>
+  legacy_models?: string[]
+  source: 'user' | 'legacy' | 'default_pool' | 'channel_defaults'
+  mode: RoutingMode
+  configured: boolean
+  pool_channels?: PoolChannel[]
+}
+
+export const userRoutingPoolKeys = {
+  all: (userId: number) => ['user-routing-pools', userId] as const,
+  catalog: (userId: number) =>
+    ['user-routing-pools', userId, 'catalog'] as const,
+  detail: (userId: number, group: string, model: string) =>
+    ['user-routing-pools', userId, group, model] as const,
+}
+
+export async function getUserRoutingPool(
+  userId: number,
+  group = '',
+  model = ''
+) {
+  const response = await api.get<{
+    success: boolean
+    message?: string
+    data: UserRoutingPoolConfig
+  }>(`/api/user/${userId}/channel-routing-overrides`, {
+    params: { model, ...(group ? { routing_group: group } : {}), view: 'pool' },
+  })
+  return requireServerSuccess(response.data).data
+}
 
 export interface PoolChannel {
   channel_id: number

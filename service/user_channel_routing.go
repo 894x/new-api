@@ -48,12 +48,15 @@ func (p *RetryParam) UserChannelRoutingForGroup(group string) (map[int]model.Use
 			continue
 		}
 		row := scoped.UserChannelRoutingOverride
+		inherited, exists := legacy[row.ChannelId]
+		if row.Weight == nil {
+			row.Weight = inherited.Weight
+		}
 		if row.Priority == nil {
-			inherited, exists := legacy[row.ChannelId]
 			row.Priority = inherited.Priority
 			// Keep the configured row visible in the editor while restoring
 			// ordinary affinity/dynamic routing when no override remains.
-			if !exists && !row.Disabled {
+			if !exists && !row.Disabled && row.Weight == nil {
 				continue
 			}
 		}
