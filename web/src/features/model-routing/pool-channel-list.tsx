@@ -17,12 +17,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Reorder } from 'motion/react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { AutoGroupOrderItem } from '@/components/auto-group-order-item'
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import { TruncatedText } from '@/components/truncated-text'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 import type { PoolCandidate, PoolChannel } from './api'
@@ -44,6 +48,9 @@ export function PoolChannelList(props: {
   onChange: (channels: PoolChannelDraft[]) => void
 }) {
   const { t } = useTranslation()
+  const [removingChannelId, setRemovingChannelId] = useState<number | null>(
+    null
+  )
   const candidates = new Map(
     props.candidates.map((candidate) => [candidate.channel_id, candidate])
   )
@@ -81,20 +88,33 @@ export function PoolChannelList(props: {
   }
 
   return (
-    <div className='space-y-2'>
+    <div className='@container/channel-list space-y-2'>
       <div
         aria-hidden='true'
         className={cn(
-          'text-muted-foreground hidden items-center gap-3 pl-10 text-xs sm:flex',
-          props.removable === false ? 'pr-20' : 'pr-28'
+          'text-muted-foreground flex items-center gap-1.5 pl-9 text-xs',
+          props.removable === false
+            ? 'pr-14 @max-[24rem]/channel-list:pr-8'
+            : 'pr-20 @max-[24rem]/channel-list:pr-14'
         )}
       >
-        <span className='min-w-0 flex-1'>{t('Channel Name')}</span>
-        <span className='w-20 shrink-0'>
-          {props.allowInheritance ? t('User priority') : t('Base priority')}
+        <span className='min-w-0 flex-1 truncate' title={t('Channel Name')}>
+          {t('Channel Name')}
         </span>
-        <span className='w-16 shrink-0'>{t('Weight')}</span>
-        <span className='w-12 shrink-0'>{t('Enabled in pool')}</span>
+        <span
+          className='w-12 shrink-0 truncate'
+          title={
+            props.allowInheritance ? t('User priority') : t('Base priority')
+          }
+        >
+          {t('Priority')}
+        </span>
+        <span className='w-12 shrink-0 truncate' title={t('Weight')}>
+          {t('Weight')}
+        </span>
+        <span className='w-8 shrink-0 truncate' title={t('Enabled in pool')}>
+          {t('Enable')}
+        </span>
       </div>
       <Reorder.Group
         axis='y'
@@ -109,19 +129,25 @@ export function PoolChannelList(props: {
             <AutoGroupOrderItem
               key={entry.channel_id}
               group={String(entry.channel_id)}
-              labelClassName='sm:flex-1 sm:basis-0'
+              compact
+              labelClassName='flex-1 basis-0 text-xs'
+              removeClassName='text-destructive hover:bg-destructive/10 hover:text-destructive'
               label={
-                <span className='flex min-w-0 items-center gap-2'>
-                  <span className='truncate' title={name}>
-                    {name}
-                  </span>
-                  <span className='text-muted-foreground shrink-0 text-xs'>
+                <div className='flex min-w-0 items-center gap-1' title=''>
+                  <TooltipProvider>
+                    <TruncatedText
+                      text={name}
+                      maxWidth='max-w-full'
+                      className='min-w-0 flex-1'
+                    />
+                  </TooltipProvider>
+                  <span className='text-muted-foreground shrink-0 text-[10px]'>
                     #{entry.channel_id}
                   </span>
                   {!candidate?.available && (
                     <Badge variant='outline'>{t('Unavailable')}</Badge>
                   )}
-                </span>
+                </div>
               }
               index={index}
               count={props.channels.length}
@@ -130,23 +156,19 @@ export function PoolChannelList(props: {
               onRemove={
                 props.removable === false
                   ? undefined
-                  : () =>
-                      props.onChange(
-                        props.channels.filter(
-                          (channel) => channel.channel_id !== entry.channel_id
-                        )
-                      )
+                  : () => setRemovingChannelId(entry.channel_id)
               }
             >
-              <div className='flex w-full flex-wrap items-center gap-3 sm:w-auto sm:shrink-0'>
+              <div className='flex shrink-0 items-center gap-1.5'>
                 <label className='flex items-center gap-2 text-xs'>
-                  <span className='sm:sr-only'>
+                  <span className='sr-only'>
                     {props.allowInheritance
                       ? t('User priority')
                       : t('Base priority')}
                   </span>
                   <Input
                     type='number'
+                    inputMode='numeric'
                     min={0}
                     max={2147483647}
                     step={1}
@@ -161,7 +183,7 @@ export function PoolChannelList(props: {
                         : undefined
                     }
                     disabled={props.disabled}
-                    className='h-8 w-20'
+                    className='h-7 w-12 [appearance:textfield] px-1 text-center text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
                     aria-label={t('Priority for {{channel}}', {
                       channel: name,
                     })}
@@ -176,9 +198,10 @@ export function PoolChannelList(props: {
                   />
                 </label>
                 <label className='flex items-center gap-2 text-xs'>
-                  <span className='sm:sr-only'>{t('Weight')}</span>
+                  <span className='sr-only'>{t('Weight')}</span>
                   <Input
                     type='number'
+                    inputMode='numeric'
                     min={0}
                     max={2147483637}
                     step={1}
@@ -193,7 +216,7 @@ export function PoolChannelList(props: {
                         : undefined
                     }
                     disabled={props.disabled}
-                    className='h-8 w-16'
+                    className='h-7 w-12 [appearance:textfield] px-1 text-center text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
                     aria-label={t('Weight for {{channel}}', { channel: name })}
                     onChange={(event) =>
                       update(entry.channel_id, {
@@ -205,8 +228,8 @@ export function PoolChannelList(props: {
                     }
                   />
                 </label>
-                <div className='flex items-center gap-2 text-xs sm:w-12 sm:justify-center'>
-                  <span className='sm:sr-only'>{t('Enabled in pool')}</span>
+                <div className='flex w-8 items-center justify-center gap-2 text-xs'>
+                  <span className='sr-only'>{t('Enabled in pool')}</span>
                   <Switch
                     checked={entry.enabled}
                     disabled={props.disabled}
@@ -223,6 +246,45 @@ export function PoolChannelList(props: {
           )
         })}
       </Reorder.Group>
+      <ConfirmDialog
+        open={removingChannelId !== null}
+        onOpenChange={(open) => {
+          if (!open) setRemovingChannelId(null)
+        }}
+        title={t('Remove channel from pool')}
+        desc={t(
+          'Remove channel "{{name}}" from this routing pool? Save the card to apply this change.',
+          {
+            name:
+              candidates.get(removingChannelId ?? 0)?.channel_name ??
+              `#${removingChannelId}`,
+          }
+        )}
+        confirmText={t('Remove')}
+        destructive
+        disabled={
+          props.disabled ||
+          props.removable === false ||
+          !props.channels.some(
+            (channel) => channel.channel_id === removingChannelId
+          )
+        }
+        handleConfirm={() => {
+          if (
+            props.disabled ||
+            props.removable === false ||
+            removingChannelId === null
+          ) {
+            return
+          }
+          props.onChange(
+            props.channels.filter(
+              (channel) => channel.channel_id !== removingChannelId
+            )
+          )
+          setRemovingChannelId(null)
+        }}
+      />
     </div>
   )
 }

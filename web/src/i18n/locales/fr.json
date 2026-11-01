@@ -5796,6 +5796,8 @@
     "Remove asset library configuration?": "Supprimer la configuration de la bibliothèque ?",
     "Remove attachment": "Supprimer la pièce jointe",
     "Remove branch": "Supprimer la branche",
+    "Remove channel \"{{name}}\" from this routing pool? Save the card to apply this change.": "Retirer le canal « {{name}} » de ce pool de routage ? Enregistrez la carte pour appliquer ce changement.",
+    "Remove channel from pool": "Retirer le canal du pool",
     "Remove compatible Passkey domains?": "Supprimer des domaines compatibles ?",
     "Remove condition": "Supprimer la condition",
     "Remove configuration": "Supprimer la configuration",

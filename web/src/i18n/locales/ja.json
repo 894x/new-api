@@ -5796,6 +5796,8 @@
     "Remove asset library configuration?": "素材ライブラリ設定を削除しますか？",
     "Remove attachment": "添付ファイルを削除",
     "Remove branch": "分岐を削除",
+    "Remove channel \"{{name}}\" from this routing pool? Save the card to apply this change.": "チャネル「{{name}}」をこのルーティングプールから削除しますか？カードを保存すると変更が適用されます。",
+    "Remove channel from pool": "ルーティングプールからチャネルを削除",
     "Remove compatible Passkey domains?": "互換用パスキードメインを削除しますか？",
     "Remove condition": "条件を削除",
     "Remove configuration": "設定を削除",

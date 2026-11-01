@@ -85,7 +85,7 @@ export function UserPoolCard(props: {
       role='region'
       aria-label={`${props.model} · ${props.groupLabel}`}
     >
-      <CardHeader className='flex flex-wrap items-start justify-between gap-2 px-4'>
+      <CardHeader className='flex flex-wrap items-start justify-between gap-2 px-3'>
         <CardTitle className='min-w-0 text-base break-all'>
           {props.model}
         </CardTitle>
@@ -94,12 +94,12 @@ export function UserPoolCard(props: {
         </Badge>
       </CardHeader>
       {query.isPending && (
-        <CardContent className='px-4'>
+        <CardContent className='px-3'>
           <Skeleton className='h-36 w-full' />
         </CardContent>
       )}
       {query.isError && (
-        <CardContent className='px-4'>
+        <CardContent className='px-3'>
           <ErrorState onRetry={() => void query.refetch()} />
         </CardContent>
       )}
@@ -237,7 +237,7 @@ function UserPoolEditor(props: {
   }))
   return (
     <>
-      <CardContent className='space-y-3 px-4'>
+      <CardContent className='space-y-3 px-3'>
         <div className='flex flex-wrap items-center justify-between gap-2 text-xs'>
           <Badge variant={config.configured ? 'default' : 'outline'}>
             {config.configured ? t('User override') : sources[config.source]}
@@ -294,7 +294,7 @@ function UserPoolEditor(props: {
           </p>
         )}
       </CardContent>
-      <CardFooter className='flex flex-wrap justify-between gap-2 px-4'>
+      <CardFooter className='flex flex-wrap justify-between gap-2 px-3'>
         {!editing ? (
           <Button
             type='button'

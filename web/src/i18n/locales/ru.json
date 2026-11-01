@@ -5796,6 +5796,8 @@
     "Remove asset library configuration?": "Удалить конфигурацию библиотеки?",
     "Remove attachment": "Удалить вложение",
     "Remove branch": "Удалить ветвь",
+    "Remove channel \"{{name}}\" from this routing pool? Save the card to apply this change.": "Убрать канал «{{name}}» из этого пула маршрутизации? Сохраните карточку, чтобы применить изменение.",
+    "Remove channel from pool": "Убрать канал из пула",
     "Remove compatible Passkey domains?": "Удалить совместимые домены ключей доступа?",
     "Remove condition": "Удалить условие",
     "Remove configuration": "Удалить конфигурацию",

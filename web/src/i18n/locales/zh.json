@@ -5796,6 +5796,8 @@
     "Remove asset library configuration?": "移除素材库配置？",
     "Remove attachment": "移除附件",
     "Remove branch": "删除分支",
+    "Remove channel \"{{name}}\" from this routing pool? Save the card to apply this change.": "确定将渠道“{{name}}”从此路由池中移除吗？保存卡片后生效。",
+    "Remove channel from pool": "从路由池移除渠道",
     "Remove compatible Passkey domains?": "移除兼容的通行密钥域名？",
     "Remove condition": "移除条件",
     "Remove configuration": "移除配置",

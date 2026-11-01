@@ -141,7 +141,7 @@ export function PoolCard(props: {
 
   return (
     <Card className='min-w-0 gap-4 py-4'>
-      <CardHeader className='gap-3 px-4'>
+      <CardHeader className='gap-3 px-3'>
         <div className='flex min-w-0 flex-wrap items-start justify-between gap-2'>
           <CardTitle className='min-w-0 text-base break-all'>
             {props.pool.model}
@@ -181,7 +181,7 @@ export function PoolCard(props: {
           void form.handleSubmit((data) => save.mutate(data))(event)
         }}
       >
-        <CardContent className='space-y-3 px-4'>
+        <CardContent className='space-y-3 px-3'>
           {values.channels.length === 0 ? (
             <p
               role='status'
@@ -274,7 +274,7 @@ export function PoolCard(props: {
             </div>
           )}
         </CardContent>
-        <CardFooter className='flex flex-wrap justify-between gap-2 px-4'>
+        <CardFooter className='flex flex-wrap justify-between gap-2 px-3'>
           <Button
             type='button'
             variant='outline'

@@ -5796,6 +5796,8 @@
     "Remove asset library configuration?": "Xóa cấu hình thư viện tài nguyên?",
     "Remove attachment": "Xóa tệp đính kèm",
     "Remove branch": "Xóa nhánh",
+    "Remove channel \"{{name}}\" from this routing pool? Save the card to apply this change.": "Xóa kênh “{{name}}” khỏi nhóm định tuyến này? Lưu thẻ để áp dụng thay đổi.",
+    "Remove channel from pool": "Xóa kênh khỏi nhóm định tuyến",
     "Remove compatible Passkey domains?": "Xóa tên miền khóa truy cập tương thích?",
     "Remove condition": "Gỡ điều kiện",
     "Remove configuration": "Xóa cấu hình",

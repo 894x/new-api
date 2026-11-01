@@ -176,7 +176,7 @@ export function UserRoutingWorkspace(props: {
           (filtered.length === 0 ? (
             <EmptyState title={t('No available routing pools')} />
           ) : (
-            <div className='grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,32rem),1fr))] items-start gap-4'>
+            <div className='grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,21rem),1fr))] items-start gap-4'>
               {filtered
                 .slice((currentPage - 1) * pageSize, currentPage * pageSize)
                 .map((entry) => {

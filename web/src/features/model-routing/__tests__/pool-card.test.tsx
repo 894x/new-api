@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
 
@@ -222,4 +228,76 @@ test('restoring defaults requires confirmation and deletes the explicit pool usi
       },
     })
   )
+})
+
+test('removing a channel requires confirmation and changes only the draft until saving', async () => {
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+    data: { success: true, data: { ...(body as object), revision: 'saved' } },
+  }))
+  const deleteChannel = vi.spyOn(api, 'delete')
+  mountCard()
+  await userEvent.click(screen.getByRole('button', { name: 'Remove 1' }))
+  const confirmation = await screen.findByRole('alertdialog', {
+    name: 'Remove channel from pool',
+  })
+  expect(
+    within(confirmation).getByText(
+      'Remove channel "Alpha" from this routing pool? Save the card to apply this change.'
+    )
+  ).toBeVisible()
+  expect(
+    screen.getByRole('spinbutton', { name: 'Priority for Alpha', hidden: true })
+  ).toHaveValue(100)
+  await userEvent.click(
+    within(confirmation).getByRole('button', { name: 'Cancel' })
+  )
+  await waitFor(() =>
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  )
+  expect(
+    screen.getByRole('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(100)
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  expect(put).not.toHaveBeenCalled()
+
+  await userEvent.click(screen.getByRole('button', { name: 'Remove 1' }))
+  await userEvent.click(
+    within(await screen.findByRole('alertdialog')).getByRole('button', {
+      name: 'Remove',
+    })
+  )
+  await waitFor(() =>
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  )
+  expect(
+    screen.queryByRole('spinbutton', { name: 'Priority for Alpha' })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.getByRole('spinbutton', { name: 'Weight for Beta' })
+  ).toHaveValue(0)
+  expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  expect(put).not.toHaveBeenCalled()
+  expect(deleteChannel).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        channels: [{ channel_id: 2, priority: 80, weight: 0, enabled: true }],
+      })
+    )
+  )
+})
+
+test('channel names expose their full text in a tooltip', async () => {
+  const pool = fixture()
+  const name = 'Primary provider for the international customer routing pool'
+  pool.candidates[0].channel_name = name
+  mountCard(pool)
+  await userEvent.hover(screen.getByText(name))
+  await waitFor(() => {
+    const labels = screen.getAllByText(name)
+    expect(labels).toHaveLength(2)
+    expect(labels[1]).toBeVisible()
+  })
 })

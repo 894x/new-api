@@ -34,6 +34,8 @@ type AutoGroupOrderItemProps = {
   group: string
   label?: ReactNode
   labelClassName?: string
+  removeClassName?: string
+  compact?: boolean
   disabled?: boolean
   index: number
   count: number
@@ -70,12 +72,15 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
       dragListener={false}
       dragMomentum={false}
       dragControls={dragControls}
-      className='bg-background relative flex min-w-0 items-center gap-2 rounded-lg border p-2'
+      className={cn(
+        'bg-background relative flex min-w-0 items-center rounded-lg border',
+        props.compact ? '@container/order-item gap-1 p-1' : 'gap-2 p-2'
+      )}
     >
       <Button
         type='button'
         variant='ghost'
-        size='icon-sm'
+        size={props.compact ? 'icon-xs' : 'icon-sm'}
         className='text-muted-foreground cursor-grab touch-none font-mono active:cursor-grabbing'
         aria-label={t('Drag {{group}} to reorder', { group: props.group })}
         title={t('Drag {{group}} to reorder', { group: props.group })}
@@ -86,8 +91,13 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
         <HugeiconsIcon icon={Drag01Icon} strokeWidth={2} aria-hidden='true' />
       </Button>
       {props.leading}
-      <div className='flex min-w-0 flex-1 flex-wrap items-center gap-2'>
-        <span
+      <div
+        className={cn(
+          'flex min-w-0 flex-1 items-center',
+          props.compact ? 'flex-nowrap gap-1.5' : 'flex-wrap gap-2'
+        )}
+      >
+        <div
           className={cn(
             'min-w-0 truncate text-sm font-medium',
             props.labelClassName
@@ -95,44 +105,54 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
           title={props.group}
         >
           {props.label ?? props.group}
-        </span>
+        </div>
         {props.children}
       </div>
-      <div className='flex shrink-0 gap-1'>
-        <Button
-          type='button'
-          variant='ghost'
-          size='icon-sm'
-          disabled={props.disabled || props.index === 0}
-          aria-label={t('Move {{group}} up', { group: props.group })}
-          onClick={() => props.onMove(props.index, 'up')}
+      <div
+        className={cn('flex shrink-0 items-center', !props.compact && 'gap-1')}
+      >
+        <div
+          className={cn(
+            'flex shrink-0',
+            props.compact ? '@max-[24rem]/order-item:flex-col' : 'gap-1'
+          )}
         >
-          <HugeiconsIcon
-            icon={ArrowUp01Icon}
-            strokeWidth={2}
-            aria-hidden='true'
-          />
-        </Button>
-        <Button
-          type='button'
-          variant='ghost'
-          size='icon-sm'
-          disabled={props.disabled || props.index === props.count - 1}
-          aria-label={t('Move {{group}} down', { group: props.group })}
-          onClick={() => props.onMove(props.index, 'down')}
-        >
-          <HugeiconsIcon
-            icon={ArrowDown01Icon}
-            strokeWidth={2}
-            aria-hidden='true'
-          />
-        </Button>
+          <Button
+            type='button'
+            variant='ghost'
+            size={props.compact ? 'icon-xs' : 'icon-sm'}
+            disabled={props.disabled || props.index === 0}
+            aria-label={t('Move {{group}} up', { group: props.group })}
+            onClick={() => props.onMove(props.index, 'up')}
+          >
+            <HugeiconsIcon
+              icon={ArrowUp01Icon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+          </Button>
+          <Button
+            type='button'
+            variant='ghost'
+            size={props.compact ? 'icon-xs' : 'icon-sm'}
+            disabled={props.disabled || props.index === props.count - 1}
+            aria-label={t('Move {{group}} down', { group: props.group })}
+            onClick={() => props.onMove(props.index, 'down')}
+          >
+            <HugeiconsIcon
+              icon={ArrowDown01Icon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+          </Button>
+        </div>
         {props.onRemove && (
           <Button
             type='button'
             variant='ghost'
-            size='icon-sm'
+            size={props.compact ? 'icon-xs' : 'icon-sm'}
             aria-label={t('Remove {{group}}', { group: props.group })}
+            className={props.removeClassName}
             disabled={props.disabled}
             onClick={() => props.onRemove?.(props.group)}
           >

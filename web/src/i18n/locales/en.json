@@ -5796,6 +5796,8 @@
     "Remove asset library configuration?": "Remove asset library configuration?",
     "Remove attachment": "Remove attachment",
     "Remove branch": "Remove branch",
+    "Remove channel \"{{name}}\" from this routing pool? Save the card to apply this change.": "Remove channel \"{{name}}\" from this routing pool? Save the card to apply this change.",
+    "Remove channel from pool": "Remove channel from pool",
     "Remove compatible Passkey domains?": "Remove compatible Passkey domains?",
     "Remove condition": "Remove condition",
     "Remove configuration": "Remove configuration",
