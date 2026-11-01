@@ -223,8 +223,8 @@ func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelec
 	if len(filters.UserRoutingOverrides) > 0 {
 		personalized := make([]Ability, 0, len(abilities))
 		for _, ability := range abilities {
-			override := filters.UserRoutingOverrides[ability.ChannelId]
-			if override.Disabled {
+			override, member := filters.UserRoutingOverrides[ability.ChannelId]
+			if !member || override.Disabled {
 				continue
 			}
 			if override.Priority != nil {

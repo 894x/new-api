@@ -104,14 +104,6 @@ func GetChannelDisableImpact(ctx context.Context, ids []int, tag *string, operat
 		userID int
 		model  string
 	}
-	legacy := make(map[userModel]map[int]model.UserChannelRoutingOverride)
-	for _, row := range snapshot.Overrides {
-		key := userModel{row.UserId, row.Model}
-		if legacy[key] == nil {
-			legacy[key] = make(map[int]model.UserChannelRoutingOverride)
-		}
-		legacy[key][row.ChannelId] = row
-	}
 	scoped := make(map[userModel][]model.UserGroupChannelRoutingOverride)
 	for _, row := range snapshot.GroupOverrides {
 		key := userModel{row.UserId, row.Model}
@@ -144,7 +136,7 @@ func GetChannelDisableImpact(ctx context.Context, ids []int, tag *string, operat
 				candidates[key] = routes
 			}
 			policyKey := userModel{user.Id, name}
-			param := RetryParam{ModelName: name, userRoutingLoaded: true, userRouting: legacy[policyKey], userGroupRouting: scoped[policyKey]}
+			param := RetryParam{ModelName: name, userRoutingLoaded: true, userGroupRouting: scoped[policyKey]}
 			routing, err := param.UserChannelRoutingForGroup(group)
 			if err != nil {
 				return result, err
@@ -170,8 +162,8 @@ func GetChannelDisableImpact(ctx context.Context, ids []int, tag *string, operat
 			var highest int64
 			remaining := 0
 			for _, route := range routes {
-				override := routing[route.ChannelId]
-				if override.Disabled {
+				override, member := routing[route.ChannelId]
+				if len(routing) > 0 && !member || override.Disabled {
 					continue
 				}
 				priority := int64(0)

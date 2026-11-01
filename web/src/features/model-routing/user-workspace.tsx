@@ -67,9 +67,6 @@ export function UserRoutingWorkspace(props: {
         configured: data?.configured_key_groups?.[name]?.includes(key) ?? false,
       }))
   )
-  for (const name of data?.legacy_models ?? []) {
-    entries.push({ model: name, group: '', configured: true })
-  }
   entries.sort(
     (a, b) =>
       Number(b.configured) - Number(a.configured) ||
@@ -96,7 +93,7 @@ export function UserRoutingWorkspace(props: {
         <span className='text-muted-foreground text-sm'>#{props.userId}</span>
         <span className='text-muted-foreground text-xs'>
           {t(
-            'User overrides take precedence. Unconfigured cards follow the default routing pool.'
+            'User pools define the full channel list. Empty user pools follow the default routing pool.'
           )}
         </span>
       </div>
@@ -129,9 +126,6 @@ export function UserRoutingWorkspace(props: {
               value,
               label: `${label || value} (${value})`,
             })),
-            ...(data?.legacy_models?.length
-              ? [{ value: '', label: t('All public groups (legacy)') }]
-              : []),
           ]}
           onValueChange={(value) => {
             setGroup(value ?? '__all')
@@ -179,7 +173,7 @@ export function UserRoutingWorkspace(props: {
             <div
               role='list'
               aria-label={t('User routing pools')}
-              className='min-w-0 columns-[32rem] gap-4'
+              className='min-w-0 columns-[24rem] gap-4'
             >
               {filtered
                 .slice((currentPage - 1) * pageSize, currentPage * pageSize)
@@ -195,9 +189,7 @@ export function UserRoutingWorkspace(props: {
                         userId={props.userId}
                         model={entry.model}
                         group={entry.group}
-                        groupLabel={
-                          entry.group || t('All public groups (legacy)')
-                        }
+                        groupLabel={entry.group}
                         onDirtyChange={(value) =>
                           setDirtyCards((old) =>
                             old[key] === value ? old : { ...old, [key]: value }

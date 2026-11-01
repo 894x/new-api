@@ -36,10 +36,9 @@ func TestUserChannelRoutingOverridesAllSelectionPaths(t *testing.T) {
 				require.NoError(t, db.First(&channel, id).Error)
 				require.NoError(t, channel.UpdateAbilities(nil))
 			}
-			require.NoError(t, db.Create(&[]model.UserChannelRoutingOverride{
-				{UserId: 42, Model: "gpt-5", ChannelId: 9501, Priority: common.GetPointer(int64(0))},
-				{UserId: 42, Model: "gpt-5", ChannelId: 9502, Priority: common.GetPointer(int64(200))},
-				{UserId: 42, Model: "gpt-5", ChannelId: 9503, Priority: common.GetPointer(int64(9999))},
+			require.NoError(t, db.Create(&[]model.UserGroupChannelRoutingOverride{
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: 42, Model: "gpt-5", ChannelId: 9501, Priority: common.GetPointer(int64(0))}, RoutingGroup: "default"},
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: 42, Model: "gpt-5", ChannelId: 9502, Priority: common.GetPointer(int64(200))}, RoutingGroup: "default"},
 			}).Error)
 			require.NoError(t, db.Create(&[]model.UserGroupChannelRoutingOverride{
 				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: 42, Model: "gpt-5", ChannelId: 9501, Priority: common.GetPointer(int64(400))}, RoutingGroup: "vip"},
@@ -112,7 +111,7 @@ func TestUserChannelRoutingOverridesAllSelectionPaths(t *testing.T) {
 				})
 			}
 			// Pausing is also enforced on fixed channels and post-selection checks.
-			require.NoError(t, db.Model(&model.UserChannelRoutingOverride{}).Where("user_id = ? AND channel_id = ?", 42, 9502).Update("disabled", true).Error)
+			require.NoError(t, db.Model(&model.UserGroupChannelRoutingOverride{}).Where("user_id = ? AND channel_id = ? AND routing_group = ?", 42, 9502, "default").Update("disabled", true).Error)
 			c := newChannelSelectContext()
 			common.SetContextKey(c, constant.ContextKeyUserId, 42)
 			common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")

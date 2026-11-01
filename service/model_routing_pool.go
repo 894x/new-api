@@ -49,7 +49,8 @@ func (p *RetryParam) ModelRoutingPoolAllows(group string, channelID int) (bool, 
 	// Customer-specific membership/priority rules are the upper layer. The
 	// administrator's model/group mode still governs how that pool is scheduled.
 	if len(userRouting) > 0 {
-		return !userRouting[channelID].Disabled, nil
+		override, member := userRouting[channelID]
+		return member && !override.Disabled, nil
 	}
 	pool, err := p.ModelRoutingPool(group)
 	if err != nil || pool == nil {

@@ -188,11 +188,11 @@ test('shows the user identity and effective inherited priorities and weights wit
   expect(model).toHaveValue('All models')
 })
 
-test('user pool cards flow into responsive columns without splitting across columns', async () => {
+test('user pool cards fill each responsive column without a fixed maximum width or splitting across columns', async () => {
   mockPool()
   const { card } = await mountWorkspace()
   const list = screen.getByRole('list', { name: 'User routing pools' })
-  expect(list).toHaveClass('columns-[32rem]', 'gap-4')
+  expect(list).toHaveClass('columns-[24rem]', 'gap-4')
   expect(list).not.toHaveClass('grid')
   const item = within(list).getByRole('listitem')
   expect(item).toHaveClass(
@@ -201,6 +201,7 @@ test('user pool cards flow into responsive columns without splitting across colu
     'break-inside-avoid',
     'mb-4'
   )
+  expect(item.className).not.toMatch(/max-w-/)
   expect(item).toContainElement(card)
 })
 
@@ -247,14 +248,12 @@ test('creates a user snapshot with explicit zero priority and weight while prese
             channel_id: 1,
             priority_override: 0,
             weight_override: 0,
-            inherit_weight: false,
             enabled: true,
           },
           {
             channel_id: 2,
             priority_override: 0,
             weight_override: 0,
-            inherit_weight: false,
             enabled: false,
           },
         ],
@@ -301,8 +300,13 @@ test('clearing a user weight explicitly restores inheritance and keeps the prior
             channel_id: 1,
             priority_override: 50,
             weight_override: null,
-            inherit_weight: true,
             enabled: true,
+          },
+          {
+            channel_id: 2,
+            priority_override: null,
+            weight_override: null,
+            enabled: false,
           },
         ],
       })
@@ -317,7 +321,9 @@ test('restoring inheritance requires confirmation and resets only this model and
     .mockResolvedValue({ data: { success: true } })
   const { card } = await mountWorkspace()
   fireEvent.click(
-    await within(card).findByRole('button', { name: 'Restore inheritance' })
+    await within(card).findByRole('button', {
+      name: 'Clear and use default pool',
+    })
   )
   fireEvent.click(
     within(screen.getByRole('alertdialog')).getByRole('button', {
@@ -326,11 +332,11 @@ test('restoring inheritance requires confirmation and resets only this model and
   )
   expect(patch).not.toHaveBeenCalled()
   fireEvent.click(
-    within(card).getByRole('button', { name: 'Restore inheritance' })
+    within(card).getByRole('button', { name: 'Clear and use default pool' })
   )
   fireEvent.click(
     within(screen.getByRole('alertdialog')).getByRole('button', {
-      name: 'Restore',
+      name: 'Clear and use default pool',
     })
   )
   await waitFor(() =>
@@ -514,4 +520,135 @@ test('scope search selects an authorized user and disabled scope controls cannot
   expect(
     screen.getByRole('button', { name: 'Default configuration' })
   ).toBeDisabled()
+})
+
+test('a user can add an enabled channel outside the default pool and save the complete membership', async () => {
+  const config = fixture()
+  config.channels.push({
+    ...config.channels[0],
+    channel_id: 3,
+    channel_name: 'Outside default',
+    inherited_priority: 12,
+    inherited_weight: 30,
+  })
+  mockPool(config)
+  const patch = vi
+    .spyOn(api, 'patch')
+    .mockResolvedValue({ data: { success: true } })
+  const { card } = await mountWorkspace()
+  await userEvent.click(
+    await within(card).findByRole('button', { name: 'Create user override' })
+  )
+  await userEvent.click(
+    within(card).getByRole('combobox', { name: 'Select channel' })
+  )
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'Outside default #3' })
+  )
+  await userEvent.click(within(card).getByRole('button', { name: 'Add' }))
+  expect(
+    within(card).getByRole('spinbutton', {
+      name: 'Priority for Outside default',
+    })
+  ).toHaveValue(12)
+  await userEvent.click(within(card).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      expect.objectContaining({
+        overrides: expect.arrayContaining([
+          expect.objectContaining({ channel_id: 1 }),
+          expect.objectContaining({ channel_id: 2 }),
+          expect.objectContaining({
+            channel_id: 3,
+            priority_override: 12,
+            weight_override: 30,
+            enabled: true,
+          }),
+        ]),
+      })
+    )
+  )
+})
+
+test('clearing a configured user pool confirms that the default pool will be used', async () => {
+  mockPool({ ...fixture(), configured: true, source: 'user' })
+  const patch = vi
+    .spyOn(api, 'patch')
+    .mockResolvedValue({ data: { success: true } })
+  const { card } = await mountWorkspace()
+  await userEvent.click(
+    await within(card).findByRole('button', {
+      name: 'Clear and use default pool',
+    })
+  )
+  const dialog = screen.getByRole('alertdialog')
+  expect(
+    within(dialog).getByText(
+      'Clear this user pool and use the default routing pool for this model and public group?'
+    )
+  ).toBeVisible()
+  expect(patch).not.toHaveBeenCalled()
+  await userEvent.click(
+    within(dialog).getByRole('button', { name: 'Clear and use default pool' })
+  )
+  await waitFor(() =>
+    expect(patch).toHaveBeenCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      expect.objectContaining({
+        routing_group: 'vip',
+        revision: 'original',
+        reset: true,
+        overrides: [],
+      })
+    )
+  )
+})
+
+test('a nonempty user pool with every member disabled warns that requests will fail', async () => {
+  mockPool({
+    ...fixture(),
+    configured: true,
+    source: 'user',
+    pool_channels: [
+      { channel_id: 1, priority: 10, weight: 20, enabled: false },
+    ],
+    channels: [{ ...fixture().channels[0], configured: true, enabled: false }],
+  })
+  const { card } = await mountWorkspace()
+  expect(await within(card).findByRole('alert')).toHaveTextContent(
+    'This user pool has no enabled channels. Requests for this model will fail.'
+  )
+})
+
+test('removing the final user member explains default fallback and saves an empty pool', async () => {
+  const config = fixture()
+  mockPool({
+    ...config,
+    configured: true,
+    source: 'user',
+    channels: [{ ...config.channels[0], configured: true }],
+    pool_channels: [{ channel_id: 1, priority: 100, weight: 7, enabled: true }],
+  })
+  const patch = vi
+    .spyOn(api, 'patch')
+    .mockResolvedValue({ data: { success: true } })
+  const { card } = await mountWorkspace()
+  await userEvent.click(
+    await within(card).findByRole('button', { name: 'Edit user override' })
+  )
+  await userEvent.click(within(card).getByRole('button', { name: 'Remove 1' }))
+  const dialog = screen.getByRole('alertdialog')
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
+  expect(within(card).getByRole('status')).toHaveTextContent(
+    'This user pool is empty. Saving will restore the default routing pool.'
+  )
+  expect(within(card).queryByRole('alert')).not.toBeInTheDocument()
+  await userEvent.click(within(card).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      expect.objectContaining({ routing_group: 'vip', overrides: [] })
+    )
+  )
 })

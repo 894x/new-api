@@ -27,8 +27,7 @@ export interface UserRoutingPoolConfig extends UserChannelRoutingConfig {
   username: string
   user_role: number
   model_groups?: Record<string, string[]>
-  legacy_models?: string[]
-  source: 'user' | 'legacy' | 'default_pool' | 'channel_defaults'
+  source: 'user' | 'default_pool' | 'channel_defaults'
   mode: RoutingMode
   configured: boolean
   pool_channels?: PoolChannel[]

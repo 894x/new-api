@@ -61,62 +61,12 @@ func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName
 	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	selectedGroup := common.GetContextKeyString(c, constant.ContextKeyAutoGroup)
 	param := &RetryParam{Ctx: c, ModelName: modelName}
-	if group == "auto" {
-		legacy, err := param.UserChannelRouting()
-		if err != nil {
-			return err
-		}
-		hasScopedPolicy := false
-		for _, row := range param.userGroupRouting {
-			if row.ChannelId == channelID {
-				hasScopedPolicy = true
-				break
-			}
-		}
-		// Preserve unscoped pinned-channel validation when there is no
-		// outlet policy to resolve for this channel.
-		if !hasScopedPolicy {
-			if legacy[channelID].Disabled {
-				return ErrGroupModelChannelDenied
-			}
-			hasDefaultPool := false
-			for _, candidate := range GetRequestAutoGroups(c, userGroup) {
-				if selectedGroup != "" && candidate != selectedGroup {
-					continue
-				}
-				pool, err := param.ModelRoutingPool(candidate)
-				if err != nil {
-					return err
-				}
-				hasDefaultPool = hasDefaultPool || pool != nil
-				permitted, err := param.ModelRoutingPoolAllows(candidate, channelID)
-				if err != nil {
-					return err
-				}
-				if permitted && model.IsChannelEnabledForGroupModel(candidate, modelName, channelID) {
-					return nil
-				}
-			}
-			if !hasDefaultPool {
-				return nil
-			}
-			return ErrGroupModelChannelDenied
-		}
-	}
 	if group != "auto" {
-		routing, err := param.UserChannelRoutingForGroup(group)
-		if err != nil {
-			return err
-		}
-		pool, poolErr := param.ModelRoutingPool(group)
-		if poolErr != nil {
-			return poolErr
-		}
 		permitted, poolErr := param.ModelRoutingPoolAllows(group, channelID)
 		if poolErr != nil {
 			return poolErr
 		}
-		if permitted && !routing[channelID].Disabled && (pool == nil || model.IsChannelEnabledForGroupModel(group, modelName, channelID)) {
+		if permitted && model.IsChannelEnabledForGroupModel(group, modelName, channelID) {
 			return nil
 		}
 		return ErrGroupModelChannelDenied
@@ -125,15 +75,11 @@ func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName
 		if selectedGroup != "" && candidate != selectedGroup {
 			continue
 		}
-		routing, err := param.UserChannelRoutingForGroup(candidate)
-		if err != nil {
-			return err
-		}
 		permitted, err := param.ModelRoutingPoolAllows(candidate, channelID)
 		if err != nil {
 			return err
 		}
-		if permitted && !routing[channelID].Disabled && model.IsChannelEnabledForGroupModel(candidate, modelName, channelID) {
+		if permitted && model.IsChannelEnabledForGroupModel(candidate, modelName, channelID) {
 			return nil
 		}
 	}

@@ -282,14 +282,11 @@ export function UserChannelRoutingEditor(props: {
           ? { routing_group: props.config.routing_group }
           : {}),
         revision: props.config.revision,
-        overrides: data.channels.filter((row) => {
-          const original = originalById.get(row.channel_id)
-          return (
-            row.priority_override !== original?.priority_override ||
-            row.enabled !== original?.enabled ||
-            (props.config.routing_group && !original?.configured)
-          )
-        }),
+        overrides: data.channels.map((row) => ({
+          ...row,
+          weight_override:
+            originalById.get(row.channel_id)?.weight_override ?? null,
+        })),
       })
     },
     onSuccess: async () => {
@@ -351,6 +348,22 @@ export function UserChannelRoutingEditor(props: {
   return (
     <Form {...form}>
       <div className='flex flex-col gap-4'>
+        {values.length === 0 && (
+          <p role='status' className='text-muted-foreground text-xs'>
+            {t(
+              'No user-specific channels are configured. The default routing pool is used.'
+            )}
+          </p>
+        )}
+        {values.length > 0 && values.every((row) => !row.enabled) && (
+          <Alert variant='destructive'>
+            <AlertDescription>
+              {t(
+                'This user pool has no enabled channels. Requests for this model will fail.'
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
         {props.config.routing_group && (
           <div className='flex flex-wrap gap-2'>
             <Combobox
