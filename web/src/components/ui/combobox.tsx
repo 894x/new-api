@@ -52,6 +52,7 @@ type LegacyComboboxProps = {
   className?: string
   popupClassName?: string
   id?: string
+  maxLength?: number
   openOnFocus?: boolean
   showAllOptionsOnFocus?: boolean
   disabled?: boolean
@@ -79,6 +80,7 @@ function Combobox(
     return (
       <LegacyComboboxInput
         id={props.id}
+        maxLength={props.maxLength}
         aria-label={props['aria-label']}
         aria-labelledby={props['aria-labelledby']}
         aria-invalid={props['aria-invalid']}
@@ -139,6 +141,7 @@ function OptionCombobox(props: LegacyComboboxProps) {
         <ComboboxInput
           ref={props.ref}
           id={props.id}
+          maxLength={props.maxLength}
           disabled={props.disabled}
           onBlur={props.onBlur}
           onKeyDown={props.onKeyDown}

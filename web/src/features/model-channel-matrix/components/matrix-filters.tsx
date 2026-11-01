@@ -17,26 +17,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect } from 'react'
-import { useForm } from 'react-hook-form'
+import { Controller, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
 import { Field, FieldLabel } from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { ChannelStatusFilter } from '@/features/channels/components/channel-status-filter'
 
-import type { MatrixSearch } from '../types'
+import type { MatrixChannel, MatrixSearch } from '../types'
 
 type FilterValues = Pick<MatrixSearch, 'model' | 'channel' | 'group'>
 
 export function MatrixFilters(props: {
   search: MatrixSearch
   groups: string[]
+  models: readonly string[]
+  channels: readonly Pick<MatrixChannel, 'id' | 'name'>[]
   onSearchChange: (search: MatrixSearch) => void
 }) {
   const { t } = useTranslation()
-  const { reset, register, handleSubmit } = useForm<FilterValues>({
+  const { reset, register, handleSubmit, control } = useForm<FilterValues>({
     defaultValues: props.search,
   })
   useEffect(() => {
@@ -51,34 +53,77 @@ export function MatrixFilters(props: {
       ? props.groups
       : [props.search.group, ...props.groups]
 
+  function submitFilters(values: FilterValues) {
+    props.onSearchChange({
+      ...props.search,
+      ...values,
+      model_page: 1,
+      channel_page: 1,
+    })
+  }
+
   return (
     <form
       className='flex shrink-0 flex-wrap items-end gap-3'
-      onSubmit={handleSubmit((values) =>
-        props.onSearchChange({
-          ...props.search,
-          ...values,
-          model_page: 1,
-          channel_page: 1,
-        })
-      )}
+      onSubmit={handleSubmit(submitFilters)}
+      onKeyDownCapture={(event) => {
+        const input = event.target
+        if (
+          event.key !== 'Enter' ||
+          !(input instanceof HTMLInputElement) ||
+          (input.id !== 'matrix-model-search' &&
+            input.id !== 'matrix-channel-search') ||
+          input.getAttribute('aria-activedescendant')
+        ) {
+          return
+        }
+        event.preventDefault()
+        event.stopPropagation()
+        void handleSubmit(submitFilters)()
+      }}
     >
       <Field className='min-w-36 flex-1 gap-1.5'>
         <FieldLabel htmlFor='matrix-model-search'>{t('Model')}</FieldLabel>
-        <Input
-          id='matrix-model-search'
-          placeholder={t('Search models')}
-          maxLength={255}
-          {...register('model')}
+        <Controller
+          name='model'
+          control={control}
+          render={({ field }) => (
+            <Combobox
+              id='matrix-model-search'
+              placeholder={t('Search models')}
+              emptyText={t('No results found')}
+              maxLength={255}
+              allowCustomValue
+              options={props.models.map((model) => ({
+                value: model,
+                label: model,
+              }))}
+              value={field.value}
+              onValueChange={(value) => field.onChange(value ?? '')}
+            />
+          )}
         />
       </Field>
       <Field className='min-w-36 flex-1 gap-1.5'>
         <FieldLabel htmlFor='matrix-channel-search'>{t('Channel')}</FieldLabel>
-        <Input
-          id='matrix-channel-search'
-          placeholder={t('Channel name or ID')}
-          maxLength={255}
-          {...register('channel')}
+        <Controller
+          name='channel'
+          control={control}
+          render={({ field }) => (
+            <Combobox
+              id='matrix-channel-search'
+              placeholder={t('Channel name or ID')}
+              emptyText={t('No results found')}
+              maxLength={255}
+              allowCustomValue
+              options={props.channels.map((channel) => ({
+                value: String(channel.id),
+                label: `${channel.name} #${channel.id}`,
+              }))}
+              value={field.value}
+              onValueChange={(value) => field.onChange(value ?? '')}
+            />
+          )}
         />
       </Field>
       <Field className='w-auto min-w-32 gap-1.5'>
