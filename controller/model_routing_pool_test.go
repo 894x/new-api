@@ -141,9 +141,12 @@ func TestModelRoutingPoolDatabaseMatrix(t *testing.T) {
 			require.NotNil(t, selected)
 			assert.True(t, service.RequestDynamicRoutingEnabled(ctx))
 			assert.False(t, service.DynamicRoutingEnabled())
-			// Personal priorities supersede the default ordering, while the
+			// A complete personal pool supersedes the default ordering, while the
 			// administrator's strategy still applies to the personalized pool.
-			require.NoError(t, db.Create(&model.UserChannelRoutingOverride{UserId: 9710, Model: "pool-model", ChannelId: 9701, Priority: common.GetPointer(int64(200))}).Error)
+			require.NoError(t, db.Create(&[]model.UserGroupChannelRoutingOverride{
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: 9710, Model: "pool-model", ChannelId: 9701, Priority: common.GetPointer(int64(200))}, RoutingGroup: "default"},
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: 9710, Model: "pool-model", ChannelId: 9702}, RoutingGroup: "default"},
+			}).Error)
 			personalContext, _ := gin.CreateTestContext(httptest.NewRecorder())
 			common.SetContextKey(personalContext, constant.ContextKeyUsingGroup, "default")
 			common.SetContextKey(personalContext, constant.ContextKeyUserId, 9710)
@@ -151,6 +154,7 @@ func TestModelRoutingPoolDatabaseMatrix(t *testing.T) {
 			personalFilters, err := personalParam.SelectionFilters("default")
 			require.NoError(t, err)
 			assert.Nil(t, personalFilters.RoutingPoolChannels)
+			require.Contains(t, personalFilters.UserRoutingOverrides, 9701)
 			assert.EqualValues(t, 200, *personalFilters.UserRoutingOverrides[9701].Priority)
 			selected, _, err = service.CacheGetRandomSatisfiedChannel(personalParam)
 			require.NoError(t, err)

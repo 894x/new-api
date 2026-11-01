@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// UserChannelRoutingOverride is a sparse user/public-model/channel policy.
+// UserChannelRoutingOverride stores one member of a user's routing pool.
 // Disabled retains the priority so re-enabling restores the user's ordering.
 type UserChannelRoutingOverride struct {
 	UserId    int    `json:"-" gorm:"primaryKey;autoIncrement:false"`
@@ -24,8 +24,7 @@ type UserChannelRoutingOverride struct {
 	Disabled  bool   `json:"disabled"`
 }
 
-// Group-scoped policies live separately so upgrades preserve the legacy
-// user/model/channel primary key and its inherited defaults.
+// Each public group has an independent, complete user routing pool.
 type UserGroupChannelRoutingOverride struct {
 	UserChannelRoutingOverride `gorm:"embedded"`
 	RoutingGroup               string `json:"routing_group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
@@ -45,11 +44,10 @@ func ListUserGroupChannelRoutingOverrides(userID int, modelName string) ([]UserG
 }
 
 type UserChannelRoutingPatch struct {
-	ChannelId     int    `json:"channel_id"`
-	Priority      *int64 `json:"priority_override"`
-	Weight        *uint  `json:"weight_override"`
-	InheritWeight bool   `json:"inherit_weight"`
-	Enabled       *bool  `json:"enabled"`
+	ChannelId int    `json:"channel_id"`
+	Priority  *int64 `json:"priority_override"`
+	Weight    *uint  `json:"weight_override"`
+	Enabled   *bool  `json:"enabled"`
 }
 
 var ErrUserChannelRoutingConflict = errors.New("user channel routing changed; reload the configuration")
@@ -76,14 +74,15 @@ func UserChannelRoutingRevision(rows []UserChannelRoutingOverride) (string, erro
 	return fmt.Sprintf("%x", sha256.Sum256(encoded)), nil
 }
 
-// PatchUserChannelRouting atomically patches final row values, with optimistic
-// concurrency per user/model. Omitted rows are untouched; enabled+nil inherits.
+// PatchUserChannelRouting atomically replaces a complete pool with optimistic
+// concurrency. Empty pools restore defaults; enabled members with nil values
+// inherit channel values without losing their explicit membership.
 func PatchUserChannelRouting(userID int, modelName, revision string, patches []UserChannelRoutingPatch) error {
 	return PatchUserChannelRoutingForGroup(userID, modelName, "", revision, patches)
 }
 
 func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revision string, patches []UserChannelRoutingPatch) error {
-	if userID <= 0 || modelName == "" || strings.TrimSpace(modelName) != modelName || len(modelName) > 255 || revision == "" || len(patches) == 0 || len(patches) > 1000 {
+	if userID <= 0 || modelName == "" || strings.TrimSpace(modelName) != modelName || len(modelName) > 255 || revision == "" || len(patches) > 1000 {
 		return ErrInvalidUserChannelRouting
 	}
 	if len(routingGroup) > 64 || strings.TrimSpace(routingGroup) != routingGroup || routingGroup == "auto" || strings.ContainsAny(routingGroup, ",\x00\r\n") {
@@ -119,22 +118,9 @@ func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revisi
 		if current != revision {
 			return ErrUserChannelRoutingConflict
 		}
+		ids := make([]int, 0, len(patches))
 		for _, patch := range patches {
-			// Older editors omit weight; preserve it unless inheritance is explicit.
-			if patch.Weight == nil && !patch.InheritWeight {
-				for _, existing := range rows {
-					if existing.ChannelId == patch.ChannelId {
-						patch.Weight = existing.Weight
-						break
-					}
-				}
-			}
-			if routingGroup == "" && patch.Priority == nil && patch.Weight == nil && *patch.Enabled {
-				if err := tx.Where("user_id = ? AND model = ? AND channel_id = ?", userID, modelName, patch.ChannelId).Delete(&UserChannelRoutingOverride{}).Error; err != nil {
-					return err
-				}
-				continue
-			}
+			ids = append(ids, patch.ChannelId)
 			var channel Channel
 			if err := tx.Select("id", "models", "group").First(&channel, patch.ChannelId).Error; err != nil {
 				return err
@@ -160,7 +146,10 @@ func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revisi
 				return err
 			}
 		}
-		return nil
+		if len(ids) > 0 {
+			query = query.Where("channel_id NOT IN ?", ids)
+		}
+		return query.Delete(query.Statement.Model).Error
 	})
 }
 

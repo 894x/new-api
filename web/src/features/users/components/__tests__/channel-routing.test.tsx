@@ -42,12 +42,14 @@ vi.mock('@/lib/api', () => ({ api: { get: vi.fn(), patch: vi.fn() } }))
 
 const config: UserChannelRoutingConfig = {
   model: 'gpt-5',
+  routing_group: 'default',
   models: [],
   revision: 'v1',
   channels: [
     {
       channel_id: 1,
       channel_name: 'Alpha',
+      configured: true,
       default_priority: 100,
       model_priority: null,
       inherited_priority: 100,
@@ -59,6 +61,7 @@ const config: UserChannelRoutingConfig = {
     {
       channel_id: 2,
       channel_name: 'Beta',
+      configured: true,
       default_priority: 10,
       model_priority: 20,
       inherited_priority: 20,
@@ -186,7 +189,20 @@ describe('user channel routing', () => {
           model: 'gpt-5',
           routing_group: 'pool-a',
           revision: 'revision-pool-a',
-          overrides: [{ channel_id: 1, priority_override: 7, enabled: true }],
+          overrides: [
+            {
+              channel_id: 1,
+              priority_override: 7,
+              weight_override: null,
+              enabled: true,
+            },
+            {
+              channel_id: 2,
+              priority_override: null,
+              weight_override: null,
+              enabled: true,
+            },
+          ],
         }
       )
     )
@@ -200,7 +216,20 @@ describe('user channel routing', () => {
         expect.any(String),
         expect.objectContaining({
           routing_group: 'pool-b',
-          overrides: [{ channel_id: 1, priority_override: 200, enabled: true }],
+          overrides: [
+            {
+              channel_id: 1,
+              priority_override: 200,
+              weight_override: null,
+              enabled: true,
+            },
+            {
+              channel_id: 2,
+              priority_override: null,
+              weight_override: null,
+              enabled: true,
+            },
+          ],
         })
       )
     )
@@ -257,7 +286,14 @@ describe('user channel routing', () => {
         expect.any(String),
         expect.objectContaining({
           routing_group: 'pool-a',
-          overrides: [{ channel_id: 1, priority_override: 100, enabled: true }],
+          overrides: [
+            {
+              channel_id: 1,
+              priority_override: 100,
+              weight_override: null,
+              enabled: true,
+            },
+          ],
         })
       )
     )
@@ -297,10 +333,21 @@ describe('user channel routing', () => {
         '/api/user/42/channel-routing-overrides',
         {
           model: 'gpt-5',
+          routing_group: 'default',
           revision: 'v1',
           overrides: [
-            { channel_id: 2, priority_override: 2, enabled: false },
-            { channel_id: 1, priority_override: 1, enabled: true },
+            {
+              channel_id: 2,
+              priority_override: 2,
+              weight_override: null,
+              enabled: false,
+            },
+            {
+              channel_id: 1,
+              priority_override: 1,
+              weight_override: null,
+              enabled: true,
+            },
           ],
         }
       )
@@ -343,7 +390,14 @@ describe('user channel routing', () => {
       expect(api.patch).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          overrides: [{ channel_id: 1, priority_override: 0, enabled: true }],
+          overrides: [
+            {
+              channel_id: 1,
+              priority_override: 0,
+              weight_override: null,
+              enabled: true,
+            },
+          ],
         })
       )
     )
@@ -363,7 +417,12 @@ describe('user channel routing', () => {
         expect.any(String),
         expect.objectContaining({
           overrides: [
-            { channel_id: 1, priority_override: null, enabled: false },
+            {
+              channel_id: 1,
+              priority_override: null,
+              weight_override: null,
+              enabled: false,
+            },
           ],
         })
       )
@@ -387,7 +446,7 @@ describe('user channel routing', () => {
     expect(screen.getByRole('button', { name: 'Reload' })).toBeEnabled()
   })
 
-  it('invalid priorities cannot be saved and untouched rows are omitted', async () => {
+  it('rejects invalid priorities and saves the full pool including untouched members', async () => {
     renderEditor()
     const input = screen.getByRole('spinbutton', {
       name: 'Priority for Beta #2',
@@ -402,7 +461,20 @@ describe('user channel routing', () => {
       expect(api.patch).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          overrides: [{ channel_id: 2, priority_override: 0, enabled: true }],
+          overrides: [
+            {
+              channel_id: 1,
+              priority_override: null,
+              weight_override: null,
+              enabled: true,
+            },
+            {
+              channel_id: 2,
+              priority_override: 0,
+              weight_override: null,
+              enabled: true,
+            },
+          ],
         })
       )
     )

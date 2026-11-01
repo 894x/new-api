@@ -43,7 +43,6 @@ func AppendTaskPluginIdentityFilter(c *gin.Context, pluginKey string) {
 
 type RetryParam struct {
 	userRoutingLoaded      bool
-	userRouting            map[int]model.UserChannelRoutingOverride
 	userGroupRouting       []model.UserGroupChannelRoutingOverride
 	routingPools           map[string]*model.ModelRoutingPool
 	Ctx                    *gin.Context
@@ -330,7 +329,8 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 	}
 	constraints := GetChannelConstraints(c)
 	if pin, found, overridden := constraints.ResolvedPin(); found {
-		if userRouting[pin.ChannelId].Disabled {
+		override, member := userRouting[pin.ChannelId]
+		if len(userRouting) > 0 && !member || override.Disabled {
 			return nil, "", &ChannelSelectError{StatusCode: http.StatusForbidden, Message: "user_channel_disabled"}
 		}
 		for _, lost := range overridden {
@@ -378,7 +378,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 	if retry.TokenGroup == "auto" {
 		for _, group := range GetRequestAutoGroups(c, common.GetContextKeyString(c, constant.ContextKeyUserGroup)) {
 			for _, row := range retry.userGroupRouting {
-				if row.RoutingGroup == group && (row.Priority != nil || row.Weight != nil || row.Disabled) {
+				if row.RoutingGroup == group {
 					hasUserRouting = true
 				}
 			}

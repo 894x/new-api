@@ -26,6 +26,7 @@ import { z } from 'zod'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { ErrorState } from '@/components/error-state'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -35,6 +36,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { Combobox } from '@/components/ui/combobox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { patchUserChannelRouting } from '@/features/users/api'
 import { canAccessUserGroupConfig } from '@/lib/admin-permissions'
@@ -130,6 +132,7 @@ function UserPoolEditor(props: {
   const editing = editingBase !== null
   const canWrite = canAccessUserGroupConfig(actor, config.user_role, 'write')
   const [restoreRevision, setRestoreRevision] = useState<string | null>(null)
+  const [channelToAdd, setChannelToAdd] = useState<string | null>(null)
   const initial: Values = {
     channels: (config.pool_channels ?? []).map((entry) => {
       const row = config.channels.find(
@@ -146,7 +149,7 @@ function UserPoolEditor(props: {
         ...entry,
         priority: row?.priority_override ?? null,
         weight: row?.weight_override ?? null,
-        enabled: row?.enabled ?? entry.enabled,
+        enabled: entry.enabled,
       }
     }),
   }
@@ -181,30 +184,18 @@ function UserPoolEditor(props: {
             : config.revision,
         reset: data === null,
         overrides:
-          data?.channels
-            .filter((row) => {
-              const old = config.channels.find(
-                (item) => item.channel_id === row.channel_id
-              )
-              return (
-                !config.configured ||
-                row.priority !== (old?.priority_override ?? null) ||
-                row.weight !== (old?.weight_override ?? null) ||
-                row.enabled !== old?.enabled
-              )
-            })
-            .map((row) => ({
-              channel_id: row.channel_id,
-              priority_override: row.priority,
-              weight_override: row.weight,
-              inherit_weight: row.weight === null,
-              enabled: row.enabled,
-            })) ?? [],
+          data?.channels.map((row) => ({
+            channel_id: row.channel_id,
+            priority_override: row.priority,
+            weight_override: row.weight,
+            enabled: row.enabled,
+          })) ?? [],
       })
     },
     onSuccess: async () => {
       setEditingBase(null)
       setRestoreRevision(null)
+      setChannelToAdd(null)
       props.onDirtyChange(false)
       toast.success(t('Saved successfully'))
       await Promise.all([
@@ -224,7 +215,6 @@ function UserPoolEditor(props: {
   const disabled = !canWrite || !editing || save.isPending
   const sources = {
     user: t('User override'),
-    legacy: t('Legacy user override'),
     default_pool: t('Default routing pool'),
     channel_defaults: t('Channel defaults'),
   }
@@ -235,6 +225,12 @@ function UserPoolEditor(props: {
     weight: row.inherited_weight ?? 0,
     available: row.available,
   }))
+  const displayed = editing ? values.channels : (config.pool_channels ?? [])
+  const unused = candidates.filter(
+    (candidate) =>
+      candidate.available &&
+      !values.channels.some((row) => row.channel_id === candidate.channel_id)
+  )
   return (
     <>
       <CardContent className='space-y-3 px-3'>
@@ -256,20 +252,42 @@ function UserPoolEditor(props: {
         {editing && (
           <p className='text-muted-foreground text-xs'>
             {t(
-              'Leave priority or weight empty to inherit its value. Disable a channel to exclude it for this user.'
+              'Only channels in this user pool can be selected. Empty priority or weight inherits the channel value. Clearing the pool restores the default routing pool.'
             )}
           </p>
         )}
-        {(config.pool_channels ?? []).length === 0 ? (
+        {!editing && !config.configured && (
+          <p role='status' className='text-muted-foreground text-xs'>
+            {t(
+              'No user-specific channels are configured. The default routing pool is used.'
+            )}
+          </p>
+        )}
+        {displayed.length > 0 &&
+          (editing || config.configured) &&
+          displayed.every((row) => !row.enabled) && (
+            <Alert variant='destructive'>
+              <AlertDescription>
+                {t(
+                  'This user pool has no enabled channels. Requests for this model will fail.'
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
+        {displayed.length === 0 ? (
           <p role='status' className='text-muted-foreground text-sm'>
-            {t('No available channels')}
+            {editing
+              ? t(
+                  'This user pool is empty. Saving will restore the default routing pool.'
+                )
+              : t('No available channels')}
           </p>
         ) : (
           <PoolChannelList
-            channels={editing ? values.channels : (config.pool_channels ?? [])}
+            channels={displayed}
             candidates={candidates}
             disabled={disabled}
-            removable={false}
+            removable={editing}
             allowInheritance
             onChange={(channels) =>
               form.setValue('channels', channels, {
@@ -278,6 +296,50 @@ function UserPoolEditor(props: {
               })
             }
           />
+        )}
+        {editing && (
+          <div className='flex min-w-0 flex-wrap gap-2'>
+            <Combobox
+              options={unused.map((candidate) => ({
+                value: String(candidate.channel_id),
+                label: `${candidate.channel_name} #${candidate.channel_id}`,
+              }))}
+              value={channelToAdd}
+              onValueChange={setChannelToAdd}
+              disabled={disabled}
+              aria-label={t('Select channel')}
+              placeholder={t('Select channel')}
+              className='min-w-0 flex-1'
+            />
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              disabled={disabled || !channelToAdd}
+              onClick={() => {
+                const candidate = unused.find(
+                  (row) => row.channel_id === Number(channelToAdd)
+                )
+                if (!candidate || disabled) return
+                form.setValue(
+                  'channels',
+                  [
+                    ...values.channels,
+                    {
+                      channel_id: candidate.channel_id,
+                      priority: candidate.priority,
+                      weight: candidate.weight,
+                      enabled: true,
+                    },
+                  ],
+                  { shouldDirty: true, shouldValidate: true }
+                )
+                setChannelToAdd(null)
+              }}
+            >
+              {t('Add')}
+            </Button>
+          </div>
         )}
         {form.formState.errors.channels && (
           <p role='alert' className='text-destructive text-sm'>
@@ -300,9 +362,15 @@ function UserPoolEditor(props: {
             type='button'
             size='sm'
             variant='outline'
-            disabled={!canWrite || save.isPending || !initial.channels.length}
+            disabled={
+              !canWrite ||
+              save.isPending ||
+              (!candidates.some((row) => row.available) &&
+                !initial.channels.length)
+            }
             onClick={() => {
               form.reset(initial)
+              setChannelToAdd(null)
               setEditingBase(config)
             }}
           >
@@ -320,6 +388,7 @@ function UserPoolEditor(props: {
               onClick={() => {
                 form.reset(initial)
                 setEditingBase(null)
+                setChannelToAdd(null)
               }}
             >
               {t('Cancel')}
@@ -345,7 +414,7 @@ function UserPoolEditor(props: {
             disabled={!canWrite || save.isPending}
             onClick={() => setRestoreRevision(config.revision)}
           >
-            {t('Restore inheritance')}
+            {t('Clear and use default pool')}
           </Button>
         )}
       </CardFooter>
@@ -354,11 +423,11 @@ function UserPoolEditor(props: {
         onOpenChange={(open) => {
           if (!open) setRestoreRevision(null)
         }}
-        title={t('Restore inheritance')}
+        title={t('Clear and use default pool')}
         desc={t(
-          'Remove this user override and follow the inherited routing configuration again?'
+          'Clear this user pool and use the default routing pool for this model and public group?'
         )}
-        confirmText={t('Restore')}
+        confirmText={t('Clear and use default pool')}
         isLoading={save.isPending}
         handleConfirm={() => save.mutate(null)}
       />

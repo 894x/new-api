@@ -199,10 +199,10 @@ export interface UserChannelRoutingPatch {
   routing_group?: string
   revision: string
   reset?: boolean
-  overrides: (Pick<
+  overrides: Pick<
     UserChannelRoutingRow,
     'channel_id' | 'priority_override' | 'enabled' | 'weight_override'
-  > & { inherit_weight?: boolean })[]
+  >[]
 }
 
 export interface UserGroupConfig {

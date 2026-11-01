@@ -46,7 +46,6 @@ type userChannelRoutingResponse struct {
 	Username            string                          `json:"username"`
 	UserRole            int                             `json:"user_role"`
 	ModelGroups         map[string][]string             `json:"model_groups,omitempty"`
-	LegacyModels        []string                        `json:"legacy_models,omitempty"`
 	Source              string                          `json:"source,omitempty"`
 	Mode                string                          `json:"mode,omitempty"`
 	Configured          bool                            `json:"configured"`
@@ -60,7 +59,7 @@ func GetUserChannelRouting(c *gin.Context) {
 	userID, err := strconv.Atoi(c.Param("id"))
 	modelName := strings.TrimSpace(c.Query("model"))
 	routingGroup := c.Query("routing_group")
-	if err != nil || userID <= 0 || len(modelName) > 255 || len(routingGroup) > 64 || strings.TrimSpace(routingGroup) != routingGroup || routingGroup == "auto" || strings.ContainsAny(routingGroup, ",\x00\r\n") {
+	if err != nil || userID <= 0 || len(modelName) > 255 || modelName != "" && routingGroup == "" || len(routingGroup) > 64 || strings.TrimSpace(routingGroup) != routingGroup || routingGroup == "auto" || strings.ContainsAny(routingGroup, ",\x00\r\n") {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid user channel routing query"})
 		return
 	}
@@ -69,7 +68,7 @@ func GetUserChannelRouting(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	overrides, err := model.ListUserChannelRoutingOverrides(userID, modelName)
+	groupOverrides, err := model.ListUserGroupChannelRoutingOverrides(userID, modelName)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -92,16 +91,6 @@ func GetUserChannelRouting(c *gin.Context) {
 			}
 		}
 		models, err := service.GetUserGroupsEnabledModels(user.Group, groups)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		for _, override := range overrides {
-			models = append(models, override.Model)
-			response.ConfiguredModels = append(response.ConfiguredModels, override.Model)
-			response.LegacyModels = append(response.LegacyModels, override.Model)
-		}
-		groupOverrides, err := model.ListUserGroupChannelRoutingOverrides(userID, "")
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -137,30 +126,17 @@ func GetUserChannelRouting(c *gin.Context) {
 				slices.Sort(groups)
 				response.ModelGroups[name] = slices.Compact(groups)
 			}
-			slices.Sort(response.LegacyModels)
-			response.LegacyModels = slices.Compact(response.LegacyModels)
 		}
 		common.ApiSuccess(c, response)
 		return
 	}
-	legacyByID := make(map[int]model.UserChannelRoutingOverride)
-	if routingGroup != "" {
-		for _, row := range overrides {
-			legacyByID[row.ChannelId] = row
+	overrides := make([]model.UserChannelRoutingOverride, 0)
+	for _, row := range groupOverrides {
+		if row.RoutingGroup == routingGroup {
+			overrides = append(overrides, row.UserChannelRoutingOverride)
 		}
-		scoped, loadErr := model.ListUserGroupChannelRoutingOverrides(userID, modelName)
-		if loadErr != nil {
-			common.ApiError(c, loadErr)
-			return
-		}
-		overrides = make([]model.UserChannelRoutingOverride, 0)
-		for _, row := range scoped {
-			if row.RoutingGroup == routingGroup {
-				overrides = append(overrides, row.UserChannelRoutingOverride)
-			}
-		}
-		groups = []string{routingGroup}
 	}
+	groups = []string{routingGroup}
 	response.Revision, err = model.UserChannelRoutingRevision(overrides)
 	if err != nil {
 		common.ApiError(c, err)
@@ -233,7 +209,6 @@ func GetUserChannelRouting(c *gin.Context) {
 		}
 		for _, route := range routes {
 			override, configured := overrideByID[route.ChannelId]
-			legacy, hasLegacy := legacyByID[route.ChannelId]
 			_, usable := available[route.ChannelId]
 			if seen[route.ChannelId] || c.Query("view") != "pool" && !usable && (routingGroup != "" || draftChannelGroups || !configured) || c.Query("view") == "pool" && !usable && !configured && !poolMembers[route.ChannelId] {
 				continue
@@ -241,19 +216,10 @@ func GetUserChannelRouting(c *gin.Context) {
 			seen[route.ChannelId] = true
 			inherited := route.EffectivePriority
 			inheritedWeight := route.EffectiveWeight
-			if legacy.Priority != nil {
-				inherited = *legacy.Priority
-			}
-			if legacy.Weight != nil {
-				inheritedWeight = *legacy.Weight
-			}
-			if !configured && hasLegacy {
-				override.Disabled = legacy.Disabled
-			}
 			row := userChannelRoutingRow{ChannelID: route.ChannelId, ChannelName: route.ChannelName,
 				DefaultPriority: route.DefaultPriority, ModelPriority: route.PriorityOverride,
 				InheritedPriority: inherited, EffectivePriority: inherited,
-				PriorityOverride: override.Priority, Enabled: !override.Disabled, Available: usable, Configured: configured || hasLegacy}
+				PriorityOverride: override.Priority, Enabled: !override.Disabled, Available: usable, Configured: configured}
 			row.WeightOverride, row.InheritedWeight, row.EffectiveWeight = override.Weight, inheritedWeight, inheritedWeight
 			if override.Priority != nil {
 				row.EffectivePriority = *override.Priority
@@ -265,12 +231,15 @@ func GetUserChannelRouting(c *gin.Context) {
 		}
 	}
 	// Stale records remain visible and can be reset even after channel removal.
-	if !draftChannelGroups && routingGroup == "" {
+	if !draftChannelGroups {
 		for _, override := range overrides {
 			if !seen[override.ChannelId] {
-				row := userChannelRoutingRow{ChannelID: override.ChannelId, PriorityOverride: override.Priority, Enabled: !override.Disabled}
+				row := userChannelRoutingRow{ChannelID: override.ChannelId, PriorityOverride: override.Priority, WeightOverride: override.Weight, Enabled: !override.Disabled, Configured: true}
 				if override.Priority != nil {
 					row.EffectivePriority = *override.Priority
+				}
+				if override.Weight != nil {
+					row.EffectiveWeight = *override.Weight
 				}
 				response.Channels = append(response.Channels, row)
 			}
@@ -299,10 +268,7 @@ func GetUserChannelRouting(c *gin.Context) {
 			return
 		}
 		if len(resolved) > 0 {
-			response.Source = "legacy"
-			if response.Configured && routingGroup != "" {
-				response.Source = "user"
-			}
+			response.Source = "user"
 		}
 		effective := make(map[int]model.Ability)
 		for _, group := range groups {
@@ -331,7 +297,21 @@ func GetUserChannelRouting(c *gin.Context) {
 					row.EffectivePriority = *candidate.Priority
 				}
 			}
+			if len(resolved) > 0 {
+				member, exists := resolved[row.ChannelID]
+				if !exists {
+					continue
+				}
+				enabled = !member.Disabled
+			} else if pool != nil {
+				continue
+			} else if !enabled {
+				continue
+			}
 			response.PoolChannels = append(response.PoolChannels, model.ModelRoutingPoolChannel{ChannelID: row.ChannelID, Priority: row.EffectivePriority, Weight: row.EffectiveWeight, Enabled: enabled})
+		}
+		if len(resolved) == 0 && pool != nil {
+			response.PoolChannels = append(response.PoolChannels, pool.Channels...)
 		}
 		slices.SortStableFunc(response.PoolChannels, func(a, b model.ModelRoutingPoolChannel) int {
 			if a.Priority > b.Priority {
@@ -364,7 +344,7 @@ func PatchUserChannelRouting(c *gin.Context) {
 		Overrides    []model.UserChannelRoutingPatch `json:"overrides"`
 		Reset        bool                            `json:"reset"`
 	}
-	if err != nil || userID <= 0 || common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10), &request) != nil {
+	if err != nil || userID <= 0 || common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10), &request) != nil || request.RoutingGroup == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid user channel routing"})
 		return
 	}
