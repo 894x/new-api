@@ -117,10 +117,10 @@ func GetChannelDisableImpact(ctx context.Context, ids []int, tag *string, operat
 		key := userModel{row.UserId, row.Model}
 		scoped[key] = append(scoped[key], row)
 	}
-	// Shared group candidates and resource-pool restrictions are resolved once,
+	// Shared public-group candidates are resolved once,
 	// rather than issuing a candidate query for every customer or API key.
 	candidates := make(map[channelImpactRoute][]model.Ability)
-	pools := make(map[channelImpactRoute]map[int]struct{})
+	defaultPools := make(map[channelImpactRoute]*model.ModelRoutingPool)
 	for _, user := range snapshot.Users {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -143,20 +143,28 @@ func GetChannelDisableImpact(ctx context.Context, ids []int, tag *string, operat
 				}
 				candidates[key] = routes
 			}
-			poolKey := channelImpactRoute{user.Group, name}
-			allowed, loaded := pools[poolKey]
-			if !loaded {
-				allowed, err = GroupModelAllowedChannelIDs(user.Group, name)
-				if err != nil {
-					return result, err
-				}
-				pools[poolKey] = allowed
-			}
 			policyKey := userModel{user.Id, name}
-			param := RetryParam{userRoutingLoaded: true, userRouting: legacy[policyKey], userGroupRouting: scoped[policyKey]}
+			param := RetryParam{ModelName: name, userRoutingLoaded: true, userRouting: legacy[policyKey], userGroupRouting: scoped[policyKey]}
 			routing, err := param.UserChannelRoutingForGroup(group)
 			if err != nil {
 				return result, err
+			}
+			var poolChannels map[int]model.ModelRoutingPoolChannel
+			if len(routing) == 0 {
+				pool, loaded := defaultPools[key]
+				if !loaded {
+					pool, err = param.ModelRoutingPool(group)
+					if err != nil {
+						return result, err
+					}
+					defaultPools[key] = pool
+				}
+				if pool != nil {
+					poolChannels = make(map[int]model.ModelRoutingPoolChannel, len(pool.Channels))
+					for _, entry := range pool.Channels {
+						poolChannels[entry.ChannelID] = entry
+					}
+				}
 			}
 			eligible := make(map[int]int64)
 			var highest int64
@@ -166,14 +174,16 @@ func GetChannelDisableImpact(ctx context.Context, ids []int, tag *string, operat
 				if override.Disabled {
 					continue
 				}
-				if allowed != nil {
-					if _, ok := allowed[route.ChannelId]; !ok {
-						continue
-					}
-				}
 				priority := int64(0)
 				if route.Priority != nil {
 					priority = *route.Priority
+				}
+				if poolChannels != nil {
+					entry, member := poolChannels[route.ChannelId]
+					if !member || !entry.Enabled {
+						continue
+					}
+					priority = entry.Priority
 				}
 				if override.Priority != nil {
 					priority = *override.Priority

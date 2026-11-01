@@ -29,14 +29,16 @@ import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 export const Route = createFileRoute('/_authenticated/model-channel-matrix/')({
-  beforeLoad: () => {
+  beforeLoad: ({ search }) => {
     const user = useAuthStore.getState().auth.user
     if (
       !user ||
       user.role < ROLE.ADMIN ||
       !hasPermission(
         user,
-        ADMIN_PERMISSION_RESOURCES.CHANNEL,
+        search.user_id
+          ? ADMIN_PERMISSION_RESOURCES.USER_GROUP_CONFIG
+          : ADMIN_PERMISSION_RESOURCES.CHANNEL,
         ADMIN_PERMISSION_ACTIONS.READ
       )
     ) {

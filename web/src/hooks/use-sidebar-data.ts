@@ -208,7 +208,7 @@ export function useSidebarData(): SidebarData {
           ...(canReadChannels
             ? [
                 {
-                  title: t('Model-channel matrix'),
+                  title: t('Model routing'),
                   url: '/model-channel-matrix',
                   icon: Grid2X2,
                 },

@@ -104,7 +104,7 @@ test('defaults to enabled channels and sends search, group and both page control
   })
   fireEvent.click(screen.getByRole('button', { name: 'Search' }))
   await waitFor(() =>
-    expect(get).toHaveBeenLastCalledWith(
+    expect(get).toHaveBeenCalledWith(
       '/api/channel/model-matrix',
       expect.objectContaining({
         params: expect.objectContaining({
@@ -233,4 +233,72 @@ test('does not fetch or render channel configuration without channel read permis
   expect(screen.getByText("You don't have necessary permission")).toBeVisible()
   expect(get).not.toHaveBeenCalled()
   expect(screen.queryByRole('table')).not.toBeInTheDocument()
+})
+
+test('searchable dropdowns select matrix models and channel IDs while allowing custom search terms', async () => {
+  rootUser()
+  const fixture = createMatrixFixture()
+  const get = vi
+    .spyOn(api, 'get')
+    .mockImplementation(async (_url, options) => ({
+      data: {
+        success: true,
+        data: {
+          ...fixture,
+          channels:
+            options?.params?.channel === '8'
+              ? [fixture.channels[1]]
+              : fixture.channels,
+        },
+      },
+    }))
+  renderWorkspace()
+  await screen.findByRole('table')
+  const model = screen.getByRole('combobox', { name: 'Model' })
+  const channel = screen.getByRole('combobox', { name: 'Channel' })
+  await userEvent.click(model)
+  await userEvent.type(model, 'model-b')
+  expect(
+    screen.queryByRole('option', { name: 'model-a' })
+  ).not.toBeInTheDocument()
+  await userEvent.click(await screen.findByRole('option', { name: 'model-b' }))
+  await userEvent.click(channel)
+  await userEvent.type(channel, 'Beta')
+  await userEvent.click(await screen.findByRole('option', { name: 'Beta #8' }))
+  expect(channel).toHaveValue('Beta #8')
+  await userEvent.click(screen.getByRole('button', { name: 'Search' }))
+  await waitFor(() =>
+    expect(get).toHaveBeenLastCalledWith(
+      '/api/channel/model-matrix',
+      expect.objectContaining({
+        params: expect.objectContaining({
+          model: 'model-b',
+          channel: '8',
+          model_page: 1,
+          channel_page: 1,
+        }),
+      })
+    )
+  )
+
+  await userEvent.click(channel)
+  await userEvent.clear(channel)
+  await userEvent.type(channel, 'Alpha')
+  expect(await screen.findByRole('option', { name: 'Alpha #7' })).toBeVisible()
+  await userEvent.clear(model)
+  await userEvent.type(model, 'custom-model')
+  await userEvent.clear(channel)
+  await userEvent.type(channel, '999')
+  await userEvent.keyboard('{Enter}')
+  await waitFor(() =>
+    expect(get).toHaveBeenLastCalledWith(
+      '/api/channel/model-matrix',
+      expect.objectContaining({
+        params: expect.objectContaining({
+          model: 'custom-model',
+          channel: '999',
+        }),
+      })
+    )
+  )
 })

@@ -79,7 +79,7 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 func GetGroupEnabledModels(group string) []string {
 	var models []string
 	// Find distinct models
-	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
+	DB.Model(&Ability{}).Where(map[string]any{"group": group, "enabled": true}).Distinct("model").Pluck("model", &models)
 	return models
 }
 
@@ -208,6 +208,18 @@ func listDBChannelCandidates(group, model string, filters ChannelSelectionFilter
 // applies request path and parameter constraints before
 // priority and weight selection.
 func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelectionFilters, model string) ([]Ability, int, int, error, error) {
+	if filters.RoutingPoolChannels != nil {
+		pooled := make([]Ability, 0, len(abilities))
+		for _, ability := range abilities {
+			entry, exists := filters.RoutingPoolChannels[ability.ChannelId]
+			if !exists || !entry.Enabled {
+				continue
+			}
+			ability.Priority, ability.Weight = common.GetPointer(entry.Priority), entry.Weight
+			pooled = append(pooled, ability)
+		}
+		abilities = pooled
+	}
 	if len(filters.UserRoutingOverrides) > 0 {
 		personalized := make([]Ability, 0, len(abilities))
 		for _, ability := range abilities {
@@ -217,6 +229,9 @@ func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelec
 			}
 			if override.Priority != nil {
 				ability.Priority = common.GetPointer(*override.Priority)
+			}
+			if override.Weight != nil {
+				ability.Weight = *override.Weight
 			}
 			personalized = append(personalized, ability)
 		}

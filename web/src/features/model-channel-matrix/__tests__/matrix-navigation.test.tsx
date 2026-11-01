@@ -61,7 +61,7 @@ test('shows the standalone menu only to administrators with channel read access'
       expect.objectContaining({ url: '/channels' }),
       expect.objectContaining({ url: '/models/metadata' }),
       expect.objectContaining({
-        title: 'Model-channel matrix',
+        title: 'Model routing',
         url: '/model-channel-matrix',
       }),
     ])

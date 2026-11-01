@@ -17,9 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { getRouteApi } from '@tanstack/react-router'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { Button } from '@/components/ui/button'
+import { ModelRoutingWorkspace } from '@/features/model-routing'
+import { RoutingScopeSelect } from '@/features/model-routing/scope-select'
+import { UserRoutingWorkspace } from '@/features/model-routing/user-workspace'
 
 import { MatrixWorkspace } from './components/matrix-workspace'
 
@@ -29,18 +34,69 @@ export function ModelChannelMatrix() {
   const { t } = useTranslation()
   const search = route.useSearch()
   const navigate = route.useNavigate()
+  const [view, setView] = useState<'pools' | 'matrix'>('pools')
+  const [dirty, setDirty] = useState(false)
+  let workspace = <ModelRoutingWorkspace onDirtyChange={setDirty} />
+  if (search.user_id) {
+    workspace = (
+      <UserRoutingWorkspace
+        key={search.user_id}
+        userId={search.user_id}
+        onDirtyChange={setDirty}
+      />
+    )
+  } else if (view === 'matrix') {
+    workspace = (
+      <MatrixWorkspace
+        search={search}
+        onSearchChange={(next) => {
+          void navigate({ search: next })
+        }}
+      />
+    )
+  }
   return (
     <SectionPageLayout fixedContent>
-      <SectionPageLayout.Title>
-        {t('Model-channel matrix')}
-      </SectionPageLayout.Title>
+      <SectionPageLayout.Title>{t('Model routing')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
-        <MatrixWorkspace
-          search={search}
-          onSearchChange={(next) => {
-            void navigate({ search: next })
-          }}
-        />
+        <div className='flex h-full min-h-0 flex-col gap-3'>
+          <RoutingScopeSelect
+            userId={search.user_id}
+            disabled={dirty}
+            onChange={(userId) => {
+              if (dirty) return
+              setView('pools')
+              void navigate({
+                search: (previous) => ({ ...previous, user_id: userId }),
+              })
+            }}
+          />
+          {!search.user_id && (
+            <div
+              className='flex shrink-0 gap-2'
+              role='group'
+              aria-label={t('Routing view')}
+            >
+              <Button
+                variant={view === 'pools' ? 'default' : 'outline'}
+                size='sm'
+                disabled={dirty && view !== 'pools'}
+                onClick={() => setView('pools')}
+              >
+                {t('Routing pools')}
+              </Button>
+              <Button
+                variant={view === 'matrix' ? 'default' : 'outline'}
+                size='sm'
+                disabled={dirty}
+                onClick={() => setView('matrix')}
+              >
+                {t('Channel defaults matrix')}
+              </Button>
+            </div>
+          )}
+          {workspace}
+        </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )

@@ -468,7 +468,7 @@ func TestExecuteTaskSubmissionDisconnectAfterDurableInsertDoesNotRefund(t *testi
 func setupTaskSubmissionDatabase(t *testing.T, migrate bool, events *[]string) *gorm.DB {
 	t.Helper()
 	previousDB := model.DB
-	var models []any
+	models := []any{&model.ModelRoutingPool{}}
 	if migrate {
 		models = append(models, &model.Task{})
 	}
@@ -513,6 +513,14 @@ func taskSubmissionRelayInfo(billing relaycommon.BillingSettler) *relaycommon.Re
 // runs leave a record.
 func openTaskDialectDatabase(t *testing.T, models ...any) (*gorm.DB, common.DatabaseType) {
 	t.Helper()
+schemaLoop:
+	for _, row := range models {
+		switch row.(type) {
+		case *model.Channel, *model.Task:
+			models = append(models, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{})
+			break schemaLoop
+		}
+	}
 	dialect := common.DatabaseType(os.Getenv("TEST_TASK_DB_DIALECT"))
 	var driver gorm.Dialector
 	switch dialect {

@@ -34,13 +34,6 @@ import {
   sideDrawerFormClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
-import { MultiSelect } from '@/components/multi-select'
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from '@/components/ui/accordion'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
@@ -65,6 +58,7 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { UserRoutingSummary } from '@/features/model-routing/user-summary'
 import { GroupModelSpecialRatioEditor } from '@/features/system-settings/models/group-model-special-ratio-editor'
 import { billingGroupModelRatiosSchema } from '@/features/system-settings/models/lib/group-model-special-ratios'
 import { RateLimitModelRulesEditor } from '@/features/system-settings/request-limits/rate-limit-model-rules-editor'
@@ -80,12 +74,10 @@ import { useAuthStore } from '@/stores/auth-store'
 import {
   createDedicatedUserGroup,
   getUserGroupConfig,
-  previewUserGroupChannels,
   updateUserGroupConfig,
 } from '../api'
 import { USER_ROLE } from '../constants'
 import type { User, UserGroupConfig } from '../types'
-import { UserModelChannelRouting } from './user-model-channel-routing'
 import { useUsers } from './users-provider'
 
 const createSchema = (t: (key: string) => string) =>
@@ -107,12 +99,6 @@ const createSchema = (t: (key: string) => string) =>
           modelName: z.string().trim().min(1, t('Value is required')),
           rpm: z.number().int().min(0).max(MAX_REQUEST_RATE_LIMIT).nullable(),
           tpm: z.number().int().min(0).max(2147483647).nullable(),
-        })
-      ),
-      channelRules: z.array(
-        z.object({
-          modelName: z.string().trim().min(1, t('Value is required')),
-          groups: z.array(z.string()),
         })
       ),
     })
@@ -139,17 +125,6 @@ const createSchema = (t: (key: string) => string) =>
         }
         rateLimitModels.add(entry.modelName)
       })
-      const channelModels = new Set<string>()
-      values.channelRules.forEach((entry, index) => {
-        if (channelModels.has(entry.modelName)) {
-          context.addIssue({
-            code: 'custom',
-            path: ['channelRules', index, 'modelName'],
-            message: t('Values must be unique'),
-          })
-        }
-        channelModels.add(entry.modelName)
-      })
     })
 
 type FormValues = z.infer<ReturnType<typeof createSchema>>
@@ -162,7 +137,6 @@ const emptyValues: FormValues = {
   maxSuccess: 1,
   maxTPM: 0,
   models: [],
-  channelRules: [],
 }
 
 function toFormValues(config: UserGroupConfig): FormValues {
@@ -182,9 +156,6 @@ function toFormValues(config: UserGroupConfig): FormValues {
         rpm: limits.rpm ?? null,
         tpm: limits.tpm ?? null,
       })
-    ),
-    channelRules: Object.entries(config.model_channel_groups).map(
-      ([modelName, groups]) => ({ modelName, groups })
     ),
   }
 }
@@ -209,21 +180,12 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
       ADMIN_PERMISSION_ACTIONS.WRITE
     )
   const [confirmDedicatedOpen, setConfirmDedicatedOpen] = useState(false)
-  const [previewKey, setPreviewKey] = useState('')
   const [channelsVisited, setChannelsVisited] = useState(false)
-  const [routingDirtyRows, setRoutingDirtyRows] = useState<Set<string>>(
-    () => new Set()
-  )
   const form = useForm<FormValues>({
     resolver: zodResolver(createSchema(t)),
     defaultValues: emptyValues,
   })
   const discounts = useFieldArray({ control: form.control, name: 'discounts' })
-  const channelRules = useFieldArray({
-    control: form.control,
-    name: 'channelRules',
-  })
-
   const query = useQuery({
     queryKey: ['user-group-config', user?.id],
     queryFn: async () => {
@@ -242,14 +204,10 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
   useEffect(() => {
     if (open && config) {
       form.reset(toFormValues(config))
-      setPreviewKey('')
-      setRoutingDirtyRows(new Set())
     }
     if (!open) {
       setChannelsVisited(false)
       form.reset(emptyValues)
-      setPreviewKey('')
-      setRoutingDirtyRows(new Set())
     }
   }, [config, form, open])
 
@@ -297,9 +255,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
             ])
           ),
         },
-        model_channel_groups: Object.fromEntries(
-          values.channelRules.map((item) => [item.modelName, item.groups])
-        ),
+        model_channel_groups: config.model_channel_groups,
       })
       return requireServerSuccess(result)
     },
@@ -351,43 +307,6 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
   })
 
   const isDedicatedGroup = config?.is_dedicated_group ?? false
-  const channelRulesValue = form.watch('channelRules')
-  const currentPreviewKey = JSON.stringify(channelRulesValue)
-  const previewChannels = useMutation({
-    mutationFn: async (input: {
-      rules: FormValues['channelRules']
-      key: string
-    }) => {
-      if (!user || !config) throw new Error('Configuration is required')
-      if (
-        !canAccessUserGroupConfig(useAuthStore.getState().auth.user, user.role)
-      ) {
-        throw new Error(t('No permission to perform this action'))
-      }
-      return requireServerSuccess(
-        await previewUserGroupChannels(
-          user.id,
-          config.group,
-          Object.fromEntries(
-            input.rules.map(({ modelName, groups }) => [modelName, groups])
-          )
-        )
-      )
-    },
-    onSuccess: (_result, input) => setPreviewKey(input.key),
-    onError: (error) =>
-      handleServerError(error, t('Channel pool preview is unavailable.')),
-  })
-
-  const setRoutingRowDirty = (rowID: string, dirty: boolean) => {
-    setRoutingDirtyRows((current) => {
-      const next = new Set(current)
-      if (dirty) next.add(rowID)
-      else next.delete(rowID)
-      return next
-    })
-  }
-
   if (!canRead) return null
   const editingDisabled = !canWrite || save.isPending
 
@@ -693,186 +612,19 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
                   >
                     <SideDrawerSection>
                       <SideDrawerSectionHeader
-                        title={t('Model channel priorities')}
+                        title={t('Routing pools')}
                         description={t(
-                          'Add a model, then choose a public Key group to configure its channels and priorities for this customer.'
+                          'Configure user priorities and weights in the routing pool workspace.'
                         )}
                       />
-                      <p className='text-muted-foreground text-sm'>
-                        {t(
-                          'Drag channels to set priority. Higher values run first; equal values use channel weights. Switch off to pause a channel without losing its priority.'
-                        )}
-                      </p>
                       {channelsVisited && user && config && (
-                        <UserModelChannelRouting
+                        <UserRoutingSummary
                           key={`${user.id}:${config.group}`}
                           userId={user.id}
-                          poolModels={Object.keys(config.model_channel_groups)}
-                          readOnly={editingDisabled}
-                          onDirtyChange={(model, dirty) =>
-                            setRoutingRowDirty(`routing:${model}`, dirty)
-                          }
+                          disabled={save.isPending || form.formState.isDirty}
                         />
                       )}
                     </SideDrawerSection>
-                    <Accordion className='rounded-lg border px-3'>
-                      <AccordionItem value='resource-pools'>
-                        <AccordionTrigger>
-                          {t('Resource channel pool filters (advanced)')}
-                        </AccordionTrigger>
-                        <AccordionContent>
-                          <SideDrawerSection>
-                            <SideDrawerSectionHeader
-                              title={t('Model channel pools')}
-                              description={t(
-                                'Choose channel groups for each model. No rule keeps existing routing; an empty selection blocks that model.'
-                              )}
-                            />
-                            {channelRules.fields.map((item, index) => (
-                              <div
-                                key={item.id}
-                                className='flex flex-col gap-3 rounded-lg border p-3'
-                              >
-                                <div className='flex items-start gap-2'>
-                                  <FormField
-                                    control={form.control}
-                                    name={`channelRules.${index}.modelName`}
-                                    render={({ field }) => (
-                                      <FormItem className='flex-1'>
-                                        <FormLabel>{t('Model')}</FormLabel>
-                                        <FormControl>
-                                          <Input
-                                            {...field}
-                                            placeholder='gpt-5'
-                                            disabled={
-                                              editingDisabled ||
-                                              routingDirtyRows.size > 0
-                                            }
-                                          />
-                                        </FormControl>
-                                        <FormMessage />
-                                      </FormItem>
-                                    )}
-                                  />
-                                  <Button
-                                    type='button'
-                                    variant='ghost'
-                                    size='icon'
-                                    className='mt-6'
-                                    aria-label={t('Remove')}
-                                    disabled={
-                                      editingDisabled ||
-                                      routingDirtyRows.size > 0
-                                    }
-                                    onClick={() => channelRules.remove(index)}
-                                  >
-                                    <Trash2 />
-                                  </Button>
-                                </div>
-                                <FormField
-                                  control={form.control}
-                                  name={`channelRules.${index}.groups`}
-                                  render={({ field }) => (
-                                    <FormItem>
-                                      <FormLabel>
-                                        {t('Resource channel groups')}
-                                      </FormLabel>
-                                      <FormControl>
-                                        <MultiSelect
-                                          options={groupOptions}
-                                          selected={field.value}
-                                          onChange={field.onChange}
-                                          disabled={
-                                            editingDisabled ||
-                                            routingDirtyRows.size > 0
-                                          }
-                                          allowCreate
-                                          placeholder={t(
-                                            'Select channel groups'
-                                          )}
-                                        />
-                                      </FormControl>
-                                      <FormMessage />
-                                    </FormItem>
-                                  )}
-                                />
-                                {previewKey === currentPreviewKey &&
-                                  previewChannels.data?.data &&
-                                  user && (
-                                    <div className='flex flex-col gap-3'>
-                                      <p className='text-muted-foreground text-sm'>
-                                        {t(
-                                          'Pool candidates for {{model}}: {{count}} (before token group filtering).',
-                                          {
-                                            model:
-                                              channelRulesValue[index]
-                                                ?.modelName ?? '',
-                                            count:
-                                              previewChannels.data.data[
-                                                channelRulesValue[index]
-                                                  ?.modelName ?? ''
-                                              ]?.candidate_count ?? 0,
-                                          }
-                                        )}
-                                        {(channelRulesValue[index]?.groups
-                                          .length ?? 0) > 0 &&
-                                          previewChannels.data.data[
-                                            channelRulesValue[index]
-                                              ?.modelName ?? ''
-                                          ]?.candidate_count === 0 && (
-                                            <span className='text-destructive'>
-                                              {' '}
-                                              {t(
-                                                'No enabled channels match this model and its selected pools.'
-                                              )}
-                                            </span>
-                                          )}
-                                      </p>
-                                    </div>
-                                  )}
-                              </div>
-                            ))}
-                            <Button
-                              type='button'
-                              variant='outline'
-                              disabled={
-                                editingDisabled || routingDirtyRows.size > 0
-                              }
-                              onClick={() =>
-                                channelRules.append({
-                                  modelName: '',
-                                  groups: [],
-                                })
-                              }
-                            >
-                              <Plus /> {t('Add rule')}
-                            </Button>
-                            {channelRules.fields.length > 0 && (
-                              <Button
-                                type='button'
-                                variant='outline'
-                                disabled={
-                                  previewChannels.isPending ||
-                                  routingDirtyRows.size > 0
-                                }
-                                onClick={async () => {
-                                  if (!(await form.trigger('channelRules'))) {
-                                    return
-                                  }
-                                  const rules = form.getValues('channelRules')
-                                  previewChannels.mutate({
-                                    rules,
-                                    key: JSON.stringify(rules),
-                                  })
-                                }}
-                              >
-                                {t('Preview channel availability')}
-                              </Button>
-                            )}
-                          </SideDrawerSection>
-                        </AccordionContent>
-                      </AccordionItem>
-                    </Accordion>
                   </TabsContent>
                 </Tabs>
               </form>
@@ -886,7 +638,7 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
             <Button
               type='submit'
               form='user-group-config-form'
-              disabled={editingDisabled || !config || routingDirtyRows.size > 0}
+              disabled={editingDisabled || !config}
             >
               {save.isPending ? t('Saving...') : t('Save changes')}
             </Button>

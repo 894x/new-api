@@ -32,8 +32,9 @@ type Config struct {
 }
 
 type RouteKey struct {
-	Group string
-	Model string
+	Group  string
+	Model  string
+	Policy string
 }
 
 type Candidate struct {

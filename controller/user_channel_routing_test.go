@@ -46,7 +46,7 @@ func TestChannelDisableImpactDatabaseMatrix(t *testing.T) {
 			require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"denied":{"gpt-5":[]}}`))
 			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default"}`))
 			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
-			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.Token{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.Token{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
 			channels := []model.Channel{
 				{Id: 9201, Name: "Target", Key: "channel-secret-must-not-leak", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "default", Priority: common.GetPointer(int64(100)), Tag: common.GetPointer("impact-batch")},
 				{Id: 9202, Name: "Alternative", Key: "alternative-secret", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "default", Priority: common.GetPointer(int64(10)), Tag: common.GetPointer("impact-batch")},
@@ -107,8 +107,8 @@ func TestChannelDisableImpactDatabaseMatrix(t *testing.T) {
 					}
 					require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
 					require.True(t, body.Success, response.Body.String())
-					assert.Equal(t, 4, body.Data.CustomerCount)
-					require.Len(t, body.Data.Customers, 4)
+					assert.Equal(t, 5, body.Data.CustomerCount)
+					require.Len(t, body.Data.Customers, 5)
 					byName := make(map[string]service.ChannelDisableImpactCustomer)
 					for _, row := range body.Data.Customers {
 						byName[row.Username] = row
@@ -133,6 +133,15 @@ func TestChannelDisableImpactDatabaseMatrix(t *testing.T) {
 					}
 				})
 			}
+			pool := model.ModelRoutingPool{RoutingGroup: "default", Model: "gpt-5", Mode: model.RoutingModePriority, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 9202, Priority: 100, Weight: 10, Enabled: true}}}
+			require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+			impact, err := service.GetChannelDisableImpact(context.Background(), []int{9201}, nil, common.RoleRootUser)
+			require.NoError(t, err)
+			assert.Equal(t, 2, impact.CustomerCount, "only explicit user overrides still use the channel excluded by the default pool")
+			for _, row := range impact.Customers {
+				assert.Contains(t, []string{"scoped-zero", "legacy-inherited"}, row.Username)
+			}
+			require.NoError(t, model.DeleteModelRoutingPool(pool.RoutingGroup, pool.Model, pool.Revision))
 			for _, invalid := range []string{`{}`, `{"ids":[-1]}`, `{"ids":[9201],"tag":"impact-batch"}`, `{"tag":" "}`} {
 				response := userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/disable-impact", invalid, GetChannelDisableImpact)
 				assert.Equal(t, http.StatusBadRequest, response.Code, invalid)
@@ -235,7 +244,7 @@ func TestUserChannelRoutingDatabaseMatrix(t *testing.T) {
 			})
 			// These pre-existing schemas and records model an upgrade from the
 			// current release; no existing schema changes are needed by this feature.
-			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}))
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}))
 			users := []model.User{{Username: "routing-a", Group: "default", AffCode: "routinga"}, {Username: "routing-b", Group: "default", AffCode: "routingb"}}
 			require.NoError(t, db.Create(&users).Error)
 			for _, channel := range []*model.Channel{
@@ -372,7 +381,7 @@ func TestUserChannelRoutingGroupIsolationDatabaseMatrix(t *testing.T) {
 				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"pool-a":1,"pool-b":1}`))
 				require.NoError(t, setting.UpdateMaxTokenAutoGroups("2"))
 				common.RetryTimes = 0
-				require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}))
+				require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}))
 				user := model.User{Username: "group-routing", Group: "default", AffCode: "group-routing"}
 				require.NoError(t, db.Create(&user).Error)
 				for _, channel := range []*model.Channel{
@@ -526,7 +535,7 @@ func TestUserChannelRoutingGroupIsolationDatabaseMatrix(t *testing.T) {
 
 func TestUserChannelRoutingCatalogSeparatesPublicKeyGroupsFromResourcePools(t *testing.T) {
 	db := setupManageUserTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
 	previousUsable, previousRatios := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString()
 	previousSpecial := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()
 	t.Cleanup(func() {
@@ -562,4 +571,143 @@ func TestUserChannelRoutingCatalogSeparatesPublicKeyGroupsFromResourcePools(t *t
 	assert.Equal(t, map[string]string{"standard": "Standard", "vip": "VIP"}, response.Data.KeyGroups)
 	assert.Equal(t, []string{"gpt-5"}, response.Data.ConfiguredModels)
 	assert.Equal(t, map[string][]string{"gpt-5": {"standard", "vip"}}, response.Data.ConfiguredKeyGroups)
+}
+
+func TestUserRoutingPoolEditorDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		for _, upgrade := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/upgrade_%t", dialect, upgrade), func(t *testing.T) {
+				if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+					t.Skip("isolated database DSN not configured")
+				}
+				t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+				db := setupManageUserTestDB(t)
+				previousCache, previousGroups, previousRatios := common.MemoryCacheEnabled, setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString()
+				previousResourceFilters := setting.GroupModelChannelGroupsJSON()
+				t.Cleanup(func() {
+					common.MemoryCacheEnabled = previousCache
+					require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousGroups))
+					require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+					require.NoError(t, setting.UpdateGroupModelChannelGroups(previousResourceFilters))
+				})
+				common.MemoryCacheEnabled = false
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP"}`))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":2}`))
+				require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"default":{"gpt-5":[]}}`))
+				require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}))
+				user := model.User{Username: "pool-editor", Group: "default", AffCode: "pooleditor"}
+				require.NoError(t, db.Create(&user).Error)
+				channel := model.Channel{Id: 9801, Type: 1, Name: "Public", Models: "gpt-5", Group: "default,vip", Status: common.ChannelStatusEnabled, Priority: common.GetPointer(int64(10)), Weight: common.GetPointer(uint(20))}
+				require.NoError(t, db.Create(&channel).Error)
+				require.NoError(t, channel.AddAbilities(nil))
+				if upgrade {
+					type previousOverride struct {
+						UserId    int    `gorm:"primaryKey;autoIncrement:false"`
+						Model     string `gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
+						ChannelId int    `gorm:"primaryKey;autoIncrement:false"`
+						Priority  *int64 `gorm:"bigint"`
+						Disabled  bool
+					}
+					type previousScopedOverride struct {
+						Override     previousOverride `gorm:"embedded"`
+						RoutingGroup string           `gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+					}
+					require.NoError(t, db.Table("user_channel_routing_overrides").AutoMigrate(&previousOverride{}))
+					require.NoError(t, db.Table("user_group_channel_routing_overrides").AutoMigrate(&previousScopedOverride{}))
+					require.NoError(t, db.Table("user_channel_routing_overrides").Create(&previousOverride{UserId: user.Id, Model: "gpt-5", ChannelId: 9801, Priority: common.GetPointer(int64(25))}).Error)
+					require.NoError(t, db.Table("user_group_channel_routing_overrides").Create(&previousScopedOverride{Override: previousOverride{UserId: user.Id, Model: "gpt-5", ChannelId: 9801, Priority: common.GetPointer(int64(30))}, RoutingGroup: "vip"}).Error)
+				}
+				for range 2 {
+					require.NoError(t, db.AutoMigrate(&model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+				}
+				if upgrade {
+					rows, err := model.ListUserChannelRoutingOverrides(user.Id, "gpt-5")
+					require.NoError(t, err)
+					require.Len(t, rows, 1)
+					assert.Nil(t, rows[0].Weight)
+					assert.EqualValues(t, 25, *rows[0].Priority)
+					scoped, err := model.ListUserGroupChannelRoutingOverrides(user.Id, "gpt-5")
+					require.NoError(t, err)
+					require.Len(t, scoped, 1)
+					assert.Nil(t, scoped[0].Weight)
+					assert.EqualValues(t, 30, *scoped[0].Priority)
+					revision, err := model.UserChannelRoutingRevision(rows)
+					require.NoError(t, err)
+					require.NoError(t, model.ResetUserChannelRoutingForGroup(user.Id, "gpt-5", "", revision))
+				}
+				pool := model.ModelRoutingPool{RoutingGroup: "default", Model: "gpt-5", Mode: model.RoutingModeSmart, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 9801, Priority: 100, Weight: 7, Enabled: true}}}
+				require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+				read := func(group string) userChannelRoutingResponse {
+					response := userRoutingRequestAtURL(t, user.Id, http.MethodGet, "/api/user/1/channel-routing-overrides?view=pool&model=gpt-5&routing_group="+group, "", GetUserChannelRouting)
+					require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+					var body struct {
+						Success bool                       `json:"success"`
+						Data    userChannelRoutingResponse `json:"data"`
+					}
+					require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+					require.True(t, body.Success, response.Body.String())
+					return body.Data
+				}
+				inherited := read("default")
+				assert.Equal(t, "default_pool", inherited.Source)
+				assert.Equal(t, "smart", inherited.Mode)
+				require.Len(t, inherited.PoolChannels, 1)
+				assert.EqualValues(t, 100, inherited.PoolChannels[0].Priority)
+				assert.EqualValues(t, 7, inherited.PoolChannels[0].Weight)
+				payload := fmt.Sprintf(`{"model":"gpt-5","routing_group":"default","revision":%q,"overrides":[{"channel_id":9801,"priority_override":0,"weight_override":0,"enabled":true}]}`, inherited.Revision)
+				require.Equal(t, http.StatusOK, userRoutingRequest(t, user.Id, http.MethodPatch, payload, PatchUserChannelRouting).Code)
+				configured := read("default")
+				assert.Equal(t, "user", configured.Source)
+				require.Len(t, configured.Channels, 1)
+				require.NotNil(t, configured.Channels[0].WeightOverride)
+				assert.Zero(t, *configured.Channels[0].WeightOverride)
+				for _, cached := range []bool{false, true} {
+					common.MemoryCacheEnabled = cached
+					if cached {
+						model.InitChannelCache()
+					}
+					ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+					common.SetContextKey(ctx, constant.ContextKeyUserId, user.Id)
+					common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+					param := &service.RetryParam{Ctx: ctx, ModelName: "gpt-5"}
+					filters, err := param.SelectionFilters("default")
+					require.NoError(t, err)
+					candidates, err := model.ListChannelSelectionCandidates("default", "gpt-5", filters)
+					require.NoError(t, err)
+					require.Len(t, candidates, 1)
+					assert.Zero(t, candidates[0].Weight)
+					assert.Zero(t, *candidates[0].Priority)
+					preview := read("default")
+					assert.Zero(t, preview.PoolChannels[0].Weight)
+					assert.Zero(t, preview.PoolChannels[0].Priority)
+				}
+				common.MemoryCacheEnabled = false
+				// Older priority-only clients preserve the newer weight override.
+				body := fmt.Sprintf(`{"model":"gpt-5","routing_group":"default","revision":%q,"overrides":[{"channel_id":9801,"priority_override":5,"enabled":true}]}`, configured.Revision)
+				require.Equal(t, http.StatusOK, userRoutingRequest(t, user.Id, http.MethodPatch, body, PatchUserChannelRouting).Code)
+				current := read("default")
+				require.NotNil(t, current.Channels[0].WeightOverride)
+				assert.Zero(t, *current.Channels[0].WeightOverride)
+				assert.ErrorIs(t, model.ResetUserChannelRoutingForGroup(user.Id, "gpt-5", "default", configured.Revision), model.ErrUserChannelRoutingConflict)
+				body = fmt.Sprintf(`{"model":"gpt-5","routing_group":"default","revision":%q,"overrides":[{"channel_id":9801,"priority_override":null,"weight_override":null,"inherit_weight":true,"enabled":true}]}`, current.Revision)
+				require.Equal(t, http.StatusOK, userRoutingRequest(t, user.Id, http.MethodPatch, body, PatchUserChannelRouting).Code)
+				current = read("default")
+				assert.Nil(t, current.Channels[0].WeightOverride)
+				assert.Equal(t, "default_pool", current.Source)
+				body = fmt.Sprintf(`{"model":"gpt-5","routing_group":"default","revision":%q,"reset":true}`, current.Revision)
+				require.Equal(t, http.StatusOK, userRoutingRequest(t, user.Id, http.MethodPatch, body, PatchUserChannelRouting).Code)
+				assert.False(t, read("default").Configured)
+				assert.Equal(t, upgrade, read("vip").Configured, "reset is isolated to one public group")
+				for _, weight := range []string{"-1", "1.5", "2147483638"} {
+					body = fmt.Sprintf(`{"model":"gpt-5","routing_group":"default","revision":%q,"overrides":[{"channel_id":9801,"weight_override":%s,"enabled":true}]}`, inherited.Revision, weight)
+					assert.Equal(t, http.StatusBadRequest, userRoutingRequest(t, user.Id, http.MethodPatch, body, PatchUserChannelRouting).Code)
+				}
+				for range 2 {
+					require.NoError(t, db.AutoMigrate(&model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+				}
+				catalog := userRoutingRequestAtURL(t, user.Id, http.MethodGet, "/api/user/1/channel-routing-overrides?view=pool", "", GetUserChannelRouting)
+				assert.Contains(t, catalog.Body.String(), `"model_groups":{"gpt-5":["default","vip"]}`)
+			})
+		}
+	}
 }

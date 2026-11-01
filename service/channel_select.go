@@ -45,6 +45,7 @@ type RetryParam struct {
 	userRoutingLoaded      bool
 	userRouting            map[int]model.UserChannelRoutingOverride
 	userGroupRouting       []model.UserGroupChannelRoutingOverride
+	routingPools           map[string]*model.ModelRoutingPool
 	Ctx                    *gin.Context
 	TokenGroup             string
 	ModelName              string
@@ -364,6 +365,9 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 				return nil, "", &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: "The specified channel has no replica for every referenced asset"}
 			}
 		}
+		if err := ValidateSelectedChannelGroupPolicy(c, channel.Id, modelName); err != nil {
+			return nil, "", &ChannelSelectError{StatusCode: http.StatusForbidden, Message: "channel_excluded_by_routing_policy"}
+		}
 		return channel, "", nil
 	}
 
@@ -374,18 +378,35 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 	if retry.TokenGroup == "auto" {
 		for _, group := range GetRequestAutoGroups(c, common.GetContextKeyString(c, constant.ContextKeyUserGroup)) {
 			for _, row := range retry.userGroupRouting {
-				if row.RoutingGroup == group && (row.Priority != nil || row.Disabled) {
+				if row.RoutingGroup == group && (row.Priority != nil || row.Weight != nil || row.Disabled) {
 					hasUserRouting = true
 				}
 			}
 		}
 	}
 	if retry.GetRetry() == 0 && !hasUserRouting {
+		preferDynamic := false
+		groups := []string{usingGroup}
+		if usingGroup == "auto" {
+			groups = GetRequestAutoGroups(c, common.GetContextKeyString(c, constant.ContextKeyUserGroup))
+		}
+		for _, group := range groups {
+			pool, err := retry.ModelRoutingPool(group)
+			if err != nil {
+				return nil, "", &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: "model_routing_pool_unavailable"}
+			}
+			if pool != nil && pool.Mode == model.RoutingModeSmart {
+				preferDynamic = true
+			}
+			if pool == nil && DynamicRoutingEnabled() {
+				preferDynamic = true
+			}
+		}
 		// Strict bindings must not be bypassed by dynamic routing. Best-effort
 		// affinity retains dynamic-routing and video-delivery tier precedence.
 		if preferredChannelID, found := GetPreferredChannelByAffinity(c, modelName, usingGroup); found &&
 			(RequestPolicy(c).SessionMode == "strict" ||
-				(!RequestHasVideoMedia(retry.RequestBody) && (!retry.DynamicRoutingEligible || !DynamicRoutingEnabled()))) {
+				(!RequestHasVideoMedia(retry.RequestBody) && (!retry.DynamicRoutingEligible || !preferDynamic))) {
 			affinityUsable := false
 			preferred, err := model.CacheGetChannel(preferredChannelID)
 			affinitySatisfied := false

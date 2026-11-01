@@ -122,12 +122,13 @@ func TestUserChannelRoutingOverridesAllSelectionPaths(t *testing.T) {
 			require.NotNil(t, selectErr)
 			assert.Equal(t, "user_channel_disabled", selectErr.Message)
 			assert.ErrorIs(t, ValidateSelectedChannelGroupPolicy(c, 9502, "gpt-5"), ErrGroupModelChannelDenied)
-			// Even a huge user priority cannot escape an explicit group deny.
+			// Retired resource-group filters no longer override the user's pool.
 			require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"default":{"gpt-5":[]}}`))
 			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 			selected, _, err := CacheGetRandomSatisfiedChannel(&RetryParam{Ctx: c, ModelName: "gpt-5", TokenGroup: "default"})
 			require.NoError(t, err)
-			assert.Nil(t, selected)
+			require.NotNil(t, selected)
+			assert.Equal(t, 9501, selected.Id)
 		})
 	}
 }

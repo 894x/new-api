@@ -38,7 +38,7 @@ import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getModelChannelMatrix, matrixQueryKeys } from '../api'
-import type { MatrixCell, MatrixSearch } from '../types'
+import type { MatrixCell, MatrixChannel, MatrixSearch } from '../types'
 import { MatrixCellEditor } from './matrix-cell-editor'
 import { MatrixFilters } from './matrix-filters'
 import { MatrixPagination } from './matrix-pagination'
@@ -74,6 +74,33 @@ export function MatrixWorkspace(props: {
     refetchOnMount: 'always',
     placeholderData: keepPreviousData,
   })
+  const candidateSearch = {
+    ...props.search,
+    model: '',
+    channel: '',
+    model_page: 1,
+    channel_page: 1,
+  }
+  const candidates = useQuery({
+    queryKey: matrixQueryKeys.list(candidateSearch),
+    queryFn: () => getModelChannelMatrix(candidateSearch),
+    enabled: canRead,
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
+  })
+  const models = [
+    ...new Set([
+      ...(candidates.data?.models ?? []),
+      ...(query.data?.models ?? []),
+    ]),
+  ]
+  const channels = new Map<number, MatrixChannel>()
+  for (const channel of [
+    ...(candidates.data?.channels ?? []),
+    ...(query.data?.channels ?? []),
+  ]) {
+    channels.set(channel.id, channel)
+  }
 
   if (!canRead) {
     return (
@@ -93,6 +120,8 @@ export function MatrixWorkspace(props: {
       <MatrixFilters
         search={props.search}
         groups={query.data?.groups ?? []}
+        models={models}
+        channels={[...channels.values()]}
         onSearchChange={props.onSearchChange}
       />
       <div className='flex shrink-0 flex-wrap items-center justify-between gap-2'>

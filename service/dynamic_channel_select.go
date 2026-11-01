@@ -1,9 +1,12 @@
 package service
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
@@ -19,13 +22,16 @@ func DynamicRoutingEnabled() bool {
 	return dynamic_routing_setting.GetSnapshot().Config.Enabled
 }
 
-func currentDynamicRoutingController() (*dynamicrouting.Controller, bool, error) {
+func currentDynamicRoutingController(force bool) (*dynamicrouting.Controller, bool, error) {
 	dynamicRoutingRuntime.Lock()
 	defer dynamicRoutingRuntime.Unlock()
 	snapshot := dynamic_routing_setting.GetSnapshot()
-	if !snapshot.Config.Enabled {
+	if !snapshot.Config.Enabled && !force {
 		return nil, false, nil
 	}
+	// Explicit smart pools use the shared tuning settings independently of the
+	// legacy global switch. Static pools never enter this controller.
+	snapshot.Config.Enabled = true
 
 	if dynamicRoutingRuntime.controller == nil {
 		controller, err := dynamicrouting.NewController(snapshot.Config)
@@ -43,10 +49,11 @@ func currentDynamicRoutingController() (*dynamicrouting.Controller, bool, error)
 	return dynamicRoutingRuntime.controller, true, nil
 }
 
-// ObserveDynamicRoutingSample records one completed upstream attempt. Samples
-// are ignored while dynamic routing is disabled.
-func ObserveDynamicRoutingSample(key dynamicrouting.ObservationKey, sample dynamicrouting.Sample) {
-	controller, enabled, err := currentDynamicRoutingController()
+// ObserveDynamicRoutingSample records one completed upstream attempt. Callers
+// enable observation for the legacy global switch or an explicit smart pool.
+func ObserveDynamicRoutingSample(key dynamicrouting.ObservationKey, sample dynamicrouting.Sample, explicitSmartPool ...bool) {
+	force := len(explicitSmartPool) > 0 && explicitSmartPool[0]
+	controller, enabled, err := currentDynamicRoutingController(force)
 	if err != nil || !enabled {
 		return
 	}
@@ -67,18 +74,39 @@ func getSatisfiedChannelForRoute(param *RetryParam, group string, retry int) (*m
 		// Attempted channels are already removed; do not skip another priority tier.
 		retry = 0
 	}
-	if param.DynamicRoutingEligible && len(userRouting) == 0 {
+	pool, err := param.ModelRoutingPool(group)
+	if err != nil {
+		return nil, false, err
+	}
+	smart := pool != nil && pool.Mode == model.RoutingModeSmart
+	param.Ctx.Set(modelRoutingSmartContextKey, smart)
+	if param.DynamicRoutingEligible && (smart || pool == nil && len(userRouting) == 0) {
 		channel, handled, allAttempted, err := selectDynamicSatisfiedChannel(param, group)
 		if handled || err != nil {
 			return channel, allAttempted, err
 		}
 	}
+	if pool != nil && len(userRouting) == 0 && len(param.AttemptedChannelIds) > 0 {
+		// Attempted channels are excluded by the request-local pool filter;
+		// skipping another priority tier would skip a valid fallback as well.
+		retry = 0
+	}
 	channel, err := selectChannelWithCapacity(param, group, retry)
-	return channel, false, err
+	allAttempted := false
+	if pool != nil && channel == nil {
+		for _, entry := range pool.Channels {
+			allAttempted = allAttempted || param.HasAttempted(entry.ChannelID)
+		}
+	}
+	return channel, allAttempted, err
 }
 
 func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Channel, bool, bool, error) {
-	controller, enabled, err := currentDynamicRoutingController()
+	pool, err := param.ModelRoutingPool(group)
+	if err != nil {
+		return nil, true, false, err
+	}
+	controller, enabled, err := currentDynamicRoutingController(pool != nil && pool.Mode == model.RoutingModeSmart)
 	if err != nil || !enabled {
 		return nil, false, false, err
 	}
@@ -135,10 +163,14 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 			Weight:    candidate.Weight,
 		})
 	}
-	decision := controller.SelectAvoiding(dynamicrouting.RouteKey{
+	key := dynamicrouting.RouteKey{
 		Group: group,
 		Model: param.ModelName,
-	}, candidates, excluded, time.Now())
+	}
+	if len(filters.UserRoutingOverrides) > 0 {
+		key.Policy = fmt.Sprintf("user:%d", common.GetContextKeyInt(param.Ctx, constant.ContextKeyUserId))
+	}
+	decision := controller.SelectAvoiding(key, candidates, excluded, time.Now())
 	if !decision.HasSelection {
 		return nil, true, allAttempted, nil
 	}

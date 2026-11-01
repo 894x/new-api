@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useNavigate } from '@tanstack/react-router'
 import type { Row } from '@tanstack/react-table'
 import {
   Pencil,
@@ -71,6 +72,7 @@ interface DataTableRowActionsProps {
 
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const user = row.original
   const { setOpen, setCurrentRow, triggerRefresh } = useUsers()
   const [resetPasskeyOpen, setResetPasskeyOpen] = useState(false)
@@ -239,6 +241,22 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         {canAccessUserGroupConfig(currentUser, user.role) && (
           <DropdownMenuItem onClick={handleGroupConfig}>
             {t('Customer group configuration')}
+            <DropdownMenuShortcut>
+              <SlidersHorizontal size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+        )}
+
+        {canAccessUserGroupConfig(currentUser, user.role) && (
+          <DropdownMenuItem
+            onClick={() =>
+              void navigate({
+                to: '/model-channel-matrix',
+                search: { user_id: user.id },
+              })
+            }
+          >
+            {t('Routing pools')}
             <DropdownMenuShortcut>
               <SlidersHorizontal size={16} />
             </DropdownMenuShortcut>

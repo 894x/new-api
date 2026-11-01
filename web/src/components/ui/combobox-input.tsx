@@ -41,6 +41,7 @@ interface ComboboxInputProps {
   className?: string
   popupClassName?: string
   id?: string
+  maxLength?: number
   allowCustomValue?: boolean
   openOnFocus?: boolean
   showAllOptionsOnFocus?: boolean
@@ -60,6 +61,7 @@ export function ComboboxInput({
   className,
   popupClassName,
   id,
+  maxLength,
   allowCustomValue = false,
   openOnFocus = true,
   showAllOptionsOnFocus = false,
@@ -244,6 +246,7 @@ export function ComboboxInput({
       <Input
         ref={inputRef}
         id={id}
+        maxLength={maxLength}
         type='text'
         role='combobox'
         disabled={disabled}
