@@ -1405,7 +1405,11 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
-	err = channel.Update()
+	var explicitFields []string
+	if _, provided := requestData["cost_discount"]; provided {
+		explicitFields = append(explicitFields, "cost_discount")
+	}
+	err = channel.Update(explicitFields...)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1416,6 +1420,10 @@ func UpdateChannel(c *gin.Context) {
 	}
 	// 记录变更的字段名（语言无关的字段标识），密钥仅记录"已更换"绝不记录内容。
 	changedFields := make([]string, 0)
+	if (channel.CostDiscount == nil) != (originChannel.CostDiscount == nil) ||
+		(channel.CostDiscount != nil && originChannel.CostDiscount != nil && *channel.CostDiscount != *originChannel.CostDiscount) {
+		changedFields = append(changedFields, "cost_discount")
+	}
 	if channel.Models != originChannel.Models {
 		changedFields = append(changedFields, "models")
 	}

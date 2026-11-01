@@ -42,17 +42,18 @@ type Channel struct {
 	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
 	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
-	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
-	RPM               *int64  `json:"rpm" gorm:"bigint"`
-	TPM               *int64  `json:"tpm" gorm:"bigint"`
-	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
-	AutoBan           *int    `json:"auto_ban" gorm:"default:1"`
-	OtherInfo         string  `json:"other_info"`
-	Tag               *string `json:"tag" gorm:"index"`
-	Setting           *string `json:"setting" gorm:"type:text"` // 渠道额外设置
-	ParamOverride     *string `json:"param_override" gorm:"type:text"`
-	HeaderOverride    *string `json:"header_override" gorm:"type:text"`
-	Remark            *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
+	StatusCodeMapping *string  `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
+	RPM               *int64   `json:"rpm" gorm:"bigint"`
+	TPM               *int64   `json:"tpm" gorm:"bigint"`
+	Priority          *int64   `json:"priority" gorm:"bigint;default:0"`
+	CostDiscount      *float64 `json:"cost_discount"`
+	AutoBan           *int     `json:"auto_ban" gorm:"default:1"`
+	OtherInfo         string   `json:"other_info"`
+	Tag               *string  `json:"tag" gorm:"index"`
+	Setting           *string  `json:"setting" gorm:"type:text"` // 渠道额外设置
+	ParamOverride     *string  `json:"param_override" gorm:"type:text"`
+	HeaderOverride    *string  `json:"header_override" gorm:"type:text"`
+	Remark            *string  `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
 	// add after v0.8.5
 	ChannelInfo ChannelInfo `json:"channel_info" gorm:"type:json"`
 
@@ -597,7 +598,8 @@ func (channel *Channel) Insert() error {
 	return tx.Commit().Error
 }
 
-func (channel *Channel) Update() error {
+// Update preserves omitted fields. explicitFields also persist zero or nil values.
+func (channel *Channel) Update(explicitFields ...string) error {
 	if err := ValidateChannelRoutingLimits(channel); err != nil {
 		return err
 	}
@@ -646,6 +648,12 @@ func (channel *Channel) Update() error {
 	if err := tx.Model(channel).Updates(channel).Error; err != nil {
 		tx.Rollback()
 		return err
+	}
+	if len(explicitFields) > 0 {
+		if err := tx.Model(channel).Select(explicitFields).Updates(channel).Error; err != nil {
+			tx.Rollback()
+			return err
+		}
 	}
 	if err := tx.Model(channel).First(channel, "id = ?", channel.Id).Error; err != nil {
 		tx.Rollback()

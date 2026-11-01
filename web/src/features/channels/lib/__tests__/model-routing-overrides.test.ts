@@ -28,6 +28,7 @@ import {
   getModelRoutingOverrideKey,
   mergeModelRoutingOverrideDraftState,
   parseRoutingOverrideInput,
+  parseCostDiscountInput,
   updateModelRoutingOverrideDraftField,
 } from '../model-routing-overrides'
 
@@ -46,6 +47,49 @@ const row: ModelRoutingOverride = {
 }
 
 describe('model routing override serialization', () => {
+  it('preserves decimal cost discounts, explicit free cost and resets', () => {
+    const costRow = { ...row, cost_discount_override: 0.3 }
+    const key = getModelRoutingOverrideKey(row.channel_id, row.model)
+    const drafts = createModelRoutingOverrideDrafts([costRow])
+    for (const [input, expected] of [
+      ['0.003125', 0.003125],
+      ['0', 0],
+      ['', null],
+    ] as const) {
+      drafts[key].cost_discount_override = input
+      expect(
+        collectChangedModelRoutingOverrides([costRow], drafts)
+      ).toMatchObject({
+        overrides: [{ cost_discount_override: expected }],
+        errors: [],
+      })
+    }
+    expect(parseCostDiscountInput('')).toBeNull()
+    for (const input of ['-0.1', '1.01', 'Infinity', 'NaN', 'invalid']) {
+      drafts[key].cost_discount_override = input
+      expect(collectChangedModelRoutingOverrides([costRow], drafts)).toEqual({
+        overrides: [],
+        errors: [{ key, field: 'cost_discount_override' }],
+      })
+    }
+  })
+
+  it('keeps a dirty cost discount when server data refreshes', () => {
+    const costRow = { ...row, cost_discount_override: null }
+    const key = getModelRoutingOverrideKey(row.channel_id, row.model)
+    let state = createModelRoutingOverrideDraftState([costRow])
+    state = updateModelRoutingOverrideDraftField(
+      state,
+      costRow,
+      'cost_discount_override',
+      '0.15'
+    )
+    state = mergeModelRoutingOverrideDraftState(
+      [{ ...costRow, cost_discount_override: 0.2 }],
+      state
+    )
+    expect(state.drafts[key].cost_discount_override).toBe('0.15')
+  })
   it('distinguishes inherited, explicit zero, and non-zero values', () => {
     expect(parseRoutingOverrideInput('')).toBeNull()
     expect(parseRoutingOverrideInput('0')).toBe(0)

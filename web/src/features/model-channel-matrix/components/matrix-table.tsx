@@ -53,6 +53,13 @@ function MatrixCellValues(props: { cell: MatrixCell; id: string }) {
       override: props.cell.weight_override,
       capacity: false,
     },
+    {
+      label: t('Upstream cost discount'),
+      value: props.cell.effective_cost_discount,
+      override: props.cell.cost_discount_override,
+      capacity: false,
+      fullWidth: true,
+    },
   ]
   return (
     <span
@@ -60,18 +67,22 @@ function MatrixCellValues(props: { cell: MatrixCell; id: string }) {
       className='grid min-w-0 flex-1 grid-cols-[minmax(0,4fr)_minmax(0,6fr)] gap-x-1.5 gap-y-1 text-xs'
     >
       {fields.map((field) => {
-        const value =
-          field.capacity && field.value === 0
-            ? t('Unlimited')
-            : field.value.toLocaleString(toIntlLocale(i18n.language))
+        let value = t('Unknown')
+        if (field.capacity && field.value === 0) {
+          value = t('Unlimited')
+        } else if (field.value != null) {
+          value = field.value.toLocaleString(toIntlLocale(i18n.language), {
+            maximumFractionDigits: 20,
+          })
+        }
         const source = field.override == null ? t('Inherit') : t('Override')
         return (
           <span
             key={field.label}
-            className='flex min-w-0 items-baseline justify-between gap-0.5'
+            className={`${field.fullWidth ? 'col-span-2 ' : ''}flex min-w-0 items-baseline justify-between gap-0.5`}
             title={`${field.label}: ${value} (${source})`}
           >
-            <span className='text-muted-foreground shrink-0 font-normal'>
+            <span className='text-muted-foreground min-w-0 truncate font-normal'>
               {field.label}
             </span>
             <span className='flex min-w-0 items-baseline gap-0.5 font-semibold tabular-nums'>

@@ -79,6 +79,9 @@ test('saves explicit zero and null inheritance for only the selected channel-mod
     target: { value: '12' },
   })
   fireEvent.change(screen.getByLabelText('Weight'), { target: { value: '30' } })
+  fireEvent.change(screen.getByLabelText('Upstream cost discount'), {
+    target: { value: '0.003125' },
+  })
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() =>
     expect(patch).toHaveBeenCalledWith(
@@ -92,6 +95,7 @@ test('saves explicit zero and null inheritance for only the selected channel-mod
             tpm_override: null,
             priority_override: 12,
             weight_override: 30,
+            cost_discount_override: 0.003125,
           },
         ],
       },
@@ -136,7 +140,13 @@ test('reset restores inheritance and a failed save keeps drafts available for re
   fireEvent.click(
     screen.getByRole('button', { name: 'Reset to channel defaults' })
   )
-  for (const label of ['RPM', 'TPM', 'Priority', 'Weight']) {
+  for (const label of [
+    'RPM',
+    'TPM',
+    'Priority',
+    'Weight',
+    'Upstream cost discount',
+  ]) {
     expect(screen.getByLabelText(label)).toHaveValue('')
   }
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -158,6 +168,7 @@ test('reset restores inheritance and a failed save keeps drafts available for re
           tpm_override: null,
           priority_override: null,
           weight_override: null,
+          cost_discount_override: null,
         },
       ],
     },

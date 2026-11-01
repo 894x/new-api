@@ -52,7 +52,7 @@ type ChannelModelMatrix struct {
 // overrides are fetched; channel credentials and other settings are never read.
 func ListChannelModelMatrix(filter ChannelModelMatrixFilter) (*ChannelModelMatrix, error) {
 	var channels []*Channel
-	if err := DB.Select([]string{"id", "name", "type", "status", "models", "group", "priority", "weight", "rpm", "tpm", "model_mapping"}).
+	if err := DB.Select([]string{"id", "name", "type", "status", "models", "group", "priority", "weight", "rpm", "tpm", "cost_discount", "model_mapping"}).
 		Order("id").Find(&channels).Error; err != nil {
 		return nil, err
 	}

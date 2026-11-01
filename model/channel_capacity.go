@@ -85,6 +85,9 @@ func ValidateChannelModelRateLimit(limit *int64) error {
 }
 
 func ValidateChannelRoutingLimits(channel *Channel) error {
+	if err := ValidateChannelCostDiscount(channel.CostDiscount); err != nil {
+		return err
+	}
 	if err := ValidateChannelWeight(channel.Weight); err != nil {
 		return err
 	}
