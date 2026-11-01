@@ -59,7 +59,21 @@ func (p *RetryParam) SelectionFilters(group string) (model.ChannelSelectionFilte
 			}
 		}
 	}
-	return model.ChannelSelectionFilters{UserRoutingOverrides: userRouting, Constraints: GetChannelConstraints(p.Ctx).Filters, RequestPath: p.RequestPath, RequestBody: p.RequestBody, RequestBodySize: p.RequestBodySize, AllowedChannelIds: allowed}, nil
+	pool, err := p.ModelRoutingPool(group)
+	if err != nil {
+		return model.ChannelSelectionFilters{}, err
+	}
+	var poolChannels map[int]model.ModelRoutingPoolChannel
+	if pool != nil && len(userRouting) == 0 {
+		poolChannels = make(map[int]model.ModelRoutingPoolChannel, len(pool.Channels))
+		for _, entry := range pool.Channels {
+			if p.HasAttempted(entry.ChannelID) && !(p.DynamicRoutingEligible && pool.Mode == model.RoutingModeSmart) {
+				continue
+			}
+			poolChannels[entry.ChannelID] = entry
+		}
+	}
+	return model.ChannelSelectionFilters{UserRoutingOverrides: userRouting, RoutingPoolChannels: poolChannels, Constraints: GetChannelConstraints(p.Ctx).Filters, RequestPath: p.RequestPath, RequestBody: p.RequestBody, RequestBodySize: p.RequestBodySize, AllowedChannelIds: allowed}, nil
 }
 
 // ValidateSelectedChannelGroupPolicy protects affinity hits, pinned channels
@@ -77,6 +91,7 @@ func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName
 		}
 	}
 	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	selectedGroup := common.GetContextKeyString(c, constant.ContextKeyAutoGroup)
 	param := &RetryParam{Ctx: c, ModelName: modelName}
 	if allowed == nil && group == "auto" {
 		legacy, err := param.UserChannelRouting()
@@ -96,7 +111,28 @@ func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName
 			if legacy[channelID].Disabled {
 				return ErrGroupModelChannelDenied
 			}
-			return nil
+			hasDefaultPool := false
+			for _, candidate := range GetRequestAutoGroups(c, userGroup) {
+				if selectedGroup != "" && candidate != selectedGroup {
+					continue
+				}
+				pool, err := param.ModelRoutingPool(candidate)
+				if err != nil {
+					return err
+				}
+				hasDefaultPool = hasDefaultPool || pool != nil
+				permitted, err := param.ModelRoutingPoolAllows(candidate, channelID)
+				if err != nil {
+					return err
+				}
+				if permitted && model.IsChannelEnabledForGroupModel(candidate, modelName, channelID) {
+					return nil
+				}
+			}
+			if !hasDefaultPool {
+				return nil
+			}
+			return ErrGroupModelChannelDenied
 		}
 	}
 	if group != "auto" {
@@ -104,12 +140,19 @@ func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName
 		if err != nil {
 			return err
 		}
-		if !routing[channelID].Disabled && (allowed == nil || model.IsChannelEnabledForGroupModel(group, modelName, channelID)) {
+		pool, poolErr := param.ModelRoutingPool(group)
+		if poolErr != nil {
+			return poolErr
+		}
+		permitted, poolErr := param.ModelRoutingPoolAllows(group, channelID)
+		if poolErr != nil {
+			return poolErr
+		}
+		if permitted && !routing[channelID].Disabled && (allowed == nil && pool == nil || model.IsChannelEnabledForGroupModel(group, modelName, channelID)) {
 			return nil
 		}
 		return ErrGroupModelChannelDenied
 	}
-	selectedGroup := common.GetContextKeyString(c, constant.ContextKeyAutoGroup)
 	for _, candidate := range GetRequestAutoGroups(c, userGroup) {
 		if selectedGroup != "" && candidate != selectedGroup {
 			continue
@@ -118,7 +161,11 @@ func ValidateSelectedChannelGroupPolicy(c *gin.Context, channelID int, modelName
 		if err != nil {
 			return err
 		}
-		if !routing[channelID].Disabled && model.IsChannelEnabledForGroupModel(candidate, modelName, channelID) {
+		permitted, err := param.ModelRoutingPoolAllows(candidate, channelID)
+		if err != nil {
+			return err
+		}
+		if permitted && !routing[channelID].Disabled && model.IsChannelEnabledForGroupModel(candidate, modelName, channelID) {
 			return nil
 		}
 	}

@@ -46,7 +46,7 @@ func TestChannelDisableImpactDatabaseMatrix(t *testing.T) {
 			require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"denied":{"gpt-5":[]}}`))
 			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default"}`))
 			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
-			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.Token{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.Token{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
 			channels := []model.Channel{
 				{Id: 9201, Name: "Target", Key: "channel-secret-must-not-leak", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "default", Priority: common.GetPointer(int64(100)), Tag: common.GetPointer("impact-batch")},
 				{Id: 9202, Name: "Alternative", Key: "alternative-secret", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "default", Priority: common.GetPointer(int64(10)), Tag: common.GetPointer("impact-batch")},
@@ -235,7 +235,7 @@ func TestUserChannelRoutingDatabaseMatrix(t *testing.T) {
 			})
 			// These pre-existing schemas and records model an upgrade from the
 			// current release; no existing schema changes are needed by this feature.
-			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}))
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}))
 			users := []model.User{{Username: "routing-a", Group: "default", AffCode: "routinga"}, {Username: "routing-b", Group: "default", AffCode: "routingb"}}
 			require.NoError(t, db.Create(&users).Error)
 			for _, channel := range []*model.Channel{
@@ -372,7 +372,7 @@ func TestUserChannelRoutingGroupIsolationDatabaseMatrix(t *testing.T) {
 				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"pool-a":1,"pool-b":1}`))
 				require.NoError(t, setting.UpdateMaxTokenAutoGroups("2"))
 				common.RetryTimes = 0
-				require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}))
+				require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}))
 				user := model.User{Username: "group-routing", Group: "default", AffCode: "group-routing"}
 				require.NoError(t, db.Create(&user).Error)
 				for _, channel := range []*model.Channel{
@@ -526,7 +526,7 @@ func TestUserChannelRoutingGroupIsolationDatabaseMatrix(t *testing.T) {
 
 func TestUserChannelRoutingCatalogSeparatesPublicKeyGroupsFromResourcePools(t *testing.T) {
 	db := setupManageUserTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
 	previousUsable, previousRatios := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString()
 	previousSpecial := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()
 	t.Cleanup(func() {

@@ -14,6 +14,7 @@ var ErrParameterCapabilityUnsupported = errors.New("request parameters are not s
 
 type ChannelSelectionFilters struct {
 	UserRoutingOverrides map[int]UserChannelRoutingOverride
+	RoutingPoolChannels  map[int]ModelRoutingPoolChannel
 	Constraints          []hostdto.ChannelFilter
 	RequestPath          string
 	RequestBody          []byte

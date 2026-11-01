@@ -315,7 +315,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
-		observeAttempt := service.DynamicRoutingEnabled() && shouldObserveDynamicRoutingAttempt(c, relayInfo)
+		observeAttempt := service.RequestDynamicRoutingEnabled(c) && shouldObserveDynamicRoutingAttempt(c, relayInfo)
 		if observeAttempt {
 			relayInfo.BeginDynamicRoutingAttempt(channel.Id, channel.Type, publicModelName, true)
 		}
@@ -334,7 +334,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if observeAttempt {
 			if attempt, ok := finishDynamicRoutingAttempt(c, relayInfo, newAPIError); ok && shouldPublishDynamicRoutingAttempt(attempt) {
 				key, sample := dynamicRoutingSampleFromAttempt(attempt)
-				service.ObserveDynamicRoutingSample(key, sample)
+				service.ObserveDynamicRoutingSample(key, sample, service.RequestDynamicRoutingEnabled(c))
 			}
 		}
 

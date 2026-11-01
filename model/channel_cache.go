@@ -252,6 +252,18 @@ func listCachedChannelCandidates(group, model string, filters ChannelSelectionFi
 }
 
 func filterCachedChannelSelectionCandidates(routings []cachedChannelRouting, filters ChannelSelectionFilters, requestModel string) ([]cachedChannelRouting, int, error, error) {
+	if filters.RoutingPoolChannels != nil {
+		pooled := make([]cachedChannelRouting, 0, len(routings))
+		for _, routing := range routings {
+			entry, exists := filters.RoutingPoolChannels[routing.ChannelId]
+			if !exists || !entry.Enabled {
+				continue
+			}
+			routing.Priority, routing.Weight = entry.Priority, entry.Weight
+			pooled = append(pooled, routing)
+		}
+		routings = pooled
+	}
 	if len(filters.UserRoutingOverrides) > 0 {
 		// Always copy: the source slice belongs to the shared channel cache.
 		personalized := make([]cachedChannelRouting, 0, len(routings))
