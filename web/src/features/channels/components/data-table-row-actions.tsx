@@ -73,6 +73,7 @@ import {
 import type { Channel } from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
+import { ChannelDisableDialog } from './dialogs/channel-disable-dialog'
 
 interface DataTableRowActionsProps {
   row: Row<Channel>
@@ -86,6 +87,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const queryClient = useQueryClient()
   const currentUser = useAuthStore((s) => s.auth.user)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [disableConfirmOpen, setDisableConfirmOpen] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
   const [isTogglingStatus, setIsTogglingStatus] = useState(false)
 
@@ -148,6 +150,10 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     e?: React.MouseEvent<HTMLButtonElement>
   ) => {
     e?.stopPropagation()
+    if (isEnabled) {
+      setDisableConfirmOpen(true)
+      return
+    }
     setIsTogglingStatus(true)
     try {
       await handleToggleChannelStatus(channel.id, channel.status, queryClient)
@@ -398,6 +404,12 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           setDeleteConfirmOpen(false)
         }}
       />
+      {disableConfirmOpen && (
+        <ChannelDisableDialog
+          target={{ ids: [channel.id] }}
+          onOpenChange={setDisableConfirmOpen}
+        />
+      )}
     </div>
   )
 }

@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQueryClient } from '@tanstack/react-query'
 import type { Row } from '@tanstack/react-table'
 import { Power, PowerOff, Pencil, Edit } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { DataTableRowActionMenu } from '@/components/data-table/core/row-action-menu'
@@ -34,12 +35,13 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 
-import { handleEnableTagChannels, handleDisableTagChannels } from '../lib'
+import { handleEnableTagChannels } from '../lib'
 import type { Channel } from '../types'
 import { useChannels } from './channels-provider'
+import { ChannelDisableDialog } from './dialogs/channel-disable-dialog'
 
 interface DataTableTagRowActionsProps {
-  row: Row<Channel & { tag?: string }>
+  row: Row<Channel>
 }
 
 export function DataTableTagRowActions({ row }: DataTableTagRowActionsProps) {
@@ -47,6 +49,7 @@ export function DataTableTagRowActions({ row }: DataTableTagRowActionsProps) {
   const tag = row.original.tag
   const { setOpen, setCurrentTag } = useChannels()
   const queryClient = useQueryClient()
+  const [disableConfirmOpen, setDisableConfirmOpen] = useState(false)
 
   if (!tag) return null
 
@@ -55,7 +58,7 @@ export function DataTableTagRowActions({ row }: DataTableTagRowActionsProps) {
   }
 
   const handleDisableAll = () => {
-    handleDisableTagChannels(tag, queryClient)
+    setDisableConfirmOpen(true)
   }
 
   const handleBatchEdit = () => {
@@ -70,6 +73,12 @@ export function DataTableTagRowActions({ row }: DataTableTagRowActionsProps) {
 
   return (
     <div className='-ml-1.5 flex items-center gap-1'>
+      {disableConfirmOpen && (
+        <ChannelDisableDialog
+          target={{ tag }}
+          onOpenChange={setDisableConfirmOpen}
+        />
+      )}
       <Tooltip>
         <TooltipTrigger
           render={

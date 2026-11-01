@@ -290,6 +290,41 @@ export async function updateChannelStatus(
   return res.data
 }
 
+export type ChannelDisableTarget =
+  | { ids: number[]; tag?: never }
+  | { tag: string; ids?: never }
+
+export type ChannelDisableImpactCustomer = {
+  user_id: number
+  username: string
+  display_name: string
+  channel_id: number
+  model: string
+  key_group: string
+  effective_priority: number
+  primary: boolean
+  alternative_channels: number
+}
+
+export type ChannelDisableImpact = {
+  channels: { id: number; name: string }[]
+  customers: ChannelDisableImpactCustomer[]
+  customer_count: number
+}
+
+export async function getChannelDisableImpact(
+  target: ChannelDisableTarget,
+  signal?: AbortSignal
+): Promise<ChannelDisableImpact> {
+  const response = await api.post<{
+    success: boolean
+    message?: string
+    data: ChannelDisableImpact
+  }>('/api/channel/disable-impact', target, { signal })
+  requireServerSuccess(response.data)
+  return response.data.data
+}
+
 /**
  * Batch update channel enabled/disabled status.
  */

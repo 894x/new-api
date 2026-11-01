@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -21,6 +23,154 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChannelDisableImpactDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+				t.Skip("isolated database DSN not configured")
+			}
+			t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+			db := setupManageUserTestDB(t)
+			previousCache := common.MemoryCacheEnabled
+			previousPools := setting.GroupModelChannelGroupsJSON()
+			previousGroups := setting.UserUsableGroups2JSONString()
+			previousRatios := ratio_setting.GroupRatio2JSONString()
+			t.Cleanup(func() {
+				common.MemoryCacheEnabled = previousCache
+				require.NoError(t, setting.UpdateGroupModelChannelGroups(previousPools))
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousGroups))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+			})
+			common.MemoryCacheEnabled = false
+			require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"denied":{"gpt-5":[]}}`))
+			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default"}`))
+			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.Token{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+			channels := []model.Channel{
+				{Id: 9201, Name: "Target", Key: "channel-secret-must-not-leak", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "default", Priority: common.GetPointer(int64(100)), Tag: common.GetPointer("impact-batch")},
+				{Id: 9202, Name: "Alternative", Key: "alternative-secret", Type: 1, Status: common.ChannelStatusEnabled, Models: "gpt-5", Group: "default", Priority: common.GetPointer(int64(10)), Tag: common.GetPointer("impact-batch")},
+			}
+			for i := range channels {
+				require.NoError(t, db.Create(&channels[i]).Error)
+				require.NoError(t, channels[i].AddAbilities(nil))
+			}
+			require.NoError(t, model.PatchChannelModelOverrides([]model.ChannelModelOverridePatch{{ChannelId: 9201, Model: "gpt-5", Priority: common.GetPointer(int64(20))}}))
+			users := []model.User{
+				{Username: "inherited", Group: "default", Status: common.UserStatusEnabled, AffCode: "impact0"},
+				{Username: "scoped-zero", Group: "default", Status: common.UserStatusEnabled, AffCode: "impact1"},
+				{Username: "denied", Group: "denied", Status: common.UserStatusEnabled, AffCode: "impact2"},
+				{Username: "disabled", Group: "default", Status: common.UserStatusDisabled, AffCode: "impact3"},
+				{Username: "expired-key", Group: "default", Status: common.UserStatusEnabled, AffCode: "impact4"},
+				{Username: "model-limited", Group: "default", Status: common.UserStatusEnabled, AffCode: "impact5"},
+				{Username: "auto-key", Group: "default", Status: common.UserStatusEnabled, AffCode: "impact6"},
+				{Username: "route-disabled", Group: "default", Status: common.UserStatusEnabled, AffCode: "impact7"},
+				{Username: "legacy-inherited", Group: "default", Status: common.UserStatusEnabled, AffCode: "impact8"},
+			}
+			require.NoError(t, db.Create(&users).Error)
+			for i, user := range users {
+				token := model.Token{UserId: user.Id, Key: fmt.Sprintf("impact-token-%d", i), Status: common.TokenStatusEnabled, ExpiredTime: -1, Group: "default"}
+				switch i {
+				case 0:
+					token.Group = ""
+				case 4:
+					token.ExpiredTime = time.Now().Unix() - 100
+				case 5:
+					token.ModelLimitsEnabled, token.ModelLimits = true, "other-model"
+				case 6:
+					token.Group, token.AutoGroups = "auto", `["default"]`
+				}
+				require.NoError(t, db.Create(&token).Error)
+			}
+			// A second key must not duplicate the same customer/model/group row.
+			require.NoError(t, db.Create(&model.Token{UserId: users[0].Id, Key: "impact-second-key", Status: common.TokenStatusEnabled, ExpiredTime: -1, Group: "default"}).Error)
+			require.NoError(t, db.Create(&[]model.UserChannelRoutingOverride{
+				{UserId: users[1].Id, Model: "gpt-5", ChannelId: 9201, Priority: common.GetPointer(int64(30))},
+				{UserId: users[8].Id, Model: "gpt-5", ChannelId: 9201, Priority: common.GetPointer(int64(40)), Disabled: true},
+			}).Error)
+			require.NoError(t, db.Create(&[]model.UserGroupChannelRoutingOverride{
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[1].Id, Model: "gpt-5", ChannelId: 9201, Priority: common.GetPointer(int64(0))}, RoutingGroup: "default"},
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[7].Id, Model: "gpt-5", ChannelId: 9201, Disabled: true}, RoutingGroup: "default"},
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[8].Id, Model: "gpt-5", ChannelId: 9201}, RoutingGroup: "default"},
+			}).Error)
+			for _, cached := range []bool{false, true} {
+				t.Run(fmt.Sprintf("cache_%t", cached), func(t *testing.T) {
+					common.MemoryCacheEnabled = cached
+					if cached {
+						model.InitChannelCache()
+					}
+					response := userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/disable-impact", `{"ids":[9201]}`, GetChannelDisableImpact)
+					require.Equal(t, http.StatusOK, response.Code)
+					var body struct {
+						Success bool                         `json:"success"`
+						Data    service.ChannelDisableImpact `json:"data"`
+					}
+					require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+					require.True(t, body.Success, response.Body.String())
+					assert.Equal(t, 4, body.Data.CustomerCount)
+					require.Len(t, body.Data.Customers, 4)
+					byName := make(map[string]service.ChannelDisableImpactCustomer)
+					for _, row := range body.Data.Customers {
+						byName[row.Username] = row
+						assert.Equal(t, "gpt-5", row.Model)
+						assert.Equal(t, "default", row.KeyGroup)
+						assert.Equal(t, 1, row.AlternativeChannels)
+					}
+					assert.EqualValues(t, 20, byName["inherited"].EffectivePriority)
+					assert.True(t, byName["inherited"].Primary)
+					assert.EqualValues(t, 0, byName["scoped-zero"].EffectivePriority)
+					assert.False(t, byName["scoped-zero"].Primary)
+					assert.EqualValues(t, 40, byName["legacy-inherited"].EffectivePriority)
+					assert.True(t, byName["auto-key"].Primary)
+					assert.NotContains(t, response.Body.String(), "secret")
+					assert.NotContains(t, response.Body.String(), "impact-token")
+					batch := userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/disable-impact", `{"tag":"impact-batch"}`, GetChannelDisableImpact)
+					require.NoError(t, common.Unmarshal(batch.Body.Bytes(), &body))
+					require.True(t, body.Success, batch.Body.String())
+					require.Len(t, body.Data.Channels, 2)
+					for _, row := range body.Data.Customers {
+						assert.Zero(t, row.AlternativeChannels, "channels disabled in the same batch are not alternatives")
+					}
+				})
+			}
+			for _, invalid := range []string{`{}`, `{"ids":[-1]}`, `{"ids":[9201],"tag":"impact-batch"}`, `{"tag":" "}`} {
+				response := userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/disable-impact", invalid, GetChannelDisableImpact)
+				assert.Equal(t, http.StatusBadRequest, response.Code, invalid)
+			}
+			missing := userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/disable-impact", `{"ids":[999999]}`, GetChannelDisableImpact)
+			var empty struct {
+				Success bool                         `json:"success"`
+				Data    service.ChannelDisableImpact `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(missing.Body.Bytes(), &empty))
+			assert.True(t, empty.Success)
+			assert.Empty(t, empty.Data.Channels)
+			assert.Empty(t, empty.Data.Customers)
+			var unchanged model.Channel
+			require.NoError(t, db.First(&unchanged, 9201).Error)
+			assert.Equal(t, common.ChannelStatusEnabled, unchanged.Status, "preflight never disables channels")
+			privileged := model.User{Username: "root-routing", Group: "default", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AffCode: "impactroot"}
+			require.NoError(t, db.Create(&privileged).Error)
+			require.NoError(t, db.Create(&model.Token{UserId: privileged.Id, Key: "impact-root-key", Group: "default", Status: common.TokenStatusEnabled, ExpiredTime: -1}).Error)
+			visible, err := service.GetChannelDisableImpact(context.Background(), []int{9201}, nil, common.RoleAdminUser)
+			require.NoError(t, err)
+			for _, row := range visible.Customers {
+				assert.NotEqual(t, privileged.Id, row.UserID, "operators cannot inspect routing of equal or higher roles")
+			}
+		})
+	}
+}
+
+func TestChannelDisableImpactRequiresCustomerRoutingPermission(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Set("id", 0)
+	c.Set("role", common.RoleCommonUser)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/channel/disable-impact", strings.NewReader(`{"ids":[9201]}`))
+	GetChannelDisableImpact(c)
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "customers")
+}
 
 func userRoutingRequest(t *testing.T, userID int, method, body string, handler gin.HandlerFunc) *httptest.ResponseRecorder {
 	return userRoutingRequestAtURL(t, userID, method, "/api/user/1/channel-routing-overrides?model=gpt-5", body, handler)

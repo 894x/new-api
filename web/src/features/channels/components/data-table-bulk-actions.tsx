@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
-import { type Table } from '@tanstack/react-table'
+import type { Table } from '@tanstack/react-table'
 import { Power, PowerOff, Tag, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -40,13 +40,9 @@ import {
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
-import {
-  handleBatchDelete,
-  handleBatchDisable,
-  handleBatchEnable,
-  handleBatchSetTag,
-} from '../lib'
+import { handleBatchDelete, handleBatchEnable, handleBatchSetTag } from '../lib'
 import type { Channel } from '../types'
+import { ChannelDisableDialog } from './dialogs/channel-disable-dialog'
 
 interface DataTableBulkActionsProps<TData> {
   table: Table<TData>
@@ -59,6 +55,7 @@ export function DataTableBulkActions<TData>({
   const queryClient = useQueryClient()
   const [showTagDialog, setShowTagDialog] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [disableIds, setDisableIds] = useState<number[] | null>(null)
   const [tagValue, setTagValue] = useState('')
   const currentUser = useAuthStore((s) => s.auth.user)
   const canEditSensitive = hasPermission(
@@ -87,7 +84,7 @@ export function DataTableBulkActions<TData>({
   }
 
   const handleDisableAll = () => {
-    handleBatchDisable(selectedIds, queryClient, handleClearSelection)
+    setDisableIds([...selectedIds])
   }
 
   const handleDeleteAll = () => {
@@ -108,6 +105,13 @@ export function DataTableBulkActions<TData>({
 
   return (
     <>
+      {disableIds && (
+        <ChannelDisableDialog
+          target={{ ids: disableIds }}
+          onOpenChange={(open) => !open && setDisableIds(null)}
+          onDisabled={handleClearSelection}
+        />
+      )}
       <BulkActionsToolbar table={table} entityName='channel'>
         <Tooltip>
           <TooltipTrigger
