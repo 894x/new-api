@@ -216,7 +216,10 @@ export const channelFormSchema = z
     key: z.string(),
     openai_organization: z.string().optional(),
     models: z.string().min(1, ERROR_MESSAGES.REQUIRED_MODELS),
-    group: z.array(z.string()).min(1, ERROR_MESSAGES.REQUIRED_GROUP),
+    group: z
+      .array(z.string())
+      .min(1, ERROR_MESSAGES.REQUIRED_GROUP)
+      .max(16, ERROR_MESSAGES.MAX_GROUPS),
     model_mapping: z
       .string()
       .optional()

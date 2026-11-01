@@ -192,6 +192,7 @@
     "720p, 1080p, 4k": "720p, 1080p, 4k",
     "80,443,8080": "80,443,8080",
     "A billing multiplier. Lower ratios mean lower API call costs.": "A billing multiplier. Lower ratios mean lower API call costs.",
+    "A channel can belong to at most 16 groups.": "A channel can belong to at most 16 groups.",
     "A channel pool rule already exists for this group and model": "A channel pool rule already exists for this group and model",
     "A current weight of 0 disables weighting for the entire group; it does not stop traffic. Applying positive weights enables weighted DNS answers.": "A current weight of 0 disables weighting for the entire group; it does not stop traffic. Applying positive weights enables weighted DNS answers.",
     "A focused home for keys, balance, routing, and service health.": "A focused home for keys, balance, routing, and service health.",

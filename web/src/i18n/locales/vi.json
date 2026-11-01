@@ -192,6 +192,7 @@
     "720p, 1080p, 4k": "720p, 1080p, 4k",
     "80,443,8080": "80,443,8080",
     "A billing multiplier. Lower ratios mean lower API call costs.": "Hệ số tính phí. Tỷ lệ càng thấp thì chi phí gọi API càng thấp.",
+    "A channel can belong to at most 16 groups.": "Mỗi kênh có thể thuộc tối đa 16 nhóm.",
     "A channel pool rule already exists for this group and model": "Đã có quy tắc nhóm kênh cho nhóm và mô hình này",
     "A current weight of 0 disables weighting for the entire group; it does not stop traffic. Applying positive weights enables weighted DNS answers.": "Trọng số hiện tại bằng 0 tắt trọng số cho cả nhóm, không dừng lưu lượng. Áp dụng trọng số dương để bật phản hồi DNS theo trọng số.",
     "A focused home for keys, balance, routing, and service health.": "Trang tổng quan tập trung cho khóa, số dư, định tuyến và trạng thái dịch vụ.",

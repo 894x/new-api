@@ -21,6 +21,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const MaxChannelGroups = 16
+
 type Channel struct {
 	Id                 int     `json:"id"`
 	Type               int     `json:"type" gorm:"default:0"`
@@ -38,9 +40,10 @@ type Channel struct {
 	Balance            float64 `json:"balance"` // in USD
 	BalanceUpdatedTime int64   `json:"balance_updated_time" gorm:"bigint"`
 	Models             string  `json:"models"`
-	Group              string  `json:"group" gorm:"type:varchar(64);default:'default'"`
-	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
-	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
+	// Accommodate 16 group names of up to 64 characters, including separators.
+	Group        string  `json:"group" gorm:"type:varchar(2048);default:'default'"`
+	UsedQuota    int64   `json:"used_quota" gorm:"bigint;default:0"`
+	ModelMapping *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
 	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
 	RPM               *int64  `json:"rpm" gorm:"bigint"`
@@ -325,6 +328,13 @@ func (channel *Channel) GetGroups() []string {
 		groups[i] = strings.TrimSpace(group)
 	}
 	return groups
+}
+
+func ValidateChannelGroups(groups []string) error {
+	if len(groups) > MaxChannelGroups {
+		return errors.New("A channel can belong to at most 16 groups.")
+	}
+	return nil
 }
 
 func (channel *Channel) GetOtherInfo() map[string]any {

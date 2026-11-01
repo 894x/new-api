@@ -135,10 +135,10 @@ func CreateChannelResourceGroup(channelID int, name string, reuseExisting bool) 
 			}
 			groups = append(groups, name)
 		}
-		joined := strings.Join(groups, ",")
-		if utf8.RuneCountInString(joined) > 64 {
-			return errors.New("The channel's combined group names exceed the 64-character limit. Shorten the resource group name.")
+		if err := ValidateChannelGroups(groups); err != nil {
+			return err
 		}
+		joined := strings.Join(groups, ",")
 		ratios[name] = ratio
 		encoded, err := common.Marshal(ratios)
 		if err != nil {

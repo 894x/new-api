@@ -3567,7 +3567,8 @@ export function ChannelMutateDrawer({
                     <div className='space-y-1'>
                       <FormLabel required>{t('Groups')}</FormLabel>
                       <FormDescription>
-                        {t(FIELD_DESCRIPTIONS.GROUP)}
+                        {t(FIELD_DESCRIPTIONS.GROUP)}{' '}
+                        {t('A channel can belong to at most 16 groups.')}
                       </FormDescription>
                     </div>
                     {currentRow && currentUser?.role === ROLE.SUPER_ADMIN && (

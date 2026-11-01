@@ -330,6 +330,9 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	if err := migrateChannelGroups(DB); err != nil {
+		return err
+	}
 	if err := prepareQuotaVersionMigration(DB); err != nil {
 		return err
 	}
@@ -603,6 +606,31 @@ PRIMARY KEY (` + "`id`" + `)
 		if err := DB.Exec("ALTER TABLE `" + tableName + "` ADD COLUMN " + col.DDL).Error; err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func migrateChannelGroups(db *gorm.DB) error {
+	// SQLite does not enforce VARCHAR lengths, so no table rebuild is needed.
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) || !db.Migrator().HasTable(&Channel{}) {
+		return nil
+	}
+	columns, err := db.Migrator().ColumnTypes(&Channel{})
+	if err != nil {
+		return fmt.Errorf("failed to inspect channel group column: %w", err)
+	}
+	for _, column := range columns {
+		if column.Name() != "group" {
+			continue
+		}
+		if length, ok := column.Length(); !ok || length >= 2048 {
+			return nil
+		}
+		// GORM's default-value comparison can suppress a length-only migration.
+		if err := db.Migrator().AlterColumn(&Channel{}, "Group"); err != nil {
+			return fmt.Errorf("failed to expand channel group column: %w", err)
+		}
+		return nil
 	}
 	return nil
 }

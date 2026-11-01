@@ -192,6 +192,7 @@
     "720p, 1080p, 4k": "720p、1080p、4k",
     "80,443,8080": "80,443,8080",
     "A billing multiplier. Lower ratios mean lower API call costs.": "課金倍率です。倍率が低いほど API 呼び出しコストは低くなります。",
+    "A channel can belong to at most 16 groups.": "1つのチャネルに設定できるグループは最大16個です。",
     "A channel pool rule already exists for this group and model": "このグループとモデルのチャネルプールルールは既に存在します",
     "A current weight of 0 disables weighting for the entire group; it does not stop traffic. Applying positive weights enables weighted DNS answers.": "現在の重み 0 はグループ全体の重み付けを無効にします。トラフィックは停止しません。正の重みを適用すると DNS 応答の重み付けが有効になります。",
     "A focused home for keys, balance, routing, and service health.": "キー、残高、ルーティング、サービス状態を集約したホームです。",

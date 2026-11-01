@@ -364,6 +364,7 @@ export const ERROR_MESSAGES = {
   REQUIRED_KEY: 'API key is required',
   REQUIRED_MODELS: 'Models are required',
   REQUIRED_GROUP: 'Group is required',
+  MAX_GROUPS: 'A channel can belong to at most 16 groups.',
   INVALID_JSON: 'Invalid JSON format',
   INVALID_MODEL_MAPPING: 'Invalid model mapping format',
   INVALID_PROXY:

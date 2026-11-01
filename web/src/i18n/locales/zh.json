@@ -192,6 +192,7 @@
     "720p, 1080p, 4k": "720p、1080p、4k",
     "80,443,8080": "80,443,8080",
     "A billing multiplier. Lower ratios mean lower API call costs.": "计费乘数，倍率越低，API 调用费用越低。",
+    "A channel can belong to at most 16 groups.": "每个渠道最多可配置 16 个分组。",
     "A channel pool rule already exists for this group and model": "此分组和模型已存在渠道池规则",
     "A current weight of 0 disables weighting for the entire group; it does not stop traffic. Applying positive weights enables weighted DNS answers.": "当前权重为 0 会关闭整组权重功能，不会停止流量。应用正整数权重可启用加权 DNS 应答。",
     "A focused home for keys, balance, routing, and service health.": "集中展示密钥、余额、路由和服务健康状态。",
