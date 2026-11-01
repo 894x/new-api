@@ -24,12 +24,14 @@ import {
   AccordionTrigger,
 } from '@/components/ui/accordion'
 import { Badge } from '@/components/ui/badge'
+import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
 import {
   GroupPricingSection,
   PriceSection,
 } from '@/features/pricing/components/model-details'
 import { DEFAULT_TOKEN_UNIT } from '@/features/pricing/constants'
 import { getConfiguredGroupRatio } from '@/features/pricing/lib/model-helpers'
+import { hasSimpleTaskPricing } from '@/features/pricing/lib/task-price-display'
 
 import type { useApiKeyPricingData } from '../hooks/use-api-key-pricing'
 import type { ApiKeyModelPrice } from '../lib/api-key-pricing'
@@ -86,6 +88,19 @@ export function ApiKeyModelPriceItem(props: ApiKeyModelPriceItemProps) {
           tokenUnit={DEFAULT_TOKEN_UNIT}
           showRechargePrice={false}
         />
+        {props.entry.model.billing_mode === 'tiered_expr' &&
+          Boolean(props.entry.model.billing_expr) &&
+          !hasSimpleTaskPricing(props.entry.model) && (
+            <DynamicPricingBreakdown
+              billingExpr={props.entry.model.billing_expr}
+              usageSchema={props.entry.model.billing_usage_schema}
+              taskPriceOptions={{
+                showRechargePrice: false,
+                priceRate: props.pricing.priceRate,
+                usdExchangeRate: props.pricing.usdExchangeRate,
+              }}
+            />
+          )}
         <GroupPricingSection
           model={props.entry.model}
           groupRatio={groupRatio}
