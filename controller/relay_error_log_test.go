@@ -155,6 +155,7 @@ func TestRelayPreflightFailuresRecordUsageLogs(t *testing.T) {
 	defer upstream.Close()
 	channel := &model.Channel{Id: 101, Type: constant.ChannelTypeOpenAI, Name: "preflight-channel", Key: "test-key", Models: "gpt-4o", Group: "default", Status: common.ChannelStatusEnabled, BaseURL: &upstream.URL, AutoBan: common.GetPointer(1)}
 	require.NoError(t, mainDB.Create(channel).Error)
+	require.NoError(t, mainDB.Create(&model.Ability{Group: "default", Model: "gpt-4o", ChannelId: channel.Id, Enabled: true}).Error)
 
 	for _, tc := range []struct {
 		name       string
@@ -336,6 +337,7 @@ func TestRelayTerminalErrorLogsDoNotDuplicateChannelErrors(t *testing.T) {
 			t.Cleanup(upstream.Close)
 			channel := &model.Channel{Type: constant.ChannelTypeOpenAI, Name: tc.name, Key: "test-key", Models: "relay-error-log-test", Group: "default", Status: common.ChannelStatusEnabled, BaseURL: &upstream.URL, AutoBan: common.GetPointer(0)}
 			require.NoError(t, mainDB.Create(channel).Error)
+			require.NoError(t, mainDB.Create(&model.Ability{Group: "default", Model: "relay-error-log-test", ChannelId: channel.Id, Enabled: true}).Error)
 			recorder := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(recorder)
 			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"relay-error-log-test","messages":[{"role":"user","content":"hello"}]}`))

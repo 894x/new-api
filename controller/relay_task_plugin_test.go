@@ -286,10 +286,7 @@ func TestExecuteTaskSubmissionHonorsRouteRetainResult(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			events := make([]string, 0, 3)
-			database, _ := openTaskDialectDatabase(t, &model.Task{}, &model.User{}, &model.Channel{})
-			previousDB := model.DB
-			model.DB = database
-			t.Cleanup(func() { model.DB = previousDB })
+			database := setupTaskSubmissionDatabase(t, true, &events)
 			previousLogConsumeEnabled := common.LogConsumeEnabled
 			common.LogConsumeEnabled = false
 			t.Cleanup(func() { common.LogConsumeEnabled = previousLogConsumeEnabled })
@@ -467,17 +464,27 @@ func TestExecuteTaskSubmissionDisconnectAfterDurableInsertDoesNotRefund(t *testi
 // Without migrate the task table does not exist and inserts fail.
 func setupTaskSubmissionDatabase(t *testing.T, migrate bool, events *[]string) *gorm.DB {
 	t.Helper()
-	previousDB := model.DB
-	models := []any{&model.ModelRoutingPool{}}
+	previousDB, previousMemoryCache := model.DB, common.MemoryCacheEnabled
+	previousMain, previousLog := common.MainDatabaseType(), common.LogDatabaseType()
+	models := []any{&model.ModelRoutingPool{}, &model.UserGroupChannelRoutingOverride{}, &model.Ability{}}
 	if migrate {
 		models = append(models, &model.Task{})
 	}
-	database, _ := openTaskDialectDatabase(t, models...)
+	database, dialect := openTaskDialectDatabase(t, models...)
+	model.DB, common.MemoryCacheEnabled = database, false
+	common.SetDatabaseTypes(dialect, previousLog)
+	t.Cleanup(func() {
+		model.DB, common.MemoryCacheEnabled = previousDB, previousMemoryCache
+		common.SetDatabaseTypes(previousMain, previousLog)
+	})
+	require.NoError(t, database.Create(&[]model.Ability{
+		{Group: "default", Model: "plugin-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "video-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "image-model", ChannelId: 1, Enabled: true},
+	}).Error)
 	require.NoError(t, database.Callback().Create().Before("gorm:create").Register("test:task-submit-order", func(*gorm.DB) {
 		*events = append(*events, "insert")
 	}))
-	model.DB = database
-	t.Cleanup(func() { model.DB = previousDB })
 	return database
 }
 
@@ -485,6 +492,9 @@ func taskSubmissionTestContext() *gin.Context {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/plugin/submit", strings.NewReader(`{}`))
+	common.SetContextKey(c, constant.ContextKeyUserId, 1)
+	common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 	return c
 }
 
@@ -517,7 +527,7 @@ schemaLoop:
 	for _, row := range models {
 		switch row.(type) {
 		case *model.Channel, *model.Task:
-			models = append(models, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{})
+			models = append(models, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.Ability{})
 			break schemaLoop
 		}
 	}
@@ -608,7 +618,9 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			require.NoError(t, db.Create(&user).Error)
 			ch := model.Channel{Name: "test provider", Type: constant.ChannelTypeTaskPlugin}
 			require.NoError(t, db.Create(&ch).Error)
+			require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "document-model", ChannelId: ch.Id, Enabled: true}).Error)
 			c := taskSubmissionTestContext()
+			common.SetContextKey(c, constant.ContextKeyUserId, user.Id)
 			c.Set("group", "default")
 			c.Set("username", user.Username)
 			c.Set("task_request", map[string]any{"model": "document-model"})
@@ -881,9 +893,11 @@ func TestSLSDeferredSubmissionDatabase(t *testing.T) {
 			baseURL := server.URL
 			ch := model.Channel{Name: "SLS test", Status: common.ChannelStatusEnabled, Type: constant.ChannelTypeSeedanceSLS, Key: "sls-test-key", BaseURL: &baseURL}
 			require.NoError(t, db.Create(&ch).Error)
+			require.NoError(t, db.Create(&model.Ability{Group: "default", Model: modelName, ChannelId: ch.Id, Enabled: true}).Error)
 			require.NoError(t, db.Create(&model.ChannelAssetConfig{ChannelId: ch.Id, Enabled: true,
 				Backend: service.AssetLibraryBackendSeedanceSLS, BaseURL: baseURL, AuthType: service.AssetLibraryAuthBearer, APIKey: "sls-test-key"}).Error)
 			c := taskSubmissionTestContext()
+			common.SetContextKey(c, constant.ContextKeyUserId, user.Id)
 			requestCtx, cancelCaller := context.WithCancel(c.Request.Context())
 			defer cancelCaller()
 			c.Request = c.Request.WithContext(requestCtx)

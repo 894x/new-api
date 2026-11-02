@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	builtinplugins "github.com/QuantumNous/new-api/plugins"
+	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,6 +26,16 @@ func TestSeedanceSLSPluginManagedAssetsEndToEnd(t *testing.T) {
 	for _, path := range []string{"/api/v3/contents/generations/tasks", "/seedance-sls/api/v3/contents/generations/tasks", "/v1/videos", "/v1/video/generations"} {
 		t.Run(path, func(t *testing.T) {
 			f := setupAssetStorageE2E(t)
+			previousFactory := service.GetTaskAdaptorFunc
+			previousQueryLimit, previousTimeout := constant.TaskQueryLimit, constant.TaskTimeoutMinutes
+			constant.TaskQueryLimit, constant.TaskTimeoutMinutes = 100, 0
+			service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
+				return relay.GetTaskAdaptor(platform)
+			}
+			t.Cleanup(func() {
+				service.GetTaskAdaptorFunc = previousFactory
+				constant.TaskQueryLimit, constant.TaskTimeoutMinutes = previousQueryLimit, previousTimeout
+			})
 			source, err := builtinplugins.Source("seedance-sls")
 			require.NoError(t, err)
 			_, err = pluginruntime.DefaultRegistry.RegisterFactory(source, pluginruntime.Options{Key: "seedance-sls"})
@@ -95,6 +106,8 @@ func TestSeedanceSLSPluginManagedAssetsEndToEnd(t *testing.T) {
 					assert.Equal(t, f.source.URL, payload["webhook_url"], "only media references are rewritten")
 					assert.Equal(t, false, payload["generate_audio"])
 					_, _ = fmt.Fprintf(w, `{"task_id":"sls-asset-task-%d"}`, submits.Add(1))
+				case "GET /v1/video/generations/sls-asset-task-1":
+					_, _ = io.WriteString(w, `{"task_id":"sls-asset-task-1","status":"queued"}`)
 				default:
 					http.NotFound(w, r)
 				}
@@ -113,19 +126,31 @@ func TestSeedanceSLSPluginManagedAssetsEndToEnd(t *testing.T) {
 			}}
 			status, headers, body := f.request(t, http.MethodPost, path, "assete2euserkey", payload)
 			require.Equal(t, http.StatusOK, status, string(body))
-			assetID := headers.Get("X-New-Api-Asset-Ids")
-			require.NotEmpty(t, assetID)
+			assert.Empty(t, headers.Get("X-New-Api-Asset-Ids"), "the receipt precedes background asset ingestion")
+			assert.Zero(t, imports.Load())
+			assert.Zero(t, submits.Load())
 			var task model.Task
 			require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&task).Error)
+			require.NotNil(t, task.PrivateData.PendingSubmission)
+			service.RunTaskPollingOnce(t.Context(), nil)
+			require.NoError(t, model.DB.First(&task, task.ID).Error)
+			require.Equal(t, model.TaskStatus(model.TaskStatusSubmitted), task.Status, task.FailReason)
+			assert.Nil(t, task.PrivateData.PendingSubmission)
 			assert.Equal(t, constant.TaskPlatform("seedance-sls"), task.Platform)
 			require.NotNil(t, task.PrivateData.AssetReferences)
 			require.Len(t, task.PrivateData.AssetReferences.Items, 1)
-			assert.Equal(t, assetID, task.PrivateData.AssetReferences.Items[0].AssetID)
+			assetID := task.PrivateData.AssetReferences.Items[0].AssetID
+			require.NotEmpty(t, assetID)
 			asset, err := model.GetUserAsset(f.user.Id, assetID)
 			require.NoError(t, err)
 			object, err := model.GetAssetStoredObject(f.user.Id, asset.StoredObjectId)
 			require.NoError(t, err)
-			assert.Equal(t, object.SHA256, <-uploadedDigests)
+			select {
+			case digest := <-uploadedDigests:
+				assert.Equal(t, object.SHA256, digest)
+			default:
+				t.Fatal("background asset import did not reach the provider")
+			}
 			replica, err := model.GetUserAssetReplica(assetID, channel.Id)
 			require.NoError(t, err)
 			assert.Equal(t, model.AssetReplicaStateReady, replica.State)
@@ -136,7 +161,14 @@ func TestSeedanceSLSPluginManagedAssetsEndToEnd(t *testing.T) {
 			imageURL["url"] = "asset://" + assetID
 			status, headers, body = f.request(t, http.MethodPost, path, "assete2euserkey", payload)
 			require.Equal(t, http.StatusOK, status, string(body))
-			assert.Equal(t, assetID, headers.Get("X-New-Api-Asset-Ids"))
+			assert.Empty(t, headers.Get("X-New-Api-Asset-Ids"))
+			service.RunTaskPollingOnce(t.Context(), nil)
+			var secondTask model.Task
+			require.NoError(t, model.DB.Where("channel_id = ? AND id <> ?", channel.Id, task.ID).First(&secondTask).Error)
+			require.Equal(t, model.TaskStatus(model.TaskStatusSubmitted), secondTask.Status, secondTask.FailReason)
+			require.NotNil(t, secondTask.PrivateData.AssetReferences)
+			require.Len(t, secondTask.PrivateData.AssetReferences.Items, 1)
+			assert.Equal(t, assetID, secondTask.PrivateData.AssetReferences.Items[0].AssetID)
 			status, _, body = f.request(t, http.MethodPost, path, "assete2eotherkey", payload)
 			assert.Equal(t, http.StatusForbidden, status, string(body))
 			assert.Equal(t, int32(1), imports.Load())

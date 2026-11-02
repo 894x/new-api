@@ -69,8 +69,24 @@ func TestShouldObserveDynamicRoutingAttemptHonorsBypasses(t *testing.T) {
 
 func TestGetChannelRestoresPublicModelBeforeRetrySetup(t *testing.T) {
 	const publicModel = "gemini-2.5-pro"
+	database, dialect := openTaskDialectDatabase(t, &model.Ability{}, &model.ModelRoutingPool{}, &model.UserGroupChannelRoutingOverride{})
+	previousDB, previousMemoryCache := model.DB, common.MemoryCacheEnabled
+	previousMain, previousLog := common.MainDatabaseType(), common.LogDatabaseType()
+	model.DB, common.MemoryCacheEnabled = database, false
+	common.SetDatabaseTypes(dialect, previousLog)
+	t.Cleanup(func() {
+		model.DB, common.MemoryCacheEnabled = previousDB, previousMemoryCache
+		common.SetDatabaseTypes(previousMain, previousLog)
+	})
+	require.NoError(t, database.Create(&[]model.Ability{
+		{Group: "default", Model: publicModel, ChannelId: 1, Enabled: true},
+		{Group: "default", Model: publicModel, ChannelId: 2, Enabled: true},
+	}).Error)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-pro:streamGenerateContent", nil)
+	common.SetContextKey(c, constant.ContextKeyUserId, 1)
+	common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 	c.Set("channel_id", 1)
 	c.Set("channel_type", constant.ChannelTypeGemini)
 	c.Set("channel_name", "first")

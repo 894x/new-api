@@ -31,6 +31,7 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 	previousPrices, previousRatios := ratio_setting.ModelPrice2JSONString(), ratio_setting.ModelRatio2JSONString()
 	previousQuota, previousLog, previousBatch, previousCache := common.QuotaPerUnit, common.LogConsumeEnabled, common.BatchUpdateEnabled, common.MemoryCacheEnabled
 	previousFactory := service.GetTaskAdaptorFunc
+	previousQueryLimit, previousTimeout := constant.TaskQueryLimit, constant.TaskTimeoutMinutes
 	previousHide := operation_setting.ShouldHideErrorDetails()
 	previousSecret, previousAddress := common.CryptoSecret, system_setting.TaskPublicAddress
 	previousFetch := *system_setting.GetFetchSetting()
@@ -44,6 +45,7 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousRatios))
 		common.QuotaPerUnit, common.LogConsumeEnabled, common.BatchUpdateEnabled, common.MemoryCacheEnabled = previousQuota, previousLog, previousBatch, previousCache
 		service.GetTaskAdaptorFunc = previousFactory
+		constant.TaskQueryLimit, constant.TaskTimeoutMinutes = previousQueryLimit, previousTimeout
 		operation_setting.UpdateHideErrorDetails(previousHide)
 		common.CryptoSecret, system_setting.TaskPublicAddress = previousSecret, previousAddress
 		*system_setting.GetFetchSetting() = previousFetch
@@ -51,6 +53,7 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 	})
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
 	common.QuotaPerUnit, common.LogConsumeEnabled, common.BatchUpdateEnabled, common.MemoryCacheEnabled = 1000, true, false, true
+	constant.TaskQueryLimit, constant.TaskTimeoutMinutes = 100, 0
 	operation_setting.UpdateHideErrorDetails(false)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor { return relay.GetTaskAdaptor(platform) }
 	service.InitHttpClient()
@@ -148,14 +151,25 @@ func TestSeedanceSLSPluginLifecycleAndHistorical104(t *testing.T) {
 			require.NotEmpty(t, receipt.ID)
 			assert.NotContains(t, recorder.Body.String(), "upstream-")
 			assert.NotContains(t, recorder.Body.String(), `"wan_task_id"`)
-			wire := <-requests
+			var task model.Task
+			require.NoError(t, model.DB.Where("task_id = ?", receipt.ID).First(&task).Error)
+			require.NotNil(t, task.PrivateData.PendingSubmission)
+			assert.Empty(t, task.PrivateData.UpstreamTaskID)
+			service.RunTaskPollingOnce(t.Context(), nil)
+			require.NoError(t, model.DB.First(&task, task.ID).Error)
+			require.Equal(t, model.TaskStatus(model.TaskStatusSubmitted), task.Status, task.FailReason)
+			assert.Nil(t, task.PrivateData.PendingSubmission)
+			var wire map[string]any
+			select {
+			case wire = <-requests:
+			default:
+				t.Fatal("background submission did not reach the provider")
+			}
 			assert.Equal(t, "doubao-seedance-2-5-260628", wire["model"])
 			assert.Equal(t, "1080p", wire["resolution"])
 			assert.Equal(t, float64(5), wire["duration"])
 			assert.Equal(t, float64(0), wire["seed"])
 			assert.Equal(t, false, wire["generate_audio"])
-			var task model.Task
-			require.NoError(t, model.DB.Where("task_id = ?", receipt.ID).First(&task).Error)
 			assert.Equal(t, constant.TaskPlatform("seedance-sls"), task.Platform)
 			assert.NotContains(t, string(task.Data), "nested-provider-id")
 			require.NotNil(t, task.PrivateData.BillingContext)
