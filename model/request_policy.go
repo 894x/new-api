@@ -65,6 +65,12 @@ func requestPolicyDefaultOptions() map[string]string {
 }
 
 func IsRequestPolicyOption(key string) bool {
+	if strings.HasPrefix(key, "monitor_setting.channel_monitoring_") {
+		switch strings.TrimPrefix(key, "monitor_setting.") {
+		case "channel_monitoring_enabled", "channel_monitoring_minutes", "channel_monitoring_timeout_seconds", "channel_monitoring_prompt", "channel_monitoring_max_tokens", "channel_monitoring_stream", "channel_monitoring_slow_ms":
+			return true
+		}
+	}
 	if strings.HasPrefix(key, "channel_affinity_setting.") {
 		return true
 	}
@@ -155,6 +161,9 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 		}
 	}
 	if err := operation_setting.ValidateChannelTestConcurrency(raw["monitor_setting.channel_test_concurrency"]); err != nil {
+		return nil, err
+	}
+	if err := operation_setting.ValidateChannelMonitoringOptions(raw); err != nil {
 		return nil, err
 	}
 	for _, key := range []string{"ChannelDisableThreshold", "monitor_setting.auto_test_channel_minutes"} {

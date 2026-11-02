@@ -666,6 +666,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if err := model.ValidateChannelRoutingLimits(channel); err != nil {
 		return err
 	}
+	if _, err := channel.GetMonitorConfig(); err != nil {
+		return err
+	}
 
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
