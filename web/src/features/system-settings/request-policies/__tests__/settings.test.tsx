@@ -197,6 +197,12 @@ describe('request policy settings', () => {
       screen.getByRole('spinbutton', { name: 'Maximum probe output tokens' }),
       { target: { value: '64' } }
     )
+    fireEvent.change(
+      screen.getByRole('textbox', {
+        name: 'Status codes excluded from monitoring statistics',
+      }),
+      { target: { value: '400,422-429' } }
+    )
     await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
     await waitFor(() =>
       expect(api.patch).toHaveBeenCalledWith('/api/option/request_policy', {
@@ -204,6 +210,8 @@ describe('request policy settings', () => {
           'monitor_setting.channel_monitoring_prompt': 'Return ready.',
           'monitor_setting.channel_monitoring_max_tokens': '64',
           'monitor_setting.channel_monitoring_enabled': 'true',
+          'monitor_setting.channel_monitoring_excluded_status_codes':
+            '400,422-429',
         }),
       })
     )
@@ -213,6 +221,39 @@ describe('request policy settings', () => {
     expect(payload.options).not.toHaveProperty('AutomaticDisableChannelEnabled')
     expect(payload.options).not.toHaveProperty(
       'monitor_setting.auto_test_channel_enabled'
+    )
+  })
+
+  it('invalid monitoring status code rules block saving', async () => {
+    await renderPolicies('/system-settings/request-policies/monitoring')
+    fireEvent.change(
+      await screen.findByRole('textbox', {
+        name: 'Status codes excluded from monitoring statistics',
+      }),
+      { target: { value: '600,500-400' } }
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    expect(
+      await screen.findByText('Invalid status code rules: 600, 500-400')
+    ).toBeVisible()
+    expect(api.patch).not.toHaveBeenCalled()
+  })
+
+  it('clearing monitoring exclusions saves an empty rule instead of restoring the default', async () => {
+    await renderPolicies('/system-settings/request-policies/monitoring')
+    fireEvent.change(
+      await screen.findByRole('textbox', {
+        name: 'Status codes excluded from monitoring statistics',
+      }),
+      { target: { value: '' } }
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith('/api/option/request_policy', {
+        options: expect.objectContaining({
+          'monitor_setting.channel_monitoring_excluded_status_codes': '',
+        }),
+      })
     )
   })
   it.each([

@@ -74,6 +74,66 @@ func TestChannelMonitoringLocalFailureDoesNotBecomeHealthyOrExposeUpstreamSecret
 	assert.Equal(t, "configuration", local.State)
 }
 
+func TestChannelMonitoringExclusionsFollowConfiguredStatusCodes(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	withSelfUseModeEnabled(t)
+	require.NoError(t, db.AutoMigrate(&model.ChannelMonitorRecord{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+	root := model.User{Id: 11501, Username: "monitor-rejection-fixture", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", Quota: 1000000}
+	require.NoError(t, db.Create(&root).Error)
+	settings := *operation_setting.GetMonitorSetting()
+	for _, tc := range []struct {
+		name, code, rules, wantState string
+		status                       int
+	}{
+		{"configured bad request", "unsupported_parameter", "400", "excluded", 400},
+		{"bad request without an exclusion", "unsupported_parameter", "", "unavailable", 400},
+		{"bad request with a different exclusion", "unsupported_parameter", "422", "unavailable", 400},
+		{"configured range", "rate_limit_exceeded", "420-429", "excluded", 429},
+		{"unmatched rate limit", "rate_limit_exceeded", "400", "unavailable", 429},
+		{"policy controls credential responses too", "invalid_api_key", "400", "excluded", 400},
+		{"configured server error range", "service_unavailable", "500-599", "excluded", 503},
+		{"unmatched server error", "service_unavailable", "400", "unavailable", 503},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = fmt.Fprintf(w, `{"error":{"message":"fixture rejection","type":"invalid_request_error","code":%q}}`, tc.code)
+			}))
+			t.Cleanup(upstream.Close)
+			baseURL := upstream.URL
+			channel := model.Channel{Type: constant.ChannelTypeOpenAI, Key: "fixture-key", BaseURL: &baseURL, Models: "gpt-4o-mini", Group: "default", Status: common.ChannelStatusEnabled}
+			require.NoError(t, db.Create(&channel).Error)
+			ctx := context.WithValue(context.Background(), channelMonitoringRequestKey{}, settings)
+			started := time.Now()
+			result := testChannel(ctx, &channel, root.Id, "gpt-4o-mini", string(constant.EndpointTypeOpenAI), false)
+			require.Error(t, result.newAPIError)
+			observation := channelMonitoringObservation(result, started, time.Now(), settings.ChannelMonitoringSlowMs)
+			require.Equal(t, "unavailable", observation.State, "capture the original outcome independently of exclusion policy")
+			assert.Equal(t, tc.status, observation.StatusCode)
+			assert.Nil(t, observation.TTFTMs)
+			assert.Nil(t, observation.TokensPerSecond)
+			observation.ChannelID = channel.Id
+			observation.Model = "gpt-4o-mini"
+			observation.SampleKey = fmt.Sprintf("exclusion-%d", channel.Id)
+			require.NoError(t, model.SaveChannelMonitorRecord(context.Background(), &observation))
+			excluded, err := operation_setting.ParseHTTPStatusCodeRanges(tc.rules)
+			require.NoError(t, err)
+			summaries, err := model.ChannelMonitorSummaries(context.Background(), []*model.Channel{&channel}, "gpt-4o-mini", true, time.Minute, excluded, time.Now())
+			require.NoError(t, err)
+			require.Len(t, summaries, 1)
+			assert.Equal(t, tc.wantState, summaries[0].State)
+			assert.Equal(t, tc.status, summaries[0].Latest.StatusCode)
+			if tc.wantState == "excluded" {
+				assert.Nil(t, summaries[0].SuccessRate)
+			} else {
+				require.NotNil(t, summaries[0].SuccessRate)
+				assert.Zero(t, *summaries[0].SuccessRate)
+			}
+		})
+	}
+}
+
 func TestChannelMonitoringAPISelectsCurrentModelAndNeverReturnsChannelCredentials(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.ChannelMonitorRecord{}))

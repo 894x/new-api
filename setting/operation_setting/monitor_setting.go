@@ -10,17 +10,18 @@ import (
 )
 
 type MonitorSetting struct {
-	AutoTestChannelEnabled          bool    `json:"auto_test_channel_enabled"`
-	AutoTestChannelMinutes          float64 `json:"auto_test_channel_minutes"`
-	ChannelTestMode                 string  `json:"channel_test_mode"`
-	ChannelTestConcurrency          int     `json:"channel_test_concurrency"`
-	ChannelMonitoringEnabled        bool    `json:"channel_monitoring_enabled"`
-	ChannelMonitoringMinutes        int     `json:"channel_monitoring_minutes"`
-	ChannelMonitoringTimeoutSeconds int     `json:"channel_monitoring_timeout_seconds"`
-	ChannelMonitoringPrompt         string  `json:"channel_monitoring_prompt"`
-	ChannelMonitoringMaxTokens      int     `json:"channel_monitoring_max_tokens"`
-	ChannelMonitoringStream         bool    `json:"channel_monitoring_stream"`
-	ChannelMonitoringSlowMs         int     `json:"channel_monitoring_slow_ms"`
+	AutoTestChannelEnabled               bool    `json:"auto_test_channel_enabled"`
+	AutoTestChannelMinutes               float64 `json:"auto_test_channel_minutes"`
+	ChannelTestMode                      string  `json:"channel_test_mode"`
+	ChannelTestConcurrency               int     `json:"channel_test_concurrency"`
+	ChannelMonitoringEnabled             bool    `json:"channel_monitoring_enabled"`
+	ChannelMonitoringMinutes             int     `json:"channel_monitoring_minutes"`
+	ChannelMonitoringTimeoutSeconds      int     `json:"channel_monitoring_timeout_seconds"`
+	ChannelMonitoringPrompt              string  `json:"channel_monitoring_prompt"`
+	ChannelMonitoringMaxTokens           int     `json:"channel_monitoring_max_tokens"`
+	ChannelMonitoringStream              bool    `json:"channel_monitoring_stream"`
+	ChannelMonitoringSlowMs              int     `json:"channel_monitoring_slow_ms"`
+	ChannelMonitoringExcludedStatusCodes string  `json:"channel_monitoring_excluded_status_codes"`
 }
 
 const (
@@ -35,17 +36,18 @@ const (
 
 // 默认配置
 var monitorSetting = MonitorSetting{
-	AutoTestChannelEnabled:          false,
-	AutoTestChannelMinutes:          10,
-	ChannelTestMode:                 ChannelTestModeScheduledAll,
-	ChannelTestConcurrency:          DefaultChannelTestConcurrency,
-	ChannelMonitoringEnabled:        true,
-	ChannelMonitoringMinutes:        5,
-	ChannelMonitoringTimeoutSeconds: 30,
-	ChannelMonitoringPrompt:         "Reply with OK.",
-	ChannelMonitoringMaxTokens:      128,
-	ChannelMonitoringStream:         true,
-	ChannelMonitoringSlowMs:         3000,
+	AutoTestChannelEnabled:               false,
+	AutoTestChannelMinutes:               10,
+	ChannelTestMode:                      ChannelTestModeScheduledAll,
+	ChannelTestConcurrency:               DefaultChannelTestConcurrency,
+	ChannelMonitoringEnabled:             true,
+	ChannelMonitoringMinutes:             5,
+	ChannelMonitoringTimeoutSeconds:      30,
+	ChannelMonitoringPrompt:              "Reply with OK.",
+	ChannelMonitoringMaxTokens:           128,
+	ChannelMonitoringStream:              true,
+	ChannelMonitoringSlowMs:              3000,
+	ChannelMonitoringExcludedStatusCodes: "400",
 }
 
 func ValidateChannelMonitoringOptions(options map[string]string) error {
@@ -68,6 +70,13 @@ func ValidateChannelMonitoringOptions(options map[string]string) error {
 	prompt := options["monitor_setting.channel_monitoring_prompt"]
 	if len(strings.TrimSpace(prompt)) == 0 || len(prompt) > 4096 {
 		return fmt.Errorf("monitoring prompt must contain 1 to 4096 bytes")
+	}
+	excluded := options["monitor_setting.channel_monitoring_excluded_status_codes"]
+	if len(excluded) > 1024 {
+		return fmt.Errorf("monitoring status code rules must not exceed 1024 bytes")
+	}
+	if _, err := ParseHTTPStatusCodeRanges(excluded); err != nil {
+		return err
 	}
 	return nil
 }

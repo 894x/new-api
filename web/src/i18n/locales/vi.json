@@ -8347,6 +8347,9 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
     "Automatic": "Tự động",
-    "Now": "Bây giờ"
+    "Now": "Bây giờ",
+    "Status codes excluded from monitoring statistics": "Mã trạng thái bị loại khỏi thống kê giám sát",
+    "Matching responses remain visible but do not affect availability or performance. Use codes or ranges separated by commas. Leave empty to include all status codes.": "Các phản hồi phù hợp vẫn hiển thị nhưng không ảnh hưởng đến thống kê khả dụng hoặc hiệu năng. Phân tách mã hoặc dải mã bằng dấu phẩy. Để trống để tính tất cả mã trạng thái.",
+    "Excluded by monitoring policy": "Đã loại theo quy tắc giám sát"
   }
 }

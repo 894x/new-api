@@ -74,6 +74,16 @@ func TestRequestPolicyDatabaseMatrix(t *testing.T) {
 			}
 			require.NoError(t, db.Raw(query).Scan(&version).Error)
 			t.Logf("database version: %s", version)
+			const exclusionKey = "monitor_setting.channel_monitoring_excluded_status_codes"
+			for _, value := range []string{"400,422-429", ""} {
+				require.NoError(t, UpdateRequestPolicyOptions(map[string]string{exclusionKey: value}))
+				loadOptionsFromDatabase()
+				loadOptionsFromDatabase()
+				assert.Equal(t, value, CurrentRequestPolicy().Options[exclusionKey])
+				assert.Equal(t, value, operation_setting.GetMonitorSetting().ChannelMonitoringExcludedStatusCodes)
+			}
+			assert.Error(t, UpdateRequestPolicyOptions(map[string]string{exclusionKey: "99,600,500-400"}))
+			assert.Empty(t, CurrentRequestPolicy().Options[exclusionKey], "invalid exclusions do not replace a saved empty rule")
 			rules := `[{"name":"session","model_regex":[".*"],"key_sources":[{"type":"request_header","key":"X-Session"}],"ttl_seconds":0,"skip_retry_on_failure":false,"include_using_group":false,"param_override_template":{"temperature":0},"future_field":{"enabled":false}}]`
 			require.NoError(t, UpdateRequestPolicyOptions(map[string]string{"RetryTimes": "2", "channel_affinity_setting.rules": rules}))
 			assert.Equal(t, 2, CurrentRequestPolicy().RetryTimes)

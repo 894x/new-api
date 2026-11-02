@@ -238,7 +238,12 @@ func GetChannelMonitoring(c *gin.Context) {
 		return
 	}
 	settings := *operation_setting.GetMonitorSetting()
-	data, err := model.ChannelMonitorSummaries(ctx, channels, modelName, settings.ChannelMonitoringEnabled, time.Duration(max(1, settings.ChannelMonitoringMinutes))*time.Minute, time.Now())
+	excluded, err := operation_setting.ParseHTTPStatusCodeRanges(settings.ChannelMonitoringExcludedStatusCodes)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	data, err := model.ChannelMonitorSummaries(ctx, channels, modelName, settings.ChannelMonitoringEnabled, time.Duration(max(1, settings.ChannelMonitoringMinutes))*time.Minute, excluded, time.Now())
 	if err != nil {
 		common.ApiError(c, err)
 		return

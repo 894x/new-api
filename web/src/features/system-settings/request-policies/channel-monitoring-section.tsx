@@ -37,6 +37,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
+import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
 
 import {
   SettingsForm,
@@ -69,10 +70,26 @@ const fields = [
     max: 300000,
   },
 ] as const
-const createMonitoringSchema = (t: (key: string) => string) =>
+const createMonitoringSchema = (
+  t: (key: string, options?: Record<string, unknown>) => string
+) =>
   z.object({
     enabled: z.boolean(),
     stream: z.boolean(),
+    excluded_status_codes: z
+      .string()
+      .max(1024)
+      .superRefine((value, context) => {
+        const parsed = parseHttpStatusCodeRules(value)
+        if (!parsed.ok) {
+          context.addIssue({
+            code: 'custom',
+            message: t('Invalid status code rules: {{tokens}}', {
+              tokens: parsed.invalidTokens.join(', '),
+            }),
+          })
+        }
+      }),
     prompt: z
       .string()
       .trim()
@@ -134,6 +151,10 @@ export function ChannelMonitoringSection(props: {
       slow_ms:
         props.defaultValues['monitor_setting.channel_monitoring_slow_ms'] ??
         3000,
+      excluded_status_codes:
+        props.defaultValues[
+          'monitor_setting.channel_monitoring_excluded_status_codes'
+        ] ?? '400',
     }),
     [props.defaultValues]
   )
@@ -230,6 +251,31 @@ export function ChannelMonitoringSection(props: {
                 )}
               />
             ))}
+            <FormField
+              control={form.control}
+              name='excluded_status_codes'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    {t('Status codes excluded from monitoring statistics')}
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      {...field}
+                      maxLength={1024}
+                      placeholder='400,422-429'
+                      disabled={save.isPending}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Matching responses remain visible but do not affect availability or performance. Use codes or ranges separated by commas. Leave empty to include all status codes.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
             <FormField
               control={form.control}
               name='prompt'

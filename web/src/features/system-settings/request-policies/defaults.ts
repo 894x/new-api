@@ -49,6 +49,7 @@ export type MonitoringSettings = {
   'monitor_setting.channel_monitoring_max_tokens': number
   'monitor_setting.channel_monitoring_stream': boolean
   'monitor_setting.channel_monitoring_slow_ms': number
+  'monitor_setting.channel_monitoring_excluded_status_codes': string
 }
 export type RequestPolicySettings = RetrySettings &
   MonitoringSettings &
@@ -64,6 +65,7 @@ export const defaultRequestPolicySettings: RequestPolicySettings = {
   'monitor_setting.channel_monitoring_max_tokens': 128,
   'monitor_setting.channel_monitoring_stream': true,
   'monitor_setting.channel_monitoring_slow_ms': 3000,
+  'monitor_setting.channel_monitoring_excluded_status_codes': '400',
   RetryTimes: 0,
   AutomaticRetryStatusCodes:
     '100-199,300-399,401-407,409-499,500-503,505-523,525-599',

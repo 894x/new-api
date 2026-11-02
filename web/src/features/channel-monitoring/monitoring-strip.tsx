@@ -56,6 +56,11 @@ const states: Record<string, { label: string; tone: string; fill: string }> = {
     tone: 'text-amber-600 dark:text-amber-400',
     fill: 'bg-amber-500/80',
   },
+  excluded: {
+    label: 'Excluded by monitoring policy',
+    tone: 'text-muted-foreground',
+    fill: 'bg-slate-400/50',
+  },
   unsupported: {
     label: 'Monitoring protocol unsupported',
     tone: 'text-muted-foreground',
@@ -143,6 +148,11 @@ export function ChannelMonitoringStrip(props: {
           <span className='size-1.5 rounded-full bg-current' />
           {t(status.label)}
         </span>
+        {latest && !hasLatency && latest.status_code > 0 && (
+          <span className='text-muted-foreground'>
+            HTTP {latest.status_code}
+          </span>
+        )}
         <span className='text-muted-foreground'>
           {t(
             hasLatency && latest.ttft_ms !== null

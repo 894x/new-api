@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,6 +88,7 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 			ctx := context.Background()
 			records := []ChannelMonitorRecord{
 				{SampleKey: "ok", ChannelID: 7101, Model: "model-a", EndpointType: "openai", CreatedAt: now.Unix() - 600, State: "healthy", LatencyMs: 680},
+				{SampleKey: "rejected-probe", ChannelID: 7101, Model: "model-a", EndpointType: "openai", CreatedAt: now.Unix() - 400, State: "unavailable", StatusCode: 400},
 				{SampleKey: "slow", ChannelID: 7101, Model: "model-a", EndpointType: "openai", CreatedAt: now.Unix() - 300, State: "slow", LatencyMs: 4000},
 				{SampleKey: "failure", ChannelID: 7101, Model: "model-a", EndpointType: "openai", CreatedAt: now.Unix() - 1, State: "unavailable", LatencyMs: 100, StatusCode: 503},
 				{SampleKey: "other-model", ChannelID: 7101, Model: "model-b", EndpointType: "openai", CreatedAt: now.Unix(), State: "healthy"},
@@ -101,32 +103,37 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 			require.NoError(t, SaveChannelMonitorRecord(ctx, &duplicate))
 			var count int64
 			require.NoError(t, db.Model(&ChannelMonitorRecord{}).Count(&count).Error)
-			assert.Equal(t, int64(6), count, "retried writes do not inflate probe success rates")
-			summaries, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, now)
+			assert.Equal(t, int64(7), count, "retried writes do not inflate probe success rates")
+			excluded := []operation_setting.StatusCodeRange{{Start: 400, End: 400}}
+			summaries, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, excluded, now)
 			require.NoError(t, err)
 			require.Len(t, summaries, 1)
 			summary := summaries[0]
 			assert.Equal(t, "unavailable", summary.State)
-			assert.Equal(t, 3, summary.SampleCount)
+			assert.Equal(t, 4, summary.SampleCount)
 			require.NotNil(t, summary.SuccessRate)
-			assert.InDelta(t, 200.0/3, *summary.SuccessRate, 0.0001)
+			assert.InDelta(t, 200.0/3, *summary.SuccessRate, 0.0001, "a rejected probe does not enter the availability denominator")
 			require.Len(t, summary.Buckets, 96)
 			assert.Equal(t, "empty", summary.Buckets[0].State)
 			assert.Equal(t, "unavailable", summary.Buckets[95].State)
 			assert.Equal(t, 503, summary.Latest.StatusCode)
-			otherModel, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-b", true, 5*time.Minute, now)
+			unfiltered, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, nil, now)
+			require.NoError(t, err)
+			require.NotNil(t, unfiltered[0].SuccessRate)
+			assert.Equal(t, 50.0, *unfiltered[0].SuccessRate, "clearing exclusions recalculates existing observations")
+			otherModel, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-b", true, 5*time.Minute, excluded, now)
 			require.NoError(t, err)
 			assert.Equal(t, "unregistered", otherModel[0].State)
 			assert.Zero(t, otherModel[0].SampleCount)
-			stale, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, now.Add(time.Hour))
+			stale, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, excluded, now.Add(time.Hour))
 			require.NoError(t, err)
 			assert.Equal(t, "stale", stale[0].State)
-			paused, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", false, 5*time.Minute, now)
+			paused, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", false, 5*time.Minute, excluded, now)
 			require.NoError(t, err)
 			assert.Equal(t, "paused", paused[0].State)
 			require.NoError(t, PruneChannelMonitorRecords(ctx, now))
 			require.NoError(t, db.Model(&ChannelMonitorRecord{}).Count(&count).Error)
-			assert.Equal(t, int64(5), count)
+			assert.Equal(t, int64(6), count)
 		})
 	}
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm/clause"
 )
 
@@ -137,7 +138,7 @@ type ChannelMonitorSummary struct {
 	Truncated   bool                   `json:"truncated"`
 }
 
-func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName string, enabled bool, interval time.Duration, now time.Time) ([]ChannelMonitorSummary, error) {
+func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName string, enabled bool, interval time.Duration, excludedStatusCodes []operation_setting.StatusCodeRange, now time.Time) ([]ChannelMonitorSummary, error) {
 	const bucketSeconds = int64(15 * 60)
 	end := now.Unix()
 	start := end - 24*60*60
@@ -187,6 +188,16 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 		for _, record := range byChannel[channel.Id] {
 			if !protocols[record.EndpointType] {
 				continue
+			}
+			// Apply the current policy while reading; changing exclusions must
+			// recalculate the existing window without rewriting observations.
+			if slices.ContainsFunc(excludedStatusCodes, func(code operation_setting.StatusCodeRange) bool {
+				return record.StatusCode >= code.Start && record.StatusCode <= code.End
+			}) {
+				record.State = "excluded"
+				record.ErrorCode = "excluded_http_status"
+				record.TTFTMs = nil
+				record.TokensPerSecond = nil
 			}
 			if summary.Latest == nil {
 				copy := record
@@ -255,6 +266,8 @@ func channelMonitorStateRank(state string) int {
 		return 3
 	case "healthy":
 		return 2
+	case "excluded":
+		return 1
 	default:
 		return 0
 	}

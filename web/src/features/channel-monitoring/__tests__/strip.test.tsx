@@ -132,6 +132,30 @@ test('an unprobed channel shows a pending state without invented latency or avai
   expect(screen.queryByText('100%')).not.toBeInTheDocument()
 })
 
+test('an excluded response retains its HTTP status without becoming a configuration error or performance sample', () => {
+  const summary = fixture()
+  summary.state = 'excluded'
+  summary.success_rate = null
+  if (!summary.latest) throw new Error('Fixture must contain the latest probe')
+  summary.latest.state = 'excluded'
+  summary.latest.status_code = 400
+  render(
+    <ChannelMonitoringStrip
+      channelName='Example'
+      summary={summary}
+      loading={false}
+      error={false}
+    />
+  )
+  expect(screen.getByText('Excluded by monitoring policy')).toBeInTheDocument()
+  expect(screen.getByText('HTTP 400')).toBeInTheDocument()
+  expect(
+    screen.queryByText('Monitoring configuration error')
+  ).not.toBeInTheDocument()
+  expect(screen.queryByText(/\d ms/)).not.toBeInTheDocument()
+  expect(screen.queryByText('100%')).not.toBeInTheDocument()
+})
+
 test('initial monitoring loading exposes a placeholder without a connection result', () => {
   render(<ChannelMonitoringStrip channelName='Example' loading error={false} />)
   expect(screen.getByLabelText('Loading monitoring data')).toBeInTheDocument()

@@ -24,6 +24,7 @@ export const STATIC_I18N_KEYS = [
   'Slow response',
   'Connection failed',
   'Monitoring configuration error',
+  'Excluded by monitoring policy',
   'Monitoring protocol unsupported',
   'Monitoring disabled',
   'This model is not monitored',

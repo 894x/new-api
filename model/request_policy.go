@@ -67,7 +67,7 @@ func requestPolicyDefaultOptions() map[string]string {
 func IsRequestPolicyOption(key string) bool {
 	if strings.HasPrefix(key, "monitor_setting.channel_monitoring_") {
 		switch strings.TrimPrefix(key, "monitor_setting.") {
-		case "channel_monitoring_enabled", "channel_monitoring_minutes", "channel_monitoring_timeout_seconds", "channel_monitoring_prompt", "channel_monitoring_max_tokens", "channel_monitoring_stream", "channel_monitoring_slow_ms":
+		case "channel_monitoring_enabled", "channel_monitoring_minutes", "channel_monitoring_timeout_seconds", "channel_monitoring_prompt", "channel_monitoring_max_tokens", "channel_monitoring_stream", "channel_monitoring_slow_ms", "channel_monitoring_excluded_status_codes":
 			return true
 		}
 	}
