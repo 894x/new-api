@@ -3,6 +3,7 @@ package controller
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,9 +25,274 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/clickhouse"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
 )
+
+func TestAsyncLogExportDurableLifecycle(t *testing.T) {
+	var driver gorm.Dialector
+	dialect := common.DatabaseType(os.Getenv("TEST_TASK_DB_DIALECT"))
+	switch dialect {
+	case "", common.DatabaseTypeSQLite:
+		dialect = common.DatabaseTypeSQLite
+		driver = sqlite.Open(filepath.Join(t.TempDir(), "async-export.db"))
+	case common.DatabaseTypeMySQL:
+		require.NotEmpty(t, os.Getenv("TEST_MYSQL_DSN"))
+		driver = mysql.Open(os.Getenv("TEST_MYSQL_DSN"))
+	case common.DatabaseTypePostgreSQL:
+		require.NotEmpty(t, os.Getenv("TEST_POSTGRES_DSN"))
+		driver = postgres.New(postgres.Config{DSN: os.Getenv("TEST_POSTGRES_DSN"), PreferSimpleProtocol: true})
+	default:
+		t.Fatalf("unexpected dialect %q", dialect)
+	}
+	db, err := gorm.Open(driver, &gorm.Config{})
+	require.NoError(t, err)
+	logDB := db
+	logDSN := os.Getenv("TEST_EXPORT_LOG_DSN")
+	if dialect == common.DatabaseTypeSQLite {
+		logDB, err = gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "async-export-logs.db")), &gorm.Config{})
+	} else if logDSN != "" {
+		if dialect == common.DatabaseTypeMySQL {
+			logDB, err = gorm.Open(mysql.Open(logDSN), &gorm.Config{})
+		} else {
+			logDB, err = gorm.Open(postgres.New(postgres.Config{DSN: logDSN, PreferSimpleProtocol: true}), &gorm.Config{})
+		}
+	}
+	require.NoError(t, err)
+	if logDB != db {
+		logSQLDB, err := logDB.DB()
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, logSQLDB.Close()) })
+	}
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	previousMain, previousLog := common.MainDatabaseType(), common.LogDatabaseType()
+	common.OptionMapRWMutex.Lock()
+	previousOptions := common.OptionMap
+	common.OptionMap = map[string]string{model.LogExportMaxRowsOptionKey: "10"}
+	common.OptionMapRWMutex.Unlock()
+	model.DB, model.LOG_DB = db, logDB
+	common.SetDatabaseTypes(dialect, dialect)
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		common.SetDatabaseTypes(previousMain, previousLog)
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previousOptions
+		common.OptionMapRWMutex.Unlock()
+	})
+	var version string
+	if dialect == common.DatabaseTypeSQLite {
+		require.NoError(t, db.Raw("SELECT sqlite_version()").Scan(&version).Error)
+	} else {
+		require.NoError(t, db.Raw("SELECT version()").Scan(&version).Error)
+	}
+	t.Logf("database: %s %s", dialect, version)
+	models := []any{&model.LogExportChunk{}, &model.LogExportRecord{}, &model.SystemTaskLock{}, &model.SystemTask{}, &model.Option{}, &model.Log{}}
+	for _, mode := range []string{"fresh", "upgrade"} {
+		t.Run(mode, func(t *testing.T) {
+			require.NoError(t, db.Migrator().DropTable(models...))
+			if logDB != db {
+				require.NoError(t, logDB.Migrator().DropTable(&model.Log{}))
+				for range 2 {
+					require.NoError(t, logDB.AutoMigrate(&model.Log{}))
+				}
+			}
+			if mode == "upgrade" {
+				// The existing release's task and option models are unchanged by
+				// this additive migration; seed them before adding export tables.
+				require.NoError(t, db.AutoMigrate(&model.SystemTask{}, &model.SystemTaskLock{}, &model.Option{}, &model.Log{}))
+				_, err := model.CreateSystemTask("legacy-export-fixture", map[string]string{"existing": "preserved"}, nil)
+				require.NoError(t, err)
+			}
+			for range 2 {
+				require.NoError(t, db.AutoMigrate(models...))
+			}
+			require.True(t, db.Migrator().HasIndex(&model.SystemTask{}, "ActiveKey"))
+			require.True(t, db.Migrator().HasIndex(&model.LogExportRecord{}, "UserID"))
+			if mode == "upgrade" {
+				legacy, err := model.GetActiveSystemTask("legacy-export-fixture")
+				require.NoError(t, err)
+				require.NotNil(t, legacy)
+				assert.Contains(t, legacy.Payload, "preserved")
+				_, err = model.CreateSystemTask("legacy-export-fixture", nil, nil)
+				require.Error(t, err, "existing uniqueness must survive repeated migration")
+			}
+			logs := []model.Log{
+				{UserId: 41, CreatedAt: 100, Type: model.LogTypeConsume, RequestId: "mine", ModelName: "model-a", Quota: 10},
+				{UserId: 42, CreatedAt: 100, Type: model.LogTypeConsume, RequestId: "OTHER_USER_SECRET", ModelName: "model-a", Quota: 99},
+			}
+			require.NoError(t, logDB.Create(&logs).Error)
+			router := gin.New()
+			router.Use(func(c *gin.Context) { c.Set("id", 41) })
+			router.POST("/self/exports", CreateSelfLogExportJob)
+			router.GET("/self/exports", ListSelfLogExportJobs)
+			router.GET("/self/exports/:task_id/file", DownloadSelfLogExportFile)
+			body := `{"view":"self","fields":["request_id","charged_quota"],"username":"other","channel":99,"upstream_request_id":"private","start_timestamp":1,"end_timestamp":200}`
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/self/exports", strings.NewReader(body)))
+			require.Equal(t, http.StatusAccepted, response.Code, response.Body.String())
+			var queued struct {
+				Data model.LogExportRecord `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &queued))
+			require.NotEmpty(t, queued.Data.TaskID)
+			assert.Equal(t, 10, queued.Data.MaxRows)
+			task, err := model.GetSystemTaskByTaskID(queued.Data.TaskID)
+			require.NoError(t, err)
+			assert.Equal(t, model.SystemTaskStatusPending, task.Status)
+			assert.NotContains(t, task.Payload, "private")
+			assert.NotContains(t, task.Payload, "other")
+			_, err = service.QueueLogExport(41, service.LogExportRequest{View: service.LogExportViewSelf})
+			require.Error(t, err, "one active export per account")
+			// Snapshot the configured limit and keep a durable pending record even
+			// when no worker/request remains attached to the creation call.
+			require.NoError(t, model.UpdateOption(model.LogExportMaxRowsOptionKey, "1"))
+			pending := httptest.NewRecorder()
+			router.ServeHTTP(pending, httptest.NewRequest(http.MethodGet, "/self/exports/"+task.TaskID+"/file", nil))
+			assert.Equal(t, http.StatusConflict, pending.Code)
+			claimed, ok, err := model.ClaimSystemTask(task.ID, model.SystemTaskTypeLogExport, "export-test", common.GetTimestamp()+60)
+			require.NoError(t, err)
+			require.True(t, ok)
+			service.RunLogExportJob(context.Background(), claimed, "export-test")
+			record, err := model.GetLogExportRecord(context.Background(), task.TaskID, 41, true)
+			require.NoError(t, err)
+			assert.Equal(t, model.SystemTaskStatusSucceeded, record.Status, record.Error)
+			assert.Equal(t, 1, record.RowCount)
+			// Reopening/migrating the application must preserve finished artifacts.
+			for range 2 {
+				require.NoError(t, db.AutoMigrate(models...))
+			}
+			download := httptest.NewRecorder()
+			router.ServeHTTP(download, httptest.NewRequest(http.MethodGet, "/self/exports/"+task.TaskID+"/file", nil))
+			files := readSelfLogExportArchive(t, download)
+			assert.Equal(t, []string{"mine", "10"}, files["self-details.csv"][1])
+			// Exercise a real file crossing the storage chunk boundary, without
+			// relying on compression ratios or synthetic performance workloads.
+			var largeArchive bytes.Buffer
+			archiveWriter := zip.NewWriter(&largeArchive)
+			entry, err := archiveWriter.CreateHeader(&zip.FileHeader{Name: "boundary.csv", Method: zip.Store})
+			require.NoError(t, err)
+			_, err = entry.Write(bytes.Repeat([]byte("a"), model.LogExportChunkSize+17))
+			require.NoError(t, err)
+			require.NoError(t, archiveWriter.Close())
+			require.NoError(t, db.Where("task_id = ?", task.TaskID).Delete(&model.LogExportChunk{}).Error)
+			for sequence, start := 0, 0; start < largeArchive.Len(); sequence, start = sequence+1, start+model.LogExportChunkSize {
+				end := min(start+model.LogExportChunkSize, largeArchive.Len())
+				require.NoError(t, db.Create(&model.LogExportChunk{TaskID: task.TaskID, Sequence: sequence, Data: largeArchive.Bytes()[start:end]}).Error)
+			}
+			require.NoError(t, db.Model(&model.LogExportRecord{}).Where("task_id = ?", task.TaskID).Update("file_size", largeArchive.Len()).Error)
+			chunkedDownload := httptest.NewRecorder()
+			router.ServeHTTP(chunkedDownload, httptest.NewRequest(http.MethodGet, "/self/exports/"+task.TaskID+"/file", nil))
+			require.Equal(t, http.StatusOK, chunkedDownload.Code)
+			assert.Equal(t, strconv.Itoa(largeArchive.Len()), chunkedDownload.Header().Get("Content-Length"))
+			assert.Equal(t, largeArchive.Bytes(), chunkedDownload.Body.Bytes())
+			list := httptest.NewRecorder()
+			router.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/self/exports", nil))
+			assert.Contains(t, list.Body.String(), `"status":"succeeded"`)
+			assert.NotContains(t, list.Body.String(), "locked_by")
+			_, err = model.GetLogExportRecord(context.Background(), task.TaskID, 42, true)
+			require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+			denied := httptest.NewRecorder()
+			deniedContext, _ := gin.CreateTestContext(denied)
+			deniedContext.Request = httptest.NewRequest(http.MethodGet, "/self/exports/"+task.TaskID+"/file", nil)
+			deniedContext.Set("id", 42)
+			deniedContext.Params = gin.Params{{Key: "task_id", Value: task.TaskID}}
+			DownloadSelfLogExportFile(deniedContext)
+			assert.Equal(t, http.StatusNotFound, denied.Code)
+			assert.NotContains(t, denied.Body.String(), "mine")
+			// Retain history when the administrator clears system-task history.
+			_, err = model.CreateSystemTask("newer-history-fixture", nil, nil)
+			require.NoError(t, err)
+			_, err = model.DeleteSystemTaskHistory(model.SystemTaskFilter{})
+			require.NoError(t, err)
+			_, err = model.GetLogExportRecord(context.Background(), task.TaskID, 41, true)
+			require.NoError(t, err)
+			require.NoError(t, db.Model(&model.LogExportRecord{}).Where("task_id = ?", task.TaskID).Update("expires_at", common.GetTimestamp()-1).Error)
+			expired := httptest.NewRecorder()
+			router.ServeHTTP(expired, httptest.NewRequest(http.MethodGet, "/self/exports/"+task.TaskID+"/file", nil))
+			assert.Equal(t, http.StatusGone, expired.Code)
+			require.NoError(t, model.ExpireLogExportFiles(context.Background()))
+			var chunks int64
+			require.NoError(t, db.Model(&model.LogExportChunk{}).Where("task_id = ?", task.TaskID).Count(&chunks).Error)
+			assert.Zero(t, chunks)
+			history, total, err := model.ListLogExportRecords(context.Background(), 41, true, 0, 20)
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, total)
+			require.Len(t, history, 1)
+			// A limit violation becomes a safe failure record without a file.
+			require.NoError(t, logDB.Create(&model.Log{UserId: 41, CreatedAt: 101, Type: model.LogTypeRefund, RequestId: "refund", ModelName: "model-a"}).Error)
+			failed, err := service.QueueLogExport(41, service.LogExportRequest{View: service.LogExportViewSelf})
+			require.NoError(t, err)
+			failedTask, err := model.GetSystemTaskByTaskID(failed.TaskID)
+			require.NoError(t, err)
+			failedTask, ok, err = model.ClaimSystemTask(failedTask.ID, model.SystemTaskTypeLogExport, "export-test", common.GetTimestamp()+60)
+			require.NoError(t, err)
+			require.True(t, ok)
+			service.RunLogExportJob(context.Background(), failedTask, "export-test")
+			failedRecord, err := model.GetLogExportRecord(context.Background(), failed.TaskID, 41, true)
+			require.NoError(t, err)
+			assert.Equal(t, model.SystemTaskStatusFailed, failedRecord.Status)
+			assert.Equal(t, "export exceeds 1 records; narrow the filters", failedRecord.Error)
+			assert.Zero(t, failedRecord.FileSize)
+			for _, invalid := range []string{"0", "-1", "10000001", "1.5", ""} {
+				require.Error(t, model.UpdateOption(model.LogExportMaxRowsOptionKey, invalid))
+			}
+			require.NoError(t, model.UpdateOption(model.LogExportMaxRowsOptionKey, "10000000"))
+			assert.Equal(t, 10000000, model.GetLogExportMaxRows())
+			// A retry chain straddles read batches; a later fee cannot replace its
+			// success. Case-distinct request IDs and unfiltered empty IDs stay separate.
+			chain := make([]model.Log, 1003)
+			for i := range chain {
+				requestID := "CaseChain"
+				if i%2 != 0 {
+					requestID = "casechain"
+				}
+				chain[i] = model.Log{UserId: 77, Username: "stream-user", Type: model.LogTypeError, CreatedAt: int64(1000 + i), RequestId: requestID, ModelName: "stream-model"}
+			}
+			require.NoError(t, logDB.CreateInBatches(&chain, 100).Error)
+			require.NoError(t, logDB.Create(&[]model.Log{
+				{UserId: 77, Username: "stream-user", Type: model.LogTypeConsume, CreatedAt: 2500, RequestId: "CaseChain", ModelName: "stream-model"},
+				{UserId: 77, Username: "stream-user", Type: model.LogTypeConsume, CreatedAt: 2003, RequestId: "casechain", ModelName: "stream-model", PromptTokens: 123},
+				{UserId: 77, Username: "stream-user", Type: model.LogTypeConsume, CreatedAt: 2004, RequestId: "casechain", ModelName: "stream-model", Other: `{"violation_fee":true}`},
+				{UserId: 77, Username: "stream-user", Type: model.LogTypeError, CreatedAt: 1500, ModelName: "stream-model"},
+				{UserId: 78, Username: "other-user", Type: model.LogTypeError, CreatedAt: 1500, ModelName: "OUTSIDE_SCOPE"},
+			}).Error)
+			var streamed bytes.Buffer
+			request := service.LogExportRequest{View: service.LogExportViewDownstream, Fields: []string{"request_id", "status", "input_tokens"}, Username: "stream-user", StartTimestamp: 1000, EndTimestamp: 2004}
+			rows, size, err := service.StreamLogExportArchive(context.Background(), &streamed, request, 0, 10000000)
+			require.NoError(t, err)
+			assert.Equal(t, 2, rows)
+			assert.EqualValues(t, streamed.Len(), size)
+			zipReader, err := zip.NewReader(bytes.NewReader(streamed.Bytes()), int64(streamed.Len()))
+			require.NoError(t, err)
+			detailReader, err := zipReader.File[0].Open()
+			require.NoError(t, err)
+			detail, err := io.ReadAll(detailReader)
+			require.NoError(t, err)
+			require.NoError(t, detailReader.Close())
+			assert.Contains(t, string(detail), "casechain,success,123")
+			assert.NotContains(t, string(detail), "CaseChain")
+			assert.NotContains(t, string(detail), "OUTSIDE_SCOPE")
+			// The visitor returns each SQL connection before delivering a batch,
+			// so another main/log operation can run even with a single connection.
+			logConnection, err := logDB.DB()
+			require.NoError(t, err)
+			logConnection.SetMaxOpenConns(1)
+			var visited int
+			_, err = model.VisitLogsForExport(context.Background(), model.LogExportQuery{}, 41, false, 10, func(batch []*model.Log) error {
+				visited += len(batch)
+				return logDB.Exec("SELECT 1").Error
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 2, visited)
+			require.NoError(t, model.UpdateOption(model.LogExportMaxRowsOptionKey, "10"))
+		})
+	}
+}
 
 func TestExportLogsRejectsUpstreamFieldsInDownstreamView(t *testing.T) {
 	gin.SetMode(gin.TestMode)

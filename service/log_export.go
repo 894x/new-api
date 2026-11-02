@@ -258,15 +258,23 @@ func BuildLogExportRows(view LogExportView, logs []*model.Log) []LogExportRow {
 	return rows
 }
 
-func BuildLogExportSummary(view LogExportView, rows []LogExportRow) []LogExportSummary {
-	type summaryKey struct {
-		partyID int
-		model   string
-	}
+type logExportSummaryKey struct {
+	partyID int
+	model   string
+}
 
-	summaries := make(map[summaryKey]*LogExportSummary)
+type logExportSummaryAccumulator struct {
+	view   LogExportView
+	groups map[logExportSummaryKey]*LogExportSummary
+}
+
+func (accumulator *logExportSummaryAccumulator) Add(rows []LogExportRow) {
+	view := accumulator.view
+	if accumulator.groups == nil {
+		accumulator.groups = make(map[logExportSummaryKey]*LogExportSummary)
+	}
 	for _, row := range rows {
-		key := summaryKey{partyID: row.UserID, model: row.ModelName}
+		key := logExportSummaryKey{partyID: row.UserID, model: row.ModelName}
 		if view == LogExportViewSelf {
 			key.partyID = 0
 		}
@@ -274,7 +282,7 @@ func BuildLogExportSummary(view LogExportView, rows []LogExportRow) []LogExportS
 			key.partyID = row.ChannelID
 			key.model = row.UpstreamModelName
 		}
-		summary, ok := summaries[key]
+		summary, ok := accumulator.groups[key]
 		if !ok {
 			summary = &LogExportSummary{
 				UserID:      row.UserID,
@@ -283,7 +291,7 @@ func BuildLogExportSummary(view LogExportView, rows []LogExportRow) []LogExportS
 				ChannelName: row.ChannelName,
 				ModelName:   key.model,
 			}
-			summaries[key] = summary
+			accumulator.groups[key] = summary
 		}
 		summary.RequestCount++
 		if view == LogExportViewSelf {
@@ -322,9 +330,13 @@ func BuildLogExportSummary(view LogExportView, rows []LogExportRow) []LogExportS
 			summary.FailureCount++
 		}
 	}
+}
 
-	result := make([]LogExportSummary, 0, len(summaries))
-	for _, summary := range summaries {
+func (accumulator *logExportSummaryAccumulator) Summaries() []LogExportSummary {
+	view := accumulator.view
+
+	result := make([]LogExportSummary, 0, len(accumulator.groups))
+	for _, summary := range accumulator.groups {
 		result = append(result, *summary)
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -337,6 +349,12 @@ func BuildLogExportSummary(view LogExportView, rows []LogExportRow) []LogExportS
 		return result[i].ModelName < result[j].ModelName
 	})
 	return result
+}
+
+func BuildLogExportSummary(view LogExportView, rows []LogExportRow) []LogExportSummary {
+	accumulator := logExportSummaryAccumulator{view: view}
+	accumulator.Add(rows)
+	return accumulator.Summaries()
 }
 
 func WriteLogExportArchive(writer io.Writer, view LogExportView, fields []string, rows []LogExportRow, summaries []LogExportSummary) error {
@@ -486,19 +504,8 @@ func writeLogExportDetails(writer io.Writer, fields []string, rows []LogExportRo
 	if err := csvWriter.Write(fields); err != nil {
 		return err
 	}
-	for _, row := range rows {
-		record := make([]string, 0, len(fields))
-		for _, name := range fields {
-			field := logExportFields[name]
-			value := field.value(row)
-			if field.text {
-				value = safeSpreadsheetText(value)
-			}
-			record = append(record, value)
-		}
-		if err := csvWriter.Write(record); err != nil {
-			return err
-		}
+	if err := writeLogExportDetailRows(csvWriter, fields, rows); err != nil {
+		return err
 	}
 	csvWriter.Flush()
 	return csvWriter.Error()
@@ -579,4 +586,22 @@ func safeSpreadsheetText(value string) string {
 		return "'" + value
 	}
 	return value
+}
+
+func writeLogExportDetailRows(csvWriter *csv.Writer, fields []string, rows []LogExportRow) error {
+	for _, row := range rows {
+		record := make([]string, 0, len(fields))
+		for _, name := range fields {
+			field := logExportFields[name]
+			value := field.value(row)
+			if field.text {
+				value = safeSpreadsheetText(value)
+			}
+			record = append(record, value)
+		}
+		if err := csvWriter.Write(record); err != nil {
+			return err
+		}
+	}
+	return nil
 }

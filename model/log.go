@@ -581,26 +581,16 @@ type SelfLogExportQuery struct {
 }
 
 func GetUserConsumptionLogsForExport(userID int, query SelfLogExportQuery, limit int) (logs []*Log, total int64, err error) {
+	return GetUserConsumptionLogsForExportContext(context.Background(), userID, query, limit)
+}
+
+func GetUserConsumptionLogsForExportContext(ctx context.Context, userID int, query SelfLogExportQuery, limit int) (logs []*Log, total int64, err error) {
 	if userID <= 0 || limit <= 0 {
 		return nil, 0, errors.New("invalid user consumption export scope")
 	}
-	tx := LOG_DB.Model(&Log{}).
-		Where("user_id = ?", userID).
-		Where("type IN ?", []int{LogTypeConsume, LogTypeRefund})
-	if tx, err = applyExplicitLogTextFilter(tx, "model_name", query.ModelName); err != nil {
+	tx, err := userConsumptionExportScope(ctx, userID, query)
+	if err != nil {
 		return nil, 0, err
-	}
-	if query.TokenName != "" {
-		tx = tx.Where("token_name = ?", query.TokenName)
-	}
-	if query.RequestID != "" {
-		tx = tx.Where("request_id = ?", query.RequestID)
-	}
-	if query.StartTimestamp != 0 {
-		tx = tx.Where("created_at >= ?", query.StartTimestamp)
-	}
-	if query.EndTimestamp != 0 {
-		tx = tx.Where("created_at <= ?", query.EndTimestamp)
 	}
 	if err = tx.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -618,33 +608,13 @@ func GetUserConsumptionLogsForExport(userID int, query SelfLogExportQuery, limit
 }
 
 func GetLogsForExport(query LogExportQuery, limit int) (logs []*Log, total int64, err error) {
-	tx := LOG_DB.Where("logs.type IN ?", []int{LogTypeConsume, LogTypeError})
-	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", query.ModelName); err != nil {
+	return GetLogsForExportContext(context.Background(), query, limit)
+}
+
+func GetLogsForExportContext(ctx context.Context, query LogExportQuery, limit int) (logs []*Log, total int64, err error) {
+	tx, err := administrativeLogExportScope(ctx, query)
+	if err != nil {
 		return nil, 0, err
-	}
-	if tx, err = applyExplicitLogTextFilter(tx, "logs.username", query.Username); err != nil {
-		return nil, 0, err
-	}
-	if query.TokenName != "" {
-		tx = tx.Where("logs.token_name = ?", query.TokenName)
-	}
-	if query.RequestID != "" {
-		tx = tx.Where("logs.request_id = ?", query.RequestID)
-	}
-	if query.UpstreamRequestID != "" {
-		tx = tx.Where("logs.upstream_request_id = ?", query.UpstreamRequestID)
-	}
-	if query.StartTimestamp != 0 {
-		tx = tx.Where("logs.created_at >= ?", query.StartTimestamp)
-	}
-	if query.EndTimestamp != 0 {
-		tx = tx.Where("logs.created_at <= ?", query.EndTimestamp)
-	}
-	if query.ChannelID != 0 {
-		tx = tx.Where("logs.channel_id = ?", query.ChannelID)
-	}
-	if query.Group != "" {
-		tx = tx.Where("logs."+logGroupCol+" = ?", query.Group)
 	}
 	if err = tx.Model(&Log{}).Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -667,6 +637,10 @@ func GetLogsForExport(query LogExportQuery, limit int) (logs []*Log, total int64
 }
 
 func GetUsageLogsByRequestIDsForExport(requestIDs []string, limit int) (logs []*Log, truncated bool, err error) {
+	return GetUsageLogsByRequestIDsForExportContext(context.Background(), requestIDs, limit)
+}
+
+func GetUsageLogsByRequestIDsForExportContext(ctx context.Context, requestIDs []string, limit int) (logs []*Log, truncated bool, err error) {
 	const requestIDBatchSize = 500
 	for start := 0; start < len(requestIDs); start += requestIDBatchSize {
 		end := min(start+requestIDBatchSize, len(requestIDs))
@@ -675,7 +649,7 @@ func GetUsageLogsByRequestIDsForExport(requestIDs []string, limit int) (logs []*
 		if remaining <= 0 {
 			return logs, true, nil
 		}
-		err = LOG_DB.Where("logs.type IN ?", []int{LogTypeConsume, LogTypeError}).
+		err = LOG_DB.WithContext(ctx).Where("logs.type IN ?", []int{LogTypeConsume, LogTypeError}).
 			Where("logs.request_id IN ?", requestIDs[start:end]).
 			Limit(remaining).
 			Find(&batch).Error

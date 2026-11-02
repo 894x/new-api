@@ -25,9 +25,15 @@ import {
   RouterProvider,
 } from '@tanstack/react-router'
 import { getCoreRowModel, useReactTable } from '@tanstack/react-table'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import {
+  act,
+  render as renderUI,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { ComponentProps } from 'react'
+import type { ComponentProps, ReactNode } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
@@ -35,6 +41,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { CommonLogsFilterBar } from '../common-logs-filter-bar'
 import { LogExportDialog } from '../log-export-dialog'
+import { LogExportHistory } from '../log-export-history'
 import { UsageLogsProvider, useUsageLogsContext } from '../usage-logs-provider'
 
 const originalGetAnimations = Object.getOwnPropertyDescriptor(
@@ -42,7 +49,31 @@ const originalGetAnimations = Object.getOwnPropertyDescriptor(
   'getAnimations'
 )
 
+function render(ui: ReactNode) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  return renderUI(
+    <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+  )
+}
+
 beforeEach(() => {
+  vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/log/export/config') {
+      return {
+        data: {
+          success: true,
+          data: {
+            max_rows: 100000,
+            retention_days: 7,
+            max_file_bytes: 67108864,
+          },
+        },
+      }
+    }
+    return { data: { success: true, data: [], total: 0 } }
+  })
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined)
   vi.stubGlobal(
     'URL',
@@ -60,6 +91,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  Reflect.deleteProperty(window, 'showSaveFilePicker')
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   useAuthStore.getState().auth.setUser(null)
@@ -141,23 +173,14 @@ test.each([
   }
 )
 
-test('associates the administrator scope label and downloads the configured archive', async () => {
-  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:usage-export')
-  const revoke = vi
-    .spyOn(URL, 'revokeObjectURL')
-    .mockImplementation(() => undefined)
-  let downloadedFilename = ''
-  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(
-    function (this: HTMLAnchorElement) {
-      downloadedFilename = this.download
-    }
-  )
+test('queues the configured administrator export and opens persistent history without downloading synchronously', async () => {
   const exporter = vi
     .fn<NonNullable<ComponentProps<typeof LogExportDialog>['exporter']>>()
-    .mockResolvedValue({
-      blob: new Blob(['zip']),
-      filename: 'usage-upstream.zip',
-    })
+    .mockResolvedValue({ task_id: 'export-1' } as Awaited<
+      ReturnType<
+        NonNullable<ComponentProps<typeof LogExportDialog>['exporter']>
+      >
+    >)
   render(
     <LogExportDialog
       scope='all'
@@ -183,11 +206,13 @@ test('associates the administrator scope label and downloads the configured arch
       })
     )
   )
-  expect(downloadedFilename).toBe('usage-upstream.zip')
-  expect(revoke).toHaveBeenCalledWith('blob:usage-export')
   await waitFor(() =>
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('tab', { name: 'Export history' })
+    ).toHaveAttribute('aria-selected', 'true')
   )
+  expect(dialog).toBeVisible()
+  expect(URL.createObjectURL).not.toHaveBeenCalled()
 })
 
 test('personal exports show only safe selectable columns and keep the self scope when selecting all or resetting', async () => {
@@ -259,7 +284,9 @@ test('personal exports show only safe selectable columns and keep the self scope
     })
   )
   expect(dialog).toBeVisible()
-  expect(within(dialog).getByRole('button', { name: 'Export' })).toBeEnabled()
+  await waitFor(() =>
+    expect(within(dialog).getByRole('button', { name: 'Export' })).toBeEnabled()
+  )
 })
 
 test('personal exports disable submission with no selected columns and while a request is pending, then allow retry after failure', async () => {
@@ -289,5 +316,181 @@ test('personal exports disable submission with no selected columns and while a r
     await exportResult.catch(() => undefined)
   })
   expect(dialog).toBeVisible()
-  expect(within(dialog).getByRole('button', { name: 'Export' })).toBeEnabled()
+  await waitFor(() =>
+    expect(within(dialog).getByRole('button', { name: 'Export' })).toBeEnabled()
+  )
+})
+
+test('history retains statuses and downloads completed files through the authenticated API while expired files cannot be downloaded', async () => {
+  let filename = ''
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(
+    function (this: HTMLAnchorElement) {
+      filename = this.download
+    }
+  )
+  const now = Math.floor(Date.now() / 1000)
+  const base = {
+    view: 'self',
+    error: '',
+    max_rows: 100000,
+    row_count: 3,
+    file_size: 100,
+    filename: 'usage-self.zip',
+    created_at: now,
+    updated_at: now,
+    expires_at: now + 86400,
+    filters: { view: 'self', fields: [] },
+  }
+  const get = vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/log/self/exports/ready/file') {
+      return {
+        data: new Blob(['zip']),
+        headers: { 'content-type': 'application/zip' },
+      }
+    }
+    return {
+      data: {
+        success: true,
+        total: 4,
+        data: [
+          { ...base, task_id: 'ready', status: 'succeeded' },
+          {
+            ...base,
+            task_id: 'expired',
+            status: 'succeeded',
+            expires_at: now - 1,
+          },
+          { ...base, task_id: 'pending', status: 'pending' },
+          {
+            ...base,
+            task_id: 'failed',
+            status: 'failed',
+            error: 'export exceeds 10 records; narrow the filters',
+          },
+        ],
+      },
+    }
+  })
+  const mounted = render(<LogExportHistory scope='self' />)
+  expect(await screen.findByText('Queued')).toBeVisible()
+  expect(screen.getByText('Expired')).toBeVisible()
+  expect(screen.getByText('Failed')).toBeVisible()
+  expect(screen.getAllByRole('button', { name: 'Download' })).toHaveLength(1)
+  await userEvent.click(screen.getByRole('button', { name: 'Download' }))
+  await waitFor(() => expect(filename).toBe('usage-self.zip'))
+  expect(get).toHaveBeenCalledWith(
+    '/api/log/self/exports/ready/file',
+    expect.objectContaining({ responseType: 'blob' })
+  )
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:usage-export')
+  mounted.unmount()
+})
+
+test('history exposes a retry after a load failure and then shows the empty state', async () => {
+  vi.spyOn(api, 'get')
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockResolvedValue({ data: { success: true, data: [], total: 0 } })
+  render(<LogExportHistory scope='self' />)
+  expect(await screen.findByText('Unable to load export history')).toBeVisible()
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  expect(await screen.findByText('No export records yet')).toBeVisible()
+})
+
+test('a browser with file saving support streams the authenticated response to disk without creating a whole-file blob', async () => {
+  const chunks: number[][] = []
+  const destination = {
+    createWritable: vi.fn(
+      async () =>
+        new WritableStream<Uint8Array>({
+          write: (chunk) => {
+            chunks.push([...chunk])
+          },
+        })
+    ),
+  }
+  const picker = vi.fn(async () => destination)
+  Object.defineProperty(window, 'showSaveFilePicker', {
+    configurable: true,
+    value: picker,
+  })
+  const now = Math.floor(Date.now() / 1000)
+  const record = {
+    task_id: 'streamed',
+    view: 'self',
+    status: 'succeeded',
+    filename: 'large-export.zip',
+    file_size: 400000000,
+    row_count: 10000000,
+    expires_at: now + 86400,
+    created_at: now,
+    error: '',
+    filters: {},
+  }
+  const get = vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/log/self/exports/streamed/file') {
+      return {
+        data: new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            controller.enqueue(new Uint8Array([80, 75]))
+            controller.enqueue(new Uint8Array([3, 4]))
+            controller.close()
+          },
+        }),
+        headers: { 'content-type': 'application/zip' },
+      }
+    }
+    return { data: { success: true, data: [record], total: 1 } }
+  })
+  render(<LogExportHistory scope='self' />)
+  await userEvent.click(await screen.findByRole('button', { name: 'Download' }))
+  await waitFor(() =>
+    expect(chunks).toEqual([
+      [80, 75],
+      [3, 4],
+    ])
+  )
+  expect(picker).toHaveBeenCalledWith({ suggestedName: 'large-export.zip' })
+  expect(get).toHaveBeenCalledWith(
+    '/api/log/self/exports/streamed/file',
+    expect.objectContaining({ adapter: 'fetch', responseType: 'stream' })
+  )
+  expect(URL.createObjectURL).not.toHaveBeenCalled()
+})
+
+test('switching accounts hides the previous account export history while the new history loads', async () => {
+  useAuthStore.getState().auth.setUser({ id: 41, username: 'first', role: 1 })
+  let resolveNext: (value: unknown) => void = () => undefined
+  const nextHistory = new Promise((resolve) => {
+    resolveNext = resolve
+  })
+  vi.spyOn(api, 'get')
+    .mockResolvedValueOnce({
+      data: {
+        success: true,
+        total: 1,
+        data: [
+          {
+            task_id: 'first-private-export',
+            view: 'self',
+            status: 'failed',
+            error: 'First account export',
+            created_at: 100,
+            filters: {},
+          },
+        ],
+      },
+    })
+    .mockImplementationOnce(async () => nextHistory)
+  render(<LogExportHistory scope='self' />)
+  expect(await screen.findByText('First account export')).toBeVisible()
+  act(() =>
+    useAuthStore
+      .getState()
+      .auth.setUser({ id: 42, username: 'second', role: 1 })
+  )
+  expect(screen.queryByText('First account export')).not.toBeInTheDocument()
+  await act(async () =>
+    resolveNext({ data: { success: true, data: [], total: 0 } })
+  )
+  expect(await screen.findByText('No export records yet')).toBeVisible()
 })

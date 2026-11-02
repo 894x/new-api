@@ -232,7 +232,7 @@ func DeleteSystemTaskHistory(filter SystemTaskFilter) (int64, error) {
 		newestID = max(newestID, id)
 	}
 	filter.Scope = "history"
-	result := filter.query().Where("id < ? AND id NOT IN ?", newestID, latestIDs).Delete(&SystemTask{})
+	result := filter.query().Where("id < ? AND id NOT IN ? AND type <> ?", newestID, latestIDs, SystemTaskTypeLogExport).Delete(&SystemTask{})
 	return result.RowsAffected, result.Error
 }
 

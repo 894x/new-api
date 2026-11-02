@@ -49,6 +49,7 @@ func AllOption() ([]*Option, error) {
 func InitOptionMap() {
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap = make(map[string]string)
+	common.OptionMap[LogExportMaxRowsOptionKey] = strconv.Itoa(DefaultLogExportMaxRows)
 	common.OptionMap[RequestCaptureStorageOptionKey] = DefaultRequestCaptureStorageJSON
 
 	// 添加原有的系统配置
@@ -312,6 +313,10 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == LogExportMaxRowsOptionKey {
+		_, err := ParseLogExportMaxRows(value)
+		return err
+	}
 	if key == DNSPodConfigOptionKey {
 		return errors.New("DNSPod configuration requires its dedicated verified endpoint")
 	}
