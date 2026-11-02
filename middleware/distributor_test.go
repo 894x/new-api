@@ -21,6 +21,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestChannelProbeRequiresActiveAdministrator(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		id, role, status int
+		allowed          bool
+	}{
+		{"anonymous", 0, common.RoleGuestUser, common.UserStatusEnabled, false},
+		{"ordinary user", 1, common.RoleCommonUser, common.UserStatusEnabled, false},
+		{"disabled administrator", 1, common.RoleAdminUser, common.UserStatusDisabled, false},
+		{"active administrator", 1, common.RoleAdminUser, common.UserStatusEnabled, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			ctx.Set("id", tc.id)
+			ctx.Set("role", tc.role)
+			common.SetContextKey(ctx, constant.ContextKeyUserStatus, tc.status)
+			err := SetupContextForChannelProbe(ctx, &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Key: "fixture", Status: common.ChannelStatusEnabled}, "model-a")
+			if tc.allowed {
+				assert.Nil(t, err)
+			} else {
+				assert.NotNil(t, err)
+			}
+		})
+	}
+}
+
 func TestChannelMatchesExpectedTaskPluginUsesGenericChannelSetting(t *testing.T) {
 	channel := &model.Channel{Type: constant.ChannelTypeTaskPlugin}
 	channel.SetSetting(dto.ChannelSettings{TaskPluginKey: "generic-alpha"})

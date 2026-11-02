@@ -620,6 +620,20 @@ func getTaskOriginModelName(c *gin.Context) string {
 }
 
 func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
+	return setupSelectedChannelContext(c, channel, modelName, true)
+}
+
+// SetupContextForChannelProbe observes an administrator-selected upstream rather
+// than selecting a routable channel for a customer's request. Channel credentials,
+// per-key availability, and request policies still use the ordinary setup path.
+func SetupContextForChannelProbe(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
+	if c.GetInt("id") <= 0 || c.GetInt("role") < common.RoleAdminUser || common.GetContextKeyInt(c, constant.ContextKeyUserStatus) != common.UserStatusEnabled {
+		return types.NewError(errors.New("channel probes require an active administrator"), types.ErrorCodeAccessDenied, types.ErrOptionWithStatusCode(http.StatusForbidden), types.ErrOptionWithSkipRetry())
+	}
+	return setupSelectedChannelContext(c, channel, modelName, false)
+}
+
+func setupSelectedChannelContext(c *gin.Context, channel *model.Channel, modelName string, enforceRouting bool) *types.NewAPIError {
 	if _, exists := c.Get("original_model"); !exists {
 		c.Set("original_model", modelName)
 	} // preserve the public model across retries
@@ -628,8 +642,10 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		logTaskPluginChannelDecision(c, nil, modelName, "channel_rejected", "nil_channel")
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
-	if err := service.ValidateSelectedChannelGroupPolicy(c, channel.Id, c.GetString("original_model")); err != nil {
-		return types.NewError(err, types.ErrorCodeAccessDenied, types.ErrOptionWithStatusCode(http.StatusForbidden), types.ErrOptionWithSkipRetry())
+	if enforceRouting {
+		if err := service.ValidateSelectedChannelGroupPolicy(c, channel.Id, c.GetString("original_model")); err != nil {
+			return types.NewError(err, types.ErrorCodeAccessDenied, types.ErrOptionWithStatusCode(http.StatusForbidden), types.ErrOptionWithSkipRetry())
+		}
 	}
 	// Optional provider settings belong to this channel, including after spillover.
 	common.SetContextKey(c, constant.ContextKeyChannelOrganization, "")

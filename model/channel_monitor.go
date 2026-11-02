@@ -157,6 +157,9 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 	}
 	byChannel := make(map[int][]ChannelMonitorRecord)
 	for _, record := range records {
+		if record.Model != modelName {
+			continue
+		}
 		byChannel[record.ChannelID] = append(byChannel[record.ChannelID], record)
 	}
 	summaries := make([]ChannelMonitorSummary, 0, len(channels))

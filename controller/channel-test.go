@@ -100,6 +100,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	if _, monitored := ctx.Value(channelMonitoringRequestKey{}).(operation_setting.MonitorSetting); monitored {
+		common.StartRequestTiming(c, tik)
+		c.Set(string(constant.ContextKeyRequestStartTime), tik)
+	}
 
 	testModel = strings.TrimSpace(testModel)
 	if testModel == "" {
@@ -176,6 +180,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 	cache.WriteContext(c)
 	c.Set("id", testUserID)
+	c.Set("role", cache.Role)
 
 	//c.Request.Header.Set("Authorization", "Bearer "+channel.Key)
 	c.Request.Header.Set("Content-Type", "application/json")
@@ -184,7 +189,12 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	group, _ := model.GetUserGroup(testUserID, false)
 	c.Set("group", group)
 
-	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, testModel)
+	var newAPIError *types.NewAPIError
+	if _, monitored := ctx.Value(channelMonitoringRequestKey{}).(operation_setting.MonitorSetting); monitored {
+		newAPIError = middleware.SetupContextForChannelProbe(c, channel, testModel)
+	} else {
+		newAPIError = middleware.SetupContextForSelectedChannel(c, channel, testModel)
+	}
 	if newAPIError != nil {
 		return testResult{
 			context:     c,
@@ -244,6 +254,11 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 
 	request := buildTestRequest(testModel, endpointType, channel, isStream)
+	if settings, monitored := ctx.Value(channelMonitoringRequestKey{}).(operation_setting.MonitorSetting); monitored {
+		if err := configureChannelMonitoringRequest(request, settings); err != nil {
+			return testResult{context: c, localErr: err}
+		}
+	}
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 
@@ -256,6 +271,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 
 	info.IsChannelTest = true
+	c.Set("channel_test_relay_info", info)
 	info.InitChannelMeta(c)
 
 	err = attachTestBillingRequestInput(info, request)
@@ -454,6 +470,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 
 	requestBody := bytes.NewBuffer(jsonData)
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
+	c.Set("channel_test_upstream_started", true)
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return testResult{
@@ -465,6 +482,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
+		c.Set("channel_test_upstream_status", httpResp.StatusCode)
 		if httpResp.StatusCode != http.StatusOK {
 			err := service.RelayErrorHandler(c.Request.Context(), httpResp, true)
 			common.SysError(fmt.Sprintf(
@@ -517,6 +535,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		}
 	}
 	info.SetEstimatePromptTokens(usage.PromptTokens)
+	c.Set("channel_test_usage", usage)
 
 	quota, tieredResult := settleTestQuota(info, priceData, usage)
 	tok := time.Now()
@@ -964,7 +983,7 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 		}
 	}
 
-	if newAPIError == nil {
+	if newAPIError == nil && result.localErr == nil {
 		summary.Succeeded++
 	} else {
 		summary.Failed++
