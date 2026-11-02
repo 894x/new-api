@@ -33,7 +33,6 @@ import {
   Trash2,
   RefreshCw,
   Loader2,
-  FolderPlus,
 } from 'lucide-react'
 import { useContext, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -58,7 +57,6 @@ import {
   ADMIN_PERMISSION_RESOURCES,
   hasPermission,
 } from '@/lib/admin-permissions'
-import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { MODEL_FETCHABLE_TYPES } from '../constants'
@@ -327,20 +325,6 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           )}
 
           <DropdownMenuSeparator />
-
-          {currentUser?.role === ROLE.SUPER_ADMIN && (
-            <DropdownMenuItem
-              onClick={() => {
-                setCurrentRow(channel)
-                setOpen('resource-group')
-              }}
-            >
-              {t('Create resource group')}
-              <DropdownMenuShortcut>
-                <FolderPlus size={16} />
-              </DropdownMenuShortcut>
-            </DropdownMenuItem>
-          )}
 
           {/* Copy Channel */}
           <DropdownMenuItem

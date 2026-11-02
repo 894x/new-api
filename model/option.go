@@ -50,7 +50,6 @@ func InitOptionMap() {
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap = make(map[string]string)
 	common.OptionMap[RequestCaptureStorageOptionKey] = DefaultRequestCaptureStorageJSON
-	common.OptionMap[setting.GroupModelChannelGroupsOptionKey] = setting.GroupModelChannelGroupsJSON()
 
 	// 添加原有的系统配置
 	common.OptionMap["FileUploadPermission"] = strconv.Itoa(common.FileUploadPermission)
@@ -316,9 +315,8 @@ func validateOptionValue(key string, value string) error {
 	if key == DNSPodConfigOptionKey {
 		return errors.New("DNSPod configuration requires its dedicated verified endpoint")
 	}
-	if key == setting.GroupModelChannelGroupsOptionKey {
-		_, err := setting.ParseGroupModelChannelGroups(value)
-		return err
+	if key == "GroupModelChannelGroups" {
+		return errors.New("resource group policies have been removed; use model routing pools")
 	}
 	if key == RequestCaptureStorageOptionKey {
 		_, err := ParseRequestCaptureStorageSettings(value)
@@ -585,7 +583,7 @@ func updateOptionMap(key string, value string) (err error) {
 	if strings.HasPrefix(key, dynamic_routing_setting.OptionPrefix) {
 		return fmt.Errorf("dynamic routing settings must be updated atomically")
 	}
-	if key == retiredThemeOptionKey {
+	if key == retiredThemeOptionKey || key == "GroupModelChannelGroups" {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
 		common.OptionMapRWMutex.Unlock()
@@ -595,13 +593,6 @@ func updateOptionMap(key string, value string) (err error) {
 	defer common.OptionMapRWMutex.Unlock()
 	if key == ratio_setting.GroupGroupModelRatioOptionKey {
 		if err := ratio_setting.UpdateGroupGroupModelRatioByJSONString(value); err != nil {
-			return err
-		}
-		common.OptionMap[key] = value
-		return nil
-	}
-	if key == setting.GroupModelChannelGroupsOptionKey {
-		if err := setting.UpdateGroupModelChannelGroups(value); err != nil {
 			return err
 		}
 		common.OptionMap[key] = value

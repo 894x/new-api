@@ -15,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +26,6 @@ func TestDistributeChannelPoolIntersectionRechecksAffinityAndPinnedChannels(t *t
 	originalDB, originalCache, originalRedis := model.DB, common.MemoryCacheEnabled, common.RedisEnabled
 	originalPath, originalMaster := common.SQLitePath, common.IsMasterNode
 	originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
-	originalPolicy := setting.GroupModelChannelGroupsJSON()
 	affinity := operation_setting.GetChannelAffinitySetting()
 	originalAffinity := *affinity
 	t.Setenv("SQL_DSN", "local")
@@ -39,14 +37,13 @@ func TestDistributeChannelPoolIntersectionRechecksAffinityAndPinnedChannels(t *t
 	common.MemoryCacheEnabled, common.RedisEnabled = true, false
 	t.Cleanup(func() {
 		*affinity = originalAffinity
-		require.NoError(t, setting.UpdateGroupModelChannelGroups(originalPolicy))
 		model.DB, common.MemoryCacheEnabled, common.RedisEnabled = originalDB, originalCache, originalRedis
 		common.SetDatabaseTypes(originalMainType, originalLogType)
 		sqlDB, err := db.DB()
 		require.NoError(t, err)
 		require.NoError(t, sqlDB.Close())
 	})
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}))
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}))
 	for i, groups := range []string{"vip,pool", "vip", "pool"} {
 		id := i + 1
 		priority := int64(i * 100)
@@ -87,15 +84,17 @@ func TestDistributeChannelPoolIntersectionRechecksAffinityAndPinnedChannels(t *t
 	})
 
 	for _, test := range []struct {
-		name, policy, query string
-		status, channel     int
+		name, query     string
+		members         []model.ModelRoutingPoolChannel
+		configured      bool
+		status, channel int
 	}{
-		{"seed affinity without policy", `{}`, "", 200, 2},
-		{"shared X replaces denied affinity", `{"default":{"model-a":["pool"]}}`, "", 200, 1},
-		{"shared X may be pinned", `{"default":{"model-a":["pool"]}}`, "?channel=1", 200, 1},
-		{"token-only pinned channel denied", `{"default":{"model-a":["pool"]}}`, "?channel=2", 403, 0},
-		{"pool-only pinned channel denied", `{"default":{"model-a":["pool"]}}`, "?channel=3", 403, 0},
-		{"empty pool cannot reuse affinity", `{"default":{"model-a":[]}}`, "", 503, 0},
+		{name: "seed affinity without policy", status: 200, channel: 2},
+		{name: "shared X replaces denied affinity", query: "", members: []model.ModelRoutingPoolChannel{{ChannelID: 1, Weight: 100, Enabled: true}}, configured: true, status: 200, channel: 1},
+		{name: "shared X may be pinned", query: "?channel=1", members: []model.ModelRoutingPoolChannel{{ChannelID: 1, Weight: 100, Enabled: true}}, configured: true, status: 200, channel: 1},
+		{name: "token-only pinned channel denied", query: "?channel=2", members: []model.ModelRoutingPoolChannel{{ChannelID: 1, Weight: 100, Enabled: true}}, configured: true, status: 403, channel: 0},
+		{name: "pool-only pinned channel denied", query: "?channel=3", members: []model.ModelRoutingPoolChannel{{ChannelID: 1, Weight: 100, Enabled: true}}, configured: true, status: 403, channel: 0},
+		{name: "empty pool cannot reuse affinity", query: "", configured: true, status: 503, channel: 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if test.name == "shared X replaces denied affinity" {
@@ -103,7 +102,15 @@ func TestDistributeChannelPoolIntersectionRechecksAffinityAndPinnedChannels(t *t
 				require.True(t, found)
 				require.Equal(t, 2, channel)
 			}
-			require.NoError(t, setting.UpdateGroupModelChannelGroups(test.policy))
+			if test.configured {
+				pool, err := model.GetModelRoutingPool("vip", "model-a")
+				require.NoError(t, err)
+				revision := ""
+				if pool != nil {
+					revision = pool.Revision
+				}
+				require.NoError(t, model.SaveModelRoutingPool(&model.ModelRoutingPool{RoutingGroup: "vip", Model: "model-a", Mode: model.RoutingModePriority, Channels: test.members}, revision))
+			}
 			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions"+test.query, strings.NewReader(`{"model":"model-a","messages":[{"role":"user","content":"hello"}]}`))
 			request.Header.Set("Content-Type", "application/json")
 			request.Header.Set("X-Session", "pool-policy-test")

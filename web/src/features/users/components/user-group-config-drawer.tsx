@@ -255,7 +255,6 @@ export function UserGroupConfigDrawer({ open, onOpenChange, user }: Props) {
             ])
           ),
         },
-        model_channel_groups: config.model_channel_groups,
       })
       return requireServerSuccess(result)
     },

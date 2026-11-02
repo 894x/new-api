@@ -218,7 +218,6 @@ export interface UserGroupConfig {
   rate_limit_enabled: boolean
   global_rate_limit_enabled: boolean
   rate_limit: UserGroupRateLimit
-  model_channel_groups: Record<string, string[]>
   available_group_ratios: Record<string, number>
 }
 
@@ -229,11 +228,6 @@ export interface UpdateUserGroupConfigPayload {
   model_discounts?: Record<string, Record<string, number>>
   rate_limit_enabled: boolean
   rate_limit: UserGroupRateLimit
-  model_channel_groups: Record<string, string[]>
-}
-
-export interface ChannelPoolPreview {
-  candidate_count: number
 }
 
 // ============================================================================

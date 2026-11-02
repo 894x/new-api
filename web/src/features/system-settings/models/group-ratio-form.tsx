@@ -69,7 +69,6 @@ import {
 import { SettingsPageActionsPortal } from '../components/settings-page-context'
 import { safeJsonParse } from '../utils/json-parser'
 import { safeNumberFieldProps } from '../utils/numeric-field'
-import { GroupModelChannelGroupsEditor } from './group-model-channel-groups-editor'
 import { GroupModelTieredRatioEditor } from './group-model-tiered-ratio-editor'
 import {
   GroupRatioVisualEditor,
@@ -86,7 +85,6 @@ type GroupFormValues = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   GroupSpecialUsableGroup: string
-  GroupModelChannelGroups: string
   ModelTieredRatios: string
 }
 
@@ -156,8 +154,6 @@ export const GroupRatioForm = memo(function GroupRatioForm({
   }, [editMode, handleTieredValidationChange])
 
   const watchedGroupRatio = values.GroupRatio ?? ''
-  const watchedUserUsableGroups = values.UserUsableGroups ?? ''
-  const watchedTopupGroupRatio = values.TopupGroupRatio ?? ''
   const pricingGroupNames = useMemo(() => {
     const ratioMap = safeJsonParse<Record<string, number>>(watchedGroupRatio, {
       fallback: {},
@@ -165,23 +161,6 @@ export const GroupRatioForm = memo(function GroupRatioForm({
     })
     return Object.keys(ratioMap)
   }, [watchedGroupRatio])
-  const groupNames = useMemo(() => {
-    const usableMap = safeJsonParse<Record<string, string>>(
-      watchedUserUsableGroups,
-      { fallback: {}, silent: true }
-    )
-    const topupMap = safeJsonParse<Record<string, number>>(
-      watchedTopupGroupRatio,
-      { fallback: {}, silent: true }
-    )
-    return [
-      ...new Set([
-        ...pricingGroupNames,
-        ...Object.keys(usableMap),
-        ...Object.keys(topupMap),
-      ]),
-    ]
-  }, [pricingGroupNames, watchedUserUsableGroups, watchedTopupGroupRatio])
 
   return (
     <div className='space-y-6'>
@@ -315,21 +294,6 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               onChange={(field, value) =>
                 handleFieldChange(field as keyof GroupFormValues, value)
               }
-            />
-            <FormField
-              control={form.control}
-              name='GroupModelChannelGroups'
-              render={({ field, fieldState }) => (
-                <FormItem data-invalid={fieldState.invalid}>
-                  <GroupModelChannelGroupsEditor
-                    value={field.value}
-                    groupOptions={groupNames}
-                    onChange={field.onChange}
-                    disabled={isSaving}
-                  />
-                  <FormMessage />
-                </FormItem>
-              )}
             />
 
             <FormField
@@ -604,32 +568,6 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               )}
             />
           </SettingsForm>
-        )}
-        {editMode === 'json' && (
-          <FormField
-            control={form.control}
-            name='GroupModelChannelGroups'
-            render={({ field, fieldState }) => (
-              <FormItem data-invalid={fieldState.invalid}>
-                <FormLabel>{t('Model channel pools')}</FormLabel>
-                <FormControl>
-                  <JsonCodeEditor
-                    value={field.value}
-                    onChange={field.onChange}
-                    name={field.name}
-                    onBlur={field.onBlur}
-                    textareaRef={field.ref}
-                  />
-                </FormControl>
-                <FormDescription>
-                  {t(
-                    'Use { userGroup: { model: [channelGroups] } }. Missing models are unrestricted; an empty array blocks the model.'
-                  )}
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         )}
       </Form>
     </div>

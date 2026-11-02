@@ -55,7 +55,6 @@ type GroupFormValues = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   GroupSpecialUsableGroup: string
-  GroupModelChannelGroups: string
   ModelTieredRatios: string
 }
 
@@ -106,7 +105,6 @@ function FormHarness(props: FormHarnessProps) {
       MaxTokenAutoGroups: 5,
       DefaultUseAutoGroup: false,
       GroupSpecialUsableGroup: '{}',
-      GroupModelChannelGroups: '{}',
       ModelTieredRatios: props.tieredRatios,
     },
   })

@@ -35,7 +35,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -46,13 +45,12 @@ var userGroupConfigMutex sync.Mutex
 const dedicatedUserGroupPrefix = "企业客户-"
 
 type userGroupConfigUpdateRequest struct {
-	Group              string                          `json:"group"`
-	Revision           string                          `json:"revision"`
-	Discounts          map[string]float64              `json:"discounts"`
-	ModelDiscounts     *map[string]map[string]*float64 `json:"model_discounts"`
-	RateLimitEnabled   bool                            `json:"rate_limit_enabled"`
-	RateLimit          setting.GroupRateLimit          `json:"rate_limit"`
-	ModelChannelGroups map[string][]string             `json:"model_channel_groups"`
+	Group            string                          `json:"group"`
+	Revision         string                          `json:"revision"`
+	Discounts        map[string]float64              `json:"discounts"`
+	ModelDiscounts   *map[string]map[string]*float64 `json:"model_discounts"`
+	RateLimitEnabled bool                            `json:"rate_limit_enabled"`
+	RateLimit        setting.GroupRateLimit          `json:"rate_limit"`
 }
 
 type userGroupRateLimitResponse struct {
@@ -72,7 +70,6 @@ type userGroupConfigResponse struct {
 	RateLimitEnabled       bool                          `json:"rate_limit_enabled"`
 	GlobalRateLimitEnabled bool                          `json:"global_rate_limit_enabled"`
 	RateLimit              userGroupRateLimitResponse    `json:"rate_limit"`
-	ModelChannelGroups     map[string][]string           `json:"model_channel_groups"`
 	AvailableGroupRatios   map[string]float64            `json:"available_group_ratios"`
 	GroupUserCount         int64                         `json:"group_user_count"`
 }
@@ -80,15 +77,6 @@ type userGroupConfigResponse struct {
 type createDedicatedUserGroupRequest struct {
 	Group    string `json:"group"`
 	Revision string `json:"revision"`
-}
-
-type previewUserGroupChannelsRequest struct {
-	Group              string              `json:"group"`
-	ModelChannelGroups map[string][]string `json:"model_channel_groups"`
-}
-
-type channelPoolPreview struct {
-	CandidateCount int `json:"candidate_count"`
 }
 
 // AuthorizeUserGroupConfigTarget preserves the user-management role hierarchy
@@ -115,51 +103,8 @@ func AuthorizeUserGroupConfigTarget(c *gin.Context) {
 	c.Next()
 }
 
-// PreviewUserGroupChannels counts enabled channel candidates in each draft
-// pool. Token group and request capability filters can further reduce them.
-func PreviewUserGroupChannels(c *gin.Context) {
-	userID, err := strconv.Atoi(c.Param("id"))
-	if err != nil || userID <= 0 {
-		common.ApiErrorMsg(c, "invalid user id")
-		return
-	}
-	var request previewUserGroupChannelsRequest
-	if err := common.DecodeJson(c.Request.Body, &request); err != nil || request.ModelChannelGroups == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid channel pool preview"})
-		return
-	}
-	user, err := model.GetUserById(userID, false)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if request.Group != user.Group {
-		c.JSON(http.StatusConflict, gin.H{"success": false, "message": model.ErrUserGroupChanged.Error()})
-		return
-	}
-	encoded, err := common.Marshal(setting.GroupModelChannelGroups{user.Group: request.ModelChannelGroups})
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if _, err := setting.ParseGroupModelChannelGroups(string(encoded)); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	previews := make(map[string]channelPoolPreview, len(request.ModelChannelGroups))
-	for modelName, groups := range request.ModelChannelGroups {
-		candidates, err := service.ChannelGroupsAllowedChannelIDs(groups, modelName)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		previews[modelName] = channelPoolPreview{CandidateCount: len(candidates)}
-	}
-	common.ApiSuccess(c, previews)
-}
-
 // CreateDedicatedUserGroup gives one user a stable identity group while
-// retaining the source group's billing, rate-limit, and routing policies.
+// retaining the source group's billing, rate-limit, and visibility policies.
 func CreateDedicatedUserGroup(c *gin.Context) {
 	userID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || userID <= 0 {
@@ -267,26 +212,6 @@ func CreateDedicatedUserGroup(c *gin.Context) {
 		rateLimits[newGroup] = append(json.RawMessage(nil), source...)
 	}
 
-	channelPolicies, err := setting.ParseGroupModelChannelGroups(setting.GroupModelChannelGroupsJSON())
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if _, exists := channelPolicies[newGroup]; exists {
-		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "dedicated user group policy already exists"})
-		return
-	}
-	if source, exists := channelPolicies[user.Group]; exists {
-		copy := make(map[string][]string, len(source))
-		for modelName, groups := range source {
-			copy[modelName] = append([]string(nil), groups...)
-			if groups != nil && len(groups) == 0 {
-				copy[modelName] = []string{}
-			}
-		}
-		channelPolicies[newGroup] = copy
-	}
-
 	specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()
 	if _, exists := specialGroups[newGroup]; exists {
 		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "dedicated user group policy already exists"})
@@ -296,12 +221,11 @@ func CreateDedicatedUserGroup(c *gin.Context) {
 		specialGroups[newGroup] = maps.Clone(source)
 	}
 
-	values := make(map[string]string, 5)
+	values := make(map[string]string, 4)
 	for key, value := range map[string]any{
 		"GroupGroupRatio": discounts,
 		ratio_setting.GroupGroupModelRatioOptionKey:      modelDiscounts,
 		"ModelRequestRateLimitGroup":                     rateLimits,
-		setting.GroupModelChannelGroupsOptionKey:         channelPolicies,
 		"group_ratio_setting.group_special_usable_group": specialGroups,
 	} {
 		encoded, err := common.Marshal(value)
@@ -364,7 +288,7 @@ func UpdateUserGroupConfig(c *gin.Context) {
 	}
 
 	var request userGroupConfigUpdateRequest
-	if err := common.DecodeJson(c.Request.Body, &request); err != nil || request.Revision == "" || request.Discounts == nil || request.ModelChannelGroups == nil {
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil || request.Revision == "" || request.Discounts == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid user group configuration"})
 		return
 	}
@@ -456,17 +380,6 @@ func UpdateUserGroupConfig(c *gin.Context) {
 		delete(rateLimits, user.Group)
 	}
 
-	channelPolicies, err := setting.ParseGroupModelChannelGroups(setting.GroupModelChannelGroupsJSON())
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if len(request.ModelChannelGroups) == 0 {
-		delete(channelPolicies, user.Group)
-	} else {
-		channelPolicies[user.Group] = request.ModelChannelGroups
-	}
-
 	discountsJSON, err := common.Marshal(discountPolicies)
 	if err != nil {
 		common.ApiError(c, err)
@@ -477,24 +390,14 @@ func UpdateUserGroupConfig(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	channelPoliciesJSON, err := common.Marshal(channelPolicies)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
 	if err := setting.CheckModelRequestRateLimitGroup(string(rateLimitsJSON)); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if _, err := setting.ParseGroupModelChannelGroups(string(channelPoliciesJSON)); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
 	options := map[string]string{
-		"GroupGroupRatio":                        string(discountsJSON),
-		"ModelRequestRateLimitGroup":             string(rateLimitsJSON),
-		setting.GroupModelChannelGroupsOptionKey: string(channelPoliciesJSON),
+		"GroupGroupRatio":            string(discountsJSON),
+		"ModelRequestRateLimitGroup": string(rateLimitsJSON),
 	}
 	if request.ModelDiscounts != nil {
 		options[ratio_setting.GroupGroupModelRatioOptionKey] = string(modelDiscountsJSON)
@@ -550,25 +453,16 @@ func buildUserGroupConfig(userID int) (*userGroupConfigResponse, error) {
 		rateLimit.Models = map[string]setting.ModelRateLimit{}
 	}
 
-	channelPolicies, err := setting.ParseGroupModelChannelGroups(setting.GroupModelChannelGroupsJSON())
-	if err != nil {
-		return nil, err
-	}
-	modelChannelGroups := channelPolicies[user.Group]
-	if modelChannelGroups == nil {
-		modelChannelGroups = map[string][]string{}
-	}
 	specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()[user.Group]
 	revisionPayload, err := common.Marshal(struct {
-		Username           string                        `json:"username"`
-		Group              string                        `json:"group"`
-		Discounts          map[string]float64            `json:"discounts"`
-		ModelDiscounts     map[string]map[string]float64 `json:"model_discounts"`
-		RateLimitEnabled   bool                          `json:"rate_limit_enabled"`
-		RateLimit          setting.GroupRateLimit        `json:"rate_limit"`
-		ModelChannelGroups map[string][]string           `json:"model_channel_groups"`
-		SpecialGroups      map[string]string             `json:"special_groups"`
-	}{user.Username, user.Group, discounts, modelDiscounts, rateLimitEnabled, rateLimit, modelChannelGroups, specialGroups})
+		Username         string                        `json:"username"`
+		Group            string                        `json:"group"`
+		Discounts        map[string]float64            `json:"discounts"`
+		ModelDiscounts   map[string]map[string]float64 `json:"model_discounts"`
+		RateLimitEnabled bool                          `json:"rate_limit_enabled"`
+		RateLimit        setting.GroupRateLimit        `json:"rate_limit"`
+		SpecialGroups    map[string]string             `json:"special_groups"`
+	}{user.Username, user.Group, discounts, modelDiscounts, rateLimitEnabled, rateLimit, specialGroups})
 	if err != nil {
 		return nil, err
 	}
@@ -589,7 +483,6 @@ func buildUserGroupConfig(userID int) (*userGroupConfigResponse, error) {
 			Limits: rateLimit.Limits,
 			Models: rateLimit.Models,
 		},
-		ModelChannelGroups:   modelChannelGroups,
 		AvailableGroupRatios: ratio_setting.GetGroupRatioCopy(),
 		GroupUserCount:       groupUserCount,
 	}, nil

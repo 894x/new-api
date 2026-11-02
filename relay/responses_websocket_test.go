@@ -20,7 +20,6 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
@@ -224,12 +223,11 @@ func TestRestoreConnectionContextRejectsChangedAdvancedCustomRoute(t *testing.T)
 
 func TestRestoreConnectionContextRechecksGroupPolicy(t *testing.T) {
 	database := setupRelayChannelDB(t)
-	channel := &model.Channel{Name: "pinned", Key: "sk-test", Status: common.ChannelStatusEnabled, Type: constant.ChannelTypeOpenAI}
+	channel := &model.Channel{Name: "pinned", Key: "sk-test", Status: common.ChannelStatusEnabled, Type: constant.ChannelTypeOpenAI, Models: "ws-model", Group: "default"}
 	channel.SetSetting(dto.ChannelSettings{ResponsesWebSocketEnabled: true})
+	require.NoError(t, database.AutoMigrate(&model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}))
 	require.NoError(t, database.Create(channel).Error)
-	original := setting.GroupModelChannelGroupsJSON()
-	t.Cleanup(func() { require.NoError(t, setting.UpdateGroupModelChannelGroups(original)) })
-	require.NoError(t, setting.UpdateGroupModelChannelGroups(`{}`))
+	require.NoError(t, channel.AddAbilities(nil))
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
@@ -238,7 +236,7 @@ func TestRestoreConnectionContextRechecksGroupPolicy(t *testing.T) {
 	session := &responsesWSSession{lockedChannelID: channel.Id, lockedModel: "ws-model", lockedKey: channel.Key,
 		lockedContext: map[constant.ContextKey]any{constant.ContextKeyChannelBaseUrl: channel.GetBaseURL(), constant.ContextKeyChannelHeaderOverride: channel.GetHeaderOverride()}}
 	require.Nil(t, session.restoreConnectionContext(c, "ws-model"))
-	require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"default":{"ws-model":[]}}`))
+	require.NoError(t, model.SaveModelRoutingPool(&model.ModelRoutingPool{RoutingGroup: "default", Model: "ws-model", Mode: model.RoutingModePriority, Channels: []model.ModelRoutingPoolChannel{}}, ""))
 	apiErr := session.restoreConnectionContext(c, "ws-model")
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)

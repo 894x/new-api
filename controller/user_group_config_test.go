@@ -49,7 +49,6 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	originalDiscounts := ratio_setting.GroupGroupRatio2JSONString()
 	originalModelDiscounts := ratio_setting.GroupGroupModelRatio2JSONString()
 	originalRateLimits := setting.ModelRequestRateLimitGroup2JSONString()
-	originalChannels := setting.GroupModelChannelGroupsJSON()
 	originalSpecialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.MarshalJSONString()
 	common.OptionMapRWMutex.Lock()
 	originalOptionMap := common.OptionMap
@@ -59,7 +58,6 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(originalDiscounts))
 		require.NoError(t, ratio_setting.UpdateGroupGroupModelRatioByJSONString(originalModelDiscounts))
 		require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(originalRateLimits))
-		require.NoError(t, setting.UpdateGroupModelChannelGroups(originalChannels))
 		require.NoError(t, types.LoadFromJsonString(ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup, originalSpecialGroups))
 		common.OptionMapRWMutex.Lock()
 		common.OptionMap = originalOptionMap
@@ -69,19 +67,12 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{"other":{"default":0.95},"customer":{"old":0.8}}`))
 	require.NoError(t, ratio_setting.UpdateGroupGroupModelRatioByJSONString(`{"other":{"default":{"gpt-5":0.9}},"customer":{"old":{"public-old":0.8}}}`))
 	require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(`{"other":[1,1,1],"customer":[2,2,2]}`))
-	require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"other":{"model-x":["pool-x"]},"customer":{"old-model":["old-pool"]}}`))
 	require.NoError(t, types.LoadFromJsonString(ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup, `{"customer":{"+:vip":"VIP"}}`))
 
 	root := model.User{Username: "root-config-test", Role: common.RoleRootUser, Group: "default", Status: common.UserStatusEnabled, AffCode: "root-config-aff"}
 	target := model.User{Username: "customer-config-test", Role: common.RoleCommonUser, Group: "customer", Status: common.UserStatusEnabled, AuthVersion: 1, AffCode: "customer-config-aff"}
 	require.NoError(t, db.Create(&root).Error)
 	require.NoError(t, db.Create(&target).Error)
-	require.NoError(t, db.Create(&[]model.Ability{
-		{Group: "pool-a", Model: "gpt-5", ChannelId: 101, Enabled: true},
-		{Group: "pool-b", Model: "gpt-5", ChannelId: 101, Enabled: true},
-		{Group: "pool-b", Model: "gpt-5", ChannelId: 102, Enabled: true},
-		{Group: "pool-b", Model: "gpt-5", ChannelId: 103, Enabled: false},
-	}).Error)
 	now := time.Now().Unix()
 	require.NoError(t, db.Create(&model.UserSession{
 		SID: "customer-config-session", UserID: target.Id, Version: 1, UserAuthVersion: 1,
@@ -90,14 +81,6 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	}).Error)
 
 	gin.SetMode(gin.TestMode)
-	previewRecorder := httptest.NewRecorder()
-	previewContext, _ := gin.CreateTestContext(previewRecorder)
-	previewContext.Params = gin.Params{{Key: "id", Value: strconv.Itoa(target.Id)}}
-	previewContext.Request = httptest.NewRequest(http.MethodPost, "/api/user/group-config/preview", strings.NewReader(`{"group":"customer","model_channel_groups":{"gpt-5":["pool-a","pool-b"],"blocked":[]}}`))
-	PreviewUserGroupChannels(previewContext)
-	assert.Equal(t, http.StatusOK, previewRecorder.Code)
-	assert.JSONEq(t, `{"success":true,"message":"","data":{"gpt-5":{"candidate_count":2},"blocked":{"candidate_count":0}}}`, previewRecorder.Body.String())
-
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(target.Id)}}
@@ -111,8 +94,7 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
   "discounts":{"default":0.7,"vip":0.6},
   "model_discounts":{"default":{"public-a":0.25,"public-free":0},"vip":{"public-a":0.75}},
   "rate_limit_enabled":true,
-  "rate_limit":{"limits":[10,8,5000],"models":{"gpt-5":{"rpm":3,"tpm":1000}}},
-  "model_channel_groups":{"gpt-5":["pool-a","pool-b"],"blocked":[]}
+  "rate_limit":{"limits":[10,8,5000],"models":{"gpt-5":{"rpm":3,"tpm":1000}}}
 }`, initial.Revision)))
 	ctx.Set("id", root.Id)
 	ctx.Set("role", common.RoleRootUser)
@@ -122,18 +104,16 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	assert.JSONEq(t, `{"other":{"default":0.95},"customer":{"default":0.7,"vip":0.6}}`, ratio_setting.GroupGroupRatio2JSONString())
 	assert.JSONEq(t, `{"other":[1,1,1],"customer":{"limits":[10,8,5000],"models":{"gpt-5":{"rpm":3,"tpm":1000}}}}`, setting.ModelRequestRateLimitGroup2JSONString())
-	assert.JSONEq(t, `{"other":{"model-x":["pool-x"]},"customer":{"gpt-5":["pool-a","pool-b"],"blocked":[]}}`, setting.GroupModelChannelGroupsJSON())
 
 	var options []model.Option
-	require.NoError(t, db.Where(clause.IN{Column: clause.Column{Name: "key"}, Values: []any{"GroupGroupRatio", "ModelRequestRateLimitGroup", setting.GroupModelChannelGroupsOptionKey, ratio_setting.GroupGroupModelRatioOptionKey}}).Find(&options).Error)
-	require.Len(t, options, 4)
+	require.NoError(t, db.Where(clause.IN{Column: clause.Column{Name: "key"}, Values: []any{"GroupGroupRatio", "ModelRequestRateLimitGroup", ratio_setting.GroupGroupModelRatioOptionKey}}).Find(&options).Error)
+	require.Len(t, options, 3)
 	stored := make(map[string]string, len(options))
 	for _, option := range options {
 		stored[option.Key] = option.Value
 	}
 	assert.JSONEq(t, ratio_setting.GroupGroupRatio2JSONString(), stored["GroupGroupRatio"])
 	assert.JSONEq(t, setting.ModelRequestRateLimitGroup2JSONString(), stored["ModelRequestRateLimitGroup"])
-	assert.JSONEq(t, setting.GroupModelChannelGroupsJSON(), stored[setting.GroupModelChannelGroupsOptionKey])
 	assert.JSONEq(t, `{"other":{"default":{"gpt-5":0.9}},"customer":{"default":{"public-a":0.25,"public-free":0},"vip":{"public-a":0.75}}}`, stored[ratio_setting.GroupGroupModelRatioOptionKey])
 
 	configured, err := buildUserGroupConfig(target.Id)
@@ -141,7 +121,7 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	stalePolicyRecorder := httptest.NewRecorder()
 	stalePolicyContext, _ := gin.CreateTestContext(stalePolicyRecorder)
 	stalePolicyContext.Params = gin.Params{{Key: "id", Value: strconv.Itoa(target.Id)}}
-	stalePolicyContext.Request = httptest.NewRequest(http.MethodPut, "/api/user/group-config", strings.NewReader(fmt.Sprintf(`{"group":"customer","revision":%q,"discounts":{},"rate_limit_enabled":false,"rate_limit":{"limits":[0,1,0]},"model_channel_groups":{}}`, initial.Revision)))
+	stalePolicyContext.Request = httptest.NewRequest(http.MethodPut, "/api/user/group-config", strings.NewReader(fmt.Sprintf(`{"group":"customer","revision":%q,"discounts":{},"rate_limit_enabled":false,"rate_limit":{"limits":[0,1,0]}}`, initial.Revision)))
 	UpdateUserGroupConfig(stalePolicyContext)
 	assert.Equal(t, http.StatusConflict, stalePolicyRecorder.Code)
 	assert.JSONEq(t, `{"other":{"default":0.95},"customer":{"default":0.7,"vip":0.6}}`, ratio_setting.GroupGroupRatio2JSONString())
@@ -175,7 +155,6 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	assert.Equal(t, model.UserSessionStatusRevoked, session.Status)
 	assert.JSONEq(t, `{"other":{"default":0.95},"customer":{"default":0.7,"vip":0.6},"企业客户-customer-config-test":{"default":0.7,"vip":0.6}}`, ratio_setting.GroupGroupRatio2JSONString())
 	assert.JSONEq(t, `{"other":[1,1,1],"customer":{"limits":[10,8,5000],"models":{"gpt-5":{"rpm":3,"tpm":1000}}},"企业客户-customer-config-test":{"limits":[10,8,5000],"models":{"gpt-5":{"rpm":3,"tpm":1000}}}}`, setting.ModelRequestRateLimitGroup2JSONString())
-	assert.JSONEq(t, `{"other":{"model-x":["pool-x"]},"customer":{"gpt-5":["pool-a","pool-b"],"blocked":[]},"企业客户-customer-config-test":{"gpt-5":["pool-a","pool-b"],"blocked":[]}}`, setting.GroupModelChannelGroupsJSON())
 	assert.JSONEq(t, `{"customer":{"+:vip":"VIP"},"企业客户-customer-config-test":{"+:vip":"VIP"}}`, ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.MarshalJSONString())
 	assert.False(t, ratio_setting.ContainsGroupRatio(updatedUser.Group))
 	assert.Equal(t, 0.7, service.GetUserGroupRatio(updatedUser.Group, "default"))
@@ -184,14 +163,11 @@ func TestUpdateUserGroupConfigReplacesOnlyTheSelectedUserGroup(t *testing.T) {
 	assert.Zero(t, success)
 	assert.Equal(t, 1000, tpm)
 	assert.Equal(t, int64(60), windowSeconds)
-	legacyGroups, legacyConfigured := setting.GetGroupModelChannelGroups(updatedUser.Group, "gpt-5")
-	assert.True(t, legacyConfigured)
-	assert.Equal(t, []string{"pool-a", "pool-b"}, legacyGroups, "legacy settings remain readable but no longer constrain routing")
 
 	staleRecorder := httptest.NewRecorder()
 	staleContext, _ := gin.CreateTestContext(staleRecorder)
 	staleContext.Params = gin.Params{{Key: "id", Value: strconv.Itoa(target.Id)}}
-	staleContext.Request = httptest.NewRequest(http.MethodPut, "/api/user/group-config", strings.NewReader(fmt.Sprintf(`{"group":"customer","revision":%q,"discounts":{},"rate_limit_enabled":false,"rate_limit":{"limits":[0,1,0]},"model_channel_groups":{}}`, configured.Revision)))
+	staleContext.Request = httptest.NewRequest(http.MethodPut, "/api/user/group-config", strings.NewReader(fmt.Sprintf(`{"group":"customer","revision":%q,"discounts":{},"rate_limit_enabled":false,"rate_limit":{"limits":[0,1,0]}}`, configured.Revision)))
 	UpdateUserGroupConfig(staleContext)
 	assert.Equal(t, http.StatusConflict, staleRecorder.Code)
 
@@ -211,7 +187,6 @@ func TestUserGroupModelDiscountConfigurationContracts(t *testing.T) {
 	oldDiscounts := ratio_setting.GroupGroupRatio2JSONString()
 	oldModels := ratio_setting.GroupGroupModelRatio2JSONString()
 	oldRates := setting.ModelRequestRateLimitGroup2JSONString()
-	oldChannels := setting.GroupModelChannelGroupsJSON()
 	common.OptionMapRWMutex.Lock()
 	oldOptions := common.OptionMap
 	common.OptionMap = map[string]string{}
@@ -220,7 +195,6 @@ func TestUserGroupModelDiscountConfigurationContracts(t *testing.T) {
 		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(oldDiscounts))
 		require.NoError(t, ratio_setting.UpdateGroupGroupModelRatioByJSONString(oldModels))
 		require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(oldRates))
-		require.NoError(t, setting.UpdateGroupModelChannelGroups(oldChannels))
 		common.OptionMapRWMutex.Lock()
 		common.OptionMap = oldOptions
 		common.OptionMapRWMutex.Unlock()
@@ -240,7 +214,7 @@ func TestUserGroupModelDiscountConfigurationContracts(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(recorder)
 			ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(user.Id)}}
-			ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/group-config", strings.NewReader(fmt.Sprintf(`{"group":"customer","revision":%q,"discounts":{},"model_discounts":%s,"rate_limit_enabled":false,"model_channel_groups":{}}`, initial.Revision, invalid)))
+			ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/group-config", strings.NewReader(fmt.Sprintf(`{"group":"customer","revision":%q,"discounts":{},"model_discounts":%s,"rate_limit_enabled":false}`, initial.Revision, invalid)))
 			UpdateUserGroupConfig(ctx)
 			assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
 			assert.JSONEq(t, baseline, ratio_setting.GroupGroupModelRatio2JSONString())
@@ -267,7 +241,7 @@ func TestUserGroupModelDiscountConfigurationContracts(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(recorder)
 			ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(user.Id)}}
-			ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/group-config", strings.NewReader(fmt.Sprintf(`{"group":"customer","revision":%q,"discounts":{},"rate_limit_enabled":false,"model_channel_groups":{}%s}`, current.Revision, step.modelField)))
+			ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/group-config", strings.NewReader(fmt.Sprintf(`{"group":"customer","revision":%q,"discounts":{},"rate_limit_enabled":false%s}`, current.Revision, step.modelField)))
 			UpdateUserGroupConfig(ctx)
 			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 			assert.JSONEq(t, step.want, ratio_setting.GroupGroupModelRatio2JSONString())

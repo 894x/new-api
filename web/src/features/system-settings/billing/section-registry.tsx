@@ -54,7 +54,6 @@ const getGroupDefaults = (settings: BillingSettings) => ({
   GroupSpecialUsableGroup:
     settings['group_ratio_setting.group_special_usable_group'],
   ModelTieredRatios: settings['group_ratio_setting.model_tiered_ratios'],
-  GroupModelChannelGroups: settings.GroupModelChannelGroups,
 })
 
 const BILLING_SECTIONS = [

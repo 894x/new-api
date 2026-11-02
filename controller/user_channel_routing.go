@@ -143,33 +143,9 @@ func GetUserChannelRouting(c *gin.Context) {
 		return
 	}
 	response.Configured = len(overrides) > 0
-	draftChannelGroups := false
-	var allowed map[int]struct{}
-	if rawGroups, ok := c.GetQuery("channel_groups"); ok {
-		draftChannelGroups = true
-		var groups []string
-		if len(rawGroups) > 64<<10 || common.UnmarshalJsonStr(rawGroups, &groups) != nil || groups == nil || len(groups) > 1000 {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid channel groups"})
-			return
-		}
-		encoded, marshalErr := common.Marshal(setting.GroupModelChannelGroups{"draft": map[string][]string{modelName: groups}})
-		if marshalErr != nil {
-			common.ApiError(c, marshalErr)
-			return
-		}
-		if _, parseErr := setting.ParseGroupModelChannelGroups(string(encoded)); parseErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid channel groups"})
-			return
-		}
-		allowed, err = service.ChannelGroupsAllowedChannelIDs(groups, modelName)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-	}
 	available := make(map[int]struct{})
 	for _, group := range groups {
-		candidates, err := model.ListChannelSelectionCandidates(group, modelName, model.ChannelSelectionFilters{AllowedChannelIds: allowed})
+		candidates, err := model.ListChannelSelectionCandidates(group, modelName, model.ChannelSelectionFilters{})
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -195,10 +171,7 @@ func GetUserChannelRouting(c *gin.Context) {
 			return
 		}
 		for _, member := range members {
-			_, permitted := allowed[member.ChannelID]
-			if allowed == nil || permitted {
-				poolMembers[member.ChannelID] = true
-			}
+			poolMembers[member.ChannelID] = true
 		}
 	}
 	for _, name := range modelNames {
@@ -210,7 +183,7 @@ func GetUserChannelRouting(c *gin.Context) {
 		for _, route := range routes {
 			override, configured := overrideByID[route.ChannelId]
 			_, usable := available[route.ChannelId]
-			if seen[route.ChannelId] || c.Query("view") != "pool" && !usable && (routingGroup != "" || draftChannelGroups || !configured) || c.Query("view") == "pool" && !usable && !configured && !poolMembers[route.ChannelId] {
+			if seen[route.ChannelId] || c.Query("view") != "pool" && !usable && (routingGroup != "" || !configured) || c.Query("view") == "pool" && !usable && !configured && !poolMembers[route.ChannelId] {
 				continue
 			}
 			seen[route.ChannelId] = true
@@ -231,18 +204,16 @@ func GetUserChannelRouting(c *gin.Context) {
 		}
 	}
 	// Stale records remain visible and can be reset even after channel removal.
-	if !draftChannelGroups {
-		for _, override := range overrides {
-			if !seen[override.ChannelId] {
-				row := userChannelRoutingRow{ChannelID: override.ChannelId, PriorityOverride: override.Priority, WeightOverride: override.Weight, Enabled: !override.Disabled, Configured: true}
-				if override.Priority != nil {
-					row.EffectivePriority = *override.Priority
-				}
-				if override.Weight != nil {
-					row.EffectiveWeight = *override.Weight
-				}
-				response.Channels = append(response.Channels, row)
+	for _, override := range overrides {
+		if !seen[override.ChannelId] {
+			row := userChannelRoutingRow{ChannelID: override.ChannelId, PriorityOverride: override.Priority, WeightOverride: override.Weight, Enabled: !override.Disabled, Configured: true}
+			if override.Priority != nil {
+				row.EffectivePriority = *override.Priority
 			}
+			if override.Weight != nil {
+				row.EffectiveWeight = *override.Weight
+			}
+			response.Channels = append(response.Channels, row)
 		}
 	}
 	if c.Query("view") == "pool" {
@@ -277,7 +248,6 @@ func GetUserChannelRouting(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
-			filters.AllowedChannelIds = allowed
 			candidates, err := model.ListChannelSelectionCandidates(group, modelName, filters)
 			if err != nil {
 				common.ApiError(c, err)

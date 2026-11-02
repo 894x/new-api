@@ -31,7 +31,6 @@ import type {
   ManageUserQuotaPayload,
   UserGroupConfig,
   UpdateUserGroupConfigPayload,
-  ChannelPoolPreview,
   ApiResponse,
   UserChannelRoutingConfig,
   UserChannelRoutingPatch,
@@ -40,7 +39,6 @@ import type {
 export async function getUserChannelRouting(
   id: number,
   model = '',
-  channelGroups?: string[],
   routingGroup?: string
 ) {
   const response = await api.get<ApiResponse<UserChannelRoutingConfig>>(
@@ -49,9 +47,6 @@ export async function getUserChannelRouting(
       params: {
         model,
         ...(routingGroup ? { routing_group: routingGroup } : {}),
-        ...(channelGroups === undefined
-          ? {}
-          : { channel_groups: JSON.stringify(channelGroups) }),
       },
     }
   )
@@ -224,18 +219,6 @@ export async function createDedicatedUserGroup(
   const res = await api.post(`/api/user/${id}/group-config/dedicated`, {
     group,
     revision,
-  })
-  return res.data
-}
-
-export async function previewUserGroupChannels(
-  id: number,
-  group: string,
-  modelChannelGroups: Record<string, string[]>
-): Promise<ApiResponse<Record<string, ChannelPoolPreview>>> {
-  const res = await api.post(`/api/user/${id}/group-config/preview`, {
-    group,
-    model_channel_groups: modelChannelGroups,
   })
   return res.data
 }

@@ -179,7 +179,7 @@ function UserChannelRoutingGroupEditor(props: {
   const query = useQuery({
     queryKey: ['user-channel-routing', props.userId, props.model, props.group],
     queryFn: () =>
-      getUserChannelRouting(props.userId, props.model, undefined, props.group),
+      getUserChannelRouting(props.userId, props.model, props.group),
     enabled: props.model !== '' && canRead,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,

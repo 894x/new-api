@@ -377,7 +377,6 @@ export type BillingSettings = {
   'group_ratio_setting.group_special_usable_group': string
   'group_ratio_setting.group_group_model_ratio': string
   'group_ratio_setting.model_tiered_ratios': string
-  GroupModelChannelGroups: string
   PayAddress: string
   EpayId: string
   EpayKey: string

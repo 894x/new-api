@@ -57,7 +57,6 @@ const sharedConfig: UserGroupConfig = {
   rate_limit_enabled: true,
   global_rate_limit_enabled: true,
   rate_limit: { limits: [10, 8, 1000], models: {} },
-  model_channel_groups: { 'model-x': ['pool-a'] },
   available_group_ratios: { default: 1 },
 }
 

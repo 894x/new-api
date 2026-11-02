@@ -40,7 +40,6 @@ import {
   Settings,
   SlidersHorizontal,
   Wand2,
-  FolderPlus,
 } from 'lucide-react'
 import {
   type ComponentProps,
@@ -213,7 +212,6 @@ import { ChannelQuickOptions } from '../channel-quick-options'
 import { ChannelTypeLogo } from '../channel-type-badge'
 import { useChannels } from '../channels-provider'
 import { AdvancedCustomEditorDialog } from '../dialogs/advanced-custom-editor-dialog'
-import { ChannelResourceGroupDialog } from '../dialogs/channel-resource-group-dialog'
 import { ConfigureModelsDialog } from '../dialogs/configure-models-dialog'
 import {
   MissingModelsConfirmationDialog,
@@ -441,7 +439,6 @@ export function ChannelMutateDrawer({
   const canRevealChannelKey = currentUser?.role === ROLE.SUPER_ADMIN
   const [isCodexCredentialRefreshing, setIsCodexCredentialRefreshing] =
     useState(false)
-  const [resourceGroupOpen, setResourceGroupOpen] = useState(false)
   const initialModelsRef = useRef<string[]>([])
   const initialModelMappingRef = useRef<string>('')
   const initialStatusCodeMappingRef = useRef<string>('')
@@ -1069,7 +1066,6 @@ export function ChannelMutateDrawer({
   useEffect(() => {
     if (!open) {
       setModelConfiguration(null)
-      setResourceGroupOpen(false)
       form.reset(CHANNEL_FORM_DEFAULT_VALUES)
       loadedForm.current = null
       setProviderTarget(null)
@@ -3563,26 +3559,12 @@ export function ChannelMutateDrawer({
               name='group'
               render={({ field }) => (
                 <FormItem className='space-y-3'>
-                  <div className='flex flex-wrap items-center justify-between gap-2'>
-                    <div className='space-y-1'>
-                      <FormLabel required>{t('Groups')}</FormLabel>
-                      <FormDescription>
-                        {t(FIELD_DESCRIPTIONS.GROUP)}{' '}
-                        {t('A channel can belong to at most 16 groups.')}
-                      </FormDescription>
-                    </div>
-                    {currentRow && currentUser?.role === ROLE.SUPER_ADMIN && (
-                      <Button
-                        type='button'
-                        variant='outline'
-                        size='sm'
-                        disabled={isSubmitting}
-                        onClick={() => setResourceGroupOpen(true)}
-                      >
-                        <FolderPlus className='size-4' aria-hidden='true' />
-                        {t('Create resource group')}
-                      </Button>
-                    )}
+                  <div className='space-y-1'>
+                    <FormLabel required>{t('Groups')}</FormLabel>
+                    <FormDescription>
+                      {t(FIELD_DESCRIPTIONS.GROUP)}{' '}
+                      {t('A channel can belong to at most 16 groups.')}
+                    </FormDescription>
                   </div>
                   <FormControl>
                     {isLoadingGroups ? (
@@ -5344,25 +5326,6 @@ export function ChannelMutateDrawer({
               shouldDirty: true,
               shouldValidate: true,
             })
-          }}
-        />
-      )}
-
-      {open && resourceGroupOpen && currentRow && (
-        <ChannelResourceGroupDialog
-          key={currentRow.id}
-          channelId={currentRow.id}
-          channelName={currentRow.name}
-          onOpenChange={setResourceGroupOpen}
-          onApplied={(groupName) => {
-            form.setValue(
-              'group',
-              [...new Set([...form.getValues('group'), groupName])],
-              {
-                shouldDirty: true,
-                shouldValidate: true,
-              }
-            )
           }}
         />
       )}

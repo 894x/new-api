@@ -40,7 +40,6 @@ func TestCustomerGroupConfigurationAuthorization(t *testing.T) {
 	oldDiscounts := ratio_setting.GroupGroupRatio2JSONString()
 	oldModelDiscounts := ratio_setting.GroupGroupModelRatio2JSONString()
 	oldRates := setting.ModelRequestRateLimitGroup2JSONString()
-	oldChannels := setting.GroupModelChannelGroupsJSON()
 	oldSpecialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.MarshalJSONString()
 	common.OptionMapRWMutex.Lock()
 	oldOptions := common.OptionMap
@@ -50,7 +49,6 @@ func TestCustomerGroupConfigurationAuthorization(t *testing.T) {
 		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(oldDiscounts))
 		require.NoError(t, ratio_setting.UpdateGroupGroupModelRatioByJSONString(oldModelDiscounts))
 		require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(oldRates))
-		require.NoError(t, setting.UpdateGroupModelChannelGroups(oldChannels))
 		require.NoError(t, types.LoadFromJsonString(ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup, oldSpecialGroups))
 		common.OptionMapRWMutex.Lock()
 		common.OptionMap = oldOptions
@@ -59,14 +57,12 @@ func TestCustomerGroupConfigurationAuthorization(t *testing.T) {
 	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(`{}`))
 	require.NoError(t, ratio_setting.UpdateGroupGroupModelRatioByJSONString(`{}`))
 	require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(`{}`))
-	require.NoError(t, setting.UpdateGroupModelChannelGroups(`{}`))
 	require.NoError(t, types.LoadFromJsonString(ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup, `{}`))
 
 	base := fmt.Sprintf("/api/user/%d", f.unprivileged.Id)
 	endpoints := []struct{ method, path string }{
 		{http.MethodGet, "/group-config"},
 		{http.MethodGet, "/channel-routing-overrides"},
-		{http.MethodPost, "/group-config/preview"},
 		{http.MethodPut, "/group-config"},
 		{http.MethodPatch, "/channel-routing-overrides"},
 		{http.MethodPost, "/group-config/dedicated"},
@@ -111,10 +107,7 @@ func TestCustomerGroupConfigurationAuthorization(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "%v", response)
 	require.Equal(t, true, response["success"], "%v", response)
 	routing := response["data"].(map[string]any)
-	status, response = f.request(t, http.MethodPost, base+"/group-config/preview", f.managerA.Id, map[string]any{"group": f.unprivileged.Group, "model_channel_groups": map[string][]string{"gpt-5": {"default"}}})
-	require.Equal(t, http.StatusOK, status, "%v", response)
-	assert.Equal(t, true, response["success"])
-	for _, endpoint := range endpoints[3:] {
+	for _, endpoint := range endpoints[2:] {
 		status, _ := f.request(t, endpoint.method, base+endpoint.path, f.managerA.Id, nil)
 		assert.Equal(t, http.StatusForbidden, status, "read only cannot mutate %s", endpoint.path)
 	}
@@ -138,7 +131,6 @@ func TestCustomerGroupConfigurationAuthorization(t *testing.T) {
 		"group": f.unprivileged.Group, "revision": config["revision"], "discounts": map[string]float64{"default": 0.75},
 		"model_discounts":    map[string]map[string]float64{"default": {"gpt-5": 0.6}},
 		"rate_limit_enabled": true, "rate_limit": map[string]any{"limits": [3]int{20, 10, 5000}, "models": map[string]any{}},
-		"model_channel_groups": map[string][]string{"gpt-5": {"default"}},
 	})
 	require.Equal(t, http.StatusOK, status, "%v", response)
 	require.Equal(t, true, response["success"], "%v", response)
@@ -198,9 +190,6 @@ func TestCustomerGroupConfigurationAuthorization(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "%v", response)
 	require.Equal(t, true, response["success"], "%v", response)
 	routing = response["data"].(map[string]any)
-	status, response = f.request(t, http.MethodPost, base+"/group-config/preview", f.root.Id, map[string]any{"group": updated.Group, "model_channel_groups": map[string][]string{"gpt-5": {"default"}}})
-	require.Equal(t, http.StatusOK, status, "%v", response)
-	require.Equal(t, true, response["success"], "%v", response)
 	status, response = f.request(t, http.MethodPut, base+"/group-config", f.root.Id, config)
 	require.Equal(t, http.StatusOK, status, "%v", response)
 	require.Equal(t, true, response["success"], "%v", response)

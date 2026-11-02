@@ -8,7 +8,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -32,16 +31,10 @@ func setupGroupModelChannelPolicyTest(t *testing.T) *gorm.DB {
 		common.SetDatabaseTypes(originalMainType, originalLogType)
 	})
 	db := setupChannelSelectAutoGroupsTest(t)
-	original := setting.GroupModelChannelGroupsJSON()
-	t.Cleanup(func() { require.NoError(t, setting.UpdateGroupModelChannelGroups(original)) })
-	require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"default":{"model-a":["pool"],"denied":[]}}`))
 	createChannelSelectAutoGroupsChannel(t, db, 4101, "vip", "model-a")
 	createChannelSelectAutoGroupsChannel(t, db, 4102, "vip", "model-a")
 	createChannelSelectAutoGroupsChannel(t, db, 4103, "pool", "model-a")
 	createChannelSelectAutoGroupsChannel(t, db, 4104, "vip", "denied")
-	// X belongs to both the token's vip group and the user's configured pool.
-	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 4101).Update("group", "vip,pool").Error)
-	require.NoError(t, db.Create(&model.Ability{Group: "pool", Model: "model-a", ChannelId: 4101, Enabled: true, Weight: 100}).Error)
 	// A disallowed high-priority channel must not prevent X from being selected.
 	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 4102).Update("priority", 100).Error)
 	require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", 4102).Update("priority", 100).Error)
@@ -51,7 +44,7 @@ func setupGroupModelChannelPolicyTest(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestRoutingPoolReplacesResourceFiltersAndEnforcesPublicGroupMembership(t *testing.T) {
+func TestRoutingPoolEnforcesPublicGroupMembership(t *testing.T) {
 	for _, cache := range []bool{true, false} {
 		for _, dynamic := range []bool{true, false} {
 			t.Run(fmt.Sprintf("cache=%t/dynamic=%t", cache, dynamic), func(t *testing.T) {
@@ -71,7 +64,7 @@ func TestRoutingPoolReplacesResourceFiltersAndEnforcesPublicGroupMembership(t *t
 				assert.ErrorIs(t, ValidateSelectedChannelGroupPolicy(ctx, 4103, "model-a"), ErrGroupModelChannelDenied)
 				models, err := GetUserGroupsEnabledModels("default", []string{"vip"})
 				require.NoError(t, err)
-				assert.ElementsMatch(t, []string{"model-a", "denied"}, models, "legacy resource filters no longer hide models")
+				assert.ElementsMatch(t, []string{"model-a", "denied"}, models, "pool membership does not change public model visibility")
 			})
 		}
 	}
@@ -104,15 +97,14 @@ func TestRoutingPoolComposesAssetsAutoAndCapacitySpillover(t *testing.T) {
 	assert.Nil(t, channel, "an empty intersection must not fall back to unrestricted routing")
 }
 
-func TestRoutingPoolReloadsMembershipAndIgnoresLegacyResourceFilters(t *testing.T) {
+func TestRoutingPoolReloadsMembership(t *testing.T) {
 	setupGroupModelChannelPolicyTest(t)
 	ctx := newChannelSelectContext()
 	param := &RetryParam{Ctx: ctx, TokenGroup: "vip", ModelName: "model-a"}
-	require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"default":{"model-a":[]}}`))
 	channel, _, err := CacheGetRandomSatisfiedChannel(param)
 	require.NoError(t, err)
 	require.NotNil(t, channel)
-	assert.Equal(t, 4101, channel.Id, "legacy resource filters do not restrict the routing pool")
+	assert.Equal(t, 4101, channel.Id, "the routing pool selects its explicit member")
 	pool, err := model.GetModelRoutingPool("vip", "model-a")
 	require.NoError(t, err)
 	require.NotNil(t, pool)

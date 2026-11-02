@@ -1,18 +1,14 @@
 package model
 
 import (
-	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/glebarez/sqlite"
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +26,7 @@ type releasedChannelGroups struct {
 
 func (releasedChannelGroups) TableName() string { return "channels" }
 
-func TestChannelResourceGroup(t *testing.T) {
+func TestChannelGroupsStorage(t *testing.T) {
 	for _, tc := range []struct{ dialect, scenario string }{
 		{"sqlite", "fresh"}, {"sqlite", "upgrade"},
 		{"mysql", "fresh"}, {"mysql", "upgrade"},
@@ -42,7 +38,7 @@ func TestChannelResourceGroup(t *testing.T) {
 			dbType := common.DatabaseTypeSQLite
 			switch dialect {
 			case "sqlite":
-				driver = sqlite.Open(filepath.Join(t.TempDir(), "resource-groups.db"))
+				driver = sqlite.Open(filepath.Join(t.TempDir(), "channel-groups.db"))
 			case "mysql":
 				dsn := os.Getenv("TEST_RESOURCE_GROUP_MYSQL_DSN")
 				if dsn == "" {
@@ -144,90 +140,14 @@ func TestChannelResourceGroup(t *testing.T) {
 			var version string
 			require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
 			t.Logf("%s: %s", dialect, version)
-			require.NoError(t, applyGroupPricingOptions(`{"default":1,"资源-existing":0.7,"资源-public":1,"资源-special":1,"资源-auto":1}`, `{}`))
-			baseline := []Option{
-				{Key: "GroupRatio", Value: ratio_setting.GroupRatio2JSONString()},
-				{Key: "UserUsableGroups", Value: `{"default":"Default","资源-public":"Public"}`},
-				{Key: "AutoGroups", Value: `["default","资源-auto"]`},
-				{Key: "group_ratio_setting.group_special_usable_group", Value: `{"vip":{"+:资源-special":"Special"}}`},
-			}
-			require.NoError(t, db.Create(&baseline).Error)
-			channel := Channel{Name: "Vendor", Type: 1, Key: "secret-must-stay", Group: "default", Models: "model-a,model-b", Status: common.ChannelStatusEnabled}
-			require.NoError(t, db.Create(&channel).Error)
-			priority := int64(17)
-			require.NoError(t, db.Create(&ChannelModelOverride{ChannelId: channel.Id, Model: "model-a", Priority: &priority}).Error)
-			require.NoError(t, channel.AddAbilities(nil))
-			sibling := Channel{Name: "Sibling", Type: 1, Key: "other-secret", Group: "资源-existing", Models: "model-a", Status: common.ChannelStatusEnabled}
-			require.NoError(t, db.Create(&sibling).Error)
-			require.NoError(t, sibling.AddAbilities(nil))
-
-			t.Run("create preserves groups credentials and private configuration", func(t *testing.T) {
-				result, err := CreateChannelResourceGroup(channel.Id, " 资源-Vendor ", false)
-				require.NoError(t, err)
-				assert.True(t, result.Created)
-				assert.Equal(t, []string{"default", "资源-Vendor"}, result.ChannelGroups)
-				assert.Equal(t, 1.0, result.Ratio)
-				var saved Channel
-				require.NoError(t, db.First(&saved, channel.Id).Error)
-				assert.Equal(t, "default,资源-Vendor", saved.Group)
-				assert.Equal(t, channel.Key, saved.Key)
-				assert.Equal(t, channel.Status, saved.Status)
-				var abilities []Ability
-				require.NoError(t, db.Where("channel_id = ?", channel.Id).Find(&abilities).Error)
-				assert.Len(t, abilities, 4)
-				for _, ability := range abilities {
-					if ability.Model == "model-a" {
-						require.NotNil(t, ability.Priority)
-						assert.Equal(t, priority, *ability.Priority)
-					}
-				}
-				assert.Equal(t, 1.0, ratio_setting.GetGroupRatio("资源-Vendor"))
-				for _, option := range baseline[1:] {
-					var saved Option
-					require.NoError(t, db.Where(&Option{Key: option.Key}).First(&saved).Error)
-					assert.JSONEq(t, option.Value, saved.Value)
-				}
-				assert.NotContains(t, setting.GetUserUsableGroupsCopy(), "资源-Vendor")
-			})
-			t.Run("retry is idempotent", func(t *testing.T) {
-				result, err := CreateChannelResourceGroup(channel.Id, "资源-Vendor", false)
-				require.NoError(t, err)
-				assert.False(t, result.Created)
-				assert.Equal(t, []string{"default", "资源-Vendor"}, result.ChannelGroups)
-			})
-			t.Run("collision requires explicit reuse and preserves ratio", func(t *testing.T) {
-				_, err := CreateChannelResourceGroup(channel.Id, "资源-existing", false)
-				var conflict *ResourceGroupConflict
-				require.ErrorAs(t, err, &conflict)
-				assert.Equal(t, []ResourceGroupChannel{{ID: sibling.Id, Name: sibling.Name}}, conflict.Channels)
-				assert.Equal(t, 0.7, conflict.Ratio)
-				result, err := CreateChannelResourceGroup(channel.Id, "资源-existing", true)
-				require.NoError(t, err)
-				assert.False(t, result.Created)
-				assert.Equal(t, 0.7, result.Ratio)
-			})
-			t.Run("invalid and exposed groups cannot be created or reused", func(t *testing.T) {
-				for _, name := range []string{"", "资源-", "other", "资源-a,b", "资源-a\nb", "资源-" + strings.Repeat("长", 62), "资源-public", "资源-special", "资源-auto"} {
-					_, err := CreateChannelResourceGroup(channel.Id, name, true)
-					assert.Error(t, err, "name: %q", name)
-				}
-				_, err := CreateChannelResourceGroup(999999, "资源-missing", false)
-				assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
-				assert.False(t, ratio_setting.ContainsGroupRatio("资源-missing"))
-			})
 			t.Run("sixteen groups persist beyond sixty four characters and all writes reject seventeen", func(t *testing.T) {
-				groups := make([]string, 15)
+				groups := make([]string, 16)
 				for i := range groups {
 					groups[i] = fmt.Sprintf("%02d-%s", i, strings.Repeat("长", 61))
 				}
 				tag := "group-limit"
 				limited := Channel{Name: "Group limit", Type: 1, Key: "limit-key", Group: strings.Join(groups, ","), Models: "limit-model", Status: common.ChannelStatusEnabled, Tag: &tag}
 				require.NoError(t, limited.Insert())
-				lastGroup := "资源-" + strings.Repeat("长", 61)
-				result, err := CreateChannelResourceGroup(limited.Id, lastGroup, false)
-				require.NoError(t, err)
-				groups = append(groups, lastGroup)
-				assert.Equal(t, groups, result.ChannelGroups)
 				var saved Channel
 				require.NoError(t, db.First(&saved, limited.Id).Error)
 				assert.Equal(t, strings.Join(groups, ","), saved.Group)
@@ -239,11 +159,8 @@ func TestChannelResourceGroup(t *testing.T) {
 					storedGroups = append(storedGroups, ability.Group)
 				}
 				assert.ElementsMatch(t, groups, storedGroups)
-				_, err = CloneChannelWithModelOverrides(limited.Id, "-copy", false)
+				_, err := CloneChannelWithModelOverrides(limited.Id, "-copy", false)
 				require.NoError(t, err)
-				result, err = CreateChannelResourceGroup(limited.Id, lastGroup, false)
-				require.NoError(t, err, "reusing an existing group at the limit is idempotent")
-				assert.Len(t, result.ChannelGroups, 16)
 				overLimit := saved
 				overLimit.Id = 0
 				overLimit.Name = "Rejected"
@@ -255,61 +172,12 @@ func TestChannelResourceGroup(t *testing.T) {
 				overLimit.Id = limited.Id
 				require.ErrorContains(t, overLimit.Update(), "at most 16 groups")
 				require.ErrorContains(t, EditChannelByTag(tag, nil, nil, nil, &overLimit.Group, nil, nil, nil, nil), "at most 16 groups")
-				beforeRatios := ratio_setting.GroupRatio2JSONString()
-				_, err = CreateChannelResourceGroup(limited.Id, "资源-seventeenth", false)
-				require.ErrorContains(t, err, "at most 16 groups")
-				assert.JSONEq(t, beforeRatios, ratio_setting.GroupRatio2JSONString())
-				assert.False(t, ratio_setting.ContainsGroupRatio("资源-seventeenth"))
 				var after Channel
 				require.NoError(t, db.First(&after, limited.Id).Error)
 				assert.Equal(t, saved, after, "rejected edits preserve every channel field")
 				var rejected int64
 				require.NoError(t, db.Model(&Channel{}).Where("name = ?", "Rejected").Count(&rejected).Error)
 				assert.Zero(t, rejected)
-			})
-			t.Run("ability failure rolls back registry channel and routing", func(t *testing.T) {
-				var before Channel
-				require.NoError(t, db.First(&before, channel.Id).Error)
-				beforeRatios := ratio_setting.GroupRatio2JSONString()
-				const callback = "test:resource_group_ability_failure"
-				require.NoError(t, db.Callback().Create().Before("gorm:create").Register(callback, func(tx *gorm.DB) {
-					if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "Ability" {
-						tx.AddError(errors.New("routing write failed"))
-					}
-				}))
-				_, err := CreateChannelResourceGroup(channel.Id, "资源-rollback", false)
-				require.NoError(t, db.Callback().Create().Remove(callback))
-				require.ErrorContains(t, err, "routing write failed")
-				var after Channel
-				require.NoError(t, db.First(&after, channel.Id).Error)
-				assert.Equal(t, before.Group, after.Group)
-				var registry Option
-				require.NoError(t, db.Where(&Option{Key: "GroupRatio"}).First(&registry).Error)
-				assert.JSONEq(t, beforeRatios, registry.Value)
-				assert.JSONEq(t, beforeRatios, ratio_setting.GroupRatio2JSONString())
-				var count int64
-				require.NoError(t, db.Model(&Ability{}).Where("channel_id = ?", channel.Id).Count(&count).Error)
-				assert.Equal(t, int64(6), count)
-			})
-			t.Run("persisted changes from another node survive concurrent creations", func(t *testing.T) {
-				registry := ratio_setting.GetGroupRatioCopy()
-				registry["external"] = 0.8
-				encoded, err := common.Marshal(registry)
-				require.NoError(t, err)
-				require.NoError(t, db.Model(&Option{}).Where(&Option{Key: "GroupRatio"}).Update("value", string(encoded)).Error)
-				var workers sync.WaitGroup
-				errors := make(chan error, 2)
-				for _, name := range []string{"资源-A", "资源-B"} {
-					workers.Go(func() { _, err := CreateChannelResourceGroup(sibling.Id, name, false); errors <- err })
-				}
-				workers.Wait()
-				close(errors)
-				for err := range errors {
-					require.NoError(t, err)
-				}
-				assert.Equal(t, 0.8, ratio_setting.GetGroupRatio("external"))
-				assert.True(t, ratio_setting.ContainsGroupRatio("资源-A"))
-				assert.True(t, ratio_setting.ContainsGroupRatio("资源-B"))
 			})
 		})
 	}

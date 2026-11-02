@@ -13,7 +13,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -55,9 +54,6 @@ func TestUserChannelRoutingOverridesAllSelectionPaths(t *testing.T) {
 			affinityKey := t.Name()
 			require.NoError(t, getChannelAffinityCache().SetWithTTL(cacheKey, 9501, time.Minute))
 			t.Cleanup(func() { _, _ = getChannelAffinityCache().DeleteMany([]string{cacheKey}) })
-			originalPolicy := setting.GroupModelChannelGroupsJSON()
-			t.Cleanup(func() { require.NoError(t, setting.UpdateGroupModelChannelGroups(originalPolicy)) })
-			require.NoError(t, setting.UpdateGroupModelChannelGroups(`{}`))
 			for _, tc := range []struct {
 				name     string
 				group    string
@@ -121,8 +117,7 @@ func TestUserChannelRoutingOverridesAllSelectionPaths(t *testing.T) {
 			require.NotNil(t, selectErr)
 			assert.Equal(t, "user_channel_disabled", selectErr.Message)
 			assert.ErrorIs(t, ValidateSelectedChannelGroupPolicy(c, 9502, "gpt-5"), ErrGroupModelChannelDenied)
-			// Retired resource-group filters no longer override the user's pool.
-			require.NoError(t, setting.UpdateGroupModelChannelGroups(`{"default":{"gpt-5":[]}}`))
+			// The user's explicit pool remains effective for subsequent requests.
 			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 			selected, _, err := CacheGetRandomSatisfiedChannel(&RetryParam{Ctx: c, ModelName: "gpt-5", TokenGroup: "default"})
 			require.NoError(t, err)

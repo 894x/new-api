@@ -70,7 +70,6 @@ const groupDefaults = {
   MaxTokenAutoGroups: 5,
   DefaultUseAutoGroup: false,
   GroupSpecialUsableGroup: '{}',
-  GroupModelChannelGroups: '{}',
   ModelTieredRatios: '{}',
 }
 
@@ -105,32 +104,14 @@ function renderRatioSettingsCard(modelTieredRatios: string) {
 }
 
 describe('ratio settings card tiered-discount persistence', () => {
-  test('saves channel pool rules and rejects null policies before sending', async () => {
+  test('group settings omit retired resource pool controls in visual and JSON modes', async () => {
     const user = userEvent.setup()
     renderRatioSettingsCard('{}')
+    expect(screen.queryByText('Model channel pools')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Switch to JSON' }))
-    const input = screen.getByRole('textbox', { name: 'Model channel pools' })
-    fireEvent.input(input, { target: { value: 'null' } })
-    await user.click(
-      screen.getByRole('button', { name: 'Save group settings' })
-    )
     expect(
-      await screen.findByText(
-        'Invalid channel pool policy. Use an object of user groups, models, and channel group arrays.'
-      )
-    ).toBeInTheDocument()
-    expect(updateSystemOption).not.toHaveBeenCalled()
-    const value = '{"premium":{"model-a":["official"]}}'
-    fireEvent.input(input, { target: { value } })
-    await user.click(
-      screen.getByRole('button', { name: 'Save group settings' })
-    )
-    await waitFor(() =>
-      expect(updateSystemOption).toHaveBeenCalledWith({
-        key: 'GroupModelChannelGroups',
-        value,
-      })
-    )
+      screen.queryByRole('textbox', { name: 'Model channel pools' })
+    ).not.toBeInTheDocument()
   })
   beforeEach(() => {
     vi.mocked(updateGroupPricingOptions).mockResolvedValue({

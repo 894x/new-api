@@ -11,23 +11,6 @@ import (
 
 var ErrGroupModelChannelDenied = errors.New("the user's group does not allow this channel for the requested model")
 
-// ChannelGroupsAllowedChannelIDs resolves the union of enabled channels in the
-// selected channel groups for one public model. An empty, non-nil selection is
-// an explicit deny-all policy.
-func ChannelGroupsAllowedChannelIDs(groups []string, modelName string) (map[int]struct{}, error) {
-	allowed := make(map[int]struct{})
-	for _, group := range groups {
-		candidates, err := model.ListChannelSelectionCandidates(group, modelName, model.ChannelSelectionFilters{})
-		if err != nil {
-			return nil, err
-		}
-		for _, candidate := range candidates {
-			allowed[candidate.ChannelId] = struct{}{}
-		}
-	}
-	return allowed, nil
-}
-
 // SelectionFilters intersects user policy with asset constraints without
 // mutating either source. Each retry resolves the current policy again.
 func (p *RetryParam) SelectionFilters(group string) (model.ChannelSelectionFilters, error) {

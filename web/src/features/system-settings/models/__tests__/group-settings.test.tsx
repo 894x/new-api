@@ -49,7 +49,6 @@ const defaults = {
   MaxTokenAutoGroups: 5,
   DefaultUseAutoGroup: false,
   GroupSpecialUsableGroup: '{}',
-  GroupModelChannelGroups: '{}',
   ModelTieredRatios: '{}',
 }
 
@@ -63,7 +62,6 @@ const schema = z.object({
   MaxTokenAutoGroups: positiveIntegerSchema('Enter a positive integer'),
   DefaultUseAutoGroup: z.boolean(),
   GroupSpecialUsableGroup: z.string(),
-  GroupModelChannelGroups: z.string(),
   ModelTieredRatios: z.string(),
 })
 
