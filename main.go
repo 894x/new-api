@@ -137,6 +137,7 @@ func main() {
 	// all currently alive nodes in multi-instance deployments.
 	service.StartSystemInstanceReporter()
 	service.StartRequestCaptureStorage()
+	service.StartChannelTrafficMonitoring()
 
 	// Wire task polling adaptor factory (breaks service -> relay import cycle).
 	// Must run before the system task runner starts: the async_task_poll handler
@@ -246,6 +247,9 @@ func main() {
 	captureFlushContext, captureFlushCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	service.StopRequestCaptureStorage(captureFlushContext)
 	captureFlushCancel()
+	monitorFlushContext, monitorFlushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	service.StopChannelTrafficMonitoring(monitorFlushContext)
+	monitorFlushCancel()
 	perfmetrics.Flush()
 	// 内存中的看板数据保存入库，避免重启丢失未落库数据 (issue #5679)
 	if common.DataExportEnabled {

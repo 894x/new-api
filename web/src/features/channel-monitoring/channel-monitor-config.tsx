@@ -111,7 +111,7 @@ export function ChannelMonitorConfigEditor(props: {
           <p className='text-sm font-medium'>{t('Channel monitoring')}</p>
           <p className='text-muted-foreground text-xs'>
             {t(
-              'Register this channel for continuous probes and show its health in model routing.'
+              'Combine active probes and live traffic to show channel health in model routing.'
             )}
           </p>
         </div>

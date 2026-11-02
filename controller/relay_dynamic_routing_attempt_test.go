@@ -69,8 +69,18 @@ func TestShouldObserveDynamicRoutingAttemptHonorsBypasses(t *testing.T) {
 
 func TestGetChannelRestoresPublicModelBeforeRetrySetup(t *testing.T) {
 	const publicModel = "gemini-2.5-pro"
+	db := setupModelListControllerTestDB(t)
+	previousMemoryCache := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = previousMemoryCache })
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: publicModel, ChannelId: 1, Enabled: true},
+		{Group: "default", Model: publicModel, ChannelId: 2, Enabled: true},
+	}).Error)
+
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-2.5-pro:streamGenerateContent", nil)
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 	c.Set("channel_id", 1)
 	c.Set("channel_type", constant.ChannelTypeGemini)
 	c.Set("channel_name", "first")
@@ -80,9 +90,15 @@ func TestGetChannelRestoresPublicModelBeforeRetrySetup(t *testing.T) {
 	require.Nil(t, getErr)
 	assert.Equal(t, publicModel, info.OriginModelName)
 
-	second := &model.Channel{Id: 2, Type: constant.ChannelTypeGemini, Name: "second", Key: "test-key"}
+	second := &model.Channel{Id: 2, Type: constant.ChannelTypeGemini, Name: "second", Key: "test-key", Models: publicModel, MonitorConfig: `{"targets":[{"model":"gemini-2.5-pro","endpoint_type":"gemini"}]}`}
 	require.Nil(t, middleware.SetupContextForSelectedChannel(c, second, info.OriginModelName))
 	assert.Equal(t, publicModel, c.GetString("original_model"))
+	selected, getErr := getChannel(c, info, &service.RetryParam{ModelName: publicModel})
+	require.Nil(t, getErr)
+	assert.Equal(t, second.MonitorConfig, selected.MonitorConfig, "first-attempt context must retain the channel monitoring switch and targets")
+	assert.Equal(t, second.Models, selected.Models)
+	info.RelayFormat = types.RelayFormatGemini
+	assert.Equal(t, "gemini", service.ChannelTrafficMonitoringEndpoint(selected, info, publicModel))
 	info.InitChannelMeta(c)
 	assert.Equal(t, publicModel, info.UpstreamModelName)
 }

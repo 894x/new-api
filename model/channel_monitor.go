@@ -84,10 +84,34 @@ func (channel *Channel) MonitorTargets() (bool, []ChannelMonitorTarget, error) {
 	return true, []ChannelMonitorTarget{{Model: modelName}}, nil
 }
 
+// MonitoringEndpoint resolves automatic targets consistently for probes and traffic.
+func (channel *Channel) MonitoringEndpoint(target ChannelMonitorTarget) string {
+	if target.EndpointType != "" {
+		return target.EndpointType
+	}
+	name := strings.ToLower(target.Model)
+	switch {
+	case channel.Type == constant.ChannelTypeCodex || strings.Contains(name, "codex"):
+		return string(constant.EndpointTypeOpenAIResponse)
+	case channel.Type == constant.ChannelTypeAstraFlowImage || channel.Type == constant.ChannelTypeAstraFlowGemini:
+		return string(constant.EndpointTypeImageGeneration)
+	case strings.Contains(name, "rerank"):
+		return string(constant.EndpointTypeJinaRerank)
+	case channel.Type == constant.ChannelTypeMokaAI || strings.Contains(name, "embed") || strings.HasPrefix(name, "bge-") || strings.HasPrefix(name, "m3e"):
+		return string(constant.EndpointTypeEmbeddings)
+	default:
+		return string(constant.EndpointTypeOpenAI)
+	}
+}
+
 // ChannelMonitorRecord stores observations independently of consume-log settings.
 // SampleKey makes a retried system-task write idempotent. Error summaries never
 // contain upstream response bodies, credentials, or request headers.
 type ChannelMonitorRecord struct {
+	Source          string   `json:"source" gorm:"size:16"`
+	Count           int      `json:"count"`
+	BucketAt        int64    `json:"bucket_at"`
+	ObservedAtMs    int64    `json:"-"`
 	ID              int64    `json:"id" gorm:"primaryKey"`
 	SampleKey       string   `json:"-" gorm:"size:64;uniqueIndex"`
 	ChannelID       int      `json:"channel_id" gorm:"index:idx_channel_monitor_window,priority:1"`
@@ -104,6 +128,18 @@ type ChannelMonitorRecord struct {
 
 func SaveChannelMonitorRecord(ctx context.Context, record *ChannelMonitorRecord) error {
 	return DB.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(record).Error
+}
+
+// SaveChannelTrafficRecords writes cumulative counts, so retrying a flush is
+// idempotent even if the previous database response was lost.
+func SaveChannelTrafficRecords(ctx context.Context, records []ChannelMonitorRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	return DB.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "sample_key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"count", "created_at", "observed_at_ms", "latency_ms", "ttft_ms", "tokens_per_second", "error_code"}),
+	}).CreateInBatches(records, 100).Error
 }
 
 func PruneChannelMonitorRecords(ctx context.Context, now time.Time) error {
@@ -123,38 +159,44 @@ type ChannelMonitorBucket struct {
 	Count        int            `json:"count"`
 	SuccessCount int            `json:"success_count"`
 	StateCounts  map[string]int `json:"state_counts"`
+	SourceCounts map[string]int `json:"source_counts"`
 	LatencyMs    *int64         `json:"latency_ms"`
 	ErrorCode    string         `json:"error_code,omitempty"`
 }
 
 type ChannelMonitorSummary struct {
-	ChannelID   int                    `json:"channel_id"`
-	Enabled     bool                   `json:"enabled"`
-	Registered  bool                   `json:"registered"`
-	State       string                 `json:"state"`
-	Latest      *ChannelMonitorRecord  `json:"latest"`
-	SuccessRate *float64               `json:"success_rate"`
-	SampleCount int                    `json:"sample_count"`
-	Buckets     []ChannelMonitorBucket `json:"buckets"`
-	Truncated   bool                   `json:"truncated"`
+	ChannelID    int                    `json:"channel_id"`
+	Enabled      bool                   `json:"enabled"`
+	Registered   bool                   `json:"registered"`
+	State        string                 `json:"state"`
+	Latest       *ChannelMonitorRecord  `json:"latest"`
+	SuccessRate  *float64               `json:"success_rate"`
+	SampleCount  int                    `json:"sample_count"`
+	SourceCounts map[string]int         `json:"source_counts"`
+	Buckets      []ChannelMonitorBucket `json:"buckets"`
+	Truncated    bool                   `json:"truncated"`
 }
 
 func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName string, enabled bool, interval time.Duration, excludedStatusCodes []operation_setting.StatusCodeRange, now time.Time) ([]ChannelMonitorSummary, error) {
 	const bucketSeconds = int64(15 * 60)
 	end := now.Unix()
-	start := end - 24*60*60
+	start := end/bucketSeconds*bucketSeconds + bucketSeconds - 24*60*60
 	ids := make([]int, 0, len(channels))
 	for _, channel := range channels {
 		ids = append(ids, channel.Id)
 	}
 	var records []ChannelMonitorRecord
 	if len(ids) > 0 {
-		if err := DB.WithContext(ctx).Where("channel_id IN ? AND model = ? AND created_at >= ? AND created_at <= ?", ids, modelName, start, end).Order("created_at DESC, id DESC").Limit(100001).Find(&records).Error; err != nil {
+		if err := DB.WithContext(ctx).Where("channel_id IN ? AND model = ? AND created_at >= ? AND created_at <= ?", ids, modelName, start, end).Order("created_at DESC, observed_at_ms DESC, id DESC").Limit(100001).Find(&records).Error; err != nil {
 			return nil, err
 		}
 	}
-	truncated := len(records) > 100000
-	if truncated {
+	var gaps int64
+	if err := DB.WithContext(ctx).Model(&ChannelMonitorRecord{}).Where("source = ? AND created_at >= ? AND created_at <= ?", "gap", start, end).Limit(1).Count(&gaps).Error; err != nil {
+		return nil, err
+	}
+	truncated := len(records) > 100000 || gaps > 0
+	if len(records) > 100000 {
 		records = records[:100000]
 	}
 	byChannel := make(map[int][]ChannelMonitorRecord)
@@ -166,9 +208,9 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 	}
 	summaries := make([]ChannelMonitorSummary, 0, len(channels))
 	for _, channel := range channels {
-		summary := ChannelMonitorSummary{ChannelID: channel.Id, State: "pending", Buckets: make([]ChannelMonitorBucket, 96), Truncated: truncated}
+		summary := ChannelMonitorSummary{ChannelID: channel.Id, State: "pending", Buckets: make([]ChannelMonitorBucket, 96), Truncated: truncated, SourceCounts: make(map[string]int)}
 		for i := range summary.Buckets {
-			summary.Buckets[i] = ChannelMonitorBucket{Timestamp: start + int64(i)*bucketSeconds, State: "empty", StateCounts: make(map[string]int)}
+			summary.Buckets[i] = ChannelMonitorBucket{Timestamp: start + int64(i)*bucketSeconds, State: "empty", StateCounts: make(map[string]int), SourceCounts: make(map[string]int)}
 		}
 		monitor, targets, err := channel.MonitorTargets()
 		if err != nil {
@@ -178,18 +220,30 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 		protocols := make(map[string]bool)
 		for _, target := range targets {
 			if target.Model == modelName {
-				protocols[target.EndpointType] = true
+				protocols[channel.MonitoringEndpoint(target)] = true
 				summary.Registered = true
 			}
 		}
 		latestProtocols := make(map[string]bool)
-		staleProtocol := false
+		freshProtocol := false
 		latestRank := -1
 		succeeded, measured := 0, 0
 		for _, record := range byChannel[channel.Id] {
-			if !protocols[record.EndpointType] {
+			if record.Source == "" {
+				record.Source = "probe"
+			}
+			if record.Source == "probe" {
+				record.EndpointType = channel.MonitoringEndpoint(ChannelMonitorTarget{Model: record.Model, EndpointType: record.EndpointType})
+				if !protocols[record.EndpointType] {
+					continue
+				}
+			} else if record.Source == "traffic" {
+				summary.Registered = true
+			} else {
 				continue
 			}
+			count := max(1, record.Count)
+			record.Count = count
 			// Apply the current policy while reading; changing exclusions must
 			// recalculate the existing window without rewriting observations.
 			if slices.ContainsFunc(excludedStatusCodes, func(code operation_setting.StatusCodeRange) bool {
@@ -206,33 +260,43 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 			}
 			if !latestProtocols[record.EndpointType] {
 				latestProtocols[record.EndpointType] = true
-				staleProtocol = staleProtocol || end-record.CreatedAt > int64(interval.Seconds()*2)+60
-				if rank := channelMonitorStateRank(record.State); rank > latestRank {
+				fresh := end-record.CreatedAt <= int64(interval.Seconds()*2)+60
+				freshProtocol = freshProtocol || fresh
+				if rank := channelMonitorStateRank(record.State); fresh && rank > latestRank {
 					summary.State = record.State
 					latestRank = rank
 					copy := record
 					summary.Latest = &copy
 				}
 			}
-			index := min(95, int((record.CreatedAt-start)/bucketSeconds))
+			bucketAt := record.CreatedAt
+			if record.Source == "traffic" {
+				bucketAt = record.BucketAt
+			}
+			if bucketAt < start || bucketAt > end {
+				continue
+			}
+			index := min(95, int((bucketAt-start)/bucketSeconds))
 			bucket := &summary.Buckets[index]
 			if bucket.Count == 0 || channelMonitorStateRank(record.State) > channelMonitorStateRank(bucket.State) {
 				bucket.State = record.State
 				bucket.ErrorCode = record.ErrorCode
 			}
-			bucket.Count++
-			bucket.StateCounts[record.State]++
-			summary.SampleCount++
+			bucket.Count += count
+			bucket.SourceCounts[record.Source] += count
+			summary.SourceCounts[record.Source] += count
+			bucket.StateCounts[record.State] += count
+			summary.SampleCount += count
 			if record.State == "healthy" || record.State == "slow" {
-				succeeded++
-				measured++
-				bucket.SuccessCount++
+				succeeded += count
+				measured += count
+				bucket.SuccessCount += count
 				if bucket.LatencyMs == nil {
 					latency := record.LatencyMs
 					bucket.LatencyMs = &latency
 				}
 			} else if record.State == "unavailable" {
-				measured++
+				measured += count
 			}
 		}
 		if measured > 0 && !truncated {
@@ -248,9 +312,9 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 			summary.State = "unregistered"
 		case !enabled || channel.Status == common.ChannelStatusManuallyDisabled:
 			summary.State = "paused"
-		case staleProtocol:
+		case summary.Latest != nil && !freshProtocol:
 			summary.State = "stale"
-		case len(latestProtocols) < len(protocols):
+		case summary.Latest == nil:
 			summary.State = "pending"
 		}
 		summaries = append(summaries, summary)

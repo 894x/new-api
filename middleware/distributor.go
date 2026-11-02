@@ -689,6 +689,8 @@ func setupSelectedChannelContext(c *gin.Context, channel *model.Channel, modelNa
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)
 	common.SetContextKey(c, constant.ContextKeyChannelType, channel.Type)
 	common.SetContextKey(c, constant.ContextKeyChannelCreateTime, channel.CreatedTime)
+	c.Set("channel_monitor_config", channel.MonitorConfig)
+	c.Set("channel_monitor_models", channel.Models)
 	common.SetContextKey(c, constant.ContextKeyChannelSetting, channel.GetSetting())
 	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, channel.GetOtherSettings())
 	switch channel.Type {

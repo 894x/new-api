@@ -65,6 +65,14 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 					require.NoError(t, db.Migrator().DropColumn(&Channel{}, "MonitorConfig"))
 					require.NoError(t, db.Model(&Channel{}).Create(map[string]any{"id": 7101, "name": "existing channel", "key": "fixture", "models": "model-a,model-b", "status": common.ChannelStatusEnabled}).Error)
 				}
+				if upgrade {
+					// Also exercise upgrading this feature's preceding schema.
+					require.NoError(t, db.AutoMigrate(&ChannelMonitorRecord{}))
+					for _, field := range []string{"Source", "Count", "BucketAt", "ObservedAtMs"} {
+						require.NoError(t, db.Migrator().DropColumn(&ChannelMonitorRecord{}, field))
+					}
+					require.NoError(t, db.Table("channel_monitor_test_channel_monitor_records").Create(map[string]any{"sample_key": "legacy", "channel_id": 7101, "model": "model-a", "state": "healthy", "created_at": int64(1)}).Error)
+				}
 				for range 2 {
 					require.NoError(t, db.AutoMigrate(&Channel{}, &ChannelMonitorRecord{}))
 				}
@@ -78,6 +86,14 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 					require.NoError(t, err)
 					assert.True(t, enabled)
 					assert.Equal(t, []ChannelMonitorTarget{{Model: "model-a"}}, targets)
+				}
+				if upgrade {
+					var legacy ChannelMonitorRecord
+					require.NoError(t, db.Where("sample_key = ?", "legacy").First(&legacy).Error)
+					assert.Equal(t, "healthy", legacy.State)
+					assert.Empty(t, legacy.Source)
+					assert.Zero(t, legacy.Count)
+					require.NoError(t, db.Delete(&legacy).Error)
 				}
 				assert.True(t, db.Migrator().HasIndex(&ChannelMonitorRecord{}, "idx_channel_monitor_window"))
 				assert.True(t, db.Migrator().HasIndex(&Channel{}, "Name"))
@@ -132,6 +148,38 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 			paused, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", false, 5*time.Minute, excluded, now)
 			require.NoError(t, err)
 			assert.Equal(t, "paused", paused[0].State)
+			traffic := ChannelMonitorRecord{SampleKey: "traffic", ChannelID: 7101, Model: "model-a", EndpointType: "openai", CreatedAt: now.Unix(), BucketAt: now.Unix() / 900 * 900, State: "healthy", StatusCode: 200, Source: "traffic", Count: 100}
+			require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{traffic}))
+			traffic.Count = 200
+			require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{traffic}))
+			require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{traffic}))
+			mixed, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, excluded, now)
+			require.NoError(t, err)
+			assert.Equal(t, "healthy", mixed[0].State, "fresh traffic supersedes an earlier probe for the same protocol")
+			assert.Equal(t, 204, mixed[0].SampleCount, "cumulative flush retries do not double count")
+			assert.Equal(t, map[string]int{"probe": 4, "traffic": 200}, mixed[0].SourceCounts)
+			assert.InDelta(t, 20200.0/203, *mixed[0].SuccessRate, 0.0001, "availability is weighted by attempts rather than averaging sources")
+			traffic.SampleKey, traffic.StatusCode, traffic.State, traffic.Count = "traffic-400", 400, "unavailable", 20
+			require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{traffic}))
+			mixed, err = ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, excluded, now)
+			require.NoError(t, err)
+			assert.Equal(t, 21, mixed[0].Buckets[95].StateCounts["excluded"])
+			unfiltered, err = ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, nil, now)
+			require.NoError(t, err)
+			assert.InDelta(t, 20200.0/224, *unfiltered[0].SuccessRate, 0.0001, "clearing exclusions includes upstream 400s from both sources")
+			traffic.SampleKey, traffic.Model, traffic.State, traffic.StatusCode = "traffic-other-model", "model-b", "healthy", 200
+			require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{traffic}))
+			otherModel, err = ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-b", true, 5*time.Minute, excluded, now)
+			require.NoError(t, err)
+			assert.Equal(t, "healthy", otherModel[0].State, "traffic contributes without scheduling a synthetic target for this model")
+			assert.Equal(t, 20, otherModel[0].SampleCount)
+			require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{{SampleKey: "gap", Source: "gap", State: "collection_gap", CreatedAt: now.Unix()}}))
+			partial, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, excluded, now)
+			require.NoError(t, err)
+			assert.True(t, partial[0].Truncated)
+			assert.Nil(t, partial[0].SuccessRate, "known collection gaps cannot show a complete availability rate")
+			require.NoError(t, db.Where("source = ?", "gap").Delete(&ChannelMonitorRecord{}).Error)
+			require.NoError(t, db.Where("source = ?", "traffic").Delete(&ChannelMonitorRecord{}).Error)
 			require.NoError(t, PruneChannelMonitorRecords(ctx, now))
 			require.NoError(t, db.Model(&ChannelMonitorRecord{}).Count(&count).Error)
 			assert.Equal(t, int64(6), count)

@@ -181,7 +181,7 @@ export function ChannelMonitoringSection(props: {
     <SettingsSection title={t('Channel monitoring')}>
       <p className='text-muted-foreground text-sm'>
         {t(
-          'Registered channels are probed in the background. Monitoring does not change channel routing or automatic disable policies.'
+          'Active probes and live traffic jointly contribute to channel health. Monitoring does not change routing or automatic disable policies.'
         )}
       </p>
       <Form {...form}>
@@ -292,7 +292,7 @@ export function ChannelMonitoringSection(props: {
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'The same short prompt is converted to each target protocol. Channel configuration selects which models and protocols are monitored.'
+                      'The same short prompt is converted to each target protocol. Targets control active probes; live traffic for enabled channels contributes automatically.'
                     )}
                   </FormDescription>
                   <FormMessage />

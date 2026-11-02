@@ -81,7 +81,7 @@ test('a measured zero first-response time is preserved and missing generation sp
   expect(screen.getByText('100%')).toBeInTheDocument()
   expect(screen.getByRole('img', { name: 'Connected' })).toBeInTheDocument()
   expect(screen.queryByText('First response')).not.toBeInTheDocument()
-  expect(screen.queryByText('Probe success rate')).not.toBeInTheDocument()
+  expect(screen.queryByText('Success rate')).not.toBeInTheDocument()
 })
 
 test('keyboard selection opens the matching historical probe bucket', async () => {
@@ -94,11 +94,13 @@ test('keyboard selection opens the matching historical probe bucket', async () =
     />
   )
   const timeline = screen.getByRole('button', {
-    name: '24-hour probe history for Example',
+    name: '24-hour channel history for Example',
   })
   fireEvent.keyDown(timeline, { key: 'ArrowLeft' })
   await userEvent.click(timeline)
-  const dialog = await screen.findByRole('dialog', { name: 'Probe details' })
+  const dialog = await screen.findByRole('dialog', {
+    name: 'Monitoring details',
+  })
   expect(
     within(dialog).getByText('Connection failed', { selector: 'dd' })
   ).toBeInTheDocument()
@@ -122,7 +124,7 @@ test('bar heights encode sample volume on a shared bounded scale while empty int
     />
   )
   const timeline = screen.getByRole('button', {
-    name: '24-hour probe history for Example',
+    name: '24-hour channel history for Example',
   })
   const bars = timeline.querySelectorAll<HTMLElement>('[data-bucket]')
   const heights = [...bars]
@@ -154,7 +156,7 @@ test('a mixed interval stacks normal, slow, failed and excluded samples by their
     />
   )
   const timeline = screen.getByRole('button', {
-    name: '24-hour probe history for Example',
+    name: '24-hour channel history for Example',
   })
   const column = timeline.querySelector('[data-bucket="95"]')
   expect(
@@ -189,7 +191,7 @@ test('history hover shows only the interval and short outcome counts', async () 
     />
   )
   await userEvent.hover(
-    screen.getByRole('button', { name: '24-hour probe history for Example' })
+    screen.getByRole('button', { name: '24-hour channel history for Example' })
   )
   const tooltip = await screen.findByRole('tooltip')
   expect(tooltip).toHaveTextContent('Healthy 21')
@@ -229,7 +231,7 @@ test('an unprobed channel shows a pending state without invented latency or avai
     />
   )
   expect(
-    screen.getByRole('img', { name: 'Waiting for first probe' })
+    screen.getByRole('img', { name: 'Waiting for first observation' })
   ).toBeInTheDocument()
   expect(screen.queryByText('Connected')).not.toBeInTheDocument()
   expect(screen.queryByText(/\d ms/)).not.toBeInTheDocument()
@@ -286,7 +288,40 @@ test('disabled monitoring hides the timeline and has no fabricated availability'
   )
   expect(screen.getByText('Monitoring disabled')).toBeInTheDocument()
   expect(
-    screen.queryByRole('button', { name: '24-hour probe history for Example' })
+    screen.queryByRole('button', {
+      name: '24-hour channel history for Example',
+    })
   ).not.toBeInTheDocument()
   expect(screen.queryByText('100%')).not.toBeInTheDocument()
+})
+
+test('combined source counts appear in details while the metric line and hover remain compact', async () => {
+  const summary = fixture()
+  summary.buckets[95].source_counts = { probe: 1, traffic: 2 }
+  render(
+    <ChannelMonitoringStrip
+      channelName='Example'
+      summary={summary}
+      loading={false}
+      error={false}
+    />
+  )
+  expect(screen.queryByText('Active probes')).not.toBeInTheDocument()
+  const timeline = screen.getByRole('button', {
+    name: '24-hour channel history for Example',
+  })
+  await userEvent.hover(timeline)
+  expect(await screen.findByRole('tooltip')).not.toHaveTextContent(
+    'Live traffic'
+  )
+  await userEvent.click(timeline)
+  const dialog = await screen.findByRole('dialog', {
+    name: 'Monitoring details',
+  })
+  expect(
+    within(dialog).getByText('Active probes').nextElementSibling
+  ).toHaveTextContent('1')
+  expect(
+    within(dialog).getByText('Live traffic').nextElementSibling
+  ).toHaveTextContent('2')
 })

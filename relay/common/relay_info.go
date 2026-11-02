@@ -110,22 +110,25 @@ type DynamicRoutingAttemptSample struct {
 }
 
 type dynamicRoutingAttempt struct {
-	enabled             bool
-	channelID           int
-	channelType         int
-	model               string
-	reachedUpstream     bool
-	preUpstreamHard     bool
-	upstreamStarted     time.Time
-	firstResponseAt     time.Time
-	firstContentAt      time.Time
-	lastContentAt       time.Time
-	visibleTextParts    []string
-	tTFTInvalid         bool
-	tPOTInvalid         bool
-	httpStatus          int
-	completionTokens    int
-	completionTokensSet bool
+	enabled              bool
+	monitorOnly          bool
+	monitorTextBytes     int
+	monitorTextTruncated bool
+	channelID            int
+	channelType          int
+	model                string
+	reachedUpstream      bool
+	preUpstreamHard      bool
+	upstreamStarted      time.Time
+	firstResponseAt      time.Time
+	firstContentAt       time.Time
+	lastContentAt        time.Time
+	visibleTextParts     []string
+	tTFTInvalid          bool
+	tPOTInvalid          bool
+	httpStatus           int
+	completionTokens     int
+	completionTokensSet  bool
 }
 
 type RelayInfo struct {
@@ -1128,6 +1131,51 @@ func (info *RelayInfo) BeginDynamicRoutingAttempt(channelID int, channelType int
 	info.attemptMu.Unlock()
 }
 
+// BeginChannelMonitoringAttempt uses the same physical transport boundaries
+// without enabling dynamic routing. Text used by the existing performance-only
+// token counter is bounded; it is never persisted by monitoring.
+func (info *RelayInfo) BeginChannelMonitoringAttempt(channelID, channelType int, publicModel string) {
+	if info == nil {
+		return
+	}
+	info.BeginDynamicRoutingAttempt(channelID, channelType, publicModel, true)
+	info.attemptMu.Lock()
+	info.currentAttempt.monitorOnly = true
+	info.attemptMu.Unlock()
+}
+
+type ChannelMonitoringAttempt struct {
+	ChannelID        int
+	Model            string
+	StartedAt        time.Time
+	FinishedAt       time.Time
+	FirstResponseAt  time.Time
+	FirstContentAt   time.Time
+	LastContentAt    time.Time
+	HTTPStatus       int
+	CompletionTokens int
+	TTFTInvalid      bool
+	TPOTInvalid      bool
+}
+
+// ChannelMonitoringSnapshot leaves the attempt intact for dynamic routing.
+// Only physical upstream attempts contribute; local admission errors do not.
+func (info *RelayInfo) ChannelMonitoringSnapshot() (ChannelMonitoringAttempt, bool) {
+	if info == nil {
+		return ChannelMonitoringAttempt{}, false
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	a := info.currentAttempt
+	return ChannelMonitoringAttempt{
+		ChannelID: a.channelID, Model: a.model, StartedAt: a.upstreamStarted,
+		FinishedAt: info.attemptTimeNowLocked(), FirstResponseAt: a.firstResponseAt,
+		FirstContentAt: a.firstContentAt, LastContentAt: a.lastContentAt,
+		HTTPStatus: a.httpStatus, CompletionTokens: a.completionTokens,
+		TTFTInvalid: a.tTFTInvalid, TPOTInvalid: a.tPOTInvalid,
+	}, a.enabled && a.reachedUpstream
+}
+
 // DiscardDynamicRoutingAttempt clears only the current attempt. It is used
 // when downstream cancellation makes every in-flight timing or failure signal
 // ambiguous, while preserving request-wide timing across retries.
@@ -1224,7 +1272,14 @@ func (info *RelayInfo) RecordAttemptVisibleText(text string) {
 			info.currentAttempt.firstContentAt = now
 		}
 		info.currentAttempt.lastContentAt = now
-		info.currentAttempt.visibleTextParts = append(info.currentAttempt.visibleTextParts, text)
+		if info.currentAttempt.monitorOnly && info.currentAttempt.monitorTextBytes+len(text) > 64*1024 {
+			info.currentAttempt.monitorTextTruncated = true
+			info.currentAttempt.visibleTextParts = nil
+		}
+		if !info.currentAttempt.monitorTextTruncated {
+			info.currentAttempt.visibleTextParts = append(info.currentAttempt.visibleTextParts, text)
+			info.currentAttempt.monitorTextBytes += len(text)
+		}
 	}
 }
 

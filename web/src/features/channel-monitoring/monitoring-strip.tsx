@@ -82,17 +82,17 @@ const states: Record<string, { label: string; tone: string; fill: string }> = {
     fill: 'bg-muted-foreground/25',
   },
   stale: {
-    label: 'Probe data is stale',
+    label: 'Monitoring data is stale',
     tone: 'text-muted-foreground',
     fill: 'bg-muted-foreground/25',
   },
   pending: {
-    label: 'Waiting for first probe',
+    label: 'Waiting for first observation',
     tone: 'text-muted-foreground',
     fill: 'bg-muted-foreground/25',
   },
   empty: {
-    label: 'No probe data',
+    label: 'No monitoring data',
     tone: 'text-muted-foreground',
     fill: 'bg-muted-foreground/25',
   },
@@ -162,7 +162,9 @@ export function ChannelMonitoringStrip(props: {
     latest && (latest.state === 'healthy' || latest.state === 'slow')
   const latency = hasLatency ? (latest.ttft_ms ?? latest.latency_ms) : null
   const latencyLabel = t(
-    hasLatency && latest.ttft_ms !== null ? 'First response' : 'Probe duration'
+    hasLatency && latest.ttft_ms !== null
+      ? 'First response'
+      : 'Request duration'
   )
   const latencyValue =
     latency === null ? '—' : `${formatNumber(latency, locale)} ms`
@@ -212,8 +214,8 @@ export function ChannelMonitoringStrip(props: {
         )}
         <span
           className='text-foreground ml-auto tabular-nums'
-          title={`24h ${t('Probe success rate')}`}
-          aria-label={`24h ${t('Probe success rate')}: ${successRateValue}`}
+          title={`24h ${t('Success rate')}`}
+          aria-label={`24h ${t('Success rate')}: ${successRateValue}`}
         >
           {successRateValue}
         </span>
@@ -227,7 +229,7 @@ export function ChannelMonitoringStrip(props: {
                 variant='ghost'
                 className='h-4 w-full items-end gap-px rounded-none p-0 hover:bg-transparent'
                 aria-describedby={`${volumeHintId} ${volumeHintId}-tooltip`}
-                aria-label={t('24-hour probe history for {{channel}}', {
+                aria-label={t('24-hour channel history for {{channel}}', {
                   channel: props.channelName,
                 })}
                 onPointerMove={(event) => {
@@ -340,7 +342,7 @@ export function ChannelMonitoringStrip(props: {
       <Dialog
         open={open}
         onOpenChange={setOpen}
-        title={t('Probe details')}
+        title={t('Monitoring details')}
         description={
           bucket
             ? `${props.channelName} · ${dayjs(bucket.timestamp * 1000).format('MM-DD HH:mm')} – ${dayjs((bucket.timestamp + 900) * 1000).format('HH:mm')}`
@@ -352,9 +354,19 @@ export function ChannelMonitoringStrip(props: {
           <dl className='grid grid-cols-2 gap-x-4 gap-y-3 text-sm'>
             <dt className='text-muted-foreground'>{t('Status')}</dt>
             <dd>{t(bucketStatus.label)}</dd>
-            <dt className='text-muted-foreground'>{t('Probe count')}</dt>
+            <dt className='text-muted-foreground'>{t('Sample count')}</dt>
             <dd>{formatNumber(bucket.count, locale)}</dd>
-            <dt className='text-muted-foreground'>{t('Successful probes')}</dt>
+            {bucket.source_counts && (
+              <>
+                <dt className='text-muted-foreground'>{t('Active probes')}</dt>
+                <dd>{formatNumber(bucket.source_counts.probe ?? 0, locale)}</dd>
+                <dt className='text-muted-foreground'>{t('Live traffic')}</dt>
+                <dd>
+                  {formatNumber(bucket.source_counts.traffic ?? 0, locale)}
+                </dd>
+              </>
+            )}
+            <dt className='text-muted-foreground'>{t('Successful samples')}</dt>
             <dd>{formatNumber(bucket.success_count, locale)}</dd>
             {bucketStates
               .filter((state) => (bucketCounts[state] ?? 0) > 0)
@@ -370,7 +382,7 @@ export function ChannelMonitoringStrip(props: {
                 </div>
               ))}
             <dt className='text-muted-foreground'>
-              {t('Latest successful duration')}
+              {t('Latest successful request duration')}
             </dt>
             <dd>
               {bucket.latency_ms === null

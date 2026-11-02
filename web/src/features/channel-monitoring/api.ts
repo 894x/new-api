@@ -20,6 +20,8 @@ import { api } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
 export type MonitorObservation = {
+  source?: string
+  count?: number
   id: number
   channel_id: number
   model: string
@@ -38,6 +40,7 @@ export type MonitorBucket = {
   count: number
   success_count: number
   state_counts?: Record<string, number>
+  source_counts?: Record<string, number>
   latency_ms: number | null
   error_code?: string
 }
@@ -49,6 +52,7 @@ export type ChannelMonitorSummary = {
   latest: MonitorObservation | null
   success_rate: number | null
   sample_count: number
+  source_counts?: Record<string, number>
   buckets: MonitorBucket[]
   truncated: boolean
 }

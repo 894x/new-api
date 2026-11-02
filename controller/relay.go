@@ -316,8 +316,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
 		observeAttempt := service.RequestDynamicRoutingEnabled(c) && shouldObserveDynamicRoutingAttempt(c, relayInfo)
+		monitorEndpoint := service.ChannelTrafficMonitoringEndpoint(channel, relayInfo, publicModelName)
 		if observeAttempt {
 			relayInfo.BeginDynamicRoutingAttempt(channel.Id, channel.Type, publicModelName, true)
+		} else if monitorEndpoint != "" {
+			relayInfo.BeginChannelMonitoringAttempt(channel.Id, channel.Type, publicModelName)
 		}
 
 		failureStage = "relay_attempt"
@@ -331,11 +334,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		default:
 			newAPIError = relayHandler(c, relayInfo)
 		}
+		if monitorEndpoint != "" {
+			service.ObserveChannelTraffic(c.Request.Context(), relayInfo, monitorEndpoint, newAPIError)
+		}
 		if observeAttempt {
 			if attempt, ok := finishDynamicRoutingAttempt(c, relayInfo, newAPIError); ok && shouldPublishDynamicRoutingAttempt(attempt) {
 				key, sample := dynamicRoutingSampleFromAttempt(attempt)
 				service.ObserveDynamicRoutingSample(key, sample, service.RequestDynamicRoutingEnabled(c))
 			}
+		} else if monitorEndpoint != "" {
+			relayInfo.FinishDynamicRoutingAttempt(newAPIError)
 		}
 
 		if newAPIError == nil {
@@ -503,10 +511,12 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			autoBanInt = 0
 		}
 		channel := &model.Channel{
-			Id:      channelId,
-			Type:    c.GetInt("channel_type"),
-			Name:    c.GetString("channel_name"),
-			AutoBan: &autoBanInt,
+			Id:            channelId,
+			Type:          c.GetInt("channel_type"),
+			Name:          c.GetString("channel_name"),
+			AutoBan:       &autoBanInt,
+			MonitorConfig: c.GetString("channel_monitor_config"),
+			Models:        c.GetString("channel_monitor_models"),
 		}
 		service.RequestPolicy(c).BeginAttempt(channel, info.UsingGroup)
 		return channel, nil

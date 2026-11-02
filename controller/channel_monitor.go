@@ -60,26 +60,8 @@ func configureChannelMonitoringRequest(request dto.Request, settings operation_s
 	return nil
 }
 
-func channelMonitoringEndpoint(channel *model.Channel, target model.ChannelMonitorTarget) string {
-	endpoint := normalizeChannelTestEndpoint(channel, target.Model, target.EndpointType)
-	if endpoint != "" {
-		return endpoint
-	}
-	name := strings.ToLower(target.Model)
-	switch {
-	case strings.Contains(name, "codex"):
-		return string(constant.EndpointTypeOpenAIResponse)
-	case strings.Contains(name, "rerank"):
-		return string(constant.EndpointTypeJinaRerank)
-	case channel.Type == constant.ChannelTypeMokaAI || strings.Contains(name, "embed") || strings.HasPrefix(name, "bge-") || strings.HasPrefix(name, "m3e"):
-		return string(constant.EndpointTypeEmbeddings)
-	default:
-		return string(constant.EndpointTypeOpenAI)
-	}
-}
-
 func channelMonitoringObservation(result testResult, started, completed time.Time, slowMs int) model.ChannelMonitorRecord {
-	record := model.ChannelMonitorRecord{CreatedAt: completed.Unix(), LatencyMs: completed.Sub(started).Milliseconds(), State: "healthy"}
+	record := model.ChannelMonitorRecord{CreatedAt: completed.Unix(), ObservedAtMs: completed.UnixMilli(), LatencyMs: completed.Sub(started).Milliseconds(), State: "healthy"}
 	if result.context != nil {
 		record.StatusCode = result.context.GetInt("channel_test_upstream_status")
 	}
@@ -161,7 +143,7 @@ func (channelMonitoringHandler) Run(ctx context.Context, task *model.SystemTask,
 			if ctx.Err() != nil {
 				return summary
 			}
-			endpoint := channelMonitoringEndpoint(channel, target)
+			endpoint := channel.MonitoringEndpoint(target)
 			stream := settings.ChannelMonitoringStream && endpoint != string(constant.EndpointTypeEmbeddings) && endpoint != string(constant.EndpointTypeJinaRerank)
 			probeContext, cancel := context.WithTimeout(ctx, time.Duration(max(1, settings.ChannelMonitoringTimeoutSeconds))*time.Second)
 			probeContext = context.WithValue(probeContext, channelMonitoringRequestKey{}, settings)
@@ -172,6 +154,7 @@ func (channelMonitoringHandler) Run(ctx context.Context, task *model.SystemTask,
 			started := time.Now()
 			result := testChannel(probeContext, &probeChannel, testUserID, target.Model, endpoint, stream)
 			record := channelMonitoringObservation(result, started, time.Now(), settings.ChannelMonitoringSlowMs)
+			record.Source, record.Count = "probe", 1
 			if probeContext.Err() != nil {
 				record.State = "unavailable"
 				record.ErrorCode = "timeout"
@@ -184,7 +167,7 @@ func (channelMonitoringHandler) Run(ctx context.Context, task *model.SystemTask,
 			record.SampleKey = fmt.Sprintf("%x", key)
 			record.ChannelID = channel.Id
 			record.Model = target.Model
-			record.EndpointType = target.EndpointType
+			record.EndpointType = endpoint
 			if err := model.SaveChannelMonitorRecord(ctx, &record); err != nil {
 				common.SysError(fmt.Sprintf("failed to save channel monitoring observation: channel=%d error=%v", channel.Id, err))
 				summary.Failed++
@@ -233,7 +216,7 @@ func GetChannelMonitoring(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 	var channels []*model.Channel
-	if err := model.DB.WithContext(ctx).Select("id, models, test_model, status, monitor_config").Where("id IN ?", ids).Find(&channels).Error; err != nil {
+	if err := model.DB.WithContext(ctx).Select("id, type, models, test_model, status, monitor_config").Where("id IN ?", ids).Find(&channels).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
