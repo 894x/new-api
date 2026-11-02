@@ -41,6 +41,7 @@ type AutoGroupOrderItemProps = {
   count: number
   leading?: ReactNode
   children?: ReactNode
+  footer?: ReactNode
   onMove: (index: number, direction: 'up' | 'down') => void
   onRemove?: (group: string) => void
 }
@@ -74,7 +75,8 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
       dragControls={dragControls}
       className={cn(
         'bg-background relative flex min-w-0 items-center rounded-lg border',
-        props.compact ? '@container/order-item gap-1 p-1' : 'gap-2 p-2'
+        props.compact ? '@container/order-item gap-1 p-1' : 'gap-2 p-2',
+        props.footer && 'flex-wrap'
       )}
     >
       <Button
@@ -164,6 +166,11 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
           </Button>
         )}
       </div>
+      {props.footer && (
+        <div className='w-full min-w-0 basis-full px-1 pt-1 pb-0.5'>
+          {props.footer}
+        </div>
+      )}
     </Reorder.Item>
   )
 }

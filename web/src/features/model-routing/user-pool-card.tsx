@@ -284,6 +284,7 @@ function UserPoolEditor(props: {
           </p>
         ) : (
           <PoolChannelList
+            model={config.model}
             channels={displayed}
             candidates={candidates}
             disabled={disabled}

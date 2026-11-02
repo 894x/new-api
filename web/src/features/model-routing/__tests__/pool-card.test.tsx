@@ -202,7 +202,13 @@ test('read-only cards expose configuration while disabling mutation, reordering 
     screen.getByRole('spinbutton', { name: 'Priority for Alpha' })
   ).toHaveValue(100)
   expect(onDirtyChange).not.toHaveBeenCalledWith(true)
-  expect(get).not.toHaveBeenCalled()
+  expect(get).toHaveBeenCalledTimes(1)
+  expect(get).toHaveBeenCalledWith(
+    '/api/channel/monitoring',
+    expect.objectContaining({
+      params: { model: 'kimi-k3', channel_ids: '1,2' },
+    })
+  )
 })
 
 test('restoring defaults requires confirmation and deletes the explicit pool using its revision', async () => {

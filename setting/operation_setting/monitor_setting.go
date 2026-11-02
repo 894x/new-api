@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/setting/config"
 )
@@ -65,7 +66,7 @@ func ValidateChannelMonitoringOptions(options map[string]string) error {
 		}
 	}
 	prompt := options["monitor_setting.channel_monitoring_prompt"]
-	if len(prompt) == 0 || len(prompt) > 4096 {
+	if len(strings.TrimSpace(prompt)) == 0 || len(prompt) > 4096 {
 		return fmt.Errorf("monitoring prompt must contain 1 to 4096 bytes")
 	}
 	return nil

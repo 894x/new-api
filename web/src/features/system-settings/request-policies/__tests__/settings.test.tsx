@@ -187,6 +187,34 @@ afterEach(() => {
 })
 
 describe('request policy settings', () => {
+  it('monitoring settings save probe request options without changing automatic disable policies', async () => {
+    await renderPolicies('/system-settings/request-policies/monitoring')
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Probe prompt' }),
+      { target: { value: 'Return ready.' } }
+    )
+    fireEvent.change(
+      screen.getByRole('spinbutton', { name: 'Maximum probe output tokens' }),
+      { target: { value: '64' } }
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith('/api/option/request_policy', {
+        options: expect.objectContaining({
+          'monitor_setting.channel_monitoring_prompt': 'Return ready.',
+          'monitor_setting.channel_monitoring_max_tokens': '64',
+          'monitor_setting.channel_monitoring_enabled': 'true',
+        }),
+      })
+    )
+    const payload = vi.mocked(api.patch).mock.lastCall?.[1] as {
+      options: Record<string, string>
+    }
+    expect(payload.options).not.toHaveProperty('AutomaticDisableChannelEnabled')
+    expect(payload.options).not.toHaveProperty(
+      'monitor_setting.auto_test_channel_enabled'
+    )
+  })
   it.each([
     ['retry', 'Save Changes'],
     ['health', 'Save Changes'],

@@ -27,6 +27,8 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { ChannelMonitoringStrip } from '@/features/channel-monitoring/monitoring-strip'
+import { useChannelMonitoring } from '@/features/channel-monitoring/use-channel-monitoring'
 import { cn } from '@/lib/utils'
 
 import type { PoolCandidate, PoolChannel } from './api'
@@ -40,6 +42,7 @@ export interface PoolChannelDraft extends Omit<
 }
 
 export function PoolChannelList(props: {
+  model?: string
   channels: PoolChannelDraft[]
   candidates: PoolCandidate[]
   disabled: boolean
@@ -50,6 +53,13 @@ export function PoolChannelList(props: {
   const { t } = useTranslation()
   const [removingChannelId, setRemovingChannelId] = useState<number | null>(
     null
+  )
+  const monitoring = useChannelMonitoring(
+    props.model,
+    props.channels.map((channel) => channel.channel_id)
+  )
+  const observations = new Map(
+    monitoring.data?.map((entry) => [entry.channel_id, entry])
   )
   const candidates = new Map(
     props.candidates.map((candidate) => [candidate.channel_id, candidate])
@@ -130,6 +140,16 @@ export function PoolChannelList(props: {
               key={entry.channel_id}
               group={String(entry.channel_id)}
               compact
+              footer={
+                props.model ? (
+                  <ChannelMonitoringStrip
+                    channelName={name}
+                    summary={observations.get(entry.channel_id)}
+                    loading={monitoring.isLoading}
+                    error={monitoring.isError}
+                  />
+                ) : undefined
+              }
               labelClassName='flex-1 basis-0 text-xs'
               removeClassName='text-destructive hover:bg-destructive/10 hover:text-destructive'
               label={

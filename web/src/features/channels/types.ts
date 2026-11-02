@@ -40,6 +40,7 @@ export const channelSchema = z.object({
   key: z.string(),
   openai_organization: z.string().nullish(),
   test_model: z.string().nullish(),
+  monitor_config: z.string().nullish(),
   status: z.number(), // 1: enabled, 0: manual disabled, 2: auto disabled
   name: z.string(),
   weight: z.number().nullish(),
@@ -452,6 +453,7 @@ export interface ChannelFormData {
   tpm?: number
   test_model?: string
   auto_ban?: number
+  monitor_config?: string
   status: number
   status_code_mapping?: string
   tag?: string

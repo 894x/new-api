@@ -41,12 +41,29 @@ export type FilteringSettings = Pick<
   SecuritySettings,
   'CheckSensitiveEnabled' | 'CheckSensitiveOnPromptEnabled' | 'SensitiveWords'
 >
+export type MonitoringSettings = {
+  'monitor_setting.channel_monitoring_enabled': boolean
+  'monitor_setting.channel_monitoring_minutes': number
+  'monitor_setting.channel_monitoring_timeout_seconds': number
+  'monitor_setting.channel_monitoring_prompt': string
+  'monitor_setting.channel_monitoring_max_tokens': number
+  'monitor_setting.channel_monitoring_stream': boolean
+  'monitor_setting.channel_monitoring_slow_ms': number
+}
 export type RequestPolicySettings = RetrySettings &
+  MonitoringSettings &
   HealthSettings &
   FilteringSettings &
   Pick<ChannelAffinitySettings, keyof ChannelAffinitySettings>
 
 export const defaultRequestPolicySettings: RequestPolicySettings = {
+  'monitor_setting.channel_monitoring_enabled': true,
+  'monitor_setting.channel_monitoring_minutes': 5,
+  'monitor_setting.channel_monitoring_timeout_seconds': 30,
+  'monitor_setting.channel_monitoring_prompt': 'Reply with OK.',
+  'monitor_setting.channel_monitoring_max_tokens': 128,
+  'monitor_setting.channel_monitoring_stream': true,
+  'monitor_setting.channel_monitoring_slow_ms': 3000,
   RetryTimes: 0,
   AutomaticRetryStatusCodes:
     '100-199,300-399,401-407,409-499,500-503,505-523,525-599',

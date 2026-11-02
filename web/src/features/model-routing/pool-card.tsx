@@ -193,6 +193,7 @@ export function PoolCard(props: {
             </p>
           ) : (
             <PoolChannelList
+              model={props.pool.model}
               channels={values.channels}
               candidates={available}
               disabled={disabled}

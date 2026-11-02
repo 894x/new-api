@@ -160,6 +160,10 @@ func TestChannelMonitorRegistrationValidation(t *testing.T) {
 	assert.False(t, enabled)
 	assert.Empty(t, targets)
 	options := requestPolicyDefaultOptions()
+	options["monitor_setting.channel_monitoring_prompt"] = " \t\n"
+	_, err = BuildRequestPolicy(options)
+	require.Error(t, err, "a blank probe prompt must not be saved")
+	options["monitor_setting.channel_monitoring_prompt"] = "Reply with OK."
 	for _, key := range []string{"monitor_setting.channel_monitoring_minutes", "monitor_setting.channel_monitoring_timeout_seconds", "monitor_setting.channel_monitoring_max_tokens"} {
 		original := options[key]
 		options[key] = "0"
