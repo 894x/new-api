@@ -56,6 +56,7 @@ const CONFIGURATION_BLOCKS = {
       'cost_discount',
       'test_model',
       'auto_ban',
+      'monitor_config',
     ],
   },
   overrideRules: {

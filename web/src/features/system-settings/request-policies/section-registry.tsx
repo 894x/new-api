@@ -18,11 +18,19 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { createSectionRegistry } from '../utils/section-registry'
 import { ChannelHealthSection } from './channel-health-section'
+import { ChannelMonitoringSection } from './channel-monitoring-section'
 import type { RequestPolicySettings } from './defaults'
 import { RequestChecksSection } from './request-checks-section'
 import { RoutingPolicySection } from './routing-section'
 
 const POLICY_SECTIONS = [
+  {
+    id: 'monitoring',
+    titleKey: 'Channel monitoring',
+    build: (settings: RequestPolicySettings) => (
+      <ChannelMonitoringSection defaultValues={settings} />
+    ),
+  },
   {
     id: 'filtering',
     titleKey: 'Request checks',

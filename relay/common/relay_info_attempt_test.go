@@ -3,6 +3,7 @@ package common
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -755,4 +756,36 @@ func TestDynamicRoutingAttemptStateIsConcurrentSafe(t *testing.T) {
 	assert.Equal(t, 100*time.Millisecond, sample.TTFT)
 	assert.True(t, sample.HasTPOT)
 	assert.Equal(t, base.Add(100*time.Millisecond), info.FirstResponseTime)
+}
+
+func TestChannelMonitoringSnapshotPreservesRoutingAndStreamOutcome(t *testing.T) {
+	base := time.Unix(1800000000, 0)
+	at := base
+	info := &RelayInfo{IsStream: true}
+	info.setAttemptNowForTest(func() time.Time { return at })
+	info.BeginChannelMonitoringAttempt(42, 1, "public-model")
+	info.MarkAttemptUpstreamStarted()
+	at = base.Add(400 * time.Millisecond)
+	info.RecordAttemptVisibleText("hello")
+	at = base.Add(1400 * time.Millisecond)
+	info.RecordAttemptVisibleText(" world")
+	info.SetAttemptCompletionTokens(6)
+	info.StreamStatus = NewStreamStatus()
+	info.StreamStatus.SetEndReason(StreamEndReasonDone, nil)
+	snapshot, ok := info.ChannelMonitoringSnapshot()
+	require.True(t, ok)
+	assert.Equal(t, 400*time.Millisecond, snapshot.FirstContentAt.Sub(snapshot.StartedAt))
+	assert.Equal(t, time.Second, snapshot.LastContentAt.Sub(snapshot.FirstContentAt))
+	assert.Equal(t, 6, snapshot.CompletionTokens)
+	assert.Equal(t, "hello world", info.DynamicRoutingAttemptVisibleText())
+	info.FinishDynamicRoutingAttempt(nil)
+	assert.Equal(t, StreamEndReasonDone, info.StreamStatus.OutcomeSnapshot().EndReason)
+	_, ok = info.ChannelMonitoringSnapshot()
+	assert.False(t, ok, "each retry clears the previous attempt")
+	info.BeginChannelMonitoringAttempt(42, 1, "public-model")
+	info.MarkAttemptUpstreamStarted()
+	info.RecordAttemptVisibleText(strings.Repeat("x", 64*1024+1))
+	info.RecordAttemptVisibleText("tail")
+	assert.Empty(t, info.DynamicRoutingAttemptVisibleText(), "oversized monitoring text omits speed instead of counting a truncated prefix")
+
 }

@@ -147,23 +147,28 @@ test('invalid numeric input prevents saving and explains the allowed value contr
 test('an empty explicit pool stays empty until the administrator adds an available channel', async () => {
   const pool = fixture()
   pool.channels = []
-  vi.spyOn(api, 'get').mockResolvedValue({
-    data: {
-      success: true,
+  vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/channel/monitoring') {
+      return { data: { success: true, data: [] } }
+    }
+    return {
       data: {
-        pool,
-        candidates: [
-          ...pool.candidates,
-          {
-            channel_id: 3,
-            channel_name: 'Closed provider',
-            priority: 999,
-            weight: 1,
-            available: false,
-          },
-        ],
+        success: true,
+        data: {
+          pool,
+          candidates: [
+            ...pool.candidates,
+            {
+              channel_id: 3,
+              channel_name: 'Closed provider',
+              priority: 999,
+              weight: 1,
+              available: false,
+            },
+          ],
+        },
       },
-    },
+    }
   })
   mountCard(pool)
   expect(screen.getByRole('status')).toHaveTextContent(
@@ -202,7 +207,13 @@ test('read-only cards expose configuration while disabling mutation, reordering 
     screen.getByRole('spinbutton', { name: 'Priority for Alpha' })
   ).toHaveValue(100)
   expect(onDirtyChange).not.toHaveBeenCalledWith(true)
-  expect(get).not.toHaveBeenCalled()
+  expect(get).toHaveBeenCalledTimes(1)
+  expect(get).toHaveBeenCalledWith(
+    '/api/channel/monitoring',
+    expect.objectContaining({
+      params: { model: 'kimi-k3', channel_ids: '1,2' },
+    })
+  )
 })
 
 test('restoring defaults requires confirmation and deletes the explicit pool using its revision', async () => {

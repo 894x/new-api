@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -21,7 +23,200 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
+
+func TestChannelMonitoringRequestUsesConfiguredPromptAndBoundedOutput(t *testing.T) {
+	settings := *operation_setting.GetMonitorSetting()
+	settings.ChannelMonitoringPrompt = "Return a short confirmation."
+	settings.ChannelMonitoringMaxTokens = 128
+	for _, tc := range []struct{ protocol, promptPath, limitPath string }{
+		{string(constant.EndpointTypeOpenAI), "messages.0.content", "max_tokens"},
+		{string(constant.EndpointTypeOpenAIResponse), "input.0.content", "max_output_tokens"},
+		{string(constant.EndpointTypeAnthropic), "messages.0.content", "max_tokens"},
+		{string(constant.EndpointTypeGemini), "contents.0.parts.0.text", "generationConfig.maxOutputTokens"},
+		{string(constant.EndpointTypeEmbeddings), "input.0", ""},
+		{string(constant.EndpointTypeJinaRerank), "query", ""},
+	} {
+		t.Run(tc.protocol, func(t *testing.T) {
+			request := buildTestRequest("model-a", tc.protocol, &model.Channel{}, true)
+			require.NoError(t, configureChannelMonitoringRequest(request, settings))
+			encoded, err := common.Marshal(request)
+			require.NoError(t, err)
+			assert.Equal(t, settings.ChannelMonitoringPrompt, gjson.GetBytes(encoded, tc.promptPath).String())
+			if tc.limitPath != "" {
+				assert.Equal(t, int64(128), gjson.GetBytes(encoded, tc.limitPath).Int())
+			}
+		})
+	}
+	settings.ChannelMonitoringMaxTokens = 513
+	assert.Error(t, configureChannelMonitoringRequest(&dto.GeneralOpenAIRequest{}, settings))
+}
+
+func TestChannelMonitoringLocalFailureDoesNotBecomeHealthyOrExposeUpstreamSecrets(t *testing.T) {
+	started := time.Unix(1700000000, 0)
+	unsupported := testChannel(context.Background(), &model.Channel{Type: constant.ChannelTypeTaskPlugin}, 0, "model-a", "", false)
+	require.Error(t, unsupported.localErr)
+	observation := channelMonitoringObservation(unsupported, started, started.Add(time.Second), 3000)
+	assert.Equal(t, "unsupported", observation.State)
+	assert.Nil(t, observation.TTFTMs)
+	assert.Nil(t, observation.TokensPerSecond)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("channel_test_upstream_started", true)
+	ctx.Set("channel_test_upstream_status", 503)
+	failed := channelMonitoringObservation(testResult{context: ctx, localErr: fmt.Errorf("upstream body with secret-credential")}, started, started.Add(time.Second), 3000)
+	assert.Equal(t, "unavailable", failed.State)
+	assert.Equal(t, 503, failed.StatusCode)
+	encoded, err := common.Marshal(failed)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "secret-credential")
+	local := channelMonitoringObservation(testResult{localErr: fmt.Errorf("missing local configuration")}, started, started.Add(time.Second), 3000)
+	assert.Equal(t, "configuration", local.State)
+}
+
+func TestChannelMonitoringExclusionsFollowConfiguredStatusCodes(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	withSelfUseModeEnabled(t)
+	require.NoError(t, db.AutoMigrate(&model.ChannelMonitorRecord{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+	root := model.User{Id: 11501, Username: "monitor-rejection-fixture", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", Quota: 1000000}
+	require.NoError(t, db.Create(&root).Error)
+	settings := *operation_setting.GetMonitorSetting()
+	for _, tc := range []struct {
+		name, code, rules, wantState string
+		status                       int
+	}{
+		{"configured bad request", "unsupported_parameter", "400", "excluded", 400},
+		{"bad request without an exclusion", "unsupported_parameter", "", "unavailable", 400},
+		{"bad request with a different exclusion", "unsupported_parameter", "422", "unavailable", 400},
+		{"configured range", "rate_limit_exceeded", "420-429", "excluded", 429},
+		{"unmatched rate limit", "rate_limit_exceeded", "400", "unavailable", 429},
+		{"policy controls credential responses too", "invalid_api_key", "400", "excluded", 400},
+		{"configured server error range", "service_unavailable", "500-599", "excluded", 503},
+		{"unmatched server error", "service_unavailable", "400", "unavailable", 503},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = fmt.Fprintf(w, `{"error":{"message":"fixture rejection","type":"invalid_request_error","code":%q}}`, tc.code)
+			}))
+			t.Cleanup(upstream.Close)
+			baseURL := upstream.URL
+			channel := model.Channel{Type: constant.ChannelTypeOpenAI, Key: "fixture-key", BaseURL: &baseURL, Models: "gpt-4o-mini", Group: "default", Status: common.ChannelStatusEnabled}
+			require.NoError(t, db.Create(&channel).Error)
+			ctx := context.WithValue(context.Background(), channelMonitoringRequestKey{}, settings)
+			started := time.Now()
+			result := testChannel(ctx, &channel, root.Id, "gpt-4o-mini", string(constant.EndpointTypeOpenAI), false)
+			require.Error(t, result.newAPIError)
+			observation := channelMonitoringObservation(result, started, time.Now(), settings.ChannelMonitoringSlowMs)
+			require.Equal(t, "unavailable", observation.State, "capture the original outcome independently of exclusion policy")
+			assert.Equal(t, tc.status, observation.StatusCode)
+			assert.Nil(t, observation.TTFTMs)
+			assert.Nil(t, observation.TokensPerSecond)
+			observation.ChannelID = channel.Id
+			observation.Model = "gpt-4o-mini"
+			observation.SampleKey = fmt.Sprintf("exclusion-%d", channel.Id)
+			require.NoError(t, model.SaveChannelMonitorRecord(context.Background(), &observation))
+			excluded, err := operation_setting.ParseHTTPStatusCodeRanges(tc.rules)
+			require.NoError(t, err)
+			summaries, err := model.ChannelMonitorSummaries(context.Background(), []*model.Channel{&channel}, "gpt-4o-mini", true, time.Minute, excluded, time.Now())
+			require.NoError(t, err)
+			require.Len(t, summaries, 1)
+			assert.Equal(t, tc.wantState, summaries[0].State)
+			assert.Equal(t, tc.status, summaries[0].Latest.StatusCode)
+			if tc.wantState == "excluded" {
+				assert.Nil(t, summaries[0].SuccessRate)
+			} else {
+				require.NotNil(t, summaries[0].SuccessRate)
+				assert.Zero(t, *summaries[0].SuccessRate)
+			}
+		})
+	}
+}
+
+func TestChannelMonitoringAPISelectsCurrentModelAndNeverReturnsChannelCredentials(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.ChannelMonitorRecord{}))
+	channel := model.Channel{Key: "usable-upstream-secret", Models: "model-a,model-b", Status: common.ChannelStatusEnabled, MonitorConfig: `{"targets":[{"model":"model-a","endpoint_type":"openai"}]}`}
+	require.NoError(t, db.Create(&channel).Error)
+	require.NoError(t, model.SaveChannelMonitorRecord(context.Background(), &model.ChannelMonitorRecord{SampleKey: "api-observation", ChannelID: channel.Id, Model: "model-a", EndpointType: "openai", CreatedAt: time.Now().Unix(), State: "healthy", LatencyMs: 800}))
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/channel/monitoring?model=model-a&channel_ids=%d", channel.Id), nil)
+	GetChannelMonitoring(ctx)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "usable-upstream-secret")
+	assert.NotContains(t, recorder.Body.String(), "api-observation")
+	assert.True(t, gjson.Get(recorder.Body.String(), "success").Bool())
+	assert.Equal(t, "healthy", gjson.Get(recorder.Body.String(), "data.0.state").String())
+	assert.Equal(t, int64(96), gjson.Get(recorder.Body.String(), "data.0.buckets.#").Int())
+	recorder = httptest.NewRecorder()
+	ctx, _ = gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/monitoring?model=model-a&channel_ids=-1", nil)
+	GetChannelMonitoring(ctx)
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	health := testChannelForHealthCheck(context.Background(), &model.Channel{Id: channel.Id, Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled}, 0, false, 10000)
+	assert.Equal(t, 1, health.Failed, "a local unsupported-test error must not count as a successful health check")
+	assert.Zero(t, health.Succeeded)
+}
+
+func TestChannelMonitoringTaskUsesExistingRelayAndPreservesChannelStatus(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	withSelfUseModeEnabled(t)
+	require.NoError(t, db.AutoMigrate(&model.ChannelMonitorRecord{}, &model.SystemTask{}, &model.SystemTaskLock{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+	settings := operation_setting.GetMonitorSetting()
+	previous := *settings
+	t.Cleanup(func() { *settings = previous })
+	settings.ChannelMonitoringEnabled = true
+	settings.ChannelMonitoringPrompt = "Return OK for monitoring."
+	settings.ChannelMonitoringMaxTokens = 128
+	settings.ChannelMonitoringStream = true
+	settings.ChannelMonitoringTimeoutSeconds = 30
+	settings.ChannelTestConcurrency = 1
+	requests := make(chan []byte, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"monitor-test\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"monitor-test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":2,\"total_tokens\":4}}\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(upstream.Close)
+	root := model.User{Id: 11500, Username: "monitor-fixture", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", Quota: 1000000}
+	require.NoError(t, db.Create(&root).Error)
+	baseURL := upstream.URL
+	channel := model.Channel{Type: constant.ChannelTypeOpenAI, Key: "fixture-key", Name: "observed channel", BaseURL: &baseURL, Models: "gpt-4o-mini", Group: "default", Status: common.ChannelStatusAutoDisabled}
+	require.NoError(t, db.Create(&channel).Error)
+	task := model.SystemTask{TaskID: "channel-monitor-fixture", Type: model.SystemTaskTypeChannelMonitor, Status: model.SystemTaskStatusRunning, LockedBy: "monitor-fixture"}
+	require.NoError(t, db.Create(&task).Error)
+	require.NoError(t, db.Create(&model.SystemTaskLock{Type: task.Type, TaskID: task.TaskID, LockedBy: task.LockedBy, LockedUntil: time.Now().Add(time.Minute).Unix()}).Error)
+	channelMonitoringHandler{}.Run(context.Background(), &task, "monitor-fixture")
+	var persistedTask model.SystemTask
+	require.NoError(t, db.First(&persistedTask, task.ID).Error)
+	require.Equal(t, model.SystemTaskStatusSucceeded, persistedTask.Status, persistedTask.Error)
+	var observations []model.ChannelMonitorRecord
+	require.NoError(t, db.Find(&observations).Error)
+	require.Len(t, observations, 1)
+	require.Equal(t, "healthy", observations[0].State)
+	assert.Equal(t, "gpt-4o-mini", observations[0].Model)
+	assert.Equal(t, 200, observations[0].StatusCode)
+	require.NotNil(t, observations[0].TTFTMs)
+	assert.GreaterOrEqual(t, *observations[0].TTFTMs, int64(0))
+	select {
+	case body := <-requests:
+		assert.Equal(t, settings.ChannelMonitoringPrompt, gjson.GetBytes(body, "messages.0.content").String())
+		assert.Equal(t, int64(128), gjson.GetBytes(body, "max_tokens").Int())
+		assert.True(t, gjson.GetBytes(body, "stream").Bool())
+	default:
+		t.Fatal("monitoring did not reach the configured upstream")
+	}
+	var preserved model.Channel
+	require.NoError(t, db.First(&preserved, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, preserved.Status, "observation never enables or disables a channel")
+}
 
 func TestGetChannelDefaultBaseURLsUsesBuiltInDefaults(t *testing.T) {
 	originalBaseURLs := constant.ChannelBaseURLs

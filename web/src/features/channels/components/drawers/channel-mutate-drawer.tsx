@@ -105,6 +105,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { SecureVerificationDialog } from '@/features/auth/secure-verification'
+import { ChannelMonitorConfigEditor } from '@/features/channel-monitoring/channel-monitor-config'
 import { PluginIcon } from '@/features/task-plugins/components/plugin-icon'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
@@ -1544,6 +1545,7 @@ export function ChannelMutateDrawer({
   // Handle successful submission
   const handleSuccess = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+    queryClient.invalidateQueries({ queryKey: ['channel-monitoring'] })
     if (channelId) {
       queryClient.invalidateQueries({
         queryKey: channelsQueryKeys.detail(channelId),
@@ -2339,6 +2341,23 @@ export function ChannelMutateDrawer({
             <FormDescription>
               {t(FIELD_DESCRIPTIONS.TEST_MODEL)}
             </FormDescription>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+
+      <FormField
+        control={form.control}
+        name='monitor_config'
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel className='sr-only'>{t('Channel monitoring')}</FormLabel>
+            <ChannelMonitorConfigEditor
+              value={field.value ?? ''}
+              models={form.watch('models')}
+              onChange={field.onChange}
+              disabled={form.formState.isSubmitting}
+            />
             <FormMessage />
           </FormItem>
         )}

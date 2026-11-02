@@ -96,9 +96,15 @@ func TestGetChannelRestoresPublicModelBeforeRetrySetup(t *testing.T) {
 	require.Nil(t, getErr)
 	assert.Equal(t, publicModel, info.OriginModelName)
 
-	second := &model.Channel{Id: 2, Type: constant.ChannelTypeGemini, Name: "second", Key: "test-key"}
+	second := &model.Channel{Id: 2, Type: constant.ChannelTypeGemini, Name: "second", Key: "test-key", Models: publicModel, MonitorConfig: `{"targets":[{"model":"gemini-2.5-pro","endpoint_type":"gemini"}]}`}
 	require.Nil(t, middleware.SetupContextForSelectedChannel(c, second, info.OriginModelName))
 	assert.Equal(t, publicModel, c.GetString("original_model"))
+	selected, getErr := getChannel(c, info, &service.RetryParam{ModelName: publicModel})
+	require.Nil(t, getErr)
+	assert.Equal(t, second.MonitorConfig, selected.MonitorConfig, "first-attempt context must retain the channel monitoring switch and targets")
+	assert.Equal(t, second.Models, selected.Models)
+	info.RelayFormat = types.RelayFormatGemini
+	assert.Equal(t, "gemini", service.ChannelTrafficMonitoringEndpoint(selected, info, publicModel))
 	info.InitChannelMeta(c)
 	assert.Equal(t, publicModel, info.UpstreamModelName)
 }

@@ -15,6 +15,7 @@ export function useSavePolicy() {
       client.setQueryData(['request-policy'], data)
       void client.invalidateQueries({ queryKey: ['system-options'] })
       void client.invalidateQueries({ queryKey: ['channel-ops'] })
+      void client.invalidateQueries({ queryKey: ['channel-monitoring'] })
       toast.success(t('Saved successfully'))
     },
     onError: (error) => handleServerError(error),

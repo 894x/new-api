@@ -344,6 +344,7 @@ func migrateDB() error {
 		&RequestCapturePolicy{},
 		&RequestCapture{},
 		&Channel{},
+		&ChannelMonitorRecord{},
 		&ChannelAssetConfig{},
 		&UserAssetGroup{},
 		&UserAsset{},
