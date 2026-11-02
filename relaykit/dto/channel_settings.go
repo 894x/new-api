@@ -21,6 +21,9 @@ type ChannelSettings struct {
 	SystemPrompt              string `json:"system_prompt,omitempty"`
 	SystemPromptOverride      bool   `json:"system_prompt_override,omitempty"`
 	ResponsesWebSocketEnabled bool   `json:"responses_websocket_enabled,omitempty"`
+	// StreamResponseHeaders adds exact upstream header names to the default SSE
+	// response header allowlist. Global response-header blocks still take priority.
+	StreamResponseHeaders []string `json:"stream_response_headers,omitempty"`
 	// TaskExtendPluginKeys lists the task plugins a New API channel (type 60)
 	// is extended with. The upstream gateway may host many plugins, so the
 	// channel serves every listed plugin's models while the request still pins
@@ -37,6 +40,42 @@ type ChannelSettings struct {
 	// keep-alive pool. Unknown lengths retain the channel's normal policy.
 	HTTP1LargeBodyEnabled        bool  `json:"http1_large_body_enabled,omitempty"`
 	HTTP1LargeBodyThresholdBytes int64 `json:"http1_large_body_threshold_bytes,omitempty"`
+}
+
+const MaxStreamResponseHeaders = 64
+
+var streamResponseHeaderNamePattern = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+// CanForwardStreamResponseHeader excludes invalid names and headers whose
+// transport, representation or browser-session semantics belong to the gateway.
+func CanForwardStreamResponseHeader(name string) bool {
+	if len(name) == 0 || len(name) > 128 || !streamResponseHeaderNamePattern.MatchString(name) {
+		return false
+	}
+	switch strings.ToLower(name) {
+	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+		"te", "trailer", "transfer-encoding", "upgrade", "content-length",
+		"content-encoding", "content-type", "cache-control", "x-accel-buffering",
+		"authorization", "cookie", "set-cookie":
+		return false
+	}
+	return true
+}
+
+// ValidateStreamResponseHeaders validates the channel's additional SSE headers.
+func (s *ChannelSettings) ValidateStreamResponseHeaders() error {
+	if s == nil {
+		return nil
+	}
+	if len(s.StreamResponseHeaders) > MaxStreamResponseHeaders {
+		return fmt.Errorf("stream_response_headers must not exceed %d names", MaxStreamResponseHeaders)
+	}
+	for _, name := range s.StreamResponseHeaders {
+		if !CanForwardStreamResponseHeader(strings.TrimSpace(name)) {
+			return fmt.Errorf("invalid or gateway-managed stream response header: %q", name)
+		}
+	}
+	return nil
 }
 
 // BindsTaskPlugin reports whether the channel is bound to the task plugin,

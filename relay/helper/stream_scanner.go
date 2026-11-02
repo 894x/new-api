@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
@@ -184,12 +185,27 @@ func CloseUpstreamOnContext(ctx context.Context, upstream io.Closer, completed <
 	return done
 }
 
-func copyCodexSSEHeaders(c *gin.Context, resp *http.Response) {
+func copyStreamResponseHeaders(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) {
 	if c == nil || c.Writer == nil || resp == nil {
 		return
 	}
-	// codex
-	for _, name := range []string{"X-Reasoning-Included", "X-Codex-Turn-State"} {
+	names := []string{"X-Reasoning-Included", "X-Codex-Turn-State"}
+	if info != nil && info.ChannelMeta != nil {
+		names = append(names, info.ChannelSetting.StreamResponseHeaders...)
+	}
+	// Connection can nominate additional hop-by-hop headers on this response.
+	excluded := make(map[string]bool)
+	for _, connection := range resp.Header.Values("Connection") {
+		for name := range strings.SplitSeq(connection, ",") {
+			excluded[http.CanonicalHeaderKey(strings.TrimSpace(name))] = true
+		}
+	}
+	for _, name := range names {
+		name = http.CanonicalHeaderKey(strings.TrimSpace(name))
+		if excluded[name] || !dto.CanForwardStreamResponseHeader(name) {
+			continue
+		}
+		excluded[name] = true
 		values := resp.Header.Values(name)
 		if !service.ShouldCopyUpstreamHeader(c, name, values) {
 			continue
@@ -287,7 +303,7 @@ func StreamScannerHandlerWithVisibleText(c *gin.Context, resp *http.Response, in
 	defer cleanup()
 
 	scanner.Split(bufio.ScanLines)
-	copyCodexSSEHeaders(c, resp)
+	copyStreamResponseHeaders(c, resp, info)
 	SetEventStreamHeaders(c)
 
 	ctx = context.WithValue(ctx, "stop_chan", stopChan)

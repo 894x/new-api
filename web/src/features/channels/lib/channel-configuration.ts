@@ -56,6 +56,7 @@ const CONFIGURATION_BLOCKS = {
       'status_code_mapping',
       'param_override',
       'header_override',
+      'stream_response_headers',
       'parameter_capabilities',
     ],
   },
@@ -159,7 +160,8 @@ export function getChannelConfigurationState(
       hasConfiguredJson(values.status_code_mapping) ||
       hasConfiguredJson(values.param_override) ||
       hasConfiguredJson(values.parameter_capabilities) ||
-      hasConfiguredJson(values.header_override),
+      hasConfiguredJson(values.header_override) ||
+      Boolean(values.stream_response_headers?.trim()),
     requestProcessing: Boolean(
       (values.type === 1 && values.force_format) ||
       (values.type === 4 && values.ollama_native_claude) ||

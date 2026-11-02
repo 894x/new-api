@@ -15,12 +15,115 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChannelStreamResponseHeaders(t *testing.T) {
+	originalBlocked := operation_setting.GetErrorSetting().BlockedResponseHeaders
+	require.NoError(t, operation_setting.UpdateBlockedResponseHeaders([]string{"X-Blocked", "X-Codex-Turn-State"}))
+	t.Cleanup(func() {
+		require.NoError(t, operation_setting.UpdateBlockedResponseHeaders(originalBlocked))
+	})
+
+	for _, tc := range []struct {
+		name    string
+		headers []string
+		want5m  string
+		want1h  string
+	}{
+		{name: "legacy channel keeps default headers only"},
+		{name: "channel forwards configured headers case insensitively", headers: []string{
+			" msh-usage-cache-write-tokens-5m ", "Msh-Usage-Cache-Write-Tokens-1h",
+			"X-Multi", "x-multi", "X-Blocked", "X-Reasoning-Included",
+		}, want5m: "12", want1h: "34"},
+		{name: "stored unsafe headers cannot change streaming semantics", headers: []string{
+			"Content-Length", "Content-Encoding", "Content-Type", "Connection",
+			"Set-Cookie", "X-Hop", "bad header", "X-Invalid\r\nInjected",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &model.Channel{}
+			channel.SetSetting(dto.ChannelSettings{StreamResponseHeaders: tc.headers})
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			upstream := http.Header{
+				"Msh-Usage-Cache-Write-Tokens-5m": {"12"},
+				"Msh-Usage-Cache-Write-Tokens-1h": {"34"},
+				"X-Reasoning-Included":            {"true"}, "X-Codex-Turn-State": {"blocked"},
+				"X-Multi": {"first", "second"}, "X-Blocked": {"private"},
+				"X-Unlisted": {"hidden"}, "X-Hop": {"hop-by-hop"},
+				"Connection": {"keep-alive, X-Hop"}, "Content-Encoding": {"gzip"},
+				"Content-Type": {"application/json"}, "Content-Length": {"999"},
+				"Set-Cookie": {"upstream=private"},
+			}
+			resp := &http.Response{Header: upstream, Body: io.NopCloser(strings.NewReader("data: {\"text\":\"ok\"}\n\ndata: [DONE]\n\n"))}
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: channel.GetSetting()}}
+			var writeErr error
+			StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+				writeErr = StringData(c, data)
+				if writeErr != nil {
+					sr.Stop(writeErr)
+				}
+			})
+			require.NoError(t, writeErr)
+			headers := recorder.Result().Header
+			assert.Equal(t, tc.want5m, headers.Get("Msh-Usage-Cache-Write-Tokens-5m"))
+			assert.Equal(t, tc.want1h, headers.Get("Msh-Usage-Cache-Write-Tokens-1h"))
+			assert.Equal(t, "true", headers.Get("X-Reasoning-Included"))
+			assert.Empty(t, headers.Get("X-Codex-Turn-State"))
+			assert.Empty(t, headers.Get("X-Blocked"))
+			assert.Empty(t, headers.Get("X-Unlisted"))
+			assert.Empty(t, headers.Get("X-Hop"))
+			assert.Empty(t, headers.Get("Content-Encoding"))
+			assert.Empty(t, headers.Get("Content-Length"))
+			assert.Empty(t, headers.Get("Set-Cookie"))
+			assert.Equal(t, "text/event-stream", headers.Get("Content-Type"))
+			assert.Equal(t, "keep-alive", headers.Get("Connection"))
+			assert.Contains(t, recorder.Body.String(), `"text":"ok"`)
+			if tc.want5m != "" {
+				assert.Equal(t, []string{"first", "second"}, headers.Values("X-Multi"))
+			}
+			assert.Equal(t, "12", upstream.Get("Msh-Usage-Cache-Write-Tokens-5m"))
+		})
+	}
+}
+
+func TestChannelStreamResponseHeadersValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		headers []string
+		valid   bool
+	}{
+		{name: "legacy setting", valid: true},
+		{name: "custom header names", headers: []string{"Msh-Usage-Cache-Write-Tokens-5m", " x-custom "}, valid: true},
+		{name: "invalid name", headers: []string{"X Invalid"}},
+		{name: "empty name", headers: []string{" "}},
+		{name: "injected name", headers: []string{"X-Trace\r\nSet-Cookie"}},
+		{name: "oversized name", headers: []string{strings.Repeat("X", 129)}},
+		{name: "too many names", headers: make([]string, 65)},
+		{name: "gateway encoding", headers: []string{"Content-Encoding"}},
+		{name: "gateway stream type", headers: []string{"content-type"}},
+		{name: "upstream session", headers: []string{"Set-Cookie"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &model.Channel{}
+			channel.SetSetting(dto.ChannelSettings{StreamResponseHeaders: tc.headers})
+			err := channel.ValidateSettings()
+			if tc.valid {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+		})
+	}
+}
 
 type cancelingErrorReadCloser struct {
 	cancel context.CancelFunc

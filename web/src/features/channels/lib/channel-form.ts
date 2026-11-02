@@ -53,6 +53,36 @@ const SUPPORTED_PROXY_PROTOCOLS = new Set([
   'socks5h:',
 ])
 
+const GATEWAY_MANAGED_STREAM_HEADERS = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+  'content-length',
+  'content-encoding',
+  'content-type',
+  'cache-control',
+  'x-accel-buffering',
+  'authorization',
+  'cookie',
+  'set-cookie',
+])
+
+function parseStreamResponseHeaders(value: string | undefined): string[] {
+  const names = new Map<string, string>()
+  for (const line of value?.split('\n') ?? []) {
+    const name = line.trim()
+    if (name && !names.has(name.toLowerCase())) {
+      names.set(name.toLowerCase(), name)
+    }
+  }
+  return [...names.values()]
+}
+
 function isOptionalProxyURL(value: string | undefined): boolean {
   const trimmedValue = value?.trim() || ''
   if (!trimmedValue) return true
@@ -287,6 +317,21 @@ export const channelFormSchema = z
     http1_large_body_threshold_kib: z.number().optional(),
     pass_through_body_enabled: z.boolean().optional(),
     responses_websocket_enabled: z.boolean().optional(),
+    stream_response_headers: z
+      .string()
+      .optional()
+      .refine((value) => {
+        const names = parseStreamResponseHeaders(value)
+        return (
+          names.length <= 64 &&
+          names.every(
+            (name) =>
+              name.length <= 128 &&
+              /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) &&
+              !GATEWAY_MANAGED_STREAM_HEADERS.has(name.toLowerCase())
+          )
+        )
+      }, 'Enter up to 64 valid header names, at most 128 characters each. Gateway-managed headers cannot be forwarded.'),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
     // Type-specific settings (stored in settings JSON)
@@ -532,6 +577,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   http1_large_body_threshold_kib: 1024,
   pass_through_body_enabled: false,
   responses_websocket_enabled: false,
+  stream_response_headers: '',
   system_prompt: '',
   system_prompt_override: false,
   // Type-specific settings
@@ -583,6 +629,7 @@ export function transformChannelToFormDefaults(
     http1_large_body_threshold_kib: 1024,
     pass_through_body_enabled: false,
     responses_websocket_enabled: false,
+    stream_response_headers: '',
     system_prompt: '',
     system_prompt_override: false,
   }
@@ -613,6 +660,11 @@ export function transformChannelToFormDefaults(
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         responses_websocket_enabled:
           parsed.responses_websocket_enabled === true,
+        stream_response_headers: Array.isArray(parsed.stream_response_headers)
+          ? parsed.stream_response_headers
+              .filter((name: unknown) => typeof name === 'string')
+              .join('\n')
+          : '',
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
       }
@@ -778,6 +830,9 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     responses_websocket_enabled:
       (formData.type === 1 || formData.type === 57) &&
       formData.responses_websocket_enabled === true,
+    stream_response_headers: formData.stream_response_headers?.trim()
+      ? parseStreamResponseHeaders(formData.stream_response_headers)
+      : undefined,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
   }

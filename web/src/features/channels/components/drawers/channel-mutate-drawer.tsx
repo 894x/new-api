@@ -236,6 +236,7 @@ import {
 import { ModelRedirectPanel } from '../model-redirect-panel'
 import { ModelRoutingOverridesEditor } from '../model-routing-overrides-editor'
 import { ResponsesWebSocketSetting } from '../responses-websocket-setting'
+import { StreamResponseHeaderSetting } from '../stream-response-header-setting'
 import { UpstreamModelSelection } from '../upstream-model-selection'
 import {
   ChannelConfiguration,
@@ -294,6 +295,7 @@ const SENSITIVE_FORM_FIELDS = [
   'param_override',
   'parameter_capabilities',
   'header_override',
+  'stream_response_headers',
   'settings',
   'setting',
   'advanced_custom',
@@ -2917,6 +2919,9 @@ export function ChannelMutateDrawer({
               <FormMessage />
             </FormItem>
           )}
+        />
+        <StreamResponseHeaderSetting
+          disabled={sensitiveLocked || isSubmitting}
         />
       </fieldset>
     </div>
