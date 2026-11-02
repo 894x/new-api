@@ -35,6 +35,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { toIntlLocale } from '@/i18n/languages'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -56,6 +57,7 @@ import {
   MAX_MODEL_ROUTING_WEIGHT,
   mergeModelRoutingOverrideDraftState,
   parseRoutingOverrideInput,
+  parseCostDiscountInput,
   resetModelRoutingOverrideDraft,
   updateModelRoutingOverrideDraftField,
   type ModelRoutingOverrideDraft,
@@ -85,15 +87,30 @@ type ModelRoutingOverrideRowProps = {
   weightInvalid: boolean
   rpmInvalid: boolean
   tpmInvalid: boolean
+  costDiscountInvalid: boolean
   onChange: (field: keyof ModelRoutingOverrideDraft, value: string) => void
   onReset: () => void
 }
 
 function ModelRoutingOverrideRow(props: ModelRoutingOverrideRowProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const rowLabel = props.showChannel ? props.row.channel_name : props.row.model
   const draftPriority = parseRoutingOverrideInput(props.draft.priority_override)
   const draftWeight = parseRoutingOverrideInput(props.draft.weight_override)
+  const draftCostDiscount = parseCostDiscountInput(
+    props.draft.cost_discount_override ?? ''
+  )
+  const effectiveCostDiscount =
+    draftCostDiscount === undefined
+      ? props.row.effective_cost_discount
+      : (draftCostDiscount ?? props.row.default_cost_discount)
+  const costDiscountLabel =
+    effectiveCostDiscount == null
+      ? t('Unknown')
+      : effectiveCostDiscount.toLocaleString(
+          toIntlLocale(i18n.resolvedLanguage || i18n.language),
+          { maximumFractionDigits: 20 }
+        )
   const effectivePriority =
     draftPriority === undefined
       ? props.row.effective_priority
@@ -188,6 +205,34 @@ function ModelRoutingOverrideRow(props: ModelRoutingOverrideRowProps) {
           </TableCell>
         )
       })}
+      <TableCell className='min-w-44'>
+        <Input
+          type='number'
+          min={0}
+          max={1}
+          step='any'
+          value={props.draft.cost_discount_override ?? ''}
+          placeholder={
+            props.row.default_cost_discount == null
+              ? t('Unknown')
+              : `${t('Inherit')} (${props.row.default_cost_discount})`
+          }
+          aria-label={`${t('Upstream cost discount')} · ${rowLabel}`}
+          aria-invalid={props.costDiscountInvalid}
+          disabled={props.disabled}
+          onChange={(event) =>
+            props.onChange('cost_discount_override', event.target.value)
+          }
+        />
+        <div className='text-muted-foreground mt-1 text-xs'>
+          {t('Effective')}: {costDiscountLabel}
+        </div>
+        {props.costDiscountInvalid && (
+          <p className='text-destructive text-xs' role='alert'>
+            {t('Use a number between 0 and 1.')}
+          </p>
+        )}
+      </TableCell>
       <TableCell className='w-16 text-right'>
         <Button
           type='button'
@@ -200,7 +245,8 @@ function ModelRoutingOverrideRow(props: ModelRoutingOverrideRowProps) {
             (props.draft.priority_override === '' &&
               props.draft.weight_override === '' &&
               !props.draft.rpm_override &&
-              !props.draft.tpm_override)
+              !props.draft.tpm_override &&
+              !props.draft.cost_discount_override)
           }
           onClick={props.onReset}
         >
@@ -389,7 +435,7 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
     if (serialization.errors.length > 0) {
       toast.error(
         t(
-          'Use whole numbers; weight must be between 0 and 2147483637, and RPM/TPM must be non-negative safe integers.'
+          'Use whole numbers for priority, weight and capacity; cost discount must be between 0 and 1.'
         )
       )
       return
@@ -408,6 +454,11 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
           <p className='text-muted-foreground text-sm'>
             {t(
               'Leave a field empty to inherit the channel default. Zero is saved as an explicit override.'
+            )}
+          </p>
+          <p className='text-muted-foreground text-sm'>
+            {t(
+              'Cost discount is upstream cost metadata: 0.3 means 30% of the reference price. An unset effective value is unknown.'
             )}
           </p>
         </div>
@@ -459,6 +510,7 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
                 <TableHead>{t('Weight')}</TableHead>
                 <TableHead>{t('RPM')}</TableHead>
                 <TableHead>{t('TPM')}</TableHead>
+                <TableHead>{t('Upstream cost discount')}</TableHead>
                 <TableHead>
                   <span className='sr-only'>{t('Reset')}</span>
                 </TableHead>
@@ -487,6 +539,9 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
                     weightInvalid={invalidFields.has(`${key}:weight_override`)}
                     rpmInvalid={invalidFields.has(`${key}:rpm_override`)}
                     tpmInvalid={invalidFields.has(`${key}:tpm_override`)}
+                    costDiscountInvalid={invalidFields.has(
+                      `${key}:cost_discount_override`
+                    )}
                     onChange={(field, value) => updateDraft(row, field, value)}
                     onReset={() => resetDraft(row)}
                   />
@@ -500,7 +555,7 @@ function ModelRoutingOverrideRows(props: ModelRoutingOverrideRowsProps) {
       {serialization.errors.length > 0 && (
         <p className='text-destructive text-sm' role='alert'>
           {t(
-            'Use whole numbers; weight must be between 0 and 2147483637, and RPM/TPM must be non-negative safe integers.'
+            'Use whole numbers for priority, weight and capacity; cost discount must be between 0 and 1.'
           )}
         </p>
       )}

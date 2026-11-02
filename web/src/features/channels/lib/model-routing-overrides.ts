@@ -29,7 +29,11 @@ export const MAX_MODEL_ROUTING_WEIGHT = 2_147_483_637
 export type ModelRoutingOverrideDraft = Pick<
   Record<keyof ModelRoutingOverridePatch, string>,
   'priority_override' | 'weight_override'
-> & { rpm_override?: string; tpm_override?: string }
+> & {
+  rpm_override?: string
+  tpm_override?: string
+  cost_discount_override?: string
+}
 
 export type ModelRoutingOverrideDraftField = keyof ModelRoutingOverrideDraft
 
@@ -81,6 +85,14 @@ export function createModelRoutingOverrideDrafts(
     rows.map((row) => [
       getModelRoutingOverrideKey(row.channel_id, row.model),
       {
+        ...(row.cost_discount_override !== undefined
+          ? {
+              cost_discount_override:
+                row.cost_discount_override === null
+                  ? ''
+                  : String(row.cost_discount_override),
+            }
+          : {}),
         ...(row.rpm_override !== undefined
           ? {
               rpm_override:
@@ -130,6 +142,7 @@ export function mergeModelRoutingOverrideDraftState(
       'weight_override',
       'rpm_override',
       'tpm_override',
+      'cost_discount_override',
     ] as const) {
       const dirtyFieldKey = getModelRoutingOverrideDirtyFieldKey(key, field)
       if (
@@ -195,6 +208,7 @@ export function resetModelRoutingOverrideDraft(
     'weight_override',
     'rpm_override',
     'tpm_override',
+    'cost_discount_override',
   ] as const) {
     state = updateModelRoutingOverrideDraftField(state, row, field, '')
   }
@@ -265,17 +279,35 @@ export function collectChangedModelRoutingOverrides(
     if (invalidCapacity) {
       continue
     }
+    const costDiscount: Pick<
+      ModelRoutingOverridePatch,
+      'cost_discount_override'
+    > = {}
+    if (
+      draft.cost_discount_override !== undefined ||
+      row.cost_discount_override !== undefined
+    ) {
+      const value = parseCostDiscountInput(draft.cost_discount_override ?? '')
+      if (value === undefined) {
+        errors.push({ key, field: 'cost_discount_override' })
+        continue
+      }
+      costDiscount.cost_discount_override = value
+    }
     if (
       priorityOverride === row.priority_override &&
       weightOverride === row.weight_override &&
       (capacity.rpm_override ?? null) === (row.rpm_override ?? null) &&
-      (capacity.tpm_override ?? null) === (row.tpm_override ?? null)
+      (capacity.tpm_override ?? null) === (row.tpm_override ?? null) &&
+      (costDiscount.cost_discount_override ?? null) ===
+        (row.cost_discount_override ?? null)
     ) {
       continue
     }
 
     changedOverrides.push({
       ...capacity,
+      ...costDiscount,
       channel_id: row.channel_id,
       model: row.model,
       priority_override: priorityOverride,
@@ -284,4 +316,13 @@ export function collectChangedModelRoutingOverrides(
   }
 
   return { overrides: changedOverrides, errors }
+}
+
+export function parseCostDiscountInput(
+  rawValue: string
+): number | null | undefined {
+  if (rawValue.trim() === '') return null
+  const value = Number(rawValue)
+  if (!Number.isFinite(value) || value < 0 || value > 1) return undefined
+  return value
 }

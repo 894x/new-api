@@ -46,6 +46,7 @@ import { channelsQueryKeys } from '@/features/channels/lib/channel-actions'
 import {
   MAX_MODEL_ROUTING_WEIGHT,
   parseRoutingOverrideInput,
+  parseCostDiscountInput,
 } from '@/features/channels/lib/model-routing-overrides'
 import { toIntlLocale } from '@/i18n/languages'
 
@@ -56,6 +57,7 @@ const overrideFields = [
   'tpm_override',
   'priority_override',
   'weight_override',
+  'cost_discount_override',
 ] as const
 type OverrideField = (typeof overrideFields)[number]
 type OverrideValues = Record<OverrideField, string>
@@ -73,12 +75,14 @@ export function MatrixCellEditor(props: {
     tpm_override: t('TPM'),
     priority_override: t('Priority'),
     weight_override: t('Weight'),
+    cost_discount_override: t('Upstream cost discount'),
   }
   const defaults = {
     rpm_override: props.cell.default_rpm ?? 0,
     tpm_override: props.cell.default_tpm ?? 0,
     priority_override: props.cell.default_priority,
     weight_override: props.cell.default_weight,
+    cost_discount_override: props.cell.default_cost_discount ?? null,
   }
   const schema = z
     .object({
@@ -86,9 +90,20 @@ export function MatrixCellEditor(props: {
       tpm_override: z.string(),
       priority_override: z.string(),
       weight_override: z.string(),
+      cost_discount_override: z.string(),
     })
     .superRefine((values, ctx) => {
       for (const field of overrideFields) {
+        if (field === 'cost_discount_override') {
+          if (parseCostDiscountInput(values[field]) === undefined) {
+            ctx.addIssue({
+              code: 'custom',
+              path: [field],
+              message: t('Use a number between 0 and 1.'),
+            })
+          }
+          continue
+        }
         const value = parseRoutingOverrideInput(values[field])
         const min = field === 'priority_override' ? -Number.MAX_SAFE_INTEGER : 0
         const max =
@@ -113,6 +128,10 @@ export function MatrixCellEditor(props: {
   const form = useForm<OverrideValues>({
     resolver: zodResolver(schema),
     defaultValues: {
+      cost_discount_override:
+        props.cell.cost_discount_override == null
+          ? ''
+          : String(props.cell.cost_discount_override),
       rpm_override:
         props.cell.rpm_override == null ? '' : String(props.cell.rpm_override),
       tpm_override:
@@ -135,6 +154,8 @@ export function MatrixCellEditor(props: {
           {
             channel_id: props.cell.channel_id,
             model: props.cell.model,
+            cost_discount_override:
+              parseCostDiscountInput(values.cost_discount_override) ?? null,
             rpm_override:
               parseRoutingOverrideInput(values.rpm_override) ?? null,
             tpm_override:
@@ -214,17 +235,29 @@ export function MatrixCellEditor(props: {
           <FieldGroup className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
             {overrideFields.map((field) => {
               const error = form.formState.errors[field]
-              const parsed = parseRoutingOverrideInput(values[field])
+              const parsed =
+                field === 'cost_discount_override'
+                  ? parseCostDiscountInput(values[field])
+                  : parseRoutingOverrideInput(values[field])
               const effective = parsed ?? defaults[field]
               const capacity =
                 field === 'rpm_override' || field === 'tpm_override'
               let effectiveLabel = '—'
               if (!error) {
-                effectiveLabel =
-                  capacity && effective === 0
-                    ? t('Unlimited')
-                    : effective.toLocaleString(toIntlLocale(i18n.language))
+                if (effective == null) {
+                  effectiveLabel = t('Unknown')
+                } else if (capacity && effective === 0) {
+                  effectiveLabel = t('Unlimited')
+                } else {
+                  effectiveLabel = effective.toLocaleString(
+                    toIntlLocale(i18n.language),
+                    { maximumFractionDigits: 20 }
+                  )
+                }
               }
+              let inputMode: 'text' | 'numeric' | 'decimal' = 'numeric'
+              if (field === 'priority_override') inputMode = 'text'
+              if (field === 'cost_discount_override') inputMode = 'decimal'
               return (
                 <Field
                   key={field}
@@ -237,11 +270,13 @@ export function MatrixCellEditor(props: {
                   <Input
                     id={`matrix-${field}`}
                     type='text'
-                    inputMode={
-                      field === 'priority_override' ? 'text' : 'numeric'
-                    }
+                    inputMode={inputMode}
                     autoComplete='off'
-                    placeholder={`${t('Inherit')} (${defaults[field]})`}
+                    placeholder={
+                      defaults[field] == null
+                        ? t('Unknown')
+                        : `${t('Inherit')} (${defaults[field]})`
+                    }
                     aria-invalid={Boolean(error)}
                     aria-describedby={`matrix-${field}-description${error ? ` matrix-${field}-error` : ''}`}
                     disabled={disabled}
@@ -259,6 +294,11 @@ export function MatrixCellEditor(props: {
               )
             })}
           </FieldGroup>
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'Cost discount is upstream cost metadata: 0.3 means 30% of the reference price. An unset effective value is unknown.'
+            )}
+          </p>
           <p className='text-muted-foreground text-xs'>
             {t(
               'RPM/TPM: 0 means unlimited. Priority is considered before weight; weight 0 still participates in selection.'

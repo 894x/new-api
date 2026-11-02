@@ -20,7 +20,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
 import { ROLE } from '@/lib/roles'
@@ -61,6 +61,10 @@ function installRoutingFixture(): void {
           weight_override: null,
           effective_priority: 5,
           effective_weight: 100,
+          default_cost_discount: 0.3,
+          cost_discount_override: null,
+          effective_cost_discount: 0.3,
+          cost_discount_source: 'channel',
         },
         {
           channel_id: 8,
@@ -94,6 +98,7 @@ function renderEditor(): void {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   apiClient.get = originalGet
   useAuthStore.getState().auth.setUser(null)
   queryClient?.clear()
@@ -101,6 +106,47 @@ afterEach(() => {
 })
 
 describe('model routing overrides editor', () => {
+  test('saves fractional cost discounts, rejects invalid input and resets to channel inheritance', async () => {
+    installRoutingFixture()
+    useAuthStore
+      .getState()
+      .auth.setUser({ id: 1, username: 'root', role: ROLE.SUPER_ADMIN })
+    const patch = vi
+      .spyOn(api, 'patch')
+      .mockResolvedValue({ data: { success: true, data: [] } })
+    renderEditor()
+    const input = await screen.findByRole('spinbutton', {
+      name: 'Upstream cost discount · Enabled channel',
+    })
+    expect(input).toHaveAttribute('placeholder', 'Inherit (0.3)')
+    fireEvent.change(input, { target: { value: '1.1' } })
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    expect(
+      screen.getByRole('button', { name: 'Save routing overrides' })
+    ).toBeDisabled()
+    fireEvent.change(input, { target: { value: '0.003125' } })
+    expect(screen.getByText('Effective: 0.003125')).toBeVisible()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Reset · Enabled channel' })
+    )
+    expect(input).toHaveValue(null)
+    expect(screen.getByText('Effective: 0.3')).toBeVisible()
+    fireEvent.change(input, { target: { value: '0.003125' } })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Save routing overrides' })
+    )
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(
+        '/api/channel/model-routing-overrides',
+        expect.objectContaining({
+          overrides: [
+            expect.objectContaining({ cost_discount_override: 0.003125 }),
+          ],
+        }),
+        expect.anything()
+      )
+    )
+  })
   test('shows enabled channels by default and reveals disabled channels after selecting all', async () => {
     installRoutingFixture()
     useAuthStore.getState().auth.setUser({

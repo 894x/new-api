@@ -2258,6 +2258,39 @@ export function ChannelMutateDrawer({
             </FormItem>
           )}
         />
+        <FormField
+          control={form.control}
+          name='cost_discount'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('Upstream cost discount')}</FormLabel>
+              <FormControl>
+                <Input
+                  type='number'
+                  min={0}
+                  max={1}
+                  step='any'
+                  {...field}
+                  value={field.value ?? ''}
+                  placeholder={t('Unknown')}
+                  onChange={(event) =>
+                    field.onChange(
+                      event.target.value === ''
+                        ? null
+                        : Number(event.target.value)
+                    )
+                  }
+                />
+              </FormControl>
+              <FormDescription>
+                {t(
+                  'Upstream cost multiplier: 0.3 means 30% of the reference price. Leave empty if unknown; model overrides take precedence.'
+                )}
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
         {(['rpm', 'tpm'] as const).map((name) => (
           <FormField
             key={name}

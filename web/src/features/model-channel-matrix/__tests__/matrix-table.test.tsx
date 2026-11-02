@@ -24,6 +24,20 @@ import { MatrixTable } from '../components/matrix-table'
 import { createMatrixFixture } from './fixtures'
 
 describe('model-channel matrix table', () => {
+  test('shows explicit free cost and preserves fractional precision', () => {
+    const fixture = createMatrixFixture()
+    fixture.cells[0].effective_cost_discount = 0.003125
+    fixture.cells[0].cost_discount_override = 0.003125
+    fixture.cells[1].effective_cost_discount = 0
+    fixture.cells[1].cost_discount_override = 0
+    render(<MatrixTable data={fixture} busy={false} onSelect={vi.fn()} />)
+    expect(
+      screen.getByTitle('Upstream cost discount: 0.003125 (Override)')
+    ).toBeVisible()
+    expect(
+      screen.getByTitle('Upstream cost discount: 0 (Override)')
+    ).toBeVisible()
+  })
   test.each(['zhCN', 'zhTW'])(
     'renders numeric values in the %s interface language',
     async (language) => {
@@ -63,7 +77,7 @@ describe('model-channel matrix table', () => {
     })
     expect(within(cell).getByText('500')).toBeVisible()
     expect(within(cell).getByText('Unlimited')).toBeVisible()
-    expect(within(cell).getAllByText('Inherit')).toHaveLength(3)
+    expect(within(cell).getAllByText('Inherit')).toHaveLength(4)
     expect(within(cell).getByTitle('TPM: Unlimited (Override)')).toBeVisible()
     expect(cell).toHaveAccessibleDescription(
       expect.stringMatching(/RPM.*500.*Inherit.*TPM.*Unlimited.*Override/)

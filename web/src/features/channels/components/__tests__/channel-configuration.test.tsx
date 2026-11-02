@@ -317,6 +317,30 @@ test.each([
   }
 )
 
+test('clearing the channel cost discount submits an explicit null and keeps it empty across tabs', async () => {
+  editingChannel.cost_discount = 0.3
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = userEvent.setup()
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  await user.click(screen.getByRole('tab', { name: /Routing & Mapping/ }))
+  const input = screen.getByRole('spinbutton', {
+    name: 'Upstream cost discount',
+  })
+  expect(input).toHaveValue(0.3)
+  fireEvent.change(input, { target: { value: '' } })
+  await user.click(screen.getByRole('tab', { name: /Connection & Models/ }))
+  await user.click(screen.getByRole('tab', { name: /Routing & Mapping/ }))
+  expect(
+    screen.getByRole('spinbutton', { name: 'Upstream cost discount' })
+  ).toHaveValue(null)
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  expect(put.mock.calls[0]?.[1]).toMatchObject({ id: 42, cost_discount: null })
+})
+
 test('an unavailable default URL endpoint keeps the fallback placeholder and allows saving a custom address', async () => {
   const onInternalServerError = vi.fn()
   client = createAppQueryClient(onInternalServerError)

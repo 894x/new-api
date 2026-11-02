@@ -33,6 +33,41 @@ import {
 } from '../model-routing-overrides'
 
 describe('channel capacity configuration', () => {
+  it.each([null, 0, 0.003125, 1])(
+    'round-trips upstream cost discount %s without defaulting unknown values',
+    (costDiscount) => {
+      const form = {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'Cost channel',
+        key: 'fixture',
+        models: 'gpt-test',
+        group: ['default'],
+        cost_discount: costDiscount,
+      }
+      expect(channelFormSchema.safeParse(form).success).toBe(true)
+      const channel = transformFormDataToCreatePayload(form).channel
+      expect(channel.cost_discount).toBe(costDiscount)
+      expect(transformFormDataToUpdatePayload(form, 1).cost_discount).toBe(
+        costDiscount
+      )
+      expect(
+        transformChannelToFormDefaults({
+          ...channel,
+          channel_info: {
+            is_multi_key: false,
+            multi_key_size: 1,
+            multi_key_mode: 'random',
+          },
+        } as Parameters<typeof transformChannelToFormDefaults>[0]).cost_discount
+      ).toBe(costDiscount)
+      expect(
+        channelFormSchema.safeParse({ ...form, cost_discount: -0.1 }).success
+      ).toBe(false)
+      expect(
+        channelFormSchema.safeParse({ ...form, cost_discount: 1.1 }).success
+      ).toBe(false)
+    }
+  )
   it('round-trips defaults and rejects negative and unsafe limits', () => {
     const form = {
       ...CHANNEL_FORM_DEFAULT_VALUES,

@@ -56,6 +56,7 @@ export const channelSchema = z.object({
   model_mapping: z.string().nullish(),
   status_code_mapping: z.string().nullish(),
   priority: z.number().nullish(),
+  cost_discount: z.number().nullish(),
   rpm: z.number().nullish(),
   tpm: z.number().nullish(),
   auto_ban: z.number().nullish(),
@@ -96,6 +97,10 @@ export interface ModelRoutingOverride {
   tpm_override?: number | null
   effective_rpm?: number
   effective_tpm?: number
+  default_cost_discount?: number | null
+  cost_discount_override?: number | null
+  effective_cost_discount?: number | null
+  cost_discount_source?: 'unknown' | 'channel' | 'model'
 }
 
 export type ModelRoutingOverridePatch = Pick<
@@ -106,6 +111,7 @@ export type ModelRoutingOverridePatch = Pick<
   | 'weight_override'
   | 'rpm_override'
   | 'tpm_override'
+  | 'cost_discount_override'
 >
 
 // ============================================================================
@@ -426,6 +432,7 @@ export interface TagOperationParams {
   tag: string
   new_tag?: string
   priority?: number
+  cost_discount?: number | null
   weight?: number
   rpm?: number
   tpm?: number
