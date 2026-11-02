@@ -37,6 +37,7 @@ export type MonitorBucket = {
   state: string
   count: number
   success_count: number
+  state_counts?: Record<string, number>
   latency_ms: number | null
   error_code?: string
 }
@@ -71,7 +72,14 @@ export async function getChannelMonitoring(
         params: { model, channel_ids: ids.join(',') },
         signal,
       })
-      return requireServerSuccess(response.data).data
+      const summaries = requireServerSuccess(response.data).data
+      if (
+        !Array.isArray(summaries) ||
+        summaries.some((summary) => !summary || !Array.isArray(summary.buckets))
+      ) {
+        throw new Error('Invalid channel monitoring response')
+      }
+      return summaries
     })
   )
   return responses.flat()

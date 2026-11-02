@@ -116,6 +116,7 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 			require.Len(t, summary.Buckets, 96)
 			assert.Equal(t, "empty", summary.Buckets[0].State)
 			assert.Equal(t, "unavailable", summary.Buckets[95].State)
+			assert.Equal(t, map[string]int{"healthy": 1, "slow": 1, "unavailable": 1, "excluded": 1}, summary.Buckets[95].StateCounts, "mixed outcomes retain their proportions within one interval")
 			assert.Equal(t, 503, summary.Latest.StatusCode)
 			unfiltered, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, nil, now)
 			require.NoError(t, err)

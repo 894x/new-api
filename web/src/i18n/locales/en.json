@@ -8350,6 +8350,9 @@
     "Now": "Now",
     "Status codes excluded from monitoring statistics": "Status codes excluded from monitoring statistics",
     "Matching responses remain visible but do not affect availability or performance. Use codes or ranges separated by commas. Leave empty to include all status codes.": "Matching responses remain visible but do not affect availability or performance. Use codes or ranges separated by commas. Leave empty to include all status codes.",
-    "Excluded by monitoring policy": "Excluded by monitoring policy"
+    "Excluded by monitoring policy": "Excluded by monitoring policy",
+    "Bar height shows sample volume": "Bar height shows sample volume",
+    "Slow": "Slow",
+    "Excluded": "Excluded"
   }
 }

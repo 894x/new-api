@@ -61,6 +61,12 @@ export function PoolChannelList(props: {
   const observations = new Map(
     monitoring.data?.map((entry) => [entry.channel_id, entry])
   )
+  let maxSampleCount = 1
+  for (const summary of monitoring.data ?? []) {
+    for (const bucket of summary.buckets) {
+      maxSampleCount = Math.max(maxSampleCount, bucket.count)
+    }
+  }
   const candidates = new Map(
     props.candidates.map((candidate) => [candidate.channel_id, candidate])
   )
@@ -147,6 +153,7 @@ export function PoolChannelList(props: {
                     summary={observations.get(entry.channel_id)}
                     loading={monitoring.isLoading}
                     error={monitoring.isError}
+                    maxSampleCount={maxSampleCount}
                   />
                 ) : undefined
               }

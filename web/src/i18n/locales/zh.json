@@ -8350,6 +8350,9 @@
     "Now": "现在",
     "Status codes excluded from monitoring statistics": "监控统计排除的状态码",
     "Matching responses remain visible but do not affect availability or performance. Use codes or ranges separated by commas. Leave empty to include all status codes.": "命中的响应仍会展示，但不影响可用率和性能统计。支持逗号分隔的状态码或区间，留空则所有状态码均参与统计。",
-    "Excluded by monitoring policy": "已按监控规则排除"
+    "Excluded by monitoring policy": "已按监控规则排除",
+    "Bar height shows sample volume": "柱高表示样本量",
+    "Slow": "慢",
+    "Excluded": "已排除"
   }
 }

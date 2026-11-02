@@ -8350,6 +8350,9 @@
     "Now": "Сейчас",
     "Status codes excluded from monitoring statistics": "Коды состояния, исключённые из статистики мониторинга",
     "Matching responses remain visible but do not affect availability or performance. Use codes or ranges separated by commas. Leave empty to include all status codes.": "Соответствующие ответы остаются видимыми, но не влияют на доступность и производительность. Разделяйте коды или диапазоны запятыми. Пустое поле включает все коды.",
-    "Excluded by monitoring policy": "Исключено правилом мониторинга"
+    "Excluded by monitoring policy": "Исключено правилом мониторинга",
+    "Bar height shows sample volume": "Высота — число наблюдений",
+    "Slow": "Медленно",
+    "Excluded": "Исключено"
   }
 }

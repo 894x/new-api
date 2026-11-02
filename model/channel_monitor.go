@@ -118,12 +118,13 @@ func PruneChannelMonitorRecords(ctx context.Context, now time.Time) error {
 }
 
 type ChannelMonitorBucket struct {
-	Timestamp    int64  `json:"timestamp"`
-	State        string `json:"state"`
-	Count        int    `json:"count"`
-	SuccessCount int    `json:"success_count"`
-	LatencyMs    *int64 `json:"latency_ms"`
-	ErrorCode    string `json:"error_code,omitempty"`
+	Timestamp    int64          `json:"timestamp"`
+	State        string         `json:"state"`
+	Count        int            `json:"count"`
+	SuccessCount int            `json:"success_count"`
+	StateCounts  map[string]int `json:"state_counts"`
+	LatencyMs    *int64         `json:"latency_ms"`
+	ErrorCode    string         `json:"error_code,omitempty"`
 }
 
 type ChannelMonitorSummary struct {
@@ -167,7 +168,7 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 	for _, channel := range channels {
 		summary := ChannelMonitorSummary{ChannelID: channel.Id, State: "pending", Buckets: make([]ChannelMonitorBucket, 96), Truncated: truncated}
 		for i := range summary.Buckets {
-			summary.Buckets[i] = ChannelMonitorBucket{Timestamp: start + int64(i)*bucketSeconds, State: "empty"}
+			summary.Buckets[i] = ChannelMonitorBucket{Timestamp: start + int64(i)*bucketSeconds, State: "empty", StateCounts: make(map[string]int)}
 		}
 		monitor, targets, err := channel.MonitorTargets()
 		if err != nil {
@@ -220,6 +221,7 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 				bucket.ErrorCode = record.ErrorCode
 			}
 			bucket.Count++
+			bucket.StateCounts[record.State]++
 			summary.SampleCount++
 			if record.State == "healthy" || record.State == "slow" {
 				succeeded++

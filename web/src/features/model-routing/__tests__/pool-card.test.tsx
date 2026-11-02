@@ -147,23 +147,28 @@ test('invalid numeric input prevents saving and explains the allowed value contr
 test('an empty explicit pool stays empty until the administrator adds an available channel', async () => {
   const pool = fixture()
   pool.channels = []
-  vi.spyOn(api, 'get').mockResolvedValue({
-    data: {
-      success: true,
+  vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/channel/monitoring') {
+      return { data: { success: true, data: [] } }
+    }
+    return {
       data: {
-        pool,
-        candidates: [
-          ...pool.candidates,
-          {
-            channel_id: 3,
-            channel_name: 'Closed provider',
-            priority: 999,
-            weight: 1,
-            available: false,
-          },
-        ],
+        success: true,
+        data: {
+          pool,
+          candidates: [
+            ...pool.candidates,
+            {
+              channel_id: 3,
+              channel_name: 'Closed provider',
+              priority: 999,
+              weight: 1,
+              available: false,
+            },
+          ],
+        },
       },
-    },
+    }
   })
   mountCard(pool)
   expect(screen.getByRole('status')).toHaveTextContent(

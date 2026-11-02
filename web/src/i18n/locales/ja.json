@@ -8350,6 +8350,9 @@
     "Now": "現在",
     "Status codes excluded from monitoring statistics": "監視統計から除外するステータスコード",
     "Matching responses remain visible but do not affect availability or performance. Use codes or ranges separated by commas. Leave empty to include all status codes.": "一致する応答は表示されますが、可用性や性能の統計には影響しません。コードまたは範囲をカンマで区切ります。空欄の場合はすべてのステータスコードを集計します。",
-    "Excluded by monitoring policy": "監視ルールにより除外"
+    "Excluded by monitoring policy": "監視ルールにより除外",
+    "Bar height shows sample volume": "棒の高さはサンプル数",
+    "Slow": "低速",
+    "Excluded": "除外"
   }
 }

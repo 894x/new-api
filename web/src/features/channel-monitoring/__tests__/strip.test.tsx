@@ -58,6 +58,10 @@ function fixture(): ChannelMonitorSummary {
       state: index === 94 ? 'unavailable' : 'healthy',
       count: index === 94 ? 7 : 3,
       success_count: index === 94 ? 5 : 3,
+      state_counts:
+        index === 94
+          ? { healthy: 4, slow: 1, unavailable: 2 }
+          : { healthy: 3, slow: 0, unavailable: 0 },
       latency_ms: 800,
     })),
   }
@@ -75,6 +79,9 @@ test('a measured zero first-response time is preserved and missing generation sp
   expect(screen.getByText('0 ms')).toBeInTheDocument()
   expect(screen.queryByText('Generation speed')).not.toBeInTheDocument()
   expect(screen.getByText('100%')).toBeInTheDocument()
+  expect(screen.getByRole('img', { name: 'Connected' })).toBeInTheDocument()
+  expect(screen.queryByText('First response')).not.toBeInTheDocument()
+  expect(screen.queryByText('Probe success rate')).not.toBeInTheDocument()
 })
 
 test('keyboard selection opens the matching historical probe bucket', async () => {
@@ -92,9 +99,104 @@ test('keyboard selection opens the matching historical probe bucket', async () =
   fireEvent.keyDown(timeline, { key: 'ArrowLeft' })
   await userEvent.click(timeline)
   const dialog = await screen.findByRole('dialog', { name: 'Probe details' })
-  expect(within(dialog).getByText('Connection failed')).toBeInTheDocument()
+  expect(
+    within(dialog).getByText('Connection failed', { selector: 'dd' })
+  ).toBeInTheDocument()
   expect(within(dialog).getByText('7')).toBeInTheDocument()
   expect(within(dialog).getByText('5')).toBeInTheDocument()
+})
+
+test('bar heights encode sample volume on a shared bounded scale while empty intervals stay flat', () => {
+  const summary = fixture()
+  summary.buckets[0] = { ...summary.buckets[0], count: 0, state: 'empty' }
+  summary.buckets[1].count = 1
+  summary.buckets[2].count = 100
+  summary.buckets[3].count = 1000
+  render(
+    <ChannelMonitoringStrip
+      channelName='Example'
+      summary={summary}
+      loading={false}
+      error={false}
+      maxSampleCount={1000}
+    />
+  )
+  const timeline = screen.getByRole('button', {
+    name: '24-hour probe history for Example',
+  })
+  const bars = timeline.querySelectorAll<HTMLElement>('[data-bucket]')
+  const heights = [...bars]
+    .slice(0, 4)
+    .map((bar) => Number.parseFloat(bar.style.height))
+  expect(heights[0]).toBe(2)
+  expect(bars[0].querySelector('[data-state]')).toBeNull()
+  expect(heights[1]).toBeGreaterThan(heights[0])
+  expect(heights[2]).toBeGreaterThan(heights[1])
+  expect(heights[3]).toBeGreaterThan(heights[2])
+  expect(heights[3]).toBe(12)
+  expect(timeline).toHaveAccessibleDescription('Bar height shows sample volume')
+})
+
+test('a mixed interval stacks normal, slow, failed and excluded samples by their actual proportions', () => {
+  const summary = fixture()
+  summary.buckets[95] = {
+    ...summary.buckets[95],
+    count: 10,
+    success_count: 8,
+    state_counts: { healthy: 6, slow: 2, unavailable: 1, excluded: 1 },
+  }
+  render(
+    <ChannelMonitoringStrip
+      channelName='Example'
+      summary={summary}
+      loading={false}
+      error={false}
+    />
+  )
+  const timeline = screen.getByRole('button', {
+    name: '24-hour probe history for Example',
+  })
+  const column = timeline.querySelector('[data-bucket="95"]')
+  expect(
+    column?.querySelector<HTMLElement>('[data-state="healthy"]')?.style.height
+  ).toBe('60%')
+  expect(
+    column?.querySelector<HTMLElement>('[data-state="slow"]')?.style.height
+  ).toBe('20%')
+  expect(
+    column?.querySelector<HTMLElement>('[data-state="unavailable"]')?.style
+      .height
+  ).toBe('10%')
+  expect(
+    column?.querySelector<HTMLElement>('[data-state="excluded"]')?.style.height
+  ).toBe('10%')
+})
+
+test('history hover shows only the interval and short outcome counts', async () => {
+  const summary = fixture()
+  summary.buckets[95] = {
+    ...summary.buckets[95],
+    count: 31,
+    success_count: 28,
+    state_counts: { healthy: 21, slow: 7, unavailable: 3 },
+  }
+  render(
+    <ChannelMonitoringStrip
+      channelName='Example'
+      summary={summary}
+      loading={false}
+      error={false}
+    />
+  )
+  await userEvent.hover(
+    screen.getByRole('button', { name: '24-hour probe history for Example' })
+  )
+  const tooltip = await screen.findByRole('tooltip')
+  expect(tooltip).toHaveTextContent('Healthy 21')
+  expect(tooltip).toHaveTextContent('Slow 7')
+  expect(tooltip).toHaveTextContent('Failed 3')
+  expect(tooltip).not.toHaveTextContent('probes succeeded')
+  expect(tooltip).not.toHaveTextContent('Connected')
 })
 
 test('a failed monitoring query is shown as unavailable instead of a healthy state', () => {
@@ -126,7 +228,9 @@ test('an unprobed channel shows a pending state without invented latency or avai
       error={false}
     />
   )
-  expect(screen.getByText('Waiting for first probe')).toBeInTheDocument()
+  expect(
+    screen.getByRole('img', { name: 'Waiting for first probe' })
+  ).toBeInTheDocument()
   expect(screen.queryByText('Connected')).not.toBeInTheDocument()
   expect(screen.queryByText(/\d ms/)).not.toBeInTheDocument()
   expect(screen.queryByText('100%')).not.toBeInTheDocument()
@@ -147,7 +251,9 @@ test('an excluded response retains its HTTP status without becoming a configurat
       error={false}
     />
   )
-  expect(screen.getByText('Excluded by monitoring policy')).toBeInTheDocument()
+  expect(
+    screen.getByRole('img', { name: 'Excluded by monitoring policy' })
+  ).toBeInTheDocument()
   expect(screen.getByText('HTTP 400')).toBeInTheDocument()
   expect(
     screen.queryByText('Monitoring configuration error')

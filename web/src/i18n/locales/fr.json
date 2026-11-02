@@ -8350,6 +8350,9 @@
     "Now": "Maintenant",
     "Status codes excluded from monitoring statistics": "Codes de statut exclus des statistiques de surveillance",
     "Matching responses remain visible but do not affect availability or performance. Use codes or ranges separated by commas. Leave empty to include all status codes.": "Les réponses correspondantes restent visibles sans affecter la disponibilité ni les performances. Séparez les codes ou plages par des virgules. Laissez vide pour inclure tous les codes.",
-    "Excluded by monitoring policy": "Exclu par la règle de surveillance"
+    "Excluded by monitoring policy": "Exclu par la règle de surveillance",
+    "Bar height shows sample volume": "Hauteur : nombre d’échantillons",
+    "Slow": "Lent",
+    "Excluded": "Exclu"
   }
 }

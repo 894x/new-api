@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import dayjs from 'dayjs'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
@@ -39,12 +39,12 @@ const states: Record<string, { label: string; tone: string; fill: string }> = {
   healthy: {
     label: 'Connected',
     tone: 'text-emerald-600 dark:text-emerald-400',
-    fill: 'bg-emerald-500/80',
+    fill: 'bg-sky-600/80',
   },
   slow: {
     label: 'Slow response',
     tone: 'text-amber-600 dark:text-amber-400',
-    fill: 'bg-amber-500/80',
+    fill: 'bg-amber-400/90',
   },
   unavailable: {
     label: 'Connection failed',
@@ -98,14 +98,34 @@ const states: Record<string, { label: string; tone: string; fill: string }> = {
   },
 }
 
+const bucketStates = [
+  'healthy',
+  'slow',
+  'unavailable',
+  'configuration',
+  'unsupported',
+  'excluded',
+] as const
+
+const tooltipLabels: Record<string, string> = {
+  healthy: 'Healthy',
+  slow: 'Slow',
+  unavailable: 'Failed',
+  configuration: 'Configuration',
+  unsupported: 'Unsupported',
+  excluded: 'Excluded',
+}
+
 export function ChannelMonitoringStrip(props: {
   channelName: string
   summary?: ChannelMonitorSummary
   loading: boolean
   error: boolean
+  maxSampleCount?: number
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  const volumeHintId = useId()
   const [slot, setSlot] = useState(95)
   const [open, setOpen] = useState(false)
   if (props.loading && !props.summary) {
@@ -133,9 +153,26 @@ export function ChannelMonitoringStrip(props: {
   const bucket = summary.buckets[slot]
   const bucketStatus = states[bucket?.state ?? 'empty'] ?? states.empty
   const latest = summary.latest
+  const maxSampleCount = Math.max(
+    1,
+    props.maxSampleCount ??
+      summary.buckets.reduce((count, point) => Math.max(count, point.count), 0)
+  )
   const hasLatency =
     latest && (latest.state === 'healthy' || latest.state === 'slow')
   const latency = hasLatency ? (latest.ttft_ms ?? latest.latency_ms) : null
+  const latencyLabel = t(
+    hasLatency && latest.ttft_ms !== null ? 'First response' : 'Probe duration'
+  )
+  const latencyValue =
+    latency === null ? '—' : `${formatNumber(latency, locale)} ms`
+  const successRateValue =
+    summary.success_rate === null
+      ? '—'
+      : `${formatNumber(summary.success_rate, locale)}%`
+  const bucketCounts =
+    bucket?.state_counts ??
+    (bucket && bucket.count > 0 ? { [bucket.state]: bucket.count } : {})
   return (
     <div
       className='min-w-0 space-y-1.5'
@@ -144,40 +181,41 @@ export function ChannelMonitoringStrip(props: {
       })}
     >
       <div className='flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px]'>
-        <span className={cn('inline-flex items-center gap-1', status.tone)}>
+        <span
+          role='img'
+          aria-label={t(status.label)}
+          title={t(status.label)}
+          className={cn('inline-flex items-center', status.tone)}
+        >
           <span className='size-1.5 rounded-full bg-current' />
-          {t(status.label)}
         </span>
         {latest && !hasLatency && latest.status_code > 0 && (
           <span className='text-muted-foreground'>
             HTTP {latest.status_code}
           </span>
         )}
-        <span className='text-muted-foreground'>
-          {t(
-            hasLatency && latest.ttft_ms !== null
-              ? 'First response'
-              : 'Probe duration'
-          )}{' '}
-          <span className='text-foreground tabular-nums'>
-            {latency === null ? '—' : `${formatNumber(latency, locale)} ms`}
-          </span>
+        <span
+          className='text-foreground tabular-nums'
+          title={latencyLabel}
+          aria-label={`${latencyLabel}: ${latencyValue}`}
+        >
+          {latencyValue}
         </span>
         {hasLatency && latest.tokens_per_second !== null && (
-          <span className='text-muted-foreground'>
-            {t('Generation speed')}{' '}
-            <span className='text-foreground tabular-nums'>
-              {formatNumber(latest.tokens_per_second, locale)} t/s
-            </span>
+          <span
+            className='text-foreground tabular-nums'
+            title={t('Generation speed')}
+            aria-label={`${t('Generation speed')}: ${formatNumber(latest.tokens_per_second, locale)} t/s`}
+          >
+            {formatNumber(latest.tokens_per_second, locale)} t/s
           </span>
         )}
-        <span className='text-muted-foreground ml-auto'>
-          24h {t('Probe success rate')}{' '}
-          <span className='text-foreground tabular-nums'>
-            {summary.success_rate === null
-              ? '—'
-              : `${formatNumber(summary.success_rate, locale)}%`}
-          </span>
+        <span
+          className='text-foreground ml-auto tabular-nums'
+          title={`24h ${t('Probe success rate')}`}
+          aria-label={`24h ${t('Probe success rate')}: ${successRateValue}`}
+        >
+          {successRateValue}
         </span>
       </div>
       <TooltipProvider>
@@ -187,12 +225,15 @@ export function ChannelMonitoringStrip(props: {
               <Button
                 type='button'
                 variant='ghost'
-                className='h-4 w-full gap-px rounded-none p-0 hover:bg-transparent'
+                className='h-4 w-full items-end gap-px rounded-none p-0 hover:bg-transparent'
+                aria-describedby={`${volumeHintId} ${volumeHintId}-tooltip`}
                 aria-label={t('24-hour probe history for {{channel}}', {
                   channel: props.channelName,
                 })}
                 onPointerMove={(event) => {
-                  const index = (event.target as HTMLElement).dataset.bucket
+                  const index = (
+                    event.target as HTMLElement
+                  ).closest<HTMLElement>('[data-bucket]')?.dataset.bucket
                   if (index !== undefined) setSlot(Number(index))
                 }}
                 onKeyDown={(event) => {
@@ -211,33 +252,79 @@ export function ChannelMonitoringStrip(props: {
                 }}
                 onClick={() => setOpen(true)}
               >
-                {summary.buckets.map((point, index) => (
-                  <span
-                    key={point.timestamp}
-                    data-bucket={index}
-                    className={cn(
-                      'block h-3 min-w-0 flex-1 rounded-[2px]',
-                      (states[point.state] ?? states.empty).fill
-                    )}
-                  />
-                ))}
+                {summary.buckets.map((point, index) => {
+                  const counts =
+                    point.count > 0
+                      ? (point.state_counts ?? { [point.state]: point.count })
+                      : {}
+                  return (
+                    <span
+                      key={point.timestamp}
+                      data-bucket={index}
+                      style={{
+                        height:
+                          point.count > 0
+                            ? 3 +
+                              (9 * Math.log1p(point.count)) /
+                                Math.log1p(
+                                  Math.max(maxSampleCount, point.count)
+                                )
+                            : 2,
+                      }}
+                      className='bg-muted-foreground/25 flex min-w-0 flex-1 flex-col-reverse overflow-hidden rounded-[1px]'
+                    >
+                      {bucketStates
+                        .filter((state) => (counts[state] ?? 0) > 0)
+                        .map((state) => (
+                          <span
+                            key={state}
+                            data-state={state}
+                            className={cn(
+                              'block w-full shrink-0',
+                              states[state].fill
+                            )}
+                            style={{
+                              height: `${(counts[state] * 100) / point.count}%`,
+                            }}
+                          />
+                        ))}
+                    </span>
+                  )
+                })}
               </Button>
             }
           />
-          <TooltipContent className='space-y-1 text-xs'>
+          <TooltipContent
+            id={`${volumeHintId}-tooltip`}
+            role='tooltip'
+            className='max-w-[calc(100vw-2rem)] flex-col items-start gap-1 text-xs'
+          >
             {bucket && (
               <>
-                <p>
+                <p className='whitespace-nowrap'>
                   {dayjs(bucket.timestamp * 1000).format('MM-DD HH:mm')} –{' '}
                   {dayjs((bucket.timestamp + 900) * 1000).format('HH:mm')}
                 </p>
-                <p>
-                  {t(bucketStatus.label)} ·{' '}
-                  {t('{{success}} of {{count}} probes succeeded', {
-                    success: formatNumber(bucket.success_count, locale),
-                    count: formatNumber(bucket.count, locale),
-                  })}
-                </p>
+                <div className='flex flex-wrap gap-x-3 gap-y-1'>
+                  {bucketStates
+                    .filter((state) => (bucketCounts[state] ?? 0) > 0)
+                    .map((state) => (
+                      <span
+                        key={state}
+                        className='inline-flex items-center gap-1 whitespace-nowrap'
+                      >
+                        <span
+                          className={cn(
+                            'size-2 rounded-[1px]',
+                            states[state].fill
+                          )}
+                        />
+                        {t(tooltipLabels[state])}{' '}
+                        {formatNumber(bucketCounts[state], locale)}
+                      </span>
+                    ))}
+                  {bucket.count === 0 && <span>{t('No data')}</span>}
+                </div>
               </>
             )}
           </TooltipContent>
@@ -245,6 +332,7 @@ export function ChannelMonitoringStrip(props: {
       </TooltipProvider>
       <div className='text-muted-foreground flex justify-between text-[11px]'>
         <span>{t('24 hours ago')}</span>
+        <span id={volumeHintId}>{t('Bar height shows sample volume')}</span>
         <span>
           {summary.truncated ? t('Partial monitoring history') : t('Now')}
         </span>
@@ -268,6 +356,19 @@ export function ChannelMonitoringStrip(props: {
             <dd>{formatNumber(bucket.count, locale)}</dd>
             <dt className='text-muted-foreground'>{t('Successful probes')}</dt>
             <dd>{formatNumber(bucket.success_count, locale)}</dd>
+            {bucketStates
+              .filter((state) => (bucketCounts[state] ?? 0) > 0)
+              .map((state) => (
+                <div key={state} className='col-span-2 grid grid-cols-subgrid'>
+                  <dt className='text-muted-foreground inline-flex items-center gap-1.5'>
+                    <span
+                      className={cn('size-2 rounded-[1px]', states[state].fill)}
+                    />
+                    {t(states[state].label)}
+                  </dt>
+                  <dd>{formatNumber(bucketCounts[state], locale)}</dd>
+                </div>
+              ))}
             <dt className='text-muted-foreground'>
               {t('Latest successful duration')}
             </dt>
