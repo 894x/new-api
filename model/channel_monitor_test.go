@@ -35,7 +35,9 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 				if dsn == "" {
 					t.Skip("TEST_POSTGRES_DSN not configured")
 				}
-				driver = postgres.Open(dsn)
+				// Each scenario recreates the same tables with a different historical
+				// schema. Avoid retaining SELECT * plans across those fixture DDLs.
+				driver = postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
 			}
 			db, err := gorm.Open(driver, &gorm.Config{NamingStrategy: schema.NamingStrategy{TablePrefix: "channel_monitor_test_"}})
 			require.NoError(t, err)
@@ -56,19 +58,26 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 			}
 			require.NoError(t, db.Raw(query).Scan(&version).Error)
 			t.Logf("database version: %s", version)
-			for _, upgrade := range []bool{false, true} {
+			for _, schemaVersion := range []string{"fresh", "previous release", "legacy probes"} {
+				upgrade := schemaVersion != "fresh"
 				require.NoError(t, db.Migrator().DropTable(&ChannelMonitorRecord{}, &Channel{}))
 				if upgrade {
 					// Reproduce the preceding release's channel schema: all existing
 					// fields and indexes, without the new monitoring column/table.
 					require.NoError(t, db.AutoMigrate(&Channel{}))
-					require.NoError(t, db.Migrator().DropColumn(&Channel{}, "MonitorConfig"))
+					if schemaVersion == "legacy probes" {
+						require.NoError(t, db.Migrator().DropColumn(&Channel{}, "MonitorConfig"))
+					}
 					require.NoError(t, db.Model(&Channel{}).Create(map[string]any{"id": 7101, "name": "existing channel", "key": "fixture", "models": "model-a,model-b", "status": common.ChannelStatusEnabled}).Error)
 				}
 				if upgrade {
 					// Also exercise upgrading this feature's preceding schema.
 					require.NoError(t, db.AutoMigrate(&ChannelMonitorRecord{}))
-					for _, field := range []string{"Source", "Count", "BucketAt", "ObservedAtMs"} {
+					fields := []string{"TimingHistogram"}
+					if schemaVersion == "legacy probes" {
+						fields = append(fields, "Source", "Count", "BucketAt", "ObservedAtMs")
+					}
+					for _, field := range fields {
 						require.NoError(t, db.Migrator().DropColumn(&ChannelMonitorRecord{}, field))
 					}
 					require.NoError(t, db.Table("channel_monitor_test_channel_monitor_records").Create(map[string]any{"sample_key": "legacy", "channel_id": 7101, "model": "model-a", "state": "healthy", "created_at": int64(1)}).Error)
@@ -93,6 +102,7 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 					assert.Equal(t, "healthy", legacy.State)
 					assert.Empty(t, legacy.Source)
 					assert.Zero(t, legacy.Count)
+					assert.Empty(t, legacy.TimingHistogram)
 					require.NoError(t, db.Delete(&legacy).Error)
 				}
 				assert.True(t, db.Migrator().HasIndex(&ChannelMonitorRecord{}, "idx_channel_monitor_window"))
@@ -105,7 +115,7 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 			records := []ChannelMonitorRecord{
 				{SampleKey: "ok", ChannelID: 7101, Model: "model-a", EndpointType: "openai", CreatedAt: now.Unix() - 600, State: "healthy", LatencyMs: 680},
 				{SampleKey: "rejected-probe", ChannelID: 7101, Model: "model-a", EndpointType: "openai", CreatedAt: now.Unix() - 400, State: "unavailable", StatusCode: 400},
-				{SampleKey: "slow", ChannelID: 7101, Model: "model-a", EndpointType: "openai", CreatedAt: now.Unix() - 300, State: "slow", LatencyMs: 4000},
+				{SampleKey: "slow", ChannelID: 7101, Model: "model-a", EndpointType: "openai", CreatedAt: now.Unix() - 300, State: "slow", LatencyMs: 6000},
 				{SampleKey: "failure", ChannelID: 7101, Model: "model-a", EndpointType: "openai", CreatedAt: now.Unix() - 1, State: "unavailable", LatencyMs: 100, StatusCode: 503},
 				{SampleKey: "other-model", ChannelID: 7101, Model: "model-b", EndpointType: "openai", CreatedAt: now.Unix(), State: "healthy"},
 				{SampleKey: "other-channel", ChannelID: 7102, Model: "model-a", EndpointType: "openai", CreatedAt: now.Unix(), State: "healthy"},
@@ -183,8 +193,90 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 			require.NoError(t, PruneChannelMonitorRecords(ctx, now))
 			require.NoError(t, db.Model(&ChannelMonitorRecord{}).Count(&count).Error)
 			assert.Equal(t, int64(6), count)
+
+			t.Run("interval performance", func(t *testing.T) {
+				require.NoError(t, db.Where("1 = 1").Delete(&ChannelMonitorRecord{}).Error)
+				base := ChannelMonitorRecord{ChannelID: channel.Id, Model: "model-a", EndpointType: "openai", Source: "traffic", State: "healthy", StatusCode: 200, CreatedAt: now.Unix(), BucketAt: now.Unix() / 900 * 900}
+				var timing ChannelMonitorTimings
+				for _, latency := range []int64{100, 200, 300, 400, 9000} {
+					ttft := latency / 2
+					timing.Add(ChannelMonitorRecord{State: "healthy", LatencyMs: latency, TTFTMs: &ttft})
+				}
+				encoded, err := common.Marshal(timing)
+				require.NoError(t, err)
+				base.SampleKey, base.Count, base.TimingHistogram, base.LatencyMs = "p50-traffic", 5, string(encoded), 9000
+				require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{base}))
+				require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{base}))
+				probe := base
+				probe.SampleKey, probe.Source, probe.Count, probe.TimingHistogram, probe.LatencyMs = "p50-probe", "probe", 1, "", 6000
+				require.NoError(t, SaveChannelMonitorRecord(ctx, &probe))
+				failure := probe
+				failure.ID, failure.SampleKey, failure.State, failure.StatusCode = 0, "p50-failure", "unavailable", 503
+				require.NoError(t, SaveChannelMonitorRecord(ctx, &failure))
+				failure.ID, failure.SampleKey, failure.StatusCode = 0, "p50-excluded", 400
+				require.NoError(t, SaveChannelMonitorRecord(ctx, &failure))
+				old := probe
+				old.ID, old.SampleKey, old.CreatedAt, old.LatencyMs = 0, "p50-previous-interval", base.BucketAt-1, 1
+				require.NoError(t, SaveChannelMonitorRecord(ctx, &old))
+				stats, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, excluded, now)
+				require.NoError(t, err)
+				performance := stats[0].Buckets[95].Performance
+				require.NotNil(t, performance)
+				assert.Equal(t, 6, performance.DurationCount, "successful requests are weighted individually across probes and traffic")
+				assert.Equal(t, 5, performance.TTFTCount, "non-streaming duration never enters the TTFT distribution")
+				require.NotNil(t, performance.DurationP50Ms)
+				require.NotNil(t, performance.TTFTP50Ms)
+				assert.Equal(t, int64(300), *performance.DurationP50Ms)
+				assert.Equal(t, int64(150), *performance.TTFTP50Ms)
+				assert.Equal(t, 8, stats[0].Buckets[95].Count, "excluded and failed observations remain visible")
+				assert.InDelta(t, 700.0/8, *stats[0].SuccessRate, 0.0001)
+
+				// Last-value-only segments from an older writer must invalidate
+				// the percentile rather than be weighted as repeated measurements.
+				base.SampleKey, base.Count, base.TimingHistogram = "p50-legacy-aggregate", 10, ""
+				require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{base}))
+				legacy, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, excluded, now)
+				require.NoError(t, err)
+				assert.Nil(t, legacy[0].Buckets[95].Performance, "a last-value-only aggregate cannot yield a percentile")
+				require.NoError(t, db.Where("sample_key = ?", base.SampleKey).Delete(&ChannelMonitorRecord{}).Error)
+				base.SampleKey, base.TimingHistogram = "p50-corrupt-aggregate", "{"
+				require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{base}))
+				corrupt, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, excluded, now)
+				require.NoError(t, err)
+				assert.Nil(t, corrupt[0].Buckets[95].Performance)
+				require.NoError(t, db.Where("sample_key = ?", base.SampleKey).Delete(&ChannelMonitorRecord{}).Error)
+				require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{{SampleKey: "p50-gap", Source: "gap", State: "collection_gap", CreatedAt: now.Unix()}}))
+				partial, err := ChannelMonitorSummaries(ctx, []*Channel{channel}, "model-a", true, 5*time.Minute, excluded, now)
+				require.NoError(t, err)
+				assert.Nil(t, partial[0].Buckets[95].Performance, "known collection gaps cannot show a complete percentile")
+			})
 		})
 	}
+}
+
+func TestChannelMonitorTimingPercentilesAndColorBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		ms    int64
+		state string
+	}{{0, "healthy"}, {4999, "healthy"}, {5000, "slow"}, {9999, "slow"}, {10000, "very_slow"}, {60000, "very_slow"}} {
+		t.Run(tc.state+" "+time.Duration(tc.ms*int64(time.Millisecond)).String(), func(t *testing.T) {
+			var timing ChannelMonitorTimings
+			timing.Add(ChannelMonitorRecord{State: "healthy", LatencyMs: tc.ms, TTFTMs: &tc.ms})
+			performance := timing.Performance()
+			require.NotNil(t, performance.TTFTP50Ms)
+			assert.Equal(t, tc.state, ChannelMonitorLatencyState(tc.ms))
+			assert.Equal(t, tc.state, ChannelMonitorLatencyState(*performance.TTFTP50Ms), "rounding must preserve the 5 s / 10 s color boundaries")
+			assert.GreaterOrEqual(t, *performance.TTFTP50Ms, tc.ms)
+			assert.LessOrEqual(t, float64(*performance.TTFTP50Ms), float64(tc.ms)*1.016)
+		})
+	}
+	var empty ChannelMonitorTimings
+	assert.Nil(t, empty.Performance().DurationP50Ms)
+	assert.Zero(t, empty.Performance().DurationCount)
+	for _, state := range []string{"unavailable", "excluded", "configuration", "unsupported"} {
+		empty.Add(ChannelMonitorRecord{State: state, LatencyMs: 100})
+	}
+	assert.Zero(t, empty.Performance().DurationCount)
 }
 
 func TestChannelMonitorRegistrationValidation(t *testing.T) {

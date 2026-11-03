@@ -43,6 +43,12 @@ export type MonitorBucket = {
   source_counts?: Record<string, number>
   latency_ms: number | null
   error_code?: string
+  performance?: {
+    duration_p50_ms: number | null
+    ttft_p50_ms: number | null
+    duration_count: number
+    ttft_count: number
+  } | null
 }
 export type ChannelMonitorSummary = {
   channel_id: number

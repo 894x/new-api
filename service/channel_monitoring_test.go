@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -57,7 +58,7 @@ func TestChannelTrafficObservesEachUpstreamAttempt(t *testing.T) {
 			if tc.status >= 400 {
 				apiErr = types.NewOpenAIError(errors.New("private upstream body"), types.ErrorCodeBadResponse, 502)
 			}
-			record, ok := ChannelTrafficObservation(ctx, info, "openai", apiErr, 300000)
+			record, ok := ChannelTrafficObservation(ctx, info, "openai", apiErr)
 			assert.Equal(t, tc.want != "", ok)
 			if ok {
 				assert.Equal(t, tc.want, record.State)
@@ -77,7 +78,7 @@ func TestChannelTrafficObservesEachUpstreamAttempt(t *testing.T) {
 			status = 200
 		}
 		info.SetAttemptHTTPStatus(status)
-		record, ok := ChannelTrafficObservation(context.Background(), info, "openai", nil, 300000)
+		record, ok := ChannelTrafficObservation(context.Background(), info, "openai", nil)
 		require.True(t, ok)
 		assert.Equal(t, id, record.ChannelID)
 		if id == 11 {
@@ -103,16 +104,23 @@ func TestChannelTrafficCollectorRetriesAndBoundsMemory(t *testing.T) {
 		}
 		return nil
 	}
-	r := model.ChannelMonitorRecord{Source: "traffic", Count: 1, ChannelID: 11, Model: "model-a", EndpointType: "openai", State: "healthy", StatusCode: 200, CreatedAt: now.Unix(), BucketAt: now.Unix() / 900 * 900}
+	r := model.ChannelMonitorRecord{Source: "traffic", Count: 1, ChannelID: 11, Model: "model-a", EndpointType: "openai", State: "healthy", StatusCode: 200, CreatedAt: now.Unix(), BucketAt: now.Unix() / 900 * 900, LatencyMs: 100, ObservedAtMs: now.UnixMilli()}
 	collector.observe(r)
+	r.LatencyMs, r.ObservedAtMs = 300, now.UnixMilli()+2
 	collector.observe(r)
 	require.Error(t, collector.flush(context.Background(), now))
 	fail = false
+	r.LatencyMs, r.ObservedAtMs = 200, now.UnixMilli()+1
 	collector.observe(r)
 	require.NoError(t, collector.flush(context.Background(), now))
 	require.Len(t, rows, 1)
 	for _, row := range rows {
 		assert.Equal(t, 3, row.Count)
+		var timing model.ChannelMonitorTimings
+		require.NoError(t, common.UnmarshalJsonStr(row.TimingHistogram, &timing))
+		assert.Equal(t, 3, timing.Performance().DurationCount, "retried flushes preserve a cumulative distribution")
+		assert.Equal(t, int64(200), *timing.Performance().DurationP50Ms, "out-of-order observations still enter the distribution")
+		assert.Equal(t, int64(300), row.LatencyMs, "the latest request remains separate from P50")
 	}
 	r.ChannelID = 22
 	collector.observe(r)
@@ -161,19 +169,27 @@ func TestChannelTrafficFlushKeepsObservationsArrivingDuringWrite(t *testing.T) {
 	collector := channelTrafficCollector{runID: "interleaving", limit: 2, records: make(map[channelTrafficKey]model.ChannelMonitorRecord)}
 	collector.observe(r)
 	var saved int
+	var savedTiming string
 	collector.save = func(_ context.Context, records []model.ChannelMonitorRecord) error {
 		saved = records[0].Count
+		savedTiming = records[0].TimingHistogram
 		collector.observe(r)
 		return nil
 	}
 	require.NoError(t, collector.flush(context.Background(), now.Add(15*time.Minute)))
 	assert.Equal(t, 1, saved)
+	var timing model.ChannelMonitorTimings
+	require.NoError(t, common.UnmarshalJsonStr(savedTiming, &timing))
+	assert.Equal(t, 1, timing.Performance().DurationCount, "a flush snapshot is isolated from observations arriving during the write")
 	require.Len(t, collector.records, 1, "the newer in-memory count must not be retired with the older snapshot")
 	collector.save = func(_ context.Context, records []model.ChannelMonitorRecord) error {
 		saved = records[0].Count
+		savedTiming = records[0].TimingHistogram
 		return nil
 	}
 	require.NoError(t, collector.flush(context.Background(), now.Add(15*time.Minute)))
 	assert.Equal(t, 2, saved)
+	require.NoError(t, common.UnmarshalJsonStr(savedTiming, &timing))
+	assert.Equal(t, 2, timing.Performance().DurationCount)
 	assert.Empty(t, collector.records)
 }

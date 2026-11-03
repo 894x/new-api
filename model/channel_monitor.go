@@ -124,6 +124,7 @@ type ChannelMonitorRecord struct {
 	TokensPerSecond *float64 `json:"tokens_per_second"`
 	StatusCode      int      `json:"status_code"`
 	ErrorCode       string   `json:"error_code" gorm:"size:64"`
+	TimingHistogram string   `json:"-" gorm:"type:text"`
 }
 
 func SaveChannelMonitorRecord(ctx context.Context, record *ChannelMonitorRecord) error {
@@ -138,7 +139,7 @@ func SaveChannelTrafficRecords(ctx context.Context, records []ChannelMonitorReco
 	}
 	return DB.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "sample_key"}},
-		DoUpdates: clause.AssignmentColumns([]string{"count", "created_at", "observed_at_ms", "latency_ms", "ttft_ms", "tokens_per_second", "error_code"}),
+		DoUpdates: clause.AssignmentColumns([]string{"count", "created_at", "observed_at_ms", "latency_ms", "ttft_ms", "tokens_per_second", "error_code", "timing_histogram"}),
 	}).CreateInBatches(records, 100).Error
 }
 
@@ -154,14 +155,15 @@ func PruneChannelMonitorRecords(ctx context.Context, now time.Time) error {
 }
 
 type ChannelMonitorBucket struct {
-	Timestamp    int64          `json:"timestamp"`
-	State        string         `json:"state"`
-	Count        int            `json:"count"`
-	SuccessCount int            `json:"success_count"`
-	StateCounts  map[string]int `json:"state_counts"`
-	SourceCounts map[string]int `json:"source_counts"`
-	LatencyMs    *int64         `json:"latency_ms"`
-	ErrorCode    string         `json:"error_code,omitempty"`
+	Timestamp    int64                      `json:"timestamp"`
+	State        string                     `json:"state"`
+	Count        int                        `json:"count"`
+	SuccessCount int                        `json:"success_count"`
+	StateCounts  map[string]int             `json:"state_counts"`
+	SourceCounts map[string]int             `json:"source_counts"`
+	LatencyMs    *int64                     `json:"latency_ms"`
+	ErrorCode    string                     `json:"error_code,omitempty"`
+	Performance  *ChannelMonitorPerformance `json:"performance"`
 }
 
 type ChannelMonitorSummary struct {
@@ -209,6 +211,8 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 	summaries := make([]ChannelMonitorSummary, 0, len(channels))
 	for _, channel := range channels {
 		summary := ChannelMonitorSummary{ChannelID: channel.Id, State: "pending", Buckets: make([]ChannelMonitorBucket, 96), Truncated: truncated, SourceCounts: make(map[string]int)}
+		timings := make([]ChannelMonitorTimings, 96)
+		incompleteTimings := make([]bool, 96)
 		for i := range summary.Buckets {
 			summary.Buckets[i] = ChannelMonitorBucket{Timestamp: start + int64(i)*bucketSeconds, State: "empty", StateCounts: make(map[string]int), SourceCounts: make(map[string]int)}
 		}
@@ -254,6 +258,13 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 				record.TTFTMs = nil
 				record.TokensPerSecond = nil
 			}
+			if record.State == "healthy" || record.State == "slow" || record.State == "very_slow" {
+				latency := record.LatencyMs
+				if record.TTFTMs != nil {
+					latency = *record.TTFTMs
+				}
+				record.State = ChannelMonitorLatencyState(latency)
+			}
 			if summary.Latest == nil {
 				copy := record
 				summary.Latest = &copy
@@ -287,7 +298,21 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 			summary.SourceCounts[record.Source] += count
 			bucket.StateCounts[record.State] += count
 			summary.SampleCount += count
-			if record.State == "healthy" || record.State == "slow" {
+			if record.State == "healthy" || record.State == "slow" || record.State == "very_slow" {
+				var distribution ChannelMonitorTimings
+				if record.TimingHistogram != "" {
+					if common.UnmarshalJsonStr(record.TimingHistogram, &distribution) != nil || distribution.Performance().DurationCount != count {
+						incompleteTimings[index] = true
+					} else {
+						timings[index].Merge(distribution)
+					}
+				} else if count == 1 {
+					timings[index].Add(record)
+				} else {
+					// Legacy traffic aggregates retain only the last latency. Never
+					// repeat it Count times and present that as a request percentile.
+					incompleteTimings[index] = true
+				}
 				succeeded += count
 				measured += count
 				bucket.SuccessCount += count
@@ -297,6 +322,12 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 				}
 			} else if record.State == "unavailable" {
 				measured += count
+			}
+		}
+		for i := range summary.Buckets {
+			if !truncated && !incompleteTimings[i] {
+				performance := timings[i].Performance()
+				summary.Buckets[i].Performance = &performance
 			}
 		}
 		if measured > 0 && !truncated {
@@ -325,8 +356,10 @@ func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName
 func channelMonitorStateRank(state string) int {
 	switch state {
 	case "unavailable":
-		return 5
+		return 6
 	case "configuration", "unsupported":
+		return 5
+	case "very_slow":
 		return 4
 	case "slow":
 		return 3

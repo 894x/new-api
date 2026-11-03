@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
@@ -49,7 +48,7 @@ func ChannelTrafficMonitoringEndpoint(channel *model.Channel, info *relaycommon.
 // ChannelTrafficObservation classifies raw upstream facts before retry and
 // client-facing status mappings. HTTP exclusions are applied later at query
 // time, using exactly the same policy as active probes.
-func ChannelTrafficObservation(ctx context.Context, info *relaycommon.RelayInfo, endpoint string, apiErr *types.NewAPIError, slowMs int) (model.ChannelMonitorRecord, bool) {
+func ChannelTrafficObservation(ctx context.Context, info *relaycommon.RelayInfo, endpoint string, apiErr *types.NewAPIError) (model.ChannelMonitorRecord, bool) {
 	if info == nil {
 		return model.ChannelMonitorRecord{}, false
 	}
@@ -96,9 +95,7 @@ func ChannelTrafficObservation(ctx context.Context, info *relaycommon.RelayInfo,
 		speed := float64(a.CompletionTokens-1) / a.LastContentAt.Sub(a.FirstContentAt).Seconds()
 		record.TokensPerSecond = &speed
 	}
-	if latency > int64(slowMs) {
-		record.State = "slow"
-	}
+	record.State = model.ChannelMonitorLatencyState(latency)
 	return record, true
 }
 
@@ -118,6 +115,7 @@ type channelTrafficCollector struct {
 	runID   string
 	limit   int
 	records map[channelTrafficKey]model.ChannelMonitorRecord
+	timings map[channelTrafficKey]model.ChannelMonitorTimings
 	gapAt   int64
 	save    func(context.Context, []model.ChannelMonitorRecord) error
 }
@@ -137,6 +135,12 @@ func (collector *channelTrafficCollector) observe(record model.ChannelMonitorRec
 		collector.gapAt = max(collector.gapAt, record.CreatedAt)
 		return
 	}
+	if collector.timings == nil {
+		collector.timings = make(map[channelTrafficKey]model.ChannelMonitorTimings)
+	}
+	timing := collector.timings[key]
+	timing.Add(record)
+	collector.timings[key] = timing
 	if exists && previous.ObservedAtMs > record.ObservedAtMs {
 		previous.Count++
 		collector.records[key] = previous
@@ -151,8 +155,7 @@ func (collector *channelTrafficCollector) observe(record model.ChannelMonitorRec
 }
 
 func ObserveChannelTraffic(ctx context.Context, info *relaycommon.RelayInfo, endpoint string, apiErr *types.NewAPIError) {
-	slowMs, _ := strconv.Atoi(model.CurrentRequestPolicy().Options["monitor_setting.channel_monitoring_slow_ms"])
-	if record, ok := ChannelTrafficObservation(ctx, info, endpoint, apiErr, max(1, slowMs)); ok {
+	if record, ok := ChannelTrafficObservation(ctx, info, endpoint, apiErr); ok {
 		channelTraffic.observe(record)
 	}
 }
@@ -162,13 +165,22 @@ func (collector *channelTrafficCollector) flush(ctx context.Context, now time.Ti
 	defer collector.flushMu.Unlock()
 	collector.mu.Lock()
 	records := make([]model.ChannelMonitorRecord, 0, len(collector.records)+1)
-	for _, record := range collector.records {
+	timings := make([]model.ChannelMonitorTimings, 0, len(collector.records))
+	for key, record := range collector.records {
 		records = append(records, record)
+		timings = append(timings, collector.timings[key].Clone())
 	}
 	if collector.gapAt > 0 {
 		records = append(records, model.ChannelMonitorRecord{SampleKey: fmt.Sprintf("%x", sha256.Sum256([]byte(collector.runID+"gap"))), Source: "gap", CreatedAt: collector.gapAt, State: "collection_gap"})
 	}
 	collector.mu.Unlock()
+	for i, timing := range timings {
+		encoded, err := common.Marshal(timing)
+		if err != nil {
+			return err
+		}
+		records[i].TimingHistogram = string(encoded)
+	}
 	if err := collector.save(ctx, records); err != nil {
 		return err
 	}
@@ -178,6 +190,7 @@ func (collector *channelTrafficCollector) flush(ctx context.Context, now time.Ti
 		key := channelTrafficKey{record.ChannelID, record.Model, record.EndpointType, record.State, record.StatusCode, record.BucketAt}
 		if current, ok := collector.records[key]; ok && current.Count == record.Count && record.BucketAt < now.Unix()/900*900 {
 			delete(collector.records, key)
+			delete(collector.timings, key)
 		}
 	}
 	return nil

@@ -63,12 +63,6 @@ const fields = [
     min: 1,
     max: 512,
   },
-  {
-    name: 'slow_ms',
-    label: 'Slow response threshold (ms)',
-    min: 1,
-    max: 300000,
-  },
 ] as const
 const createMonitoringSchema = (
   t: (key: string, options?: Record<string, unknown>) => string
@@ -113,11 +107,6 @@ const createMonitoringSchema = (
       .int(t('Enter an integer'))
       .min(1, t('Probe request limits are invalid'))
       .max(512, t('Probe request limits are invalid')),
-    slow_ms: z
-      .number()
-      .int(t('Enter an integer'))
-      .min(1, t('Probe request limits are invalid'))
-      .max(300000, t('Probe request limits are invalid')),
   })
 type Values = z.infer<ReturnType<typeof createMonitoringSchema>>
 
@@ -148,9 +137,6 @@ export function ChannelMonitoringSection(props: {
       stream:
         props.defaultValues['monitor_setting.channel_monitoring_stream'] ??
         true,
-      slow_ms:
-        props.defaultValues['monitor_setting.channel_monitoring_slow_ms'] ??
-        3000,
       excluded_status_codes:
         props.defaultValues[
           'monitor_setting.channel_monitoring_excluded_status_codes'
@@ -182,6 +168,11 @@ export function ChannelMonitoringSection(props: {
       <p className='text-muted-foreground text-sm'>
         {t(
           'Active probes and live traffic jointly contribute to channel health. Monitoring does not change routing or automatic disable policies.'
+        )}
+      </p>
+      <p className='text-muted-foreground text-sm'>
+        {t(
+          'Latency colors match first-token logs: below 5 s is green, 5 to below 10 s is yellow, 10 s or more is orange, and failed requests are red.'
         )}
       </p>
       <Form {...form}>

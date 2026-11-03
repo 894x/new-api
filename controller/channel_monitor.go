@@ -60,7 +60,7 @@ func configureChannelMonitoringRequest(request dto.Request, settings operation_s
 	return nil
 }
 
-func channelMonitoringObservation(result testResult, started, completed time.Time, slowMs int) model.ChannelMonitorRecord {
+func channelMonitoringObservation(result testResult, started, completed time.Time) model.ChannelMonitorRecord {
 	record := model.ChannelMonitorRecord{CreatedAt: completed.Unix(), ObservedAtMs: completed.UnixMilli(), LatencyMs: completed.Sub(started).Milliseconds(), State: "healthy"}
 	if result.context != nil {
 		record.StatusCode = result.context.GetInt("channel_test_upstream_status")
@@ -99,9 +99,7 @@ func channelMonitoringObservation(result testResult, started, completed time.Tim
 	if record.TTFTMs != nil {
 		latency = *record.TTFTMs
 	}
-	if latency > int64(slowMs) {
-		record.State = "slow"
-	}
+	record.State = model.ChannelMonitorLatencyState(latency)
 	return record
 }
 
@@ -153,7 +151,7 @@ func (channelMonitoringHandler) Run(ctx context.Context, task *model.SystemTask,
 			probeChannel.Status = common.ChannelStatusEnabled
 			started := time.Now()
 			result := testChannel(probeContext, &probeChannel, testUserID, target.Model, endpoint, stream)
-			record := channelMonitoringObservation(result, started, time.Now(), settings.ChannelMonitoringSlowMs)
+			record := channelMonitoringObservation(result, started, time.Now())
 			record.Source, record.Count = "probe", 1
 			if probeContext.Err() != nil {
 				record.State = "unavailable"
@@ -174,7 +172,7 @@ func (channelMonitoringHandler) Run(ctx context.Context, task *model.SystemTask,
 				continue
 			}
 			summary.Tested++
-			if record.State == "healthy" || record.State == "slow" {
+			if record.State == "healthy" || record.State == "slow" || record.State == "very_slow" {
 				summary.Succeeded++
 			} else {
 				summary.Failed++

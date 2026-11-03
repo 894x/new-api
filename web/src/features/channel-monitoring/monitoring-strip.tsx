@@ -39,12 +39,17 @@ const states: Record<string, { label: string; tone: string; fill: string }> = {
   healthy: {
     label: 'Connected',
     tone: 'text-emerald-600 dark:text-emerald-400',
-    fill: 'bg-sky-600/80',
+    fill: 'bg-emerald-500/80',
   },
   slow: {
     label: 'Slow response',
     tone: 'text-amber-600 dark:text-amber-400',
     fill: 'bg-amber-400/90',
+  },
+  very_slow: {
+    label: 'Very slow response',
+    tone: 'text-orange-600 dark:text-orange-400',
+    fill: 'bg-orange-500/90',
   },
   unavailable: {
     label: 'Connection failed',
@@ -101,6 +106,7 @@ const states: Record<string, { label: string; tone: string; fill: string }> = {
 const bucketStates = [
   'healthy',
   'slow',
+  'very_slow',
   'unavailable',
   'configuration',
   'unsupported',
@@ -110,6 +116,7 @@ const bucketStates = [
 const tooltipLabels: Record<string, string> = {
   healthy: 'Healthy',
   slow: 'Slow',
+  very_slow: 'Very slow',
   unavailable: 'Failed',
   configuration: 'Configuration',
   unsupported: 'Unsupported',
@@ -144,7 +151,7 @@ export function ChannelMonitoringStrip(props: {
     )
   }
   const summary = props.summary
-  const status = states[summary.state] ?? states.empty
+  let status = states[summary.state] ?? states.empty
   if (summary.state === 'disabled' || summary.state === 'unregistered') {
     return (
       <p className='text-muted-foreground text-[11px]'>{t(status.label)}</p>
@@ -158,16 +165,44 @@ export function ChannelMonitoringStrip(props: {
     props.maxSampleCount ??
       summary.buckets.reduce((count, point) => Math.max(count, point.count), 0)
   )
-  const hasLatency =
-    latest && (latest.state === 'healthy' || latest.state === 'slow')
-  const latency = hasLatency ? (latest.ttft_ms ?? latest.latency_ms) : null
+  const currentBucket = summary.buckets.at(-1)
+  const performance = currentBucket?.performance
+  const hasTTFT = performance?.ttft_p50_ms != null
+  const latency =
+    performance?.ttft_p50_ms ?? performance?.duration_p50_ms ?? null
   const latencyLabel = t(
-    hasLatency && latest.ttft_ms !== null
-      ? 'First response'
-      : 'Request duration'
+    hasTTFT ? 'P50 first response' : 'P50 request duration'
   )
   const latencyValue =
-    latency === null ? '—' : `${formatNumber(latency, locale)} ms`
+    latency === null ? '—' : `≈ ${formatNumber(latency, locale)} ms`
+  const sampleCount = hasTTFT
+    ? (performance?.ttft_count ?? 0)
+    : (performance?.duration_count ?? 0)
+  const intervalLabel = currentBucket
+    ? `${dayjs(currentBucket.timestamp * 1000).format('HH:mm')} – ${dayjs((currentBucket.timestamp + 900) * 1000).format('HH:mm')}`
+    : '—'
+  const performanceHint = [
+    t('Current 15-minute interval: {{interval}}', { interval: intervalLabel }),
+    t('Successful samples: {{count}}', {
+      count: formatNumber(sampleCount, locale),
+    }),
+    latency === null
+      ? t('No complete performance data for this interval')
+      : t(
+          'P50 is estimated from successful probes and live traffic with less than 1.6% rounding error. Failed and excluded requests are omitted.'
+        ),
+  ].join('\n')
+  if (
+    latency !== null &&
+    ['healthy', 'slow', 'very_slow'].includes(summary.state)
+  ) {
+    let latencyState = 'very_slow'
+    if (latency < 5000) latencyState = 'healthy'
+    else if (latency < 10000) latencyState = 'slow'
+    status = states[latencyState]
+  }
+  const hasLatestPerformance =
+    latest && ['healthy', 'slow', 'very_slow'].includes(latest.state)
   const successRateValue =
     summary.success_rate === null
       ? '—'
@@ -191,23 +226,23 @@ export function ChannelMonitoringStrip(props: {
         >
           <span className='size-1.5 rounded-full bg-current' />
         </span>
-        {latest && !hasLatency && latest.status_code > 0 && (
+        {latest && !hasLatestPerformance && latest.status_code > 0 && (
           <span className='text-muted-foreground'>
             HTTP {latest.status_code}
           </span>
         )}
         <span
           className='text-foreground tabular-nums'
-          title={latencyLabel}
+          title={`${latencyLabel}\n${performanceHint}`}
           aria-label={`${latencyLabel}: ${latencyValue}`}
         >
-          {latencyValue}
+          P50 {latencyValue}
         </span>
-        {hasLatency && latest.tokens_per_second !== null && (
+        {hasLatestPerformance && latest.tokens_per_second !== null && (
           <span
             className='text-foreground tabular-nums'
-            title={t('Generation speed')}
-            aria-label={`${t('Generation speed')}: ${formatNumber(latest.tokens_per_second, locale)} t/s`}
+            title={t('Latest generation speed')}
+            aria-label={`${t('Latest generation speed')}: ${formatNumber(latest.tokens_per_second, locale)} t/s`}
           >
             {formatNumber(latest.tokens_per_second, locale)} t/s
           </span>
@@ -381,6 +416,20 @@ export function ChannelMonitoringStrip(props: {
                   <dd>{formatNumber(bucketCounts[state], locale)}</dd>
                 </div>
               ))}
+            <dt className='text-muted-foreground'>{t('P50 first response')}</dt>
+            <dd>
+              {bucket.performance?.ttft_p50_ms == null
+                ? '—'
+                : `≈ ${formatNumber(bucket.performance.ttft_p50_ms, locale)} ms`}
+            </dd>
+            <dt className='text-muted-foreground'>
+              {t('P50 request duration')}
+            </dt>
+            <dd>
+              {bucket.performance?.duration_p50_ms == null
+                ? '—'
+                : `≈ ${formatNumber(bucket.performance.duration_p50_ms, locale)} ms`}
+            </dd>
             <dt className='text-muted-foreground'>
               {t('Latest successful request duration')}
             </dt>

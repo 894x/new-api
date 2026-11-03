@@ -63,6 +63,12 @@ function fixture(): ChannelMonitorSummary {
           ? { healthy: 4, slow: 1, unavailable: 2 }
           : { healthy: 3, slow: 0, unavailable: 0 },
       latency_ms: 800,
+      performance: {
+        duration_p50_ms: 800,
+        ttft_p50_ms: 0,
+        duration_count: 3,
+        ttft_count: 3,
+      },
     })),
   }
 }
@@ -76,7 +82,9 @@ test('a measured zero first-response time is preserved and missing generation sp
       error={false}
     />
   )
-  expect(screen.getByText('0 ms')).toBeInTheDocument()
+  expect(screen.getByLabelText('P50 first response: ≈ 0 ms')).toHaveTextContent(
+    'P50 ≈ 0 ms'
+  )
   expect(screen.queryByText('Generation speed')).not.toBeInTheDocument()
   expect(screen.getByText('100%')).toBeInTheDocument()
   expect(screen.getByRole('img', { name: 'Connected' })).toBeInTheDocument()
@@ -106,6 +114,9 @@ test('keyboard selection opens the matching historical probe bucket', async () =
   ).toBeInTheDocument()
   expect(within(dialog).getByText('7')).toBeInTheDocument()
   expect(within(dialog).getByText('5')).toBeInTheDocument()
+  expect(
+    within(dialog).getByText('Latest successful request duration')
+  ).toBeInTheDocument()
 })
 
 test('bar heights encode sample volume on a shared bounded scale while empty intervals stay flat', () => {
@@ -220,6 +231,7 @@ test('an unprobed channel shows a pending state without invented latency or avai
       count: 0,
       success_count: 0,
       latency_ms: null,
+      performance: null,
     })),
   }
   render(
@@ -242,6 +254,7 @@ test('an excluded response retains its HTTP status without becoming a configurat
   const summary = fixture()
   summary.state = 'excluded'
   summary.success_rate = null
+  summary.buckets[95].performance = null
   if (!summary.latest) throw new Error('Fixture must contain the latest probe')
   summary.latest.state = 'excluded'
   summary.latest.status_code = 400
@@ -262,6 +275,146 @@ test('an excluded response retains its HTTP status without becoming a configurat
   ).not.toBeInTheDocument()
   expect(screen.queryByText(/\d ms/)).not.toBeInTheDocument()
   expect(screen.queryByText('100%')).not.toBeInTheDocument()
+})
+
+test('current-interval P50 uses aggregate data rather than the latest request or the selected historical interval', () => {
+  const summary = fixture()
+  summary.buckets[95].performance = {
+    duration_p50_ms: 2000,
+    ttft_p50_ms: 1234,
+    duration_count: 20,
+    ttft_count: 17,
+  }
+  render(
+    <ChannelMonitoringStrip
+      channelName='Example'
+      summary={summary}
+      loading={false}
+      error={false}
+    />
+  )
+  const metric = screen.getByLabelText('P50 first response: ≈ 1,234 ms')
+  expect(metric).toHaveAttribute(
+    'title',
+    expect.stringContaining('Successful samples: 17')
+  )
+  expect(metric).toHaveAttribute(
+    'title',
+    expect.stringContaining('Current 15-minute interval:')
+  )
+  fireEvent.keyDown(
+    screen.getByRole('button', { name: '24-hour channel history for Example' }),
+    { key: 'ArrowLeft' }
+  )
+  expect(metric).toHaveTextContent('1,234 ms')
+})
+
+test('duration P50 is used when no valid TTFT samples exist', () => {
+  const summary = fixture()
+  summary.buckets[95].performance = {
+    duration_p50_ms: 800,
+    ttft_p50_ms: null,
+    duration_count: 3,
+    ttft_count: 0,
+  }
+  render(
+    <ChannelMonitoringStrip
+      channelName='Example'
+      summary={summary}
+      loading={false}
+      error={false}
+    />
+  )
+  expect(
+    screen.getByLabelText('P50 request duration: ≈ 800 ms')
+  ).toHaveAttribute('title', expect.stringContaining('Successful samples: 3'))
+})
+
+test('missing current-interval distributions do not fall back to an older interval or a last-request value', () => {
+  const summary = fixture()
+  summary.buckets[95].performance = null
+  render(
+    <ChannelMonitoringStrip
+      channelName='Example'
+      summary={summary}
+      loading={false}
+      error={false}
+    />
+  )
+  expect(screen.getByLabelText('P50 request duration: —')).toHaveAttribute(
+    'title',
+    expect.stringContaining('No complete performance data for this interval')
+  )
+  expect(screen.queryByText(/≈/)).not.toBeInTheDocument()
+})
+
+test.each([
+  [4999, 'Connected'],
+  [5000, 'Slow response'],
+  [9999, 'Slow response'],
+  [10000, 'Very slow response'],
+])(
+  'a P50 of %i ms uses the %s state at the shared 5 s and 10 s boundaries',
+  (latency, state) => {
+    const summary = fixture()
+    summary.buckets[95].performance = {
+      duration_p50_ms: latency,
+      ttft_p50_ms: latency,
+      duration_count: 3,
+      ttft_count: 3,
+    }
+    render(
+      <ChannelMonitoringStrip
+        channelName='Example'
+        summary={summary}
+        loading={false}
+        error={false}
+      />
+    )
+    expect(screen.getByRole('img', { name: state })).toBeInTheDocument()
+  }
+)
+
+test('a failed latest request remains red even when the current interval has successful P50 samples', () => {
+  const summary = fixture()
+  summary.state = 'unavailable'
+  if (!summary.latest) {
+    throw new Error('Fixture must contain the latest observation')
+  }
+  summary.latest = { ...summary.latest, state: 'unavailable', status_code: 503 }
+  summary.buckets[95].state_counts = {
+    healthy: 1,
+    very_slow: 1,
+    unavailable: 1,
+  }
+  render(
+    <ChannelMonitoringStrip
+      channelName='Example'
+      summary={summary}
+      loading={false}
+      error={false}
+    />
+  )
+  expect(
+    screen.getByRole('img', { name: 'Connection failed' })
+  ).toBeInTheDocument()
+  expect(screen.getByText('HTTP 503')).toBeInTheDocument()
+  expect(
+    screen.getByLabelText('P50 first response: ≈ 0 ms')
+  ).toBeInTheDocument()
+  const timeline = screen.getByRole('button', {
+    name: '24-hour channel history for Example',
+  })
+  const column = timeline.querySelector('[data-bucket="95"]')
+  expect(column?.querySelector('[data-state="healthy"]')).toHaveClass(
+    'bg-emerald-500/80'
+  )
+  expect(column?.querySelector('[data-state="very_slow"]')).toHaveClass(
+    'bg-orange-500/90'
+  )
+  expect(column?.querySelector('[data-state="unavailable"]')).toHaveClass(
+    'bg-rose-500/80'
+  )
 })
 
 test('initial monitoring loading exposes a placeholder without a connection result', () => {

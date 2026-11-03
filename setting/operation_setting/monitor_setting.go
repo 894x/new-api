@@ -20,7 +20,7 @@ type MonitorSetting struct {
 	ChannelMonitoringPrompt              string  `json:"channel_monitoring_prompt"`
 	ChannelMonitoringMaxTokens           int     `json:"channel_monitoring_max_tokens"`
 	ChannelMonitoringStream              bool    `json:"channel_monitoring_stream"`
-	ChannelMonitoringSlowMs              int     `json:"channel_monitoring_slow_ms"`
+	ChannelMonitoringSlowMs              int     `json:"channel_monitoring_slow_ms"` // Legacy saved-policy option; colors use fixed 5 s / 10 s boundaries.
 	ChannelMonitoringExcludedStatusCodes string  `json:"channel_monitoring_excluded_status_codes"`
 }
 
