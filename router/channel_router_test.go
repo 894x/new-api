@@ -33,6 +33,7 @@ func TestChannelStatusRoutesUseExpectedPermissions(t *testing.T) {
 }
 
 func TestChannelModelRoutingOverrideRoutesUseChannelPermissions(t *testing.T) {
+	assertChannelRoutePermission(t, http.MethodGet, "/routing-monitor", authz.ChannelRead, controller.GetRoutingMonitor)
 	assertChannelRoutePermission(t, http.MethodGet, "/group-model-matrix", authz.ChannelRead, controller.GetGroupModelMatrix)
 	assertChannelRoutePermission(t, http.MethodPut, "/group-model-matrix", authz.ChannelWrite, controller.SaveGroupModelMatrix)
 	assertChannelRoutePermission(t, http.MethodGet, "/monitoring", authz.ChannelRead, controller.GetChannelMonitoring)

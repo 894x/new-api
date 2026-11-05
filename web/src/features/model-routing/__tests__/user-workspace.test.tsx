@@ -102,6 +102,45 @@ function fixture(): UserRoutingPoolConfig {
 function mockPool(config = fixture()) {
   const state = { config }
   vi.spyOn(api, 'get').mockImplementation(async (url, options) => {
+    if (url === '/api/channel/monitoring') {
+      return {
+        data: {
+          success: true,
+          data: [
+            {
+              channel_id: 1,
+              state: 'disabled',
+              buckets: [],
+              cache: { hit_rate: 50, truncated: false },
+            },
+          ],
+        },
+      }
+    }
+    if (url === '/api/user/42/routing-monitor') {
+      return {
+        data: {
+          success: true,
+          data: {
+            generated_at: Date.now(),
+            legacy_enabled: false,
+            coverage: 'local',
+            scope: 'user',
+            user_id: 42,
+            partial: false,
+            nodes: [
+              {
+                id: 'local',
+                name: 'gateway-01',
+                local: true,
+                updated_at: Date.now(),
+                routes: [],
+              },
+            ],
+          },
+        },
+      }
+    }
     expect(url).toBe('/api/user/42/channel-routing-overrides')
     expect(options?.params?.view).toBe('pool')
     const data = options?.params?.model
@@ -120,6 +159,69 @@ function mockPool(config = fixture()) {
   })
   return state
 }
+
+test('user monitoring retains the same unsaved override and returns focus without changing the selected user pool', async () => {
+  mockPool()
+  const patch = vi
+    .spyOn(api, 'patch')
+    .mockResolvedValue({ data: { success: true } })
+  const { card } = await mountWorkspace()
+  await userEvent.click(
+    await within(card).findByRole('button', { name: 'Create user override' })
+  )
+  const priority = within(card).getByRole('spinbutton', {
+    name: 'Priority for Primary',
+  })
+  fireEvent.change(priority, { target: { value: '0' } })
+  const trigger = within(card).getByRole('button', { name: 'Monitoring view' })
+  await userEvent.click(trigger)
+  const monitor = screen.getByRole('dialog', {
+    name: 'kimi-k3 · vip · acme #42',
+  })
+  expect(
+    within(monitor).getByRole('spinbutton', { name: 'Priority for Primary' })
+  ).toBe(priority)
+  expect(priority).toHaveValue(0)
+  expect(
+    await within(monitor).findByLabelText('Cache hit rate: 50%')
+  ).toBeVisible()
+  await within(monitor).findByText('No adaptive routing observations')
+  expect(patch).not.toHaveBeenCalled()
+  await userEvent.click(
+    within(monitor).getByRole('button', { name: 'Back to card view' })
+  )
+  expect(trigger).toHaveFocus()
+  expect(
+    within(card).getByRole('spinbutton', { name: 'Priority for Primary' })
+  ).toBe(priority)
+  expect(priority).toHaveValue(0)
+  await userEvent.click(within(card).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      expect.objectContaining({
+        model: 'kimi-k3',
+        routing_group: 'vip',
+        revision: 'original',
+        reset: false,
+        overrides: [
+          {
+            channel_id: 1,
+            priority_override: 0,
+            weight_override: 7,
+            enabled: true,
+          },
+          {
+            channel_id: 2,
+            priority_override: 0,
+            weight_override: 0,
+            enabled: false,
+          },
+        ],
+      })
+    )
+  )
+})
 
 async function mountWorkspace() {
   const client = new QueryClient({

@@ -40,6 +40,7 @@ func currentDynamicRoutingController(force bool) (*dynamicrouting.Controller, bo
 		}
 		dynamicRoutingRuntime.controller = controller
 		dynamicRoutingRuntime.version = snapshot.Version
+		startRoutingMonitorReporter()
 	} else if dynamicRoutingRuntime.version != snapshot.Version {
 		if err := dynamicRoutingRuntime.controller.UpdateConfig(snapshot.Config); err != nil {
 			return nil, false, err

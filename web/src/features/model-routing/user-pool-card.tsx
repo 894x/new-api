@@ -39,8 +39,14 @@ import {
 import { Combobox } from '@/components/ui/combobox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { patchUserChannelRouting } from '@/features/users/api'
-import { canAccessUserGroupConfig } from '@/lib/admin-permissions'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  canAccessUserGroupConfig,
+  hasPermission,
+} from '@/lib/admin-permissions'
 import { handleServerError } from '@/lib/handle-server-error'
+import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -50,6 +56,7 @@ import {
   type UserRoutingPoolConfig,
 } from './api'
 import { PoolChannelList } from './pool-channel-list'
+import { PoolMonitorDisplay } from './pool-monitor-display'
 
 const schema = z.object({
   channels: z
@@ -72,6 +79,9 @@ export function UserPoolCard(props: {
   groupLabel: string
   onDirtyChange: (dirty: boolean) => void
 }) {
+  const { t } = useTranslation()
+  const actor = useAuthStore((state) => state.auth.user)
+  const [monitorOpen, setMonitorOpen] = useState(false)
   const query = useQuery({
     queryKey: userRoutingPoolKeys.detail(
       props.userId,
@@ -82,45 +92,81 @@ export function UserPoolCard(props: {
     refetchOnWindowFocus: false,
     meta: { errorToast: false },
   })
+  const canMonitor =
+    hasPermission(
+      actor,
+      ADMIN_PERMISSION_RESOURCES.CHANNEL,
+      ADMIN_PERMISSION_ACTIONS.READ
+    ) &&
+    !!query.data &&
+    canAccessUserGroupConfig(actor, query.data.user_role)
   return (
-    <Card
-      className='min-w-0 gap-4 py-4'
-      role='region'
-      aria-label={`${props.model} · ${props.groupLabel}`}
+    <PoolMonitorDisplay
+      open={monitorOpen && canMonitor}
+      onOpenChange={setMonitorOpen}
+      model={props.model}
+      group={props.group}
+      groupLabel={props.groupLabel}
+      userId={props.userId}
+      username={query.data?.username}
     >
-      <CardHeader className='flex flex-wrap items-start justify-between gap-2 px-3'>
-        <CardTitle className='min-w-0 text-base break-all'>
-          {props.model}
-        </CardTitle>
-        <Badge variant='secondary' className='max-w-full'>
-          <span className='truncate'>{props.groupLabel}</span>
-        </Badge>
-      </CardHeader>
-      {query.isPending && (
-        <CardContent className='px-3'>
-          <Skeleton className='h-36 w-full' />
-        </CardContent>
-      )}
-      {query.isError && (
-        <CardContent className='px-3'>
-          <ErrorState onRetry={() => void query.refetch()} />
-        </CardContent>
-      )}
-      {query.data && (
-        <UserPoolEditor
-          key={`${props.userId}:${props.group}:${props.model}`}
-          config={query.data}
-          group={props.group}
-          onDirtyChange={props.onDirtyChange}
-        />
-      )}
-    </Card>
+      <Card
+        className={cn(
+          'min-w-0 gap-4 py-4',
+          monitorOpen && canMonitor && 'xl:h-full xl:min-h-0'
+        )}
+        role='region'
+        aria-label={`${props.model} · ${props.groupLabel}`}
+      >
+        <CardHeader className='flex shrink-0 flex-wrap items-start justify-between gap-2 px-3'>
+          <CardTitle className='min-w-0 text-base break-all'>
+            {props.model}
+          </CardTitle>
+          <div className='flex max-w-full flex-wrap items-center justify-end gap-2'>
+            <Badge variant='secondary' className='max-w-full'>
+              <span className='truncate'>{props.groupLabel}</span>
+            </Badge>
+            {canMonitor && (
+              <Button
+                type='button'
+                size='sm'
+                variant='outline'
+                aria-pressed={monitorOpen}
+                onClick={() => setMonitorOpen(true)}
+              >
+                {t('Monitoring view')}
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        {query.isPending && (
+          <CardContent className='px-3'>
+            <Skeleton className='h-36 w-full' />
+          </CardContent>
+        )}
+        {query.isError && (
+          <CardContent className='px-3'>
+            <ErrorState onRetry={() => void query.refetch()} />
+          </CardContent>
+        )}
+        {query.data && (
+          <UserPoolEditor
+            key={`${props.userId}:${props.group}:${props.model}`}
+            config={query.data}
+            group={props.group}
+            expanded={monitorOpen && canMonitor}
+            onDirtyChange={props.onDirtyChange}
+          />
+        )}
+      </Card>
+    </PoolMonitorDisplay>
   )
 }
 
 function UserPoolEditor(props: {
   config: UserRoutingPoolConfig
   group: string
+  expanded?: boolean
   onDirtyChange: (dirty: boolean) => void
 }) {
   const { t } = useTranslation()
@@ -209,6 +255,8 @@ function UserPoolEditor(props: {
         client.invalidateQueries({
           queryKey: ['user-channel-routing', config.user_id],
         }),
+        client.invalidateQueries({ queryKey: ['routing-monitor-pool'] }),
+        client.invalidateQueries({ queryKey: ['routing-monitor'] }),
       ])
     },
     onError: (error) => handleServerError(error, t('Failed to save')),
@@ -234,7 +282,12 @@ function UserPoolEditor(props: {
   )
   return (
     <>
-      <CardContent className='space-y-3 px-3'>
+      <CardContent
+        className={cn(
+          'space-y-3 px-3',
+          props.expanded && 'xl:min-h-0 xl:flex-1 xl:overflow-y-auto'
+        )}
+      >
         <div className='flex flex-wrap items-center justify-between gap-2 text-xs'>
           <Badge variant={config.configured ? 'default' : 'outline'}>
             {config.configured ? t('User override') : sources[config.source]}
@@ -355,7 +408,7 @@ function UserPoolEditor(props: {
           </p>
         )}
       </CardContent>
-      <CardFooter className='flex flex-wrap justify-between gap-2 px-3'>
+      <CardFooter className='flex shrink-0 flex-wrap justify-between gap-2 px-3'>
         {!editing ? (
           <Button
             type='button'

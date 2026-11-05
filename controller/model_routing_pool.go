@@ -120,12 +120,26 @@ func GetModelRoutingPool(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// Keep the editor's exact pool identity while reporting the same inherited
+	// scheduling mode used for requests with model modifiers.
+	effectivePool := pool
+	if normalized := ratio_setting.RoutingMatchModelName(name); effectivePool == nil && normalized != "" && normalized != name {
+		effectivePool, err = model.GetModelRoutingPool(group, normalized)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	var effectiveMode *string
+	if effectivePool != nil {
+		effectiveMode = &effectivePool.Mode
+	}
 	candidates, err := model.ListModelRoutingPoolCandidates(group, name)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, gin.H{"pool": pool, "candidates": candidates})
+	common.ApiSuccess(c, gin.H{"pool": pool, "candidates": candidates, "effective_mode": effectiveMode})
 }
 
 func SaveModelRoutingPool(c *gin.Context) {

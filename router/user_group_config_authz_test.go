@@ -208,6 +208,38 @@ func TestCustomerGroupConfigurationAuthorization(t *testing.T) {
 	assert.Equal(t, true, response["success"])
 }
 
+func TestRoutingMonitorUserAuthorizationRequiresBothReadPermissionsAndLowerTargetRole(t *testing.T) {
+	f := setupManagedUserE2E(t)
+	f.managerA.Role = common.RoleAdminUser
+	require.NoError(t, model.DB.Model(&f.managerA).Update("role", f.managerA.Role).Error)
+	base := fmt.Sprintf("/api/user/%d/routing-monitor", f.unprivileged.Id)
+	for _, permissions := range []authz.PermissionsMap{
+		{},
+		{authz.ResourceChannel: {authz.ActionRead: true}},
+		{authz.ResourceUserGroupConfig: {authz.ActionRead: true}, authz.ResourceChannel: {authz.ActionRead: false}},
+	} {
+		require.NoError(t, authz.SetUserPermissions(f.managerA.Id, permissions))
+		status, response := f.request(t, http.MethodGet, base, f.managerA.Id, nil)
+		assert.Equal(t, http.StatusForbidden, status, "%v", response)
+	}
+	require.NoError(t, authz.SetUserPermissions(f.managerA.Id, authz.PermissionsMap{
+		authz.ResourceChannel: {authz.ActionRead: true}, authz.ResourceUserGroupConfig: {authz.ActionRead: true},
+	}))
+	status, response := f.request(t, http.MethodGet, base, f.managerA.Id, nil)
+	require.Equal(t, http.StatusOK, status, "%v", response)
+	require.Equal(t, true, response["success"], "%v", response)
+	data := response["data"].(map[string]any)
+	assert.Equal(t, "user", data["scope"])
+	assert.EqualValues(t, f.unprivileged.Id, data["user_id"])
+	status, response = f.request(t, http.MethodGet, fmt.Sprintf("/api/user/%d/routing-monitor", f.root.Id), f.managerA.Id, nil)
+	assert.Equal(t, http.StatusForbidden, status, "%v", response)
+	status, response = f.request(t, http.MethodGet, "/api/channel/routing-monitor?user_id=999", f.managerA.Id, nil)
+	assert.Equal(t, http.StatusBadRequest, status, "%v", response)
+	status, response = f.request(t, http.MethodGet, "/api/channel/routing-monitor", f.managerA.Id, nil)
+	require.Equal(t, http.StatusOK, status, "%v", response)
+	assert.Equal(t, "base", response["data"].(map[string]any)["scope"])
+}
+
 func setCustomerGroupPermissions(t *testing.T, f *managedUserE2EFixture, target model.User, read, write bool) {
 	t.Helper()
 	status, response := f.request(t, http.MethodPut, "/api/user/", f.root.Id, map[string]any{
