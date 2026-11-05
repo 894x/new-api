@@ -36,7 +36,14 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Combobox } from '@/components/ui/combobox'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
 import { handleServerError } from '@/lib/handle-server-error'
+import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   deleteRoutingPool,
@@ -50,6 +57,7 @@ import {
 import { DiscountRoutingFields } from './discount-routing-fields'
 import { PoolChannelList } from './pool-channel-list'
 import { PoolModeSelect } from './pool-mode-select'
+import { PoolMonitorDisplay } from './pool-monitor-display'
 
 const poolFormSchema = z.object({
   mode: z.enum(['priority', 'smart', 'discount']),
@@ -76,6 +84,13 @@ export function PoolCard(props: {
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const actor = useAuthStore((state) => state.auth.user)
+  const canMonitor = hasPermission(
+    actor,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.READ
+  )
+  const [monitorOpen, setMonitorOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [channelToAdd, setChannelToAdd] = useState<string | null>(null)
   const [editingStrategy, setEditingStrategy] = useState(false)
@@ -148,7 +163,11 @@ export function PoolCard(props: {
         max_tpot_ms: pool.max_tpot_ms || DEFAULT_DISCOUNT_LIMITS.max_tpot_ms,
       })
       toast.success(t('Saved successfully'))
-      await queryClient.invalidateQueries({ queryKey: routingPoolKeys.all })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: routingPoolKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ['routing-monitor-pool'] }),
+        queryClient.invalidateQueries({ queryKey: ['routing-monitor'] }),
+      ])
     },
     onError: (error) => handleServerError(error, t('Failed to save')),
   })
@@ -162,7 +181,11 @@ export function PoolCard(props: {
     onSuccess: async () => {
       props.onDirtyChange(false)
       setRestoring(false)
-      await queryClient.invalidateQueries({ queryKey: routingPoolKeys.all })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: routingPoolKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ['routing-monitor-pool'] }),
+        queryClient.invalidateQueries({ queryKey: ['routing-monitor'] }),
+      ])
     },
     onError: (error) => handleServerError(error, t('Failed to save')),
   })
@@ -177,264 +200,298 @@ export function PoolCard(props: {
   )
 
   return (
-    <Card className='min-w-0 gap-4 py-4'>
-      <CardHeader className='gap-3 px-3'>
-        <div className='flex min-w-0 flex-wrap items-start justify-between gap-2'>
-          <CardTitle className='min-w-0 text-base break-all'>
-            {props.pool.model}
-          </CardTitle>
-          <Badge
-            variant='secondary'
-            title={props.pool.routing_group}
-            className='max-w-full'
-          >
-            <span className='truncate'>
-              {props.groupLabel && props.groupLabel !== props.pool.routing_group
-                ? `${props.groupLabel} · ${props.pool.routing_group}`
-                : props.pool.routing_group}
-            </span>
-          </Badge>
-        </div>
-        <div className='flex flex-wrap items-center justify-between gap-2'>
-          <span className='text-muted-foreground text-xs'>
-            {t(ROUTING_MODE_LABELS[values.mode])}
-          </span>
-          <Button
-            type='button'
-            size='sm'
-            variant='ghost'
-            disabled={disabled}
-            onClick={() => setEditingStrategy(true)}
-          >
-            {t('Edit strategy')}
-          </Button>
-        </div>
-      </CardHeader>
-      <form
-        className='contents'
-        onSubmit={(event) => {
-          void form.handleSubmit((data) => save.mutate(data))(event)
-        }}
+    <PoolMonitorDisplay
+      open={monitorOpen && canMonitor}
+      onOpenChange={setMonitorOpen}
+      model={props.pool.model}
+      group={props.pool.routing_group}
+      groupLabel={props.groupLabel}
+    >
+      <Card
+        className={cn(
+          'min-w-0 gap-4 py-4',
+          monitorOpen && canMonitor && 'xl:h-full xl:min-h-0'
+        )}
       >
-        <CardContent className='space-y-3 px-3'>
-          {(form.formState.errors.max_ttft_ms ||
-            form.formState.errors.max_tpot_ms) && (
-            <p role='alert' className='text-destructive text-sm'>
-              {t('Enter valid positive latency limits in milliseconds.')}
-            </p>
-          )}
-          {values.channels.length === 0 ? (
-            <p
-              role='status'
-              className='text-muted-foreground rounded-md border border-dashed p-5 text-sm'
-            >
-              {t(
-                'This explicit pool has no channels. Requests will be rejected until channels are added.'
-              )}
-            </p>
-          ) : (
-            <PoolChannelList
-              model={props.pool.model}
-              channels={values.channels}
-              candidates={available}
-              disabled={disabled}
-              onChange={(channels) =>
-                form.setValue(
-                  'channels',
-                  channels.map((channel) => ({
-                    ...channel,
-                    priority: channel.priority ?? 0,
-                    weight: channel.weight ?? 0,
-                  })),
-                  {
-                    shouldDirty: true,
-                    shouldValidate: true,
-                  }
-                )
-              }
-            />
-          )}
-          {form.formState.errors.channels && (
-            <p role='alert' className='text-destructive text-sm'>
-              {t(
-                'Priority and weight must be whole numbers within the allowed range.'
-              )}
-            </p>
-          )}
-          {adding && (
-            <div className='flex min-w-0 flex-wrap gap-2'>
-              <Combobox
-                options={unused.map((candidate) => ({
-                  value: String(candidate.channel_id),
-                  label: `${candidate.channel_name} #${candidate.channel_id}`,
-                }))}
-                value={channelToAdd}
-                onValueChange={setChannelToAdd}
-                disabled={disabled || candidates.isPending}
-                aria-label={t('Select channel')}
-                placeholder={t('Select channel')}
-                className='min-w-0 flex-1'
-              />
-              <Button
-                type='button'
-                size='sm'
-                variant='outline'
-                disabled={disabled || !channelToAdd || candidates.isPending}
-                onClick={() => {
-                  const candidate = unused.find(
-                    (entry) => String(entry.channel_id) === channelToAdd
-                  )
-                  if (!candidate) return
-                  form.setValue(
-                    'channels',
-                    [
-                      ...values.channels,
-                      {
-                        channel_id: candidate.channel_id,
-                        priority: candidate.priority,
-                        weight: candidate.weight,
-                        enabled: true,
-                      },
-                    ],
-                    { shouldDirty: true }
-                  )
-                  setChannelToAdd(null)
-                }}
+        <CardHeader className='shrink-0 gap-3 px-3'>
+          <div className='flex min-w-0 flex-wrap items-start justify-between gap-2'>
+            <CardTitle className='min-w-0 text-base break-all'>
+              {props.pool.model}
+            </CardTitle>
+            <div className='flex max-w-full flex-wrap items-center justify-end gap-2'>
+              <Badge
+                variant='secondary'
+                title={props.pool.routing_group}
+                className='max-w-full'
               >
-                {t('Add')}
-              </Button>
-              {candidates.isError && (
+                <span className='truncate'>
+                  {props.groupLabel &&
+                  props.groupLabel !== props.pool.routing_group
+                    ? `${props.groupLabel} · ${props.pool.routing_group}`
+                    : props.pool.routing_group}
+                </span>
+              </Badge>
+              {canMonitor && (
                 <Button
                   type='button'
                   size='sm'
                   variant='outline'
-                  onClick={() => void candidates.refetch()}
+                  aria-pressed={monitorOpen}
+                  onClick={() => setMonitorOpen(true)}
                 >
-                  {t('Retry')}
+                  {t('Monitoring view')}
                 </Button>
               )}
             </div>
-          )}
-        </CardContent>
-        <CardFooter className='flex flex-wrap justify-between gap-2 px-3'>
-          <Button
-            type='button'
-            variant='outline'
-            size='sm'
-            disabled={disabled}
-            onClick={() => setAdding(!adding)}
-          >
-            {t('Add channel')}
-          </Button>
-          <div className='flex flex-wrap items-center gap-2'>
-            {dirty && <Badge variant='outline'>{t('Unsaved changes')}</Badge>}
+          </div>
+          <div className='flex flex-wrap items-center justify-between gap-2'>
+            <span className='text-muted-foreground text-xs'>
+              {t(ROUTING_MODE_LABELS[values.mode])}
+            </span>
             <Button
               type='button'
-              variant='ghost'
               size='sm'
-              disabled={disabled || !dirty}
-              onClick={() =>
-                form.reset({
-                  mode: props.pool.mode,
-                  channels: props.pool.channels,
-                  max_ttft_ms:
-                    props.pool.max_ttft_ms ||
-                    DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
-                  max_tpot_ms:
-                    props.pool.max_tpot_ms ||
-                    DEFAULT_DISCOUNT_LIMITS.max_tpot_ms,
-                })
-              }
+              variant='ghost'
+              disabled={disabled}
+              onClick={() => setEditingStrategy(true)}
             >
-              {t('Reset')}
-            </Button>
-            <Button type='submit' size='sm' disabled={disabled || !dirty}>
-              {save.isPending ? t('Saving...') : t('Save')}
+              {t('Edit strategy')}
             </Button>
           </div>
-          <Button
-            type='button'
-            size='sm'
-            variant='link'
-            className='text-muted-foreground px-0 text-xs'
-            disabled={disabled}
-            onClick={() => setRestoring(true)}
-          >
-            {t('Restore channel defaults')}
-          </Button>
-        </CardFooter>
-      </form>
-      <Dialog
-        open={editingStrategy}
-        onOpenChange={setEditingStrategy}
-        title={t('Edit scheduling strategy')}
-        description={t(
-          'Administrators configure the strategy for this model and public group. Clients do not select it.'
-        )}
-        footer={
-          <Button type='button' onClick={() => setEditingStrategy(false)}>
-            {t('Done')}
-          </Button>
-        }
-      >
-        <div className='space-y-4'>
-          <PoolModeSelect
-            value={values.mode}
-            disabled={disabled}
-            onChange={(mode) => {
-              form.setValue('mode', mode, { shouldDirty: true })
-              if (mode !== 'discount') {
-                form.setValue(
-                  'max_ttft_ms',
-                  DEFAULT_DISCOUNT_LIMITS.max_ttft_ms
-                )
-                form.setValue(
-                  'max_tpot_ms',
-                  DEFAULT_DISCOUNT_LIMITS.max_tpot_ms
-                )
-                form.clearErrors(['max_ttft_ms', 'max_tpot_ms'])
-              }
-            }}
-          />
-          <p className='text-muted-foreground text-sm'>
-            {t(
-              'Smart routing adjusts traffic using recent first-token latency, output speed and failures. Non-streaming and media requests use pool priorities.'
+        </CardHeader>
+        <form
+          className='contents'
+          onSubmit={(event) => {
+            void form.handleSubmit((data) => save.mutate(data))(event)
+          }}
+        >
+          <CardContent
+            className={cn(
+              'space-y-3 px-3',
+              monitorOpen &&
+                canMonitor &&
+                'xl:min-h-0 xl:flex-1 xl:overflow-y-auto'
             )}
-          </p>
-          {values.mode === 'discount' && (
-            <DiscountRoutingFields
-              maxTTFT={values.max_ttft_ms}
-              maxTPOT={values.max_tpot_ms}
+          >
+            {(form.formState.errors.max_ttft_ms ||
+              form.formState.errors.max_tpot_ms) && (
+              <p role='alert' className='text-destructive text-sm'>
+                {t('Enter valid positive latency limits in milliseconds.')}
+              </p>
+            )}
+            {values.channels.length === 0 ? (
+              <p
+                role='status'
+                className='text-muted-foreground rounded-md border border-dashed p-5 text-sm'
+              >
+                {t(
+                  'This explicit pool has no channels. Requests will be rejected until channels are added.'
+                )}
+              </p>
+            ) : (
+              <PoolChannelList
+                model={props.pool.model}
+                channels={values.channels}
+                candidates={available}
+                disabled={disabled}
+                onChange={(channels) =>
+                  form.setValue(
+                    'channels',
+                    channels.map((channel) => ({
+                      ...channel,
+                      priority: channel.priority ?? 0,
+                      weight: channel.weight ?? 0,
+                    })),
+                    {
+                      shouldDirty: true,
+                      shouldValidate: true,
+                    }
+                  )
+                }
+              />
+            )}
+            {form.formState.errors.channels && (
+              <p role='alert' className='text-destructive text-sm'>
+                {t(
+                  'Priority and weight must be whole numbers within the allowed range.'
+                )}
+              </p>
+            )}
+            {adding && (
+              <div className='flex min-w-0 flex-wrap gap-2'>
+                <Combobox
+                  options={unused.map((candidate) => ({
+                    value: String(candidate.channel_id),
+                    label: `${candidate.channel_name} #${candidate.channel_id}`,
+                  }))}
+                  value={channelToAdd}
+                  onValueChange={setChannelToAdd}
+                  disabled={disabled || candidates.isPending}
+                  aria-label={t('Select channel')}
+                  placeholder={t('Select channel')}
+                  className='min-w-0 flex-1'
+                />
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  disabled={disabled || !channelToAdd || candidates.isPending}
+                  onClick={() => {
+                    const candidate = unused.find(
+                      (entry) => String(entry.channel_id) === channelToAdd
+                    )
+                    if (!candidate) return
+                    form.setValue(
+                      'channels',
+                      [
+                        ...values.channels,
+                        {
+                          channel_id: candidate.channel_id,
+                          priority: candidate.priority,
+                          weight: candidate.weight,
+                          enabled: true,
+                        },
+                      ],
+                      { shouldDirty: true }
+                    )
+                    setChannelToAdd(null)
+                  }}
+                >
+                  {t('Add')}
+                </Button>
+                {candidates.isError && (
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='outline'
+                    onClick={() => void candidates.refetch()}
+                  >
+                    {t('Retry')}
+                  </Button>
+                )}
+              </div>
+            )}
+          </CardContent>
+          <CardFooter className='flex shrink-0 flex-wrap justify-between gap-2 px-3'>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
               disabled={disabled}
-              onChange={(field, value) =>
-                form.setValue(field, value, { shouldDirty: true })
-              }
-              invalidTTFT={!!form.formState.errors.max_ttft_ms}
-              invalidTPOT={!!form.formState.errors.max_tpot_ms}
+              onClick={() => setAdding(!adding)}
+            >
+              {t('Add channel')}
+            </Button>
+            <div className='flex flex-wrap items-center gap-2'>
+              {dirty && <Badge variant='outline'>{t('Unsaved changes')}</Badge>}
+              <Button
+                type='button'
+                variant='ghost'
+                size='sm'
+                disabled={disabled || !dirty}
+                onClick={() =>
+                  form.reset({
+                    mode: props.pool.mode,
+                    channels: props.pool.channels,
+                    max_ttft_ms:
+                      props.pool.max_ttft_ms ||
+                      DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
+                    max_tpot_ms:
+                      props.pool.max_tpot_ms ||
+                      DEFAULT_DISCOUNT_LIMITS.max_tpot_ms,
+                  })
+                }
+              >
+                {t('Reset')}
+              </Button>
+              <Button type='submit' size='sm' disabled={disabled || !dirty}>
+                {save.isPending ? t('Saving...') : t('Save')}
+              </Button>
+            </div>
+            <Button
+              type='button'
+              size='sm'
+              variant='link'
+              className='text-muted-foreground px-0 text-xs'
+              disabled={disabled}
+              onClick={() => setRestoring(true)}
+            >
+              {t('Restore channel defaults')}
+            </Button>
+          </CardFooter>
+        </form>
+        <Dialog
+          open={editingStrategy}
+          onOpenChange={setEditingStrategy}
+          title={t('Edit scheduling strategy')}
+          description={t(
+            'Administrators configure the strategy for this model and public group. Clients do not select it.'
+          )}
+          footer={
+            <Button type='button' onClick={() => setEditingStrategy(false)}>
+              {t('Done')}
+            </Button>
+          }
+        >
+          <div className='space-y-4'>
+            <PoolModeSelect
+              value={values.mode}
+              disabled={disabled}
+              onChange={(mode) => {
+                form.setValue('mode', mode, { shouldDirty: true })
+                if (mode !== 'discount') {
+                  form.setValue(
+                    'max_ttft_ms',
+                    DEFAULT_DISCOUNT_LIMITS.max_ttft_ms
+                  )
+                  form.setValue(
+                    'max_tpot_ms',
+                    DEFAULT_DISCOUNT_LIMITS.max_tpot_ms
+                  )
+                  form.clearErrors(['max_ttft_ms', 'max_tpot_ms'])
+                }
+              }}
             />
-          )}
-          {(form.formState.errors.max_ttft_ms ||
-            form.formState.errors.max_tpot_ms) && (
-            <p role='alert' className='text-destructive text-sm'>
-              {t('Enter valid positive latency limits in milliseconds.')}
+            <p className='text-muted-foreground text-sm'>
+              {t(
+                'Smart routing adjusts traffic using recent first-token latency, output speed and failures. Non-streaming and media requests use pool priorities.'
+              )}
             </p>
+            {values.mode === 'discount' && (
+              <DiscountRoutingFields
+                maxTTFT={values.max_ttft_ms}
+                maxTPOT={values.max_tpot_ms}
+                disabled={disabled}
+                onChange={(field, value) =>
+                  form.setValue(field, value, { shouldDirty: true })
+                }
+                invalidTTFT={!!form.formState.errors.max_ttft_ms}
+                invalidTPOT={!!form.formState.errors.max_tpot_ms}
+              />
+            )}
+            {(form.formState.errors.max_ttft_ms ||
+              form.formState.errors.max_tpot_ms) && (
+              <p role='alert' className='text-destructive text-sm'>
+                {t('Enter valid positive latency limits in milliseconds.')}
+              </p>
+            )}
+            <p className='text-muted-foreground text-sm'>
+              {t('Save the card to apply strategy changes.')}
+            </p>
+          </div>
+        </Dialog>
+        <ConfirmDialog
+          open={restoring}
+          onOpenChange={setRestoring}
+          title={t('Restore channel defaults')}
+          desc={t(
+            'Remove this pool and inherit the channel defaults again? An empty pool instead rejects requests.'
           )}
-          <p className='text-muted-foreground text-sm'>
-            {t('Save the card to apply strategy changes.')}
-          </p>
-        </div>
-      </Dialog>
-      <ConfirmDialog
-        open={restoring}
-        onOpenChange={setRestoring}
-        title={t('Restore channel defaults')}
-        desc={t(
-          'Remove this pool and inherit the channel defaults again? An empty pool instead rejects requests.'
-        )}
-        confirmText={t('Restore')}
-        isLoading={restore.isPending}
-        handleConfirm={() => restore.mutate()}
-      />
-    </Card>
+          confirmText={t('Restore')}
+          isLoading={restore.isPending}
+          handleConfirm={() => restore.mutate()}
+        />
+      </Card>
+    </PoolMonitorDisplay>
   )
 }

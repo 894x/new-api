@@ -96,6 +96,8 @@ type Controller struct {
 	performanceAfter   map[ObservationKey]time.Time
 	routes             map[RouteKey]*routeState
 	selections         map[RouteKey]*selectionState
+	monitor            map[RouteKey]*routeMonitor
+	monitorScratch     *monitorScratch
 	lastCleanup        time.Time
 }
 
@@ -152,6 +154,7 @@ func NewController(config Config) (*Controller, error) {
 		performanceAfter:   make(map[ObservationKey]time.Time),
 		routes:             make(map[RouteKey]*routeState),
 		selections:         make(map[RouteKey]*selectionState),
+		monitor:            make(map[RouteKey]*routeMonitor),
 	}, nil
 }
 
@@ -342,11 +345,11 @@ func (c *Controller) selectAvoiding(
 	excludedChannelIDs map[int]struct{},
 	now time.Time,
 	limits DiscountLimits,
-) Decision {
+) (decision Decision) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	decision := Decision{Dynamic: c.config.Enabled}
+	decision = Decision{Dynamic: c.config.Enabled}
 	c.cleanupExpiredLocked(now)
 	cutoff := now.Add(-c.config.MaxAge)
 	if state, exists := c.routes[key]; exists && !state.lastAccess.IsZero() && state.lastAccess.Before(cutoff) {
@@ -368,6 +371,7 @@ func (c *Controller) selectAvoiding(
 		}
 		return ordered[i].ChannelID < ordered[j].ChannelID
 	})
+	defer func() { c.recordMonitorLocked(key, ordered, decision, now) }()
 
 	mainCandidates := make([]Candidate, 0, len(ordered))
 	probeCandidates := make([]Candidate, 0, len(ordered))

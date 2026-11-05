@@ -31,12 +31,16 @@ import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { afterEach, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { routingPoolKeys, type RoutingPoolView } from '../api'
 import { PoolCard } from '../pool-card'
 
 const clients: QueryClient[] = []
-afterEach(() => clients.forEach((client) => client.clear()))
+afterEach(() => {
+  clients.forEach((client) => client.clear())
+  useAuthStore.getState().auth.setUser(null)
+})
 
 function fixture(): RoutingPoolView {
   return {
@@ -80,6 +84,159 @@ function mountCard(pool = fixture(), canWrite = true) {
   )
   return { client, onDirtyChange }
 }
+
+function mockMonitorReads(pool: RoutingPoolView, failed = false) {
+  return vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/channel/monitoring') {
+      return {
+        data: {
+          success: true,
+          data: [
+            {
+              channel_id: 1,
+              state: 'disabled',
+              buckets: [],
+              cache: { hit_rate: 75.25, truncated: false },
+            },
+          ],
+        },
+      }
+    }
+    if (url === '/api/channel/routing-pool') {
+      return {
+        data: {
+          success: true,
+          data: {
+            pool,
+            candidates: pool.candidates,
+            effective_mode: pool.mode,
+          },
+        },
+      }
+    }
+    if (url === '/api/channel/routing-monitor') {
+      if (failed) throw new Error('monitor unavailable')
+      return {
+        data: {
+          success: true,
+          data: {
+            generated_at: Date.now(),
+            legacy_enabled: false,
+            coverage: 'local',
+            scope: 'base',
+            partial: false,
+            nodes: [
+              {
+                id: 'local',
+                name: 'gateway-01',
+                local: true,
+                updated_at: Date.now(),
+                routes: [],
+              },
+            ],
+          },
+        },
+      }
+    }
+    throw new Error(`Unexpected monitor request: ${url}`)
+  })
+}
+
+test('opening and returning from a pool monitor retains the same dirty editor and channel monitoring statistics', async () => {
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
+  const pool = fixture()
+  const get = mockMonitorReads(pool)
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+    data: { success: true, data: { ...(body as object), revision: 'saved' } },
+  }))
+  const { onDirtyChange } = mountCard(pool)
+  const priority = screen.getByRole('spinbutton', {
+    name: 'Priority for Alpha',
+  })
+  fireEvent.change(priority, { target: { value: '7' } })
+  await userEvent.click(
+    screen.getByRole('switch', { name: 'Enable Beta in this pool' })
+  )
+  const trigger = screen.getByRole('button', { name: 'Monitoring view' })
+  await userEvent.click(trigger)
+  const monitor = screen.getByRole('dialog', {
+    name: 'kimi-k3 · standard · Default configuration',
+  })
+  expect(
+    within(monitor).getByRole('spinbutton', { name: 'Priority for Alpha' })
+  ).toBe(priority)
+  expect(priority).toHaveValue(7)
+  expect(
+    await within(monitor).findByLabelText('Cache hit rate: 75.25%')
+  ).toBeVisible()
+  expect(
+    await within(monitor).findByText('No adaptive routing observations')
+  ).toBeVisible()
+  expect(
+    monitor.querySelector('[data-routing-monitor-overview]')?.parentElement
+  ).toHaveClass('xl:grid-rows-[auto_1fr]')
+  const pause = within(monitor).getByRole('button', {
+    name: 'Pause live updates',
+  })
+  expect(
+    monitor.querySelector('[data-routing-monitor-header]')
+  ).toContainElement(pause)
+  expect(
+    monitor.querySelector('[data-routing-monitor-live]')
+  ).not.toContainElement(pause)
+  expect(get).toHaveBeenCalledWith('/api/channel/routing-pool', {
+    params: { routing_group: 'standard', model: 'kimi-k3' },
+  })
+  await userEvent.click(
+    within(monitor).getByRole('button', { name: 'Back to card view' })
+  )
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.getByRole('spinbutton', { name: 'Priority for Alpha' })).toBe(
+    priority
+  )
+  expect(priority).toHaveValue(7)
+  expect(
+    screen.getByRole('switch', { name: 'Enable Beta in this pool' })
+  ).not.toBeChecked()
+  expect(trigger).toHaveFocus()
+  expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        channels: [
+          { channel_id: 1, priority: 7, weight: 10, enabled: true },
+          { channel_id: 2, priority: 80, weight: 0, enabled: false },
+        ],
+      })
+    )
+  )
+})
+
+test('read-only pool monitoring keeps the original configuration visible when live data fails', async () => {
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
+  mockMonitorReads(fixture(), true)
+  mountCard(fixture(), false)
+  await userEvent.click(screen.getByRole('button', { name: 'Monitoring view' }))
+  const monitor = screen.getByRole('dialog', {
+    name: 'kimi-k3 · standard · Default configuration',
+  })
+  expect(
+    await within(monitor).findByText('Unable to refresh routing observations')
+  ).toBeVisible()
+  expect(
+    within(monitor).getByRole('spinbutton', { name: 'Priority for Alpha' })
+  ).toBeDisabled()
+  expect(within(monitor).getByRole('button', { name: 'Save' })).toBeDisabled()
+  expect(
+    await within(monitor).findByLabelText('Cache hit rate: 75.25%')
+  ).toBeVisible()
+  await userEvent.click(
+    within(monitor).getByRole('button', { name: 'Back to card view' })
+  )
+  expect(screen.getByRole('button', { name: 'Monitoring view' })).toHaveFocus()
+})
 
 test('discount-first strategy saves model latency limits and preserves the existing pool members', async () => {
   const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({

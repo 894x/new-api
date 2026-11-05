@@ -158,6 +158,49 @@ func TestDiscountRoutingPoolDatabaseMatrix(t *testing.T) {
 				invalid := pool
 				invalid.MaxTPOTMS = -1
 				assert.ErrorIs(t, model.SaveModelRoutingPool(&invalid, pool.Revision), model.ErrInvalidRoutingPool)
+
+				modifierPool := model.ModelRoutingPool{RoutingGroup: "default", Model: "discount-model@effort:high", Mode: model.RoutingModePriority, Channels: pool.Channels}
+				for _, stage := range []struct {
+					name          string
+					effectiveMode *string
+					exactPool     bool
+				}{
+					{name: "inherits_base", effectiveMode: common.GetPointer(model.RoutingModeDiscount)},
+					{name: "exact_override", effectiveMode: common.GetPointer(model.RoutingModePriority), exactPool: true},
+					{name: "deleted_override", effectiveMode: common.GetPointer(model.RoutingModeDiscount)},
+					{name: "deleted_base"},
+				} {
+					switch stage.name {
+					case "exact_override":
+						require.NoError(t, model.SaveModelRoutingPool(&modifierPool, ""))
+					case "deleted_override":
+						require.NoError(t, model.DeleteModelRoutingPool(modifierPool.RoutingGroup, modifierPool.Model, modifierPool.Revision))
+					case "deleted_base":
+						require.NoError(t, model.DeleteModelRoutingPool(pool.RoutingGroup, pool.Model, pool.Revision))
+					}
+					response = httptest.NewRecorder()
+					apiCtx, _ = gin.CreateTestContext(response)
+					apiCtx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/routing-pool?routing_group=default&model="+modifierPool.Model, nil)
+					GetModelRoutingPool(apiCtx)
+					require.Equal(t, http.StatusOK, response.Code, "%s: %s", stage.name, response.Body.String())
+					var metadata struct {
+						Success bool `json:"success"`
+						Data    struct {
+							Pool          *model.ModelRoutingPool `json:"pool"`
+							EffectiveMode *string                 `json:"effective_mode"`
+						} `json:"data"`
+					}
+					require.NoError(t, common.Unmarshal(response.Body.Bytes(), &metadata))
+					require.True(t, metadata.Success, "%s", stage.name)
+					assert.Equal(t, stage.effectiveMode, metadata.Data.EffectiveMode, "%s", stage.name)
+					if stage.exactPool {
+						require.NotNil(t, metadata.Data.Pool)
+						assert.Equal(t, modifierPool.Model, metadata.Data.Pool.Model)
+						assert.Equal(t, modifierPool.Revision, metadata.Data.Pool.Revision)
+					} else {
+						assert.Nil(t, metadata.Data.Pool, "%s: inherited mode must not become an editable exact override", stage.name)
+					}
+				}
 			})
 		}
 	}

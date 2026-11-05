@@ -139,7 +139,11 @@ export async function getRoutingPool(group: string, model: string) {
   const response = await api.get<{
     success: boolean
     message?: string
-    data: { pool: RoutingPool | null; candidates: PoolCandidate[] }
+    data: {
+      pool: RoutingPool | null
+      candidates: PoolCandidate[]
+      effective_mode?: RoutingMode | '' | null
+    }
   }>('/api/channel/routing-pool', { params: { routing_group: group, model } })
   return requireServerSuccess(response.data).data
 }

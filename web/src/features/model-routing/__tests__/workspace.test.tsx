@@ -34,11 +34,21 @@ import {
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { api } from '@/lib/api'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { ModelRoutingWorkspace } from '..'
+import type { RoutingPoolView } from '../api'
+import { PoolCard } from '../pool-card'
+import { RoutingWorkspaceDisplay } from '../routing-workspace-display'
 
 const clients: QueryClient[] = []
 afterEach(() => {
@@ -314,5 +324,206 @@ test('an administrator without channel read permission cannot fetch or configure
   expect(get).not.toHaveBeenCalled()
   expect(
     screen.queryByRole('button', { name: 'Configure routing pool' })
+  ).not.toBeInTheDocument()
+})
+
+test('Escape closes only the nested pool monitor and preserves the outer fullscreen workspace, focus and editor draft', async () => {
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'root', role: ROLE.SUPER_ADMIN })
+  const pool: RoutingPoolView = {
+    routing_group: 'standard',
+    model: 'kimi-k3',
+    mode: 'priority',
+    revision: 'r1',
+    channels: [{ channel_id: 1, priority: 100, weight: 10, enabled: true }],
+    candidates: [
+      {
+        channel_id: 1,
+        channel_name: 'Alpha',
+        priority: 100,
+        weight: 10,
+        available: true,
+      },
+    ],
+  }
+  vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/channel/monitoring') {
+      return { data: { success: true, data: [] } }
+    }
+    if (url === '/api/channel/routing-pool') {
+      return {
+        data: {
+          success: true,
+          data: {
+            pool,
+            candidates: pool.candidates,
+            effective_mode: 'priority',
+          },
+        },
+      }
+    }
+    if (url === '/api/channel/routing-monitor') {
+      return {
+        data: {
+          success: true,
+          data: {
+            generated_at: Date.now(),
+            legacy_enabled: false,
+            coverage: 'local',
+            scope: 'base',
+            partial: false,
+            nodes: [
+              {
+                id: 'local',
+                name: 'gateway-01',
+                local: true,
+                updated_at: Date.now(),
+                routes: [],
+              },
+            ],
+          },
+        },
+      }
+    }
+    throw new Error(`Unexpected nested monitor request: ${url}`)
+  })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  clients.push(client)
+  const overflow = document.body.style.overflow
+  render(
+    <QueryClientProvider client={client}>
+      <RoutingWorkspaceDisplay
+        toolbar={<span>Routing pools</span>}
+        refreshAction={null}
+      >
+        <div
+          role='region'
+          aria-label='Routing pool list'
+          className='overflow-auto'
+        >
+          <PoolCard pool={pool} canWrite onDirtyChange={() => undefined} />
+        </div>
+      </RoutingWorkspaceDisplay>
+    </QueryClientProvider>
+  )
+  const fullscreen = screen.getByRole('button', { name: 'Fullscreen' })
+  await userEvent.click(fullscreen)
+  const outer = screen.getByRole('dialog', { name: 'Model routing' })
+  const priority = within(outer).getByRole('spinbutton', {
+    name: 'Priority for Alpha',
+  })
+  fireEvent.change(priority, { target: { value: '7' } })
+  const trigger = within(outer).getByRole('button', { name: 'Monitoring view' })
+  const poolList = within(outer).getByRole('region', {
+    name: 'Routing pool list',
+  })
+  poolList.scrollTop = 120
+  await userEvent.click(trigger)
+  const inner = screen.getByRole('dialog', {
+    name: 'kimi-k3 · standard · Default configuration',
+  })
+  expect(
+    within(inner).getByRole('spinbutton', { name: 'Priority for Alpha' })
+  ).toBe(priority)
+  expect(outer.parentElement?.inert).toBe(true)
+  poolList.scrollTop = 0 // Browsers can clamp the list after its card moves into the portal.
+  await userEvent.keyboard('{Escape}')
+  expect(inner).not.toHaveAttribute('role', 'dialog')
+  expect(
+    screen.queryByRole('dialog', {
+      name: 'kimi-k3 · standard · Default configuration',
+    })
+  ).not.toBeInTheDocument()
+  expect(screen.getByRole('dialog', { name: 'Model routing' })).toBe(outer)
+  expect(outer.parentElement?.inert).not.toBe(true)
+  expect(document.body.style.overflow).toBe('hidden')
+  expect(priority).toHaveValue(7)
+  expect(poolList.scrollTop).toBe(120)
+  expect(trigger).toHaveFocus()
+  await userEvent.keyboard('{Escape}')
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(document.body.style.overflow).toBe(overflow)
+  expect(fullscreen).toHaveFocus()
+  expect(priority).toHaveValue(7)
+})
+
+test('unmounting nested fullscreen workspaces restores the page background and original scroll lock', async () => {
+  const background = document.createElement('div')
+  background.inert = false
+  document.body.appendChild(background)
+  const overflow = document.body.style.overflow
+  const page = render(
+    <RoutingWorkspaceDisplay
+      label='Outer routing workspace'
+      toolbar={null}
+      refreshAction={null}
+    >
+      <RoutingWorkspaceDisplay
+        label='Pool monitor'
+        toolbar={null}
+        refreshAction={null}
+      >
+        <p>Routing observations</p>
+      </RoutingWorkspaceDisplay>
+    </RoutingWorkspaceDisplay>
+  )
+  try {
+    await userEvent.click(
+      within(
+        screen.getByRole('region', { name: 'Outer routing workspace' })
+      ).getAllByRole('button', { name: 'Fullscreen' })[0]
+    )
+    await userEvent.click(
+      within(screen.getByRole('region', { name: 'Pool monitor' })).getByRole(
+        'button',
+        { name: 'Fullscreen' }
+      )
+    )
+    expect(background.inert).toBe(true)
+    expect(document.body.style.overflow).toBe('hidden')
+    page.unmount()
+    expect(background.inert).toBe(false)
+    expect(document.body.style.overflow).toBe(overflow)
+  } finally {
+    page.unmount()
+    background.remove()
+  }
+})
+
+test('Escape closes an open project Select without leaving fullscreen, then a second Escape returns to the workspace', async () => {
+  render(
+    <RoutingWorkspaceDisplay
+      label='Pool monitoring'
+      toolbar={null}
+      refreshAction={null}
+    >
+      <Select defaultValue='gateway-01'>
+        <SelectTrigger aria-label='Routing node'>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value='gateway-01'>Gateway 01</SelectItem>
+          <SelectItem value='gateway-02'>Gateway 02</SelectItem>
+        </SelectContent>
+      </Select>
+    </RoutingWorkspaceDisplay>
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Fullscreen' }))
+  const dialog = screen.getByRole('dialog', { name: 'Pool monitoring' })
+  const trigger = within(dialog).getByRole('combobox', { name: 'Routing node' })
+  await userEvent.click(trigger)
+  expect(await screen.findByRole('listbox')).toBeVisible()
+  await userEvent.keyboard('{Escape}')
+  await waitFor(() =>
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+  )
+  expect(screen.getByRole('dialog', { name: 'Pool monitoring' })).toBe(dialog)
+  expect(trigger).toHaveFocus()
+  await userEvent.keyboard('{Escape}')
+  expect(
+    screen.queryByRole('dialog', { name: 'Pool monitoring' })
   ).not.toBeInTheDocument()
 })

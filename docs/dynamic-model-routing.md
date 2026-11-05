@@ -197,6 +197,58 @@ bun run typecheck
 bun run build
 ```
 
+## Live routing observatory
+
+Open **Model routing**, select the default configuration or a user, then choose
+**Monitoring view** at the top right of a model/group pool card. This expands
+that card's monitor with its model, group, and user scope fixed. The left column
+combines the routing summary with the original channel configuration and
+long-window channel monitoring; the right column displays live flow, selection
+history, and routing events. Existing priority, weight, membership, strategy,
+save, reset, and inheritance actions retain their permissions and behavior.
+Switching back preserves unsaved card edits; live allocations reflect saved
+configuration only.
+
+On desktop, node controls, snapshot status, and coverage information share the
+fixed monitor header. Summary cards remain above the channel editor; its header
+and actions stay visible while channel details scroll internally. Live flow
+fills the remaining right-column height above equal-height history and event
+panels, with events scrolling inside their panel. Narrow screens stack these
+sections vertically.
+
+The monitor follows the current pool mode, including the legacy global
+switch when no explicit pool exists. A user who inherits a base pool sees a
+clearly labeled shared base-pool view; those counts are not attributed to that
+user alone. User overrides have independent allocation and selection history.
+
+The monitor displays target shares separately from actual channel-selection
+shares over the last 60 seconds, together with observed TTFT/TPOT, exploration,
+quality degradation, ejections, and allocation-change events. Selection counts
+include retries and decisions later rejected by local gates; they are not
+counts of physical upstream dispatches or completed requests. Only requests
+that enter the adaptive controller are included. Priority pools and non-streaming
+requests do not generate these observations. Reading the monitor never selects
+a channel or advances recovery, probe debt, or routing observations.
+
+The browser refreshes every three seconds and supports pausing, channel details,
+and the existing fullscreen workspace. Base monitoring requires channel-read
+permission. The selected-user endpoint additionally reuses user-group-config
+read permission and the existing actor/target role hierarchy. Other users'
+policy snapshots are filtered on the server.
+
+With Redis, each process publishes its own observation snapshot every three
+seconds with a 15-second TTL. The UI selects a reporting process explicitly;
+target shares are not merged across processes. Without Redis, or when discovery
+fails, the response identifies local-only coverage. Redis is used for monitoring
+delivery, not for coordinating the controller's learned routing state.
+
+Telemetry is bounded to 512 recently observed routes per process, 128 channel
+details per route, 60 one-second selection buckets, and 20 allocation events.
+Transport limits are 1 MiB per process snapshot, 16 discovered remote processes,
+and 4 MiB of node payloads per response. Partial or truncated data is marked in
+the response and UI. Observations are temporary: process restarts reset local
+history and expired remote snapshots disappear. This is not a durable audit log.
+
 ## Deployment boundary
 
 Controller observations and allocations are process-local in this version.
