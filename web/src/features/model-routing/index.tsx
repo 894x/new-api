@@ -51,6 +51,7 @@ import {
 } from './api'
 import { CreatePoolDialog } from './create-pool-dialog'
 import { PoolCard } from './pool-card'
+import { RoutingWorkspaceDisplay } from './routing-workspace-display'
 
 export function ModelRoutingWorkspace(props: {
   onDirtyChange: (dirty: boolean) => void
@@ -136,219 +137,228 @@ export function ModelRoutingWorkspace(props: {
           'Each card overrides channel defaults for one model and public group. Customer-specific routing takes precedence.'
         )}
       </p>
-      <div className='flex shrink-0 flex-wrap items-center gap-2'>
-        <Combobox
-          options={[
-            { value: '', label: t('All models') },
-            ...(catalog.data?.models ?? []).map((value) => ({
-              value,
-              label: value,
-            })),
-          ]}
-          value={filters.model}
-          disabled={dirty}
-          onValueChange={(value) => updateFilters({ model: value ?? '' })}
-          placeholder={t('Search models')}
-          aria-label={t('Search models')}
-          className='h-8 min-w-40 flex-1 sm:max-w-72'
-        />
-        <Combobox
-          options={[
-            { value: '__all', label: t('All groups') },
-            ...Object.entries(catalog.data?.groups ?? {}).map(
-              ([value, label]) => ({
-                value,
-                label: `${label || value} (${value})`,
-              })
-            ),
-          ]}
-          value={filters.routing_group || '__all'}
-          onValueChange={(value) =>
-            updateFilters({
-              routing_group: value === '__all' ? '' : (value ?? ''),
-            })
-          }
-          disabled={dirty}
-          aria-label={t('Public group')}
-          className='h-8 min-w-40 flex-1 sm:max-w-64'
-        />
-        <Select
-          value={filters.mode || 'all'}
-          onValueChange={(value) =>
-            updateFilters({
-              mode: value === 'priority' || value === 'smart' ? value : '',
-            })
-          }
-          disabled={dirty}
-        >
-          <SelectTrigger
-            aria-label={t('Filter scheduling strategy')}
-            className='w-full sm:w-44'
-          >
-            <SelectValue>{strategyLabels[filters.mode]}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value='all'>{t('All strategies')}</SelectItem>
-            <SelectItem value='priority'>{t('Priority routing')}</SelectItem>
-            <SelectItem value='smart'>{t('Smart routing')}</SelectItem>
-          </SelectContent>
-        </Select>
-        <Button
-          type='button'
-          className='sm:ml-auto'
-          disabled={!canWrite || dirty}
-          onClick={() => setCreating(true)}
-        >
-          {t('Configure routing pool')}
-        </Button>
-        <Button
-          type='button'
-          variant='outline'
-          disabled={dirty || pools.isFetching}
-          onClick={() => {
-            void pools.refetch()
-            void catalog.refetch()
-          }}
-        >
-          {t('Refresh')}
-        </Button>
-      </div>
-      {catalog.isError && (
-        <Alert>
-          <AlertDescription>
-            {t('Failed to load group options.')}{' '}
+      <RoutingWorkspaceDisplay
+        toolbar={
+          <>
+            <Combobox
+              options={[
+                { value: '', label: t('All models') },
+                ...(catalog.data?.models ?? []).map((value) => ({
+                  value,
+                  label: value,
+                })),
+              ]}
+              value={filters.model}
+              disabled={dirty}
+              onValueChange={(value) => updateFilters({ model: value ?? '' })}
+              placeholder={t('Search models')}
+              aria-label={t('Search models')}
+              className='h-8 min-w-40 flex-1 sm:max-w-72'
+            />
+            <Combobox
+              options={[
+                { value: '__all', label: t('All groups') },
+                ...Object.entries(catalog.data?.groups ?? {}).map(
+                  ([value, label]) => ({
+                    value,
+                    label: `${label || value} (${value})`,
+                  })
+                ),
+              ]}
+              value={filters.routing_group || '__all'}
+              onValueChange={(value) =>
+                updateFilters({
+                  routing_group: value === '__all' ? '' : (value ?? ''),
+                })
+              }
+              disabled={dirty}
+              aria-label={t('Public group')}
+              className='h-8 min-w-40 flex-1 sm:max-w-64'
+            />
+            <Select
+              value={filters.mode || 'all'}
+              onValueChange={(value) =>
+                updateFilters({
+                  mode: value === 'priority' || value === 'smart' ? value : '',
+                })
+              }
+              disabled={dirty}
+            >
+              <SelectTrigger
+                aria-label={t('Filter scheduling strategy')}
+                className='w-full sm:w-44'
+              >
+                <SelectValue>{strategyLabels[filters.mode]}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value='all'>{t('All strategies')}</SelectItem>
+                <SelectItem value='priority'>
+                  {t('Priority routing')}
+                </SelectItem>
+                <SelectItem value='smart'>{t('Smart routing')}</SelectItem>
+              </SelectContent>
+            </Select>
             <Button
               type='button'
-              variant='link'
-              onClick={() => void catalog.refetch()}
+              className='sm:ml-auto'
+              disabled={!canWrite || dirty}
+              onClick={() => setCreating(true)}
             >
-              {t('Retry')}
+              {t('Configure routing pool')}
             </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      <div className='min-h-0 flex-1 overflow-y-auto overscroll-contain'>
-        {pools.isPending && <Skeleton className='h-64 w-full' />}
-        {pools.isError && (
-          <Alert variant='destructive'>
+          </>
+        }
+        refreshAction={
+          <Button
+            type='button'
+            variant='outline'
+            disabled={dirty || pools.isFetching}
+            onClick={() => {
+              void pools.refetch()
+              void catalog.refetch()
+            }}
+          >
+            {t('Refresh')}
+          </Button>
+        }
+      >
+        {catalog.isError && (
+          <Alert>
             <AlertDescription>
-              {t('Failed to load routing pools.')}{' '}
+              {t('Failed to load group options.')}{' '}
               <Button
                 type='button'
-                variant='outline'
-                onClick={() => void pools.refetch()}
+                variant='link'
+                onClick={() => void catalog.refetch()}
               >
                 {t('Retry')}
               </Button>
             </AlertDescription>
           </Alert>
         )}
-        {pools.data &&
-          !pools.isError &&
-          (pools.data.items.length === 0 ? (
-            <EmptyState
-              title={t('No configured routing pools')}
-              description={t(
-                'Requests inherit channel defaults until a model and public group pool is configured.'
-              )}
-              action={
+        <div className='min-h-0 flex-1 overflow-y-auto overscroll-contain'>
+          {pools.isPending && <Skeleton className='h-64 w-full' />}
+          {pools.isError && (
+            <Alert variant='destructive'>
+              <AlertDescription>
+                {t('Failed to load routing pools.')}{' '}
                 <Button
                   type='button'
-                  disabled={!canWrite}
-                  onClick={() => setCreating(true)}
+                  variant='outline'
+                  onClick={() => void pools.refetch()}
                 >
-                  {t('Configure routing pool')}
+                  {t('Retry')}
                 </Button>
-              }
-            />
-          ) : (
-            <div className='grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,21rem),1fr))] items-start gap-4'>
-              {pools.data.items.map((pool) => {
-                const key = `${pool.routing_group}\u0000${pool.model}`
-                return (
-                  <PoolCard
-                    key={key}
-                    pool={pool}
-                    canWrite={canWrite && !pools.isPlaceholderData}
-                    groupLabel={catalog.data?.groups[pool.routing_group]}
-                    onDirtyChange={(value) => {
-                      setDirtyPools((previous) => {
-                        if (!!previous[key] === value) return previous
-                        const next = { ...previous, [key]: value }
-                        return next
-                      })
-                    }}
-                  />
-                )
-              })}
-            </div>
-          ))}
-      </div>
-      {pools.data && (
-        <div className='flex min-w-0 shrink-0 items-center justify-between gap-3'>
-          <div className='flex min-w-0 flex-1 items-center gap-3 text-xs'>
-            <span className='text-muted-foreground shrink-0'>
-              {t('Routing pools: {{total}}', {
-                total: formatNumber(pools.data.total, locale),
-              })}
-            </span>
-            {dirty && (
-              <p
-                role='status'
-                className='text-muted-foreground truncate'
-                title={t(
-                  'Save or reset edited cards before changing filters or views.'
+              </AlertDescription>
+            </Alert>
+          )}
+          {pools.data &&
+            !pools.isError &&
+            (pools.data.items.length === 0 ? (
+              <EmptyState
+                title={t('No configured routing pools')}
+                description={t(
+                  'Requests inherit channel defaults until a model and public group pool is configured.'
                 )}
-              >
-                {t(
-                  'Save or reset edited cards before changing filters or views.'
-                )}
-              </p>
-            )}
-          </div>
-          <div className='flex shrink-0 items-center gap-2'>
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              disabled={dirty || pools.isFetching || filters.page <= 1}
-              onClick={() => updateFilters({ page: filters.page - 1 })}
-            >
-              {t('Previous')}
-            </Button>
-            <span className='text-xs'>
-              {formatNumber(filters.page, locale)}
-            </span>
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              disabled={
-                dirty ||
-                pools.isFetching ||
-                filters.page * pools.data.page_size >= pools.data.total
-              }
-              onClick={() => updateFilters({ page: filters.page + 1 })}
-            >
-              {t('Next')}
-            </Button>
-          </div>
+                action={
+                  <Button
+                    type='button'
+                    disabled={!canWrite}
+                    onClick={() => setCreating(true)}
+                  >
+                    {t('Configure routing pool')}
+                  </Button>
+                }
+              />
+            ) : (
+              <div className='grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,21rem),1fr))] items-start gap-4'>
+                {pools.data.items.map((pool) => {
+                  const key = `${pool.routing_group}\u0000${pool.model}`
+                  return (
+                    <PoolCard
+                      key={key}
+                      pool={pool}
+                      canWrite={canWrite && !pools.isPlaceholderData}
+                      groupLabel={catalog.data?.groups[pool.routing_group]}
+                      onDirtyChange={(value) => {
+                        setDirtyPools((previous) => {
+                          if (!!previous[key] === value) return previous
+                          const next = { ...previous, [key]: value }
+                          return next
+                        })
+                      }}
+                    />
+                  )
+                })}
+              </div>
+            ))}
         </div>
-      )}
-      <CreatePoolDialog
-        open={creating}
-        onOpenChange={setCreating}
-        groups={catalog.data?.groups ?? {}}
-        canWrite={canWrite}
-        onCreated={(pool) =>
-          updateFilters({
-            model: pool.model,
-            routing_group: pool.routing_group,
-            mode: '',
-            page: 1,
-          })
-        }
-      />
+        {pools.data && (
+          <div className='flex min-w-0 shrink-0 items-center justify-between gap-3'>
+            <div className='flex min-w-0 flex-1 items-center gap-3 text-xs'>
+              <span className='text-muted-foreground shrink-0'>
+                {t('Routing pools: {{total}}', {
+                  total: formatNumber(pools.data.total, locale),
+                })}
+              </span>
+              {dirty && (
+                <p
+                  role='status'
+                  className='text-muted-foreground truncate'
+                  title={t(
+                    'Save or reset edited cards before changing filters or views.'
+                  )}
+                >
+                  {t(
+                    'Save or reset edited cards before changing filters or views.'
+                  )}
+                </p>
+              )}
+            </div>
+            <div className='flex shrink-0 items-center gap-2'>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                disabled={dirty || pools.isFetching || filters.page <= 1}
+                onClick={() => updateFilters({ page: filters.page - 1 })}
+              >
+                {t('Previous')}
+              </Button>
+              <span className='text-xs'>
+                {formatNumber(filters.page, locale)}
+              </span>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                disabled={
+                  dirty ||
+                  pools.isFetching ||
+                  filters.page * pools.data.page_size >= pools.data.total
+                }
+                onClick={() => updateFilters({ page: filters.page + 1 })}
+              >
+                {t('Next')}
+              </Button>
+            </div>
+          </div>
+        )}
+        <CreatePoolDialog
+          open={creating}
+          onOpenChange={setCreating}
+          groups={catalog.data?.groups ?? {}}
+          canWrite={canWrite}
+          onCreated={(pool) =>
+            updateFilters({
+              model: pool.model,
+              routing_group: pool.routing_group,
+              mode: '',
+              page: 1,
+            })
+          }
+        />
+      </RoutingWorkspaceDisplay>
     </div>
   )
 }

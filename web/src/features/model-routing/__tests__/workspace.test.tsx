@@ -23,7 +23,14 @@ import {
   createRouter,
   RouterProvider,
 } from '@tanstack/react-router'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, test, vi } from 'vitest'
 
@@ -177,6 +184,17 @@ test('retains edited cards and locks filtering until the administrator resets th
     )
   ).toBeVisible()
   expect(screen.getByRole('combobox', { name: 'Search models' })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: 'Fullscreen' }))
+  expect(screen.getByRole('spinbutton', { name: 'Priority for Alpha' })).toBe(
+    priority
+  )
+  expect(priority).toHaveValue(7)
+  expect(screen.getByRole('combobox', { name: 'Search models' })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }))
+  expect(screen.getByRole('spinbutton', { name: 'Priority for Alpha' })).toBe(
+    priority
+  )
+  expect(priority).toHaveValue(7)
   await act(async () => {
     await client.invalidateQueries({ queryKey: ['model-routing-pools'] })
   })
@@ -193,6 +211,69 @@ test('retains edited cards and locks filtering until the administrator resets th
       'Save or reset edited cards before changing filters or views.'
     )
   ).not.toBeInTheDocument()
+})
+
+test('fullscreen contains the filters, routing content and pagination and restores focus on Escape', async () => {
+  render(<div role='listbox' hidden />)
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'root', role: ROLE.SUPER_ADMIN })
+  vi.spyOn(api, 'get').mockImplementation(async (url) => ({
+    data: {
+      success: true,
+      data: url.endsWith('/catalog')
+        ? { groups: { standard: 'Standard' }, models: ['kimi-k3'] }
+        : { items: [], total: 0, page: 1, page_size: 12 },
+    },
+  }))
+  mountWorkspace()
+  await screen.findByText('No configured routing pools')
+  const fullscreen = screen.getByRole('button', { name: 'Fullscreen' })
+  const refresh = screen.getByRole('button', { name: 'Refresh' })
+  expect(refresh.nextElementSibling).toBe(fullscreen)
+  expect(fullscreen).toHaveAttribute('aria-pressed', 'false')
+
+  await userEvent.click(fullscreen)
+  const workspace = screen.getByRole('dialog', { name: 'Model routing' })
+  expect(workspace).toHaveAttribute('aria-modal', 'true')
+  expect(workspace).toHaveClass('fixed', 'inset-0', 'overflow-hidden')
+  expect(
+    within(workspace).getByRole('combobox', { name: 'Search models' })
+  ).toBeEnabled()
+  expect(
+    within(workspace).getByText('No configured routing pools')
+  ).toBeVisible()
+  expect(within(workspace).getByRole('button', { name: 'Next' })).toBeDisabled()
+  expect(
+    within(workspace).queryByText(
+      'Each card overrides channel defaults for one model and public group. Customer-specific routing takes precedence.'
+    )
+  ).not.toBeInTheDocument()
+  expect(fullscreen).toHaveAttribute('aria-pressed', 'true')
+  expect(fullscreen).toHaveFocus()
+
+  await userEvent.click(
+    within(workspace).getAllByRole('button', {
+      name: 'Configure routing pool',
+    })[0]
+  )
+  const createDialog = screen.getByRole('dialog', {
+    name: 'Configure routing pool',
+  })
+  expect(createDialog).toBeVisible()
+  await userEvent.keyboard('{Escape}')
+  await waitFor(() => expect(createDialog).not.toBeInTheDocument())
+  expect(workspace).toBeVisible()
+
+  await userEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }))
+  await userEvent.keyboard('{Enter}')
+  expect(screen.getByRole('dialog', { name: 'Model routing' })).toBeVisible()
+  await userEvent.keyboard('{Escape}')
+  expect(
+    screen.queryByRole('dialog', { name: 'Model routing' })
+  ).not.toBeInTheDocument()
+  expect(fullscreen).toHaveAttribute('aria-pressed', 'false')
+  expect(fullscreen).toHaveFocus()
 })
 
 test('an administrator without channel read permission cannot fetch or configure routing pools', async () => {
