@@ -13,7 +13,7 @@ import (
 // VisitLogsForExport releases the SQL connection between bounded keyset pages.
 // Downstream histories are adjacent by request ID, including attempts outside
 // the report filters, so callers only retain one request's terminal record.
-func VisitLogsForExport(ctx context.Context, query LogExportQuery, userID int, downstream bool, limit int, visit func([]*Log) error) (int64, error) {
+func VisitLogsForExport(ctx context.Context, query LogExportQuery, userID int, downstream bool, limit int, visit func([]*Log) error, progress func(processed, total int64) error) (int64, error) {
 	if limit <= 0 || userID < 0 {
 		return 0, errors.New("invalid log export scope")
 	}
@@ -52,6 +52,14 @@ func VisitLogsForExport(ctx context.Context, query LogExportQuery, userID int, d
 	if err = scope.Count(&total).Error; err != nil || total > int64(limit) {
 		return total, err
 	}
+	if downstream && !clickHouse {
+		if progress != nil {
+			if err = progress(0, total); err != nil {
+				return 0, err
+			}
+		}
+		return visitDownstreamLogsForExport(ctx, scope, logTable, requestKey, snapshotID, limit, visit, total, progress)
+	}
 	source := scope
 	if downstream {
 		matching := scope.Session(&gorm.Session{}).Select("logs.request_id").Where("logs.request_id <> ?", "")
@@ -83,6 +91,18 @@ func VisitLogsForExport(ctx context.Context, query LogExportQuery, userID int, d
 		source = source.Select(columns)
 	}
 	var cursor *sql.Rows
+	if progress != nil {
+		if clickHouse && downstream {
+			// Expanded retry histories can exceed the matching report scope.
+			// Count the actual cursor source so its percentage has a real denominator.
+			if err = source.Session(&gorm.Session{}).Count(&total).Error; err != nil || total > int64(limit) {
+				return total, err
+			}
+		}
+		if err = progress(0, total); err != nil {
+			return 0, err
+		}
+	}
 	if clickHouse {
 		order := "logs.created_at asc, logs.request_id asc"
 		if downstream {
@@ -113,15 +133,7 @@ func VisitLogsForExport(ctx context.Context, query LogExportQuery, userID int, d
 				return scanned, err
 			}
 		} else {
-			page := source.Session(&gorm.Session{})
-			if downstream {
-				if scanned > 0 {
-					page = page.Where(requestKey+" > ? OR ("+requestKey+" = ? AND logs.created_at > ?) OR ("+requestKey+" = ? AND logs.created_at = ? AND logs.id > ?)", last.RequestId, last.RequestId, last.CreatedAt, last.RequestId, last.CreatedAt, last.Id)
-				}
-				page = page.Order(requestKey + " asc, logs.created_at asc, logs.id asc")
-			} else {
-				page = page.Where("logs.id > ?", last.Id).Order("logs.id asc")
-			}
+			page := source.Session(&gorm.Session{}).Where("logs.id > ?", last.Id).Order("logs.id asc")
 			if err = page.Limit(min(1000, limit+1-int(scanned))).Find(&batch).Error; err != nil {
 				return scanned, err
 			}
@@ -141,7 +153,117 @@ func VisitLogsForExport(ctx context.Context, query LogExportQuery, userID int, d
 		if err = visit(batch); err != nil {
 			return scanned, err
 		}
+		if progress != nil {
+			if err = progress(scanned, total); err != nil {
+				return scanned, err
+			}
+		}
 		last = *batch[len(batch)-1]
+	}
+}
+
+// visitDownstreamLogsForExport expands only a bounded batch of matching request
+// IDs. A global IN subquery combined with empty-ID matches prevents a cheap
+// first page on large histories. The earliest matching log owns each request,
+// so retries in later candidate pages cannot export that request again.
+func visitDownstreamLogsForExport(ctx context.Context, scope *gorm.DB, logTable, requestKey string, snapshotID, limit int, visit func([]*Log) error, total int64, progress func(processed, total int64) error) (int64, error) {
+	var scanned int64
+	var processed int64
+	lastCandidateID := 0
+	for {
+		var candidates []Log
+		err := scope.Session(&gorm.Session{}).Select("logs.id, logs.request_id").
+			Where("logs.id > ?", lastCandidateID).Order("logs.id asc").Limit(1000).Find(&candidates).Error
+		if err != nil || len(candidates) == 0 {
+			return scanned, err
+		}
+		candidateEnd := candidates[len(candidates)-1].Id
+		requestIDs := make([]string, 0, len(candidates))
+		emptyIDs := make([]int, 0)
+		seen := make(map[string]bool, len(candidates))
+		for _, item := range candidates {
+			if item.RequestId == "" {
+				emptyIDs = append(emptyIDs, item.Id)
+			} else if !seen[item.RequestId] {
+				seen[item.RequestId] = true
+				requestIDs = append(requestIDs, item.RequestId)
+			}
+		}
+		ownedIDs := make([]string, 0, len(requestIDs))
+		if len(requestIDs) > 0 {
+			var firstMatches []Log
+			matching := scope.Session(&gorm.Session{}).
+				Select("MIN(logs.id) AS id, "+requestKey+" AS request_id").
+				Where("logs.request_id IN ?", requestIDs)
+			if common.UsingLogDatabase(common.DatabaseTypeMySQL) {
+				// Keep the indexed predicate as well as exact, case-sensitive IDs.
+				matching = matching.Where(requestKey+" IN ?", requestIDs)
+			}
+			if err = matching.Group(requestKey).Find(&firstMatches).Error; err != nil {
+				return scanned, err
+			}
+			for _, item := range firstMatches {
+				if item.Id > lastCandidateID && item.Id <= candidateEnd {
+					ownedIDs = append(ownedIDs, item.RequestId)
+				}
+			}
+		}
+		lastCandidateID = candidateEnd
+		if len(ownedIDs) == 0 && len(emptyIDs) == 0 {
+			processed += int64(len(candidates))
+			if progress != nil {
+				if err = progress(processed, total); err != nil {
+					return scanned, err
+				}
+			}
+			continue
+		}
+		histories := LOG_DB.WithContext(ctx).Model(&Log{}).Table(logTable+" AS logs").
+			Where("logs.type IN ?", []int{LogTypeConsume, LogTypeError}).Where("logs.id <= ?", snapshotID)
+		switch {
+		case len(ownedIDs) == 0:
+			histories = histories.Where("logs.id IN ?", emptyIDs)
+		case len(emptyIDs) == 0:
+			histories = histories.Where("logs.request_id IN ?", ownedIDs)
+		default:
+			histories = histories.Where("logs.request_id IN ? OR logs.id IN ?", ownedIDs, emptyIDs)
+		}
+		if len(ownedIDs) > 0 && common.UsingLogDatabase(common.DatabaseTypeMySQL) {
+			exact := LOG_DB.WithContext(ctx).Where(requestKey+" IN ?", ownedIDs)
+			if len(emptyIDs) > 0 {
+				exact = exact.Or("logs.id IN ?", emptyIDs)
+			}
+			histories = histories.Where(exact)
+		}
+		var last *Log
+		for {
+			page := histories.Session(&gorm.Session{})
+			if last != nil {
+				page = page.Where(requestKey+" > ? OR ("+requestKey+" = ? AND logs.created_at > ?) OR ("+requestKey+" = ? AND logs.created_at = ? AND logs.id > ?)", last.RequestId, last.RequestId, last.CreatedAt, last.RequestId, last.CreatedAt, last.Id)
+			}
+			var batch []*Log
+			if err = page.Order(requestKey + " asc, logs.created_at asc, logs.id asc").
+				Limit(min(1000, limit+1-int(scanned))).Find(&batch).Error; err != nil {
+				return scanned, err
+			}
+			if len(batch) == 0 {
+				break
+			}
+			scanned += int64(len(batch))
+			if scanned > int64(limit) {
+				return scanned, nil
+			}
+			if err = visit(batch); err != nil {
+				return scanned, err
+			}
+			last = batch[len(batch)-1]
+		}
+		processed += int64(len(candidates))
+		if progress != nil {
+			if err = progress(processed, total); err != nil {
+				return scanned, err
+			}
+		}
 	}
 }
 

@@ -43,11 +43,40 @@ type LogExportChunk struct {
 
 type LogExportRecordResponse struct {
 	LogExportRecord
-	Status    SystemTaskStatus `json:"status"`
-	Error     string           `json:"error"`
-	Request   string           `json:"-" gorm:"column:request"`
-	Filters   any              `json:"filters" gorm:"-"`
-	UpdatedAt int64            `json:"updated_at"`
+	Status    SystemTaskStatus  `json:"status"`
+	Error     string            `json:"error"`
+	Request   string            `json:"-" gorm:"column:request"`
+	Filters   any               `json:"filters" gorm:"-"`
+	UpdatedAt int64             `json:"updated_at"`
+	State     string            `json:"-"`
+	Progress  LogExportProgress `json:"progress" gorm:"-"`
+}
+
+// LogExportProgress is stored in the existing system-task state, not the schema.
+// Percent reserves 90-99 for artifact storage; only a succeeded task is 100%.
+type LogExportProgress struct {
+	Stage       string `json:"stage"`
+	Percent     int    `json:"percent"`
+	Processed   int64  `json:"processed"`
+	Total       int64  `json:"total"`
+	RowCount    int    `json:"row_count"`
+	StoredBytes int64  `json:"stored_bytes"`
+	TotalBytes  int64  `json:"total_bytes"`
+}
+
+func (record *LogExportRecordResponse) loadProgress() {
+	var progress LogExportProgress
+	if err := common.UnmarshalJsonStr(record.State, &progress); err != nil {
+		progress = LogExportProgress{}
+	}
+	progress.Percent = min(99, max(0, progress.Percent))
+	switch record.Status {
+	case SystemTaskStatusPending:
+		progress = LogExportProgress{Stage: "queued"}
+	case SystemTaskStatusSucceeded:
+		progress.Stage, progress.Percent, progress.RowCount = "completed", 100, record.RowCount
+	}
+	record.Progress = progress
 }
 
 func ParseLogExportMaxRows(value string) (int, error) {
@@ -105,8 +134,11 @@ func ListLogExportRecords(ctx context.Context, userID int, self bool, offset int
 	}
 	var records []LogExportRecordResponse
 	err := query.Joins("JOIN system_tasks ON system_tasks.task_id = log_export_records.task_id").
-		Select("log_export_records.*, system_tasks.status, system_tasks.error, system_tasks.payload AS request, system_tasks.updated_at").
+		Select("log_export_records.*, system_tasks.status, system_tasks.error, system_tasks.payload AS request, system_tasks.updated_at, system_tasks.state").
 		Order("log_export_records.created_at DESC, log_export_records.task_id DESC").Offset(max(0, offset)).Limit(min(max(1, limit), 50)).Scan(&records).Error
+	for i := range records {
+		records[i].loadProgress()
+	}
 	return records, total, err
 }
 
@@ -118,7 +150,8 @@ func GetLogExportRecord(ctx context.Context, taskID string, userID int, self boo
 		query = query.Where("log_export_records.view = ?", "self")
 	}
 	var record LogExportRecordResponse
-	err := query.Select("log_export_records.*, system_tasks.status, system_tasks.error, system_tasks.updated_at").Take(&record).Error
+	err := query.Select("log_export_records.*, system_tasks.status, system_tasks.error, system_tasks.updated_at, system_tasks.state").Take(&record).Error
+	record.loadProgress()
 	return &record, err
 }
 

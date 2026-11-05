@@ -157,11 +157,33 @@ func TestAsyncLogExportDurableLifecycle(t *testing.T) {
 			claimed, ok, err := model.ClaimSystemTask(task.ID, model.SystemTaskTypeLogExport, "export-test", common.GetTimestamp()+60)
 			require.NoError(t, err)
 			require.True(t, ok)
+			require.NoError(t, model.UpdateSystemTaskState(task.TaskID, "export-test", model.LogExportProgress{Stage: "exporting", Percent: 45, Processed: 45, Total: 100}))
+			running := httptest.NewRecorder()
+			router.ServeHTTP(running, httptest.NewRequest(http.MethodGet, "/self/exports", nil))
+			var runningHistory struct {
+				Data []model.LogExportRecordResponse `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(running.Body.Bytes(), &runningHistory))
+			require.Len(t, runningHistory.Data, 1)
+			assert.Equal(t, 45, runningHistory.Data[0].Progress.Percent)
+			assert.EqualValues(t, 45, runningHistory.Data[0].Progress.Processed)
+			assert.NotContains(t, running.Body.String(), "locked_by")
 			service.RunLogExportJob(context.Background(), claimed, "export-test")
 			record, err := model.GetLogExportRecord(context.Background(), task.TaskID, 41, true)
 			require.NoError(t, err)
 			assert.Equal(t, model.SystemTaskStatusSucceeded, record.Status, record.Error)
 			assert.Equal(t, 1, record.RowCount)
+			assert.Equal(t, 100, record.Progress.Percent)
+			assert.Equal(t, "completed", record.Progress.Stage)
+			var savedProgress model.LogExportProgress
+			finishedTask, err := model.GetSystemTaskByTaskID(task.TaskID)
+			require.NoError(t, err)
+			require.NoError(t, common.UnmarshalJsonStr(finishedTask.State, &savedProgress))
+			assert.Equal(t, 99, savedProgress.Percent, "storage must not advertise 100 before task completion")
+			assert.EqualValues(t, 1, savedProgress.Processed)
+			assert.EqualValues(t, 1, savedProgress.Total)
+			assert.Equal(t, record.FileSize, savedProgress.StoredBytes)
+			assert.Equal(t, record.FileSize, savedProgress.TotalBytes)
 			// Reopening/migrating the application must preserve finished artifacts.
 			for range 2 {
 				require.NoError(t, db.AutoMigrate(models...))
@@ -238,6 +260,24 @@ func TestAsyncLogExportDurableLifecycle(t *testing.T) {
 			assert.Equal(t, model.SystemTaskStatusFailed, failedRecord.Status)
 			assert.Equal(t, "export exceeds 1 records; narrow the filters", failedRecord.Error)
 			assert.Zero(t, failedRecord.FileSize)
+			assert.Zero(t, failedRecord.Progress.Percent)
+			for _, tc := range []struct {
+				status  model.SystemTaskStatus
+				state   string
+				percent int
+			}{
+				{model.SystemTaskStatusPending, `{"percent":90}`, 0},
+				{model.SystemTaskStatusRunning, `{"stage":"storing","percent":100}`, 99},
+				{model.SystemTaskStatusFailed, `{"stage":"exporting","percent":45}`, 45},
+				{model.SystemTaskStatusSucceeded, `{"row_count":1}`, 100},
+				{model.SystemTaskStatusRunning, `invalid legacy state`, 0},
+			} {
+				require.NoError(t, db.Model(&model.SystemTask{}).Where("task_id = ?", task.TaskID).Updates(map[string]any{"status": tc.status, "state": tc.state}).Error)
+				progressRecord, err := model.GetLogExportRecord(context.Background(), task.TaskID, 41, true)
+				require.NoError(t, err)
+				assert.Equal(t, tc.percent, progressRecord.Progress.Percent)
+			}
+			require.NoError(t, db.Model(&model.SystemTask{}).Where("task_id = ?", task.TaskID).Updates(map[string]any{"status": model.SystemTaskStatusSucceeded, "state": finishedTask.State}).Error)
 			for _, invalid := range []string{"0", "-1", "10000001", "1.5", ""} {
 				require.Error(t, model.UpdateOption(model.LogExportMaxRowsOptionKey, invalid))
 			}
@@ -263,7 +303,7 @@ func TestAsyncLogExportDurableLifecycle(t *testing.T) {
 			}).Error)
 			var streamed bytes.Buffer
 			request := service.LogExportRequest{View: service.LogExportViewDownstream, Fields: []string{"request_id", "status", "input_tokens"}, Username: "stream-user", StartTimestamp: 1000, EndTimestamp: 2004}
-			rows, size, err := service.StreamLogExportArchive(context.Background(), &streamed, request, 0, 10000000)
+			rows, size, err := service.StreamLogExportArchive(context.Background(), &streamed, request, 0, 10000000, nil)
 			require.NoError(t, err)
 			assert.Equal(t, 2, rows)
 			assert.EqualValues(t, streamed.Len(), size)
@@ -286,7 +326,7 @@ func TestAsyncLogExportDurableLifecycle(t *testing.T) {
 			_, err = model.VisitLogsForExport(context.Background(), model.LogExportQuery{}, 41, false, 10, func(batch []*model.Log) error {
 				visited += len(batch)
 				return logDB.Exec("SELECT 1").Error
-			})
+			}, nil)
 			require.NoError(t, err)
 			assert.Equal(t, 2, visited)
 			require.NoError(t, model.UpdateOption(model.LogExportMaxRowsOptionKey, "10"))
@@ -422,6 +462,24 @@ func TestExportSelfLogsOwnConsumptionLedgerAndRedaction(t *testing.T) {
 		{"model_name", "entry_count", "consumption_count", "violation_fee_count", "refund_count", "input_tokens", "cached_input_tokens", "output_tokens", "charged_quota", "known_actual_amount_usd", "unknown_amount_count"},
 		{"'=client-model", "5", "3", "1", "1", "111", "40", "25", "1200", "0.0023", "1"},
 	}, files["self-summary.csv"])
+
+	for _, view := range []service.LogExportView{service.LogExportViewSelf, service.LogExportViewDownstream} {
+		var output bytes.Buffer
+		var updates [][2]int64
+		_, _, err := service.StreamLogExportArchive(context.Background(), &output, service.LogExportRequest{View: view, StartTimestamp: 90, EndTimestamp: 200, Fields: []string{"request_id"}}, 7, 100, func(processed, total int64) error {
+			updates = append(updates, [2]int64{processed, total})
+			return nil
+		})
+		require.NoError(t, err)
+		total := int64(5)
+		if view == service.LogExportViewDownstream {
+			total = 6
+			if logDialect == common.DatabaseTypeClickHouse {
+				total = 7 // The cursor includes the later retry outside the report window.
+			}
+		}
+		assert.Equal(t, [][2]int64{{0, total}, {total, total}}, updates)
+	}
 
 	for _, tc := range []struct {
 		name    string
@@ -649,4 +707,92 @@ func TestExportLogsDownstreamUsesTrueTerminalRecordBeforeReportFilters(t *testin
 	records, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(detailBytes, []byte{0xEF, 0xBB, 0xBF}))).ReadAll()
 	require.NoError(t, err)
 	assert.Equal(t, [][]string{{"request_id", "status"}, {"req-success", "success"}}, records)
+}
+
+func TestDownstreamLogExportDatabasePagination(t *testing.T) {
+	db, dialect := openTaskDialectDatabase(t, &model.Log{})
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	previousMain, previousLog := common.MainDatabaseType(), common.LogDatabaseType()
+	model.DB, model.LOG_DB = db, db
+	common.SetDatabaseTypes(dialect, dialect)
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		common.SetDatabaseTypes(previousMain, previousLog)
+	})
+	// More distinct requests than one candidate page, followed by retries of
+	// requests from both pages. Input order differs from request-ID ordering.
+	logs := make([]model.Log, 1001)
+	for i := range logs {
+		requestID := fmt.Sprintf("paged-%04d", 1000-i)
+		if i == 0 {
+			requestID = "CasePage"
+		} else if i == 1 {
+			requestID = "casepage"
+		}
+		logs[i] = model.Log{Username: "paging-user", ModelName: "selected-model", CreatedAt: 1500, Type: model.LogTypeError, RequestId: requestID}
+	}
+	require.NoError(t, db.CreateInBatches(&logs, 100).Error)
+	require.NoError(t, db.Create(&[]model.Log{
+		{Username: "paging-user", ModelName: "selected-model", CreatedAt: 1501, Type: model.LogTypeError, RequestId: "CasePage"},
+		{Username: "other-user", ModelName: "terminal-model", CreatedAt: 1502, Type: model.LogTypeConsume, RequestId: "CasePage", PromptTokens: 17},
+		{Username: "paging-user", ModelName: "selected-model", CreatedAt: 2500, Type: model.LogTypeConsume, RequestId: "casepage"},
+		{Username: "paging-user", ModelName: "selected-model", CreatedAt: 1500, Type: model.LogTypeConsume, RequestId: "paged-0000", PromptTokens: 23},
+		{Username: "other-user", ModelName: "terminal-model", CreatedAt: 1503, Type: model.LogTypeConsume, RequestId: "CasePage", Other: `{"violation_fee":true}`},
+		{Username: "paging-user", ModelName: "selected-model", CreatedAt: 1500, Type: model.LogTypeError},
+		{Username: "other-user", ModelName: "selected-model", CreatedAt: 1500, Type: model.LogTypeError},
+	}).Error)
+	request := service.LogExportRequest{View: service.LogExportViewDownstream, Username: "paging-%", ModelName: "selected-model", StartTimestamp: 1000, EndTimestamp: 2000, Fields: []string{"request_id", "status", "input_tokens"}}
+	var output bytes.Buffer
+	rows, _, err := service.StreamLogExportArchive(context.Background(), &output, request, 0, 10000, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1001, rows)
+	archive, err := zip.NewReader(bytes.NewReader(output.Bytes()), int64(output.Len()))
+	require.NoError(t, err)
+	reader, err := archive.File[0].Open()
+	require.NoError(t, err)
+	detail, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	records, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(detail, []byte{0xEF, 0xBB, 0xBF}))).ReadAll()
+	require.NoError(t, err)
+	actual := make(map[string][]string, rows)
+	for _, row := range records[1:] {
+		require.NotContains(t, actual, row[0], "a retry in a later page must not duplicate a request")
+		actual[row[0]] = row
+	}
+	assert.Equal(t, []string{"CasePage", "success", "17"}, actual["CasePage"])
+	assert.Equal(t, []string{"paged-0000", "success", "23"}, actual["paged-0000"])
+	assert.Equal(t, []string{"", "failed", "0"}, actual[""])
+	assert.NotContains(t, actual, "casepage", "the real terminal record lies outside the report window")
+	// Expanded histories also count toward the safety limit, including retries
+	// outside the report filters. The archive must fail rather than truncate.
+	output.Reset()
+	_, _, err = service.StreamLogExportArchive(context.Background(), &output, request, 0, 1004, nil)
+	var limitError *service.LogExportLimitError
+	require.ErrorAs(t, err, &limitError)
+	assert.Equal(t, 1004, limitError.Limit)
+	// Callbacks may use the same one-connection database; rows appended while
+	// exporting must remain outside the captured ID snapshot.
+	var appended model.Log
+	var visited []int
+	var progressUpdates [][2]int64
+	_, err = model.VisitLogsForExport(context.Background(), model.LogExportQuery{Username: "paging-%", StartTimestamp: 1000, EndTimestamp: 2000}, 0, true, 10000, func(batch []*model.Log) error {
+		if appended.Id == 0 {
+			appended = model.Log{Username: "paging-user", CreatedAt: 1504, Type: model.LogTypeConsume, RequestId: "CasePage"}
+			if err := db.Create(&appended).Error; err != nil {
+				return err
+			}
+		}
+		for _, item := range batch {
+			visited = append(visited, item.Id)
+		}
+		return db.Exec("SELECT 1").Error
+	}, func(processed, total int64) error {
+		progressUpdates = append(progressUpdates, [2]int64{processed, total})
+		return db.Exec("SELECT 1").Error
+	})
+	require.NoError(t, err)
+	require.Positive(t, appended.Id)
+	assert.NotContains(t, visited, appended.Id)
+	assert.Equal(t, [][2]int64{{0, 1004}, {1000, 1004}, {1004, 1004}}, progressUpdates, "progress counts matching candidates, not expanded or duplicate histories")
 }

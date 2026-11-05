@@ -22,6 +22,15 @@ export interface LogExportRecord {
   updated_at: number
   expires_at: number
   filters: LogExportRequest
+  progress?: {
+    stage: 'queued' | 'counting' | 'exporting' | 'storing' | 'completed' | ''
+    percent: number
+    processed: number
+    total: number
+    row_count: number
+    stored_bytes: number
+    total_bytes: number
+  }
 }
 
 export interface LogExportHistory {

@@ -77,7 +77,7 @@ func writeUsageLogArchive(c *gin.Context, request service.LogExportRequest) {
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
-	_, size, err := service.StreamLogExportArchive(c.Request.Context(), file, request, c.GetInt("id"), model.GetLogExportMaxRows())
+	_, size, err := service.StreamLogExportArchive(c.Request.Context(), file, request, c.GetInt("id"), model.GetLogExportMaxRows(), nil)
 	if err != nil {
 		common.SysError("failed to export usage logs: " + err.Error())
 		var limitError *service.LogExportLimitError

@@ -118,7 +118,7 @@ func (stream *logExportRowStream) FlushTerminal() error {
 	return stream.archive.WriteRows(BuildLogExportRows(LogExportViewDownstream, []*model.Log{item}))
 }
 
-func StreamLogExportArchive(ctx context.Context, writer io.Writer, request LogExportRequest, userID int, limit int) (rowCount int, fileSize int64, err error) {
+func StreamLogExportArchive(ctx context.Context, writer io.Writer, request LogExportRequest, userID int, limit int, progress func(processed, total int64) error) (rowCount int, fileSize int64, err error) {
 	if err = request.Validate(); err != nil {
 		return 0, 0, err
 	}
@@ -136,7 +136,7 @@ func StreamLogExportArchive(ctx context.Context, writer io.Writer, request LogEx
 	if request.View == LogExportViewSelf {
 		ownerID = userID
 	}
-	scanned, err := model.VisitLogsForExport(ctx, query, ownerID, request.View == LogExportViewDownstream, limit, stream.WriteLogs)
+	scanned, err := model.VisitLogsForExport(ctx, query, ownerID, request.View == LogExportViewDownstream, limit, stream.WriteLogs, progress)
 	if err != nil {
 		return 0, bounded.written, err
 	}

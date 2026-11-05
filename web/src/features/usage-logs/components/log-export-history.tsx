@@ -19,6 +19,7 @@ import {
   type LogExportRecord,
   type LogExportFileDestination,
 } from '../log-export-api'
+import { LogExportProgress } from './log-export-progress'
 
 interface LogExportHistoryProps {
   scope: 'all' | 'self'
@@ -102,7 +103,7 @@ export function LogExportHistory(props: LogExportHistoryProps) {
         </p>
       )}
       <StaticDataTable<LogExportRecord>
-        tableClassName='min-w-[42rem]'
+        tableClassName='min-w-[52rem]'
         tableProps={{ 'aria-label': t('Export history') }}
         data={records}
         getRowKey={(record) => record.task_id}
@@ -175,6 +176,11 @@ export function LogExportHistory(props: LogExportHistoryProps) {
                 )}
               </div>
             ),
+          },
+          {
+            id: 'progress',
+            header: t('Progress'),
+            cell: (record) => <LogExportProgress record={record} />,
           },
           {
             id: 'rows',

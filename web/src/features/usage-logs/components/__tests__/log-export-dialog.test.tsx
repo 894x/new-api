@@ -494,3 +494,104 @@ test('switching accounts hides the previous account export history while the new
   )
   expect(await screen.findByText('No export records yet')).toBeVisible()
 })
+
+test('export history refreshes real percentages through generation and storage and only completes at 100%', async () => {
+  const record = {
+    task_id: 'progress-export',
+    view: 'downstream',
+    status: 'running',
+    error: '',
+    created_at: 100,
+    filters: {},
+    progress: {
+      stage: 'counting',
+      percent: 0,
+      processed: 0,
+      total: 0,
+    },
+  }
+  vi.spyOn(api, 'get').mockImplementation(async () => ({
+    data: { success: true, total: 1, data: [record] },
+  }))
+  render(<LogExportHistory scope='all' />)
+  expect(
+    await screen.findByRole('progressbar', { name: 'Export progress' })
+  ).toHaveAttribute('aria-valuenow', '0')
+  expect(screen.getByText('Counting records')).toBeVisible()
+  record.progress = {
+    stage: 'exporting',
+    percent: 37,
+    processed: 4100,
+    total: 10000,
+  }
+  await userEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+  await waitFor(() =>
+    expect(screen.getByRole('progressbar')).toHaveAttribute(
+      'aria-valuenow',
+      '37'
+    )
+  )
+  expect(screen.getByText('37%')).toBeVisible()
+  expect(screen.getByText('Processed 4,100 / 10,000 records')).toBeVisible()
+  record.progress = {
+    stage: 'storing',
+    percent: 99,
+    processed: 10000,
+    total: 10000,
+  }
+  await userEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+  await waitFor(() =>
+    expect(screen.getByRole('progressbar')).toHaveAttribute(
+      'aria-valuenow',
+      '99'
+    )
+  )
+  expect(screen.getByText('Saving export file')).toBeVisible()
+  expect(screen.queryByText('100%')).not.toBeInTheDocument()
+  record.status = 'succeeded'
+  await userEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+  await waitFor(() =>
+    expect(screen.getByRole('progressbar')).toHaveAttribute(
+      'aria-valuenow',
+      '100'
+    )
+  )
+  expect(screen.getByText('100%')).toBeVisible()
+})
+
+test('failed exports retain their last percentage and legacy running exports have indeterminate progress', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      total: 2,
+      data: [
+        {
+          task_id: 'failed-progress',
+          view: 'self',
+          status: 'failed',
+          created_at: 100,
+          filters: {},
+          error: 'offline',
+          progress: { stage: 'exporting', percent: 45 },
+        },
+        {
+          task_id: 'legacy-running',
+          view: 'self',
+          status: 'running',
+          created_at: 100,
+          filters: {},
+          error: '',
+          progress: { stage: '', percent: 0 },
+        },
+      ],
+    },
+  })
+  render(<LogExportHistory scope='self' />)
+  const bars = await screen.findAllByRole('progressbar', {
+    name: 'Export progress',
+  })
+  expect(bars[0]).toHaveAttribute('aria-valuenow', '45')
+  expect(bars[1]).not.toHaveAttribute('aria-valuenow')
+  expect(screen.getByText('45%')).toBeVisible()
+  expect(screen.queryByText('100%')).not.toBeInTheDocument()
+})

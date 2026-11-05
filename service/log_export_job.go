@@ -90,17 +90,26 @@ func RunLogExportJob(ctx context.Context, task *model.SystemTask, runnerID strin
 }
 
 func generateLogExport(ctx context.Context, task *model.SystemTask, runnerID string, record model.LogExportRecord, request LogExportRequest) error {
+	progress := logExportProgressReporter{taskID: task.TaskID, runnerID: runnerID, state: model.LogExportProgress{Stage: "counting"}}
+	if err := progress.persist(true); err != nil {
+		return err
+	}
 	file, err := os.CreateTemp("", "new-api-log-export-*.zip")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
-	rowCount, fileSize, err := StreamLogExportArchive(ctx, file, request, record.UserID, record.MaxRows)
+	rowCount, fileSize, err := StreamLogExportArchive(ctx, file, request, record.UserID, record.MaxRows, progress.reportRows)
 	if err != nil {
 		return err
 	}
 	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	progress.state.Stage, progress.state.Percent = "storing", 90
+	progress.state.RowCount, progress.state.TotalBytes = rowCount, fileSize
+	if err = progress.persist(true); err != nil {
 		return err
 	}
 	buffer := make([]byte, model.LogExportChunkSize)
@@ -114,6 +123,11 @@ func generateLogExport(ctx context.Context, task *model.SystemTask, runnerID str
 			if err = model.DB.WithContext(ctx).Create(&chunk).Error; err != nil {
 				return err
 			}
+			progress.state.StoredBytes += int64(n)
+			progress.state.Percent = 90 + int(progress.state.StoredBytes*9/max(1, fileSize))
+			if err = progress.persist(progress.state.StoredBytes == fileSize); err != nil {
+				return err
+			}
 		}
 		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
 			break
@@ -122,15 +136,45 @@ func generateLogExport(ctx context.Context, task *model.SystemTask, runnerID str
 			return readErr
 		}
 	}
-	if err = model.UpdateSystemTaskState(task.TaskID, runnerID, map[string]int{"row_count": rowCount}); err != nil {
-		return err
-	}
 	filename := fmt.Sprintf("usage-%s-%s.zip", request.View, time.Unix(record.CreatedAt, 0).UTC().Format("20060102-150405"))
 	err = model.DB.WithContext(ctx).Model(&model.LogExportRecord{}).Where("task_id = ?", task.TaskID).Updates(map[string]any{"filename": filename, "row_count": rowCount, "file_size": fileSize, "expires_at": common.GetTimestamp() + model.LogExportRetentionSeconds}).Error
 	if err != nil {
 		return err
 	}
 	return model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusSucceeded, map[string]int{"row_count": rowCount}, "")
+}
+
+// Export progress includes row generation and byte storage. Unlike the generic
+// task reporter, it reserves 100% for the committed terminal task status and
+// propagates lease/persist failures before more artifact data is written.
+type logExportProgressReporter struct {
+	taskID    string
+	runnerID  string
+	state     model.LogExportProgress
+	lastWrite time.Time
+	lastStage string
+}
+
+func (reporter *logExportProgressReporter) reportRows(processed, total int64) error {
+	reporter.state.Stage = "exporting"
+	reporter.state.Processed, reporter.state.Total = processed, total
+	reporter.state.Percent = 90
+	if total > 0 {
+		reporter.state.Percent = int(min(processed, total) * 90 / total)
+	}
+	return reporter.persist(processed == total)
+}
+
+func (reporter *logExportProgressReporter) persist(force bool) error {
+	now := time.Now()
+	if !force && reporter.lastStage == reporter.state.Stage && now.Sub(reporter.lastWrite) < 2*time.Second {
+		return nil
+	}
+	if err := model.UpdateSystemTaskState(reporter.taskID, reporter.runnerID, reporter.state); err != nil {
+		return err
+	}
+	reporter.lastWrite, reporter.lastStage = now, reporter.state.Stage
+	return nil
 }
 
 type logExportFileWriter struct {
