@@ -57,7 +57,7 @@ func ListModelRoutingPools(c *gin.Context) {
 	filter := struct {
 		Model    string `form:"model" binding:"max=255"`
 		Group    string `form:"routing_group" binding:"max=64"`
-		Mode     string `form:"mode" binding:"omitempty,oneof=priority smart"`
+		Mode     string `form:"mode" binding:"omitempty,oneof=priority smart discount"`
 		Page     int    `form:"page" binding:"gte=1,lte=1000000"`
 		PageSize int    `form:"page_size" binding:"gte=1,lte=50"`
 	}{Page: 1, PageSize: 12}
@@ -130,11 +130,13 @@ func GetModelRoutingPool(c *gin.Context) {
 
 func SaveModelRoutingPool(c *gin.Context) {
 	var request struct {
-		Group    string                           `json:"routing_group"`
-		Model    string                           `json:"model"`
-		Mode     string                           `json:"mode"`
-		Revision string                           `json:"revision"`
-		Channels *[]model.ModelRoutingPoolChannel `json:"channels"`
+		Group     string                           `json:"routing_group"`
+		Model     string                           `json:"model"`
+		Mode      string                           `json:"mode"`
+		Revision  string                           `json:"revision"`
+		Channels  *[]model.ModelRoutingPoolChannel `json:"channels"`
+		MaxTTFTMS int64                            `json:"max_ttft_ms"`
+		MaxTPOTMS int64                            `json:"max_tpot_ms"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil || request.Channels == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid routing pool configuration"})
@@ -148,7 +150,7 @@ func SaveModelRoutingPool(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "the group-model matrix does not allow this model"})
 		return
 	}
-	pool := model.ModelRoutingPool{RoutingGroup: request.Group, Model: request.Model, Mode: request.Mode, Channels: *request.Channels}
+	pool := model.ModelRoutingPool{RoutingGroup: request.Group, Model: request.Model, Mode: request.Mode, Channels: *request.Channels, MaxTTFTMS: request.MaxTTFTMS, MaxTPOTMS: request.MaxTPOTMS}
 	if err := model.SaveModelRoutingPool(&pool, request.Revision); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, model.ErrInvalidRoutingPool) {

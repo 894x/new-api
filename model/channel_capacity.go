@@ -29,7 +29,49 @@ func ListChannelSelectionCandidates(group, model string, filters ChannelSelectio
 		if _, ok := channelsIDM[route.ChannelId]; !ok {
 			return nil, fmt.Errorf("channel %d is missing", route.ChannelId)
 		}
-		result = append(result, Ability{ChannelId: route.ChannelId, Priority: common.GetPointer(route.Priority), Weight: route.Weight, RPM: route.RPM, TPM: route.TPM})
+		result = append(result, Ability{ChannelId: route.ChannelId, Model: route.Model, Priority: common.GetPointer(route.Priority), Weight: route.Weight, RPM: route.RPM, TPM: route.TPM})
+	}
+	return result, nil
+}
+
+// ResolveChannelSelectionDiscounts uses the actual matched ability model, including
+// normalized-model fallback. Bulk reads avoid a query for every candidate and
+// observe discount edits without waiting for a process-local channel cache sync.
+func ResolveChannelSelectionDiscounts(candidates []Ability) (map[int]*float64, error) {
+	result := make(map[int]*float64, len(candidates))
+	if len(candidates) == 0 {
+		return result, nil
+	}
+	ids := make([]int, 0, len(candidates))
+	models := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		ids = append(ids, candidate.ChannelId)
+		if !slices.Contains(models, candidate.Model) {
+			models = append(models, candidate.Model)
+		}
+	}
+	var channels []Channel
+	if err := DB.Select("id", "cost_discount").Where("id IN ?", ids).Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	for _, channel := range channels {
+		result[channel.Id] = channel.CostDiscount
+	}
+	var overrides []ChannelModelOverride
+	if err := DB.Select("channel_id", "model", "cost_discount").Where("channel_id IN ? AND model IN ?", ids, models).Find(&overrides).Error; err != nil {
+		return nil, err
+	}
+	byModel := make(map[string]map[int]*float64)
+	for _, override := range overrides {
+		if byModel[override.Model] == nil {
+			byModel[override.Model] = make(map[int]*float64)
+		}
+		byModel[override.Model][override.ChannelId] = override.CostDiscount
+	}
+	for _, candidate := range candidates {
+		if discount := byModel[candidate.Model][candidate.ChannelId]; discount != nil {
+			result[candidate.ChannelId] = discount
+		}
 	}
 	return result, nil
 }

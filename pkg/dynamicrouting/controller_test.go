@@ -1,6 +1,7 @@
 package dynamicrouting
 
 import (
+	"fmt"
 	"math"
 	"sync"
 	"testing"
@@ -9,6 +10,151 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func discountRoutingFixture(t *testing.T) (*Controller, RouteKey, []Candidate, DiscountLimits, time.Time) {
+	t.Helper()
+	controller, err := NewController(Config{Enabled: true, MaxSamples: 60, MaxAge: 90 * time.Second, MinSamples: 3, ProbeFraction: 0.015, DegradationThreshold: 1.3, RecoveryThreshold: 1.1, CriticalThreshold: 1.9, Aggressiveness: 0.9, RecoveryStep: 0.02, Cooldown: 3 * time.Second, HardFailureCooldown: 30 * time.Second})
+	require.NoError(t, err)
+	cheap, backup, expensive := 0.5, 0.6, 0.9
+	return controller, RouteKey{Group: "default", Model: "discount-model"}, []Candidate{
+		{ChannelID: 1, CostDiscount: &cheap},
+		{ChannelID: 2, Priority: 50, CostDiscount: &backup},
+		{ChannelID: 3, Priority: 100, CostDiscount: &expensive},
+	}, DiscountLimits{MaxTTFT: 5 * time.Second, MaxTPOT: 200 * time.Millisecond}, time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
+}
+
+func TestDiscountRoutingKeepsCheapTrafficWhileQualityMeetsLimits(t *testing.T) {
+	controller, key, candidates, limits, now := discountRoutingFixture(t)
+	for _, candidate := range candidates {
+		for range 3 {
+			ttft := time.Second
+			if candidate.ChannelID == 1 {
+				ttft = 5 * time.Second
+			}
+			controller.Observe(ObservationKey{ChannelID: candidate.ChannelID, Model: key.Model}, Sample{ObservedAt: now, Success: true, HasTTFT: true, TTFT: ttft, HasTPOT: true, TPOT: 100 * time.Millisecond})
+		}
+	}
+	decision := controller.SelectDiscountAvoiding(key, candidates, nil, limits, now)
+	require.True(t, decision.HasSelection)
+	assert.Equal(t, 1, decision.SelectedChannelID)
+	assert.Empty(t, decision.DegradedCandidates)
+	assert.InDelta(t, 0.985, decision.Allocations[0].Share, 1e-9)
+	assert.InDelta(t, 0.0075, decision.Allocations[1].Share, 1e-9)
+	assert.InDelta(t, 0.0075, decision.Allocations[2].Share, 1e-9)
+	// The existing smart strategy still starts on the highest priority channel.
+	stable := controller.SelectAvoiding(key, candidates, nil, now)
+	assert.Equal(t, 3, stable.SelectedChannelID)
+	avoiding := controller.SelectDiscountAvoiding(key, candidates, map[int]struct{}{1: {}}, limits, now)
+	assert.NotEqual(t, 1, avoiding.SelectedChannelID)
+	assert.Equal(t, decision.Allocations, avoiding.Allocations)
+}
+
+func TestDiscountRoutingMovesToNextCheapestAndRecoversWithProbes(t *testing.T) {
+	for _, metric := range []string{"ttft", "tpot"} {
+		t.Run(metric, func(t *testing.T) {
+			controller, key, candidates, limits, now := discountRoutingFixture(t)
+			for _, candidate := range candidates {
+				for range 3 {
+					ttft, tpot := time.Second, 100*time.Millisecond
+					if candidate.ChannelID == 1 {
+						if metric == "ttft" {
+							ttft = 10 * time.Second
+						} else {
+							tpot = 400 * time.Millisecond
+						}
+					}
+					controller.Observe(ObservationKey{ChannelID: candidate.ChannelID, Model: key.Model}, Sample{ObservedAt: now, Success: true, HasTTFT: true, TTFT: ttft, HasTPOT: true, TPOT: tpot})
+				}
+			}
+			degraded := controller.SelectDiscountAvoiding(key, candidates, nil, limits, now)
+			assert.Contains(t, degraded.DegradedCandidates, 1)
+			assert.Less(t, degraded.Allocations[0].Share, 0.1)
+			assert.Greater(t, degraded.Allocations[0].Share, 0.0, "the cheapest channel keeps recovery samples")
+			assert.Greater(t, degraded.Allocations[1].Share, 0.88)
+			assert.InDelta(t, 0.0075, degraded.Allocations[2].Share, 1e-9)
+			for range 3 {
+				controller.Observe(ObservationKey{ChannelID: 1, Model: key.Model}, Sample{ObservedAt: now.Add(time.Second), Success: true, HasTTFT: true, TTFT: time.Second, HasTPOT: true, TPOT: 50 * time.Millisecond})
+			}
+			recovered := controller.SelectDiscountAvoiding(key, candidates, nil, limits, now.Add(4*time.Second))
+			assert.NotContains(t, recovered.DegradedCandidates, 1)
+			assert.InDelta(t, degraded.Allocations[0].Share+0.02, recovered.Allocations[0].Share, 1e-9)
+			assert.Less(t, recovered.Allocations[0].Share, 0.985, "recovery must be gradual")
+		})
+	}
+}
+
+func TestDiscountRoutingRecoveryIsNotBlockedByADegradedBackup(t *testing.T) {
+	controller, key, candidates, limits, now := discountRoutingFixture(t)
+	for _, candidate := range candidates {
+		for range 3 {
+			ttft := 10 * time.Second
+			if candidate.ChannelID == 2 {
+				ttft = time.Second
+			}
+			controller.Observe(ObservationKey{ChannelID: candidate.ChannelID, Model: key.Model}, Sample{ObservedAt: now, Success: true, HasTTFT: true, TTFT: ttft})
+		}
+	}
+	before := controller.SelectDiscountAvoiding(key, candidates, nil, limits, now)
+	for range 3 {
+		controller.Observe(ObservationKey{ChannelID: 1, Model: key.Model}, Sample{ObservedAt: now.Add(time.Second), Success: true, HasTTFT: true, TTFT: time.Second})
+	}
+	after := controller.SelectDiscountAvoiding(key, candidates, nil, limits, now.Add(4*time.Second))
+	assert.Contains(t, after.DegradedCandidates, 3)
+	assert.GreaterOrEqual(t, after.Allocations[0].Share, before.Allocations[0].Share+0.02)
+	assert.LessOrEqual(t, after.Allocations[2].Share, before.Allocations[2].Share, "recovery must not refill a degraded probe")
+	total := 0.0
+	for _, allocation := range after.Allocations {
+		total += allocation.Share
+	}
+	assert.InDelta(t, 1, total, 1e-9)
+}
+
+func TestDiscountRoutingUnknownZeroChangesAndFailureFallback(t *testing.T) {
+	for _, discount := range []float64{0, 0.2, 1, math.NaN(), math.Inf(1), -1, 1.1} {
+		t.Run(fmt.Sprint(discount), func(t *testing.T) {
+			controller, key, _, limits, now := discountRoutingFixture(t)
+			candidates := []Candidate{{ChannelID: 1, CostDiscount: &discount}, {ChannelID: 2, Priority: 100}}
+			decision := controller.SelectDiscountAvoiding(key, candidates, nil, limits, now)
+			want := 1
+			if math.IsNaN(discount) || math.IsInf(discount, 0) || discount < 0 || discount > 1 {
+				want = 2
+			}
+			assert.Equal(t, want, decision.SelectedChannelID)
+		})
+	}
+	controller, key, candidates, limits, now := discountRoutingFixture(t)
+	controller.Observe(ObservationKey{ChannelID: 1, Model: key.Model}, Sample{ObservedAt: now, HardFailure: true})
+	failed := controller.SelectDiscountAvoiding(key, candidates, nil, limits, now)
+	assert.Equal(t, 2, failed.SelectedChannelID, "hard failure uses the next cheapest even before verification")
+	for _, allocation := range failed.Allocations {
+		assert.NotEqual(t, 1, allocation.ChannelID, "ejected channels have no allocation")
+	}
+	updated := 0.1
+	candidates[2].CostDiscount = &updated
+	changed := controller.SelectDiscountAvoiding(key, candidates, nil, limits, now.Add(time.Second))
+	assert.Equal(t, 3, changed.SelectedChannelID, "cost edits must rebuild the target allocation")
+	for _, allocation := range changed.Allocations {
+		if allocation.ChannelID == 1 {
+			assert.Zero(t, allocation.Share, "cost edits must preserve ejection")
+		}
+	}
+	limits.MaxTTFT = 3 * time.Second
+	retuned := controller.SelectDiscountAvoiding(key, candidates, nil, limits, now.Add(2*time.Second))
+	for _, allocation := range retuned.Allocations {
+		assert.NotEqual(t, 1, allocation.ChannelID, "quality edits preserve failure cooldown")
+	}
+	probing := controller.SelectDiscountAvoiding(key, candidates, nil, limits, now.Add(31*time.Second))
+	probeFound := false
+	for _, allocation := range probing.Allocations {
+		if allocation.ChannelID == 1 {
+			probeFound = true
+			assert.True(t, allocation.Probe)
+			assert.InDelta(t, 0.015, allocation.Share, 1e-9)
+		}
+	}
+	assert.True(t, probeFound, "a cooled-down failed channel must retain a recovery probe")
+	assert.False(t, controller.SelectDiscountAvoiding(key, candidates, nil, DiscountLimits{}, now).HasSelection)
+}
 
 func TestConfigRejectsImpossibleCountsAndNonFiniteFloats(t *testing.T) {
 	base := Config{

@@ -32,15 +32,23 @@ type Config struct {
 }
 
 type RouteKey struct {
-	Group  string
-	Model  string
-	Policy string
+	Group         string
+	Model         string
+	Policy        string
+	discountFirst bool
+}
+
+// DiscountLimits defines the service quality required before cost takes precedence.
+type DiscountLimits struct {
+	MaxTTFT time.Duration
+	MaxTPOT time.Duration
 }
 
 type Candidate struct {
-	ChannelID int
-	Priority  int64
-	Weight    uint
+	ChannelID    int
+	Priority     int64
+	Weight       uint
+	CostDiscount *float64
 }
 
 type Allocation struct {
@@ -97,18 +105,20 @@ type selectionState struct {
 }
 
 type routeState struct {
-	shares      map[int]float64
-	probes      map[int]bool
-	candidates  map[int]candidateFingerprint
-	degraded    map[int]bool
-	ejections   map[int]hardEjection
-	lastChanged time.Time
-	lastAccess  time.Time
+	shares         map[int]float64
+	probes         map[int]bool
+	candidates     map[int]candidateFingerprint
+	degraded       map[int]bool
+	ejections      map[int]hardEjection
+	lastChanged    time.Time
+	lastAccess     time.Time
+	discountLimits DiscountLimits
 }
 
 type candidateFingerprint struct {
 	priority int64
 	weight   uint
+	discount float64
 }
 
 type hardEjection struct {
@@ -301,7 +311,7 @@ func (c *Controller) UpdateConfig(config Config) error {
 }
 
 func (c *Controller) Select(key RouteKey, candidates []Candidate, now time.Time) Decision {
-	return c.selectAvoiding(key, candidates, nil, now)
+	return c.selectAvoiding(key, candidates, nil, now, DiscountLimits{})
 }
 
 // SelectAvoiding makes a routing decision without selecting any channel in
@@ -313,7 +323,17 @@ func (c *Controller) SelectAvoiding(
 	excludedChannelIDs map[int]struct{},
 	now time.Time,
 ) Decision {
-	return c.selectAvoiding(key, candidates, excludedChannelIDs, now)
+	return c.selectAvoiding(key, candidates, excludedChannelIDs, now, DiscountLimits{})
+}
+
+// SelectDiscountAvoiding shares health, exploration and fair selection with smart
+// routing, but only moves traffic away from cheap channels when quality fails.
+func (c *Controller) SelectDiscountAvoiding(key RouteKey, candidates []Candidate, excludedChannelIDs map[int]struct{}, limits DiscountLimits, now time.Time) Decision {
+	if limits.MaxTTFT <= 0 || limits.MaxTPOT <= 0 {
+		return Decision{}
+	}
+	key.discountFirst = true
+	return c.selectAvoiding(key, candidates, excludedChannelIDs, now, limits)
 }
 
 func (c *Controller) selectAvoiding(
@@ -321,6 +341,7 @@ func (c *Controller) selectAvoiding(
 	candidates []Candidate,
 	excludedChannelIDs map[int]struct{},
 	now time.Time,
+	limits DiscountLimits,
 ) Decision {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -339,17 +360,19 @@ func (c *Controller) selectAvoiding(
 
 	ordered := deduplicateCandidates(candidates)
 	sort.Slice(ordered, func(i, j int) bool {
+		if key.discountFirst && candidateDiscount(ordered[i]) != candidateDiscount(ordered[j]) {
+			return candidateDiscount(ordered[i]) < candidateDiscount(ordered[j])
+		}
 		if ordered[i].Priority != ordered[j].Priority {
 			return ordered[i].Priority > ordered[j].Priority
 		}
 		return ordered[i].ChannelID < ordered[j].ChannelID
 	})
 
-	highestPriority := ordered[0].Priority
 	mainCandidates := make([]Candidate, 0, len(ordered))
 	probeCandidates := make([]Candidate, 0, len(ordered))
 	for _, candidate := range ordered {
-		if candidate.Priority == highestPriority {
+		if sameCandidateTier(candidate, ordered[0], key.discountFirst) {
 			mainCandidates = append(mainCandidates, candidate)
 		} else {
 			probeCandidates = append(probeCandidates, candidate)
@@ -385,7 +408,7 @@ func (c *Controller) selectAvoiding(
 			}
 		}
 	}
-	if !exists || !candidateFingerprintMatches(state, ordered) {
+	if !exists || !candidateFingerprintMatches(state, ordered) || state.discountLimits != limits {
 		ejections := make(map[int]hardEjection, len(ordered))
 		if exists {
 			for channelID, ejection := range state.ejections {
@@ -393,12 +416,13 @@ func (c *Controller) selectAvoiding(
 			}
 		}
 		state = &routeState{
-			shares:     make(map[int]float64, len(initial)),
-			probes:     make(map[int]bool, len(initial)),
-			candidates: make(map[int]candidateFingerprint, len(ordered)),
-			degraded:   make(map[int]bool, len(ordered)),
-			ejections:  ejections,
-			lastAccess: now,
+			shares:         make(map[int]float64, len(initial)),
+			probes:         make(map[int]bool, len(initial)),
+			candidates:     make(map[int]candidateFingerprint, len(ordered)),
+			degraded:       make(map[int]bool, len(ordered)),
+			ejections:      ejections,
+			lastAccess:     now,
+			discountLimits: limits,
 		}
 		for _, allocation := range initial {
 			state.shares[allocation.ChannelID] = allocation.Share
@@ -408,6 +432,7 @@ func (c *Controller) selectAvoiding(
 			state.candidates[candidate.ChannelID] = candidateFingerprint{
 				priority: candidate.Priority,
 				weight:   candidate.Weight,
+				discount: candidateDiscount(candidate),
 			}
 		}
 		c.routes[key] = state
@@ -492,20 +517,35 @@ func (c *Controller) selectAvoiding(
 		}
 
 		effectiveRatio := measurement.ratio
-		for _, possible := range ordered {
-			if possible.ChannelID == candidate.ChannelID {
-				continue
+		if key.discountFirst {
+			// A more expensive channel being faster is not a quality violation.
+			effectiveRatio = 0
+			if measurement.hasTTFT {
+				effectiveRatio = float64(measurement.ttft) / float64(limits.MaxTTFT)
 			}
-			possibleMeasurement := measurements[possible.ChannelID]
-			if !possibleMeasurement.verified || possibleMeasurement.hardFail {
-				continue
+			if measurement.hasTPOT {
+				effectiveRatio = max(effectiveRatio, float64(measurement.tpot)/float64(limits.MaxTPOT))
 			}
-			if gap, better := performanceGap(measurement, possibleMeasurement, c.config.CandidateAdvantage); better && gap > effectiveRatio {
-				effectiveRatio = gap
+			effectiveRatio *= c.config.DegradationThreshold
+		} else {
+			for _, possible := range ordered {
+				if possible.ChannelID == candidate.ChannelID {
+					continue
+				}
+				possibleMeasurement := measurements[possible.ChannelID]
+				if !possibleMeasurement.verified || possibleMeasurement.hardFail {
+					continue
+				}
+				if gap, better := performanceGap(measurement, possibleMeasurement, c.config.CandidateAdvantage); better && gap > effectiveRatio {
+					effectiveRatio = gap
+				}
 			}
 		}
 		effectiveRatios[candidate.ChannelID] = effectiveRatio
 		isDegraded := effectiveRatio >= c.config.DegradationThreshold
+		if key.discountFirst {
+			isDegraded = effectiveRatio > c.config.DegradationThreshold
+		}
 		if state.degraded[candidate.ChannelID] && (!measurement.verified || effectiveRatio > c.config.RecoveryThreshold) {
 			isDegraded = true
 		}
@@ -534,6 +574,17 @@ func (c *Controller) selectAvoiding(
 			probeFloors[channelID] = floor
 		}
 	}
+	if key.discountFirst {
+		// Even the original cheapest primary needs samples after shedding traffic.
+		all := make(map[int]bool, len(ordered))
+		for _, candidate := range ordered {
+			all[candidate.ChannelID] = true
+		}
+		probeFloors = probeFloorsForCandidates(ordered, all, c.config.ProbeFraction)
+		for id, floor := range ejectionProbeFloors {
+			probeFloors[id] = max(probeFloors[id], floor)
+		}
+	}
 	for _, candidate := range ordered {
 		measurement := measurements[candidate.ChannelID]
 		if !degraded[candidate.ChannelID] {
@@ -549,23 +600,19 @@ func (c *Controller) selectAvoiding(
 			if !possibleMeasurement.verified || possibleMeasurement.hardFail || degraded[possible.ChannelID] || probeEjected[possible.ChannelID] {
 				continue
 			}
-			if measurement.hardFail || candidateOutperforms(measurement, possibleMeasurement, c.config.CandidateAdvantage) {
+			if key.discountFirst && len(receivers) > 0 && !sameCandidateTier(possible, receivers[0], true) {
+				continue
+			}
+			if key.discountFirst || measurement.hardFail || candidateOutperforms(measurement, possibleMeasurement, c.config.CandidateAdvantage) {
 				receivers = append(receivers, possible)
 			}
 		}
 		if measurement.hardFail && len(receivers) == 0 {
-			fallbackPriority := int64(0)
-			hasFallbackPriority := false
 			for _, possible := range ordered {
 				if possible.ChannelID == candidate.ChannelID || measurements[possible.ChannelID].hardFail || probeEjected[possible.ChannelID] {
 					continue
 				}
-				if !hasFallbackPriority || possible.Priority > fallbackPriority {
-					fallbackPriority = possible.Priority
-					receivers = receivers[:0]
-					hasFallbackPriority = true
-				}
-				if possible.Priority == fallbackPriority {
+				if len(receivers) == 0 || sameCandidateTier(possible, receivers[0], key.discountFirst) {
 					receivers = append(receivers, possible)
 				}
 			}
@@ -585,7 +632,7 @@ func (c *Controller) selectAvoiding(
 			unload = 1 - (1-unload)*(1-unload*severity)
 		}
 		movableShare := state.shares[candidate.ChannelID]
-		if !measurement.hardFail && state.probes[candidate.ChannelID] {
+		if !measurement.hardFail && (key.discountFirst || state.probes[candidate.ChannelID]) {
 			movableShare -= probeFloors[candidate.ChannelID]
 		}
 		if movableShare < 0 {
@@ -596,15 +643,22 @@ func (c *Controller) selectAvoiding(
 			continue
 		}
 		state.shares[candidate.ChannelID] -= moved
+		if key.discountFirst && !measurement.hardFail && state.shares[candidate.ChannelID] <= probeFloors[candidate.ChannelID]+1e-9 {
+			state.probes[candidate.ChannelID] = true
+		}
 		for _, allocation := range allocateByWeight(receivers, moved, false) {
 			state.shares[allocation.ChannelID] += allocation.Share
 			state.probes[allocation.ChannelID] = false
 		}
 		changed = true
 	}
+	if key.discountFirst {
+		target := discountRecoveryTarget(ordered, state, degraded, measurements, probeEjected, c.config.ProbeFraction)
+		changed = recoverRouteShares(state, target, c.config.RecoveryStep) || changed
+	}
 	if changed {
 		state.lastChanged = now
-	} else if len(degraded) == 0 && recoverRouteShares(state, initial, c.config.RecoveryStep) {
+	} else if !key.discountFirst && len(degraded) == 0 && recoverRouteShares(state, initial, c.config.RecoveryStep) {
 		state.lastChanged = now
 	}
 	decision.Allocations = allocationsFromState(ordered, state)
@@ -985,13 +1039,59 @@ func allocationsFromState(candidates []Candidate, state *routeState) []Allocatio
 	return allocations
 }
 
+// Unknown cost ranks behind every configured discount, including explicit zero.
+func candidateDiscount(candidate Candidate) float64 {
+	if candidate.CostDiscount == nil || !finiteFloat(*candidate.CostDiscount) || *candidate.CostDiscount < 0 || *candidate.CostDiscount > 1 {
+		return 2
+	}
+	return *candidate.CostDiscount
+}
+
+func sameCandidateTier(left, right Candidate, discountFirst bool) bool {
+	return left.Priority == right.Priority && (!discountFirst || candidateDiscount(left) == candidateDiscount(right))
+}
+
+// Recovery targets the cheapest usable tier. Degraded probes do not block it.
+func discountRecoveryTarget(ordered []Candidate, state *routeState, degraded map[int]bool, measurements map[int]channelMeasurement, ejected map[int]bool, probeShare float64) []Allocation {
+	main := make([]Candidate, 0, len(ordered))
+	probes := make([]Candidate, 0, len(ordered))
+	for _, candidate := range ordered {
+		if measurements[candidate.ChannelID].hardFail {
+			continue
+		}
+		if !degraded[candidate.ChannelID] && !ejected[candidate.ChannelID] && (len(main) == 0 || sameCandidateTier(candidate, main[0], true)) {
+			main = append(main, candidate)
+		} else {
+			probes = append(probes, candidate)
+		}
+	}
+	if len(main) == 0 {
+		return nil
+	}
+	allocations := allocateByWeight(probes, probeShare, true)
+	reserved := 0.0
+	for i := range allocations {
+		id := allocations[i].ChannelID
+		if degraded[id] || ejected[id] {
+			// Preserve health probe floors instead of repeatedly restoring and
+			// shedding their traffic while a cheap primary is recovering.
+			allocations[i].Share = state.shares[id]
+		}
+		reserved += allocations[i].Share
+	}
+	if reserved >= 1 {
+		return nil
+	}
+	return append(allocateByWeight(main, 1-reserved, false), allocations...)
+}
+
 func candidateFingerprintMatches(state *routeState, candidates []Candidate) bool {
 	if len(state.candidates) != len(candidates) {
 		return false
 	}
 	for _, candidate := range candidates {
 		fingerprint, exists := state.candidates[candidate.ChannelID]
-		if !exists || fingerprint.priority != candidate.Priority || fingerprint.weight != candidate.Weight {
+		if !exists || fingerprint.priority != candidate.Priority || fingerprint.weight != candidate.Weight || fingerprint.discount != candidateDiscount(candidate) {
 			return false
 		}
 	}

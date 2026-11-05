@@ -45,6 +45,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getUserRoutingPool,
+  ROUTING_MODE_LABELS,
   userRoutingPoolKeys,
   type UserRoutingPoolConfig,
 } from './api'
@@ -241,10 +242,7 @@ function UserPoolEditor(props: {
           <span className='text-muted-foreground'>
             {props.group
               ? t('Strategy: {{strategy}} (inherited)', {
-                  strategy:
-                    config.mode === 'smart'
-                      ? t('Smart routing')
-                      : t('Priority routing'),
+                  strategy: t(ROUTING_MODE_LABELS[config.mode]),
                 })
               : t('Strategy follows each public group')}
           </span>

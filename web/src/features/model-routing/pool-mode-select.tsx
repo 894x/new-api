@@ -26,7 +26,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
-import type { RoutingMode } from './api'
+import { ROUTING_MODE_LABELS, type RoutingMode } from './api'
 
 export function PoolModeSelect(props: {
   value: RoutingMode
@@ -38,7 +38,9 @@ export function PoolModeSelect(props: {
     <Select
       value={props.value}
       onValueChange={(value) => {
-        if (value === 'priority' || value === 'smart') props.onChange(value)
+        if (value === 'priority' || value === 'smart' || value === 'discount') {
+          props.onChange(value)
+        }
       }}
       disabled={props.disabled}
     >
@@ -46,13 +48,12 @@ export function PoolModeSelect(props: {
         aria-label={t('Scheduling strategy')}
         className='w-full sm:w-44'
       >
-        <SelectValue>
-          {props.value === 'smart' ? t('Smart routing') : t('Priority routing')}
-        </SelectValue>
+        <SelectValue>{t(ROUTING_MODE_LABELS[props.value])}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         <SelectItem value='priority'>{t('Priority routing')}</SelectItem>
         <SelectItem value='smart'>{t('Smart routing')}</SelectItem>
+        <SelectItem value='discount'>{t('Discount-first routing')}</SelectItem>
       </SelectContent>
     </Select>
   )

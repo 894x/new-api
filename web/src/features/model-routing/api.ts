@@ -20,7 +20,18 @@ import type { UserChannelRoutingConfig } from '@/features/users/types'
 import { api } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
-export type RoutingMode = 'priority' | 'smart'
+export type RoutingMode = 'priority' | 'smart' | 'discount'
+
+export const ROUTING_MODE_LABELS = {
+  priority: 'Priority routing',
+  smart: 'Smart routing',
+  discount: 'Discount-first routing',
+} as const
+
+export const DEFAULT_DISCOUNT_LIMITS = {
+  max_ttft_ms: 15000,
+  max_tpot_ms: 200,
+} as const
 
 export interface UserRoutingPoolConfig extends UserChannelRoutingConfig {
   user_id: number
@@ -78,6 +89,8 @@ export interface RoutingPool {
   mode: RoutingMode
   revision: string
   channels: PoolChannel[]
+  max_ttft_ms?: number
+  max_tpot_ms?: number
 }
 
 export interface RoutingPoolView extends RoutingPool {

@@ -276,6 +276,32 @@ test('fullscreen contains the filters, routing content and pagination and restor
   expect(fullscreen).toHaveFocus()
 })
 
+test('discount-first filtering requests only pools using the selected strategy', async () => {
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'root', role: ROLE.SUPER_ADMIN })
+  const get = vi.spyOn(api, 'get').mockImplementation(async (url) => ({
+    data: {
+      success: true,
+      data: url.endsWith('/catalog')
+        ? { groups: {}, models: [] }
+        : { items: [], total: 0, page: 1, page_size: 12 },
+    },
+  }))
+  mountWorkspace()
+  await userEvent.click(
+    await screen.findByRole('combobox', { name: 'Filter scheduling strategy' })
+  )
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'Discount-first routing' })
+  )
+  await waitFor(() =>
+    expect(get).toHaveBeenCalledWith('/api/channel/routing-pools', {
+      params: expect.objectContaining({ mode: 'discount' }),
+    })
+  )
+})
+
 test('an administrator without channel read permission cannot fetch or configure routing pools', async () => {
   useAuthStore
     .getState()

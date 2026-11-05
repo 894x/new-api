@@ -17,6 +17,7 @@ import (
 
 type cachedChannelRouting struct {
 	ChannelId int
+	Model     string
 	Priority  int64
 	RPM       int64
 	TPM       int64
@@ -80,6 +81,7 @@ func InitChannelCache() {
 			newGroup2model2channels[ability.Group][ability.Model],
 			cachedChannelRouting{
 				ChannelId: ability.ChannelId,
+				Model:     ability.Model,
 				Priority:  effectiveAbilityPriority(ability),
 				Weight:    ability.Weight,
 				RPM:       ability.RPM, TPM: ability.TPM,

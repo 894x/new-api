@@ -93,6 +93,7 @@ export function ModelRoutingWorkspace(props: {
     '': t('All strategies'),
     priority: t('Priority routing'),
     smart: t('Smart routing'),
+    discount: t('Discount-first routing'),
   }
   const catalog = useQuery({
     queryKey: routingPoolKeys.catalog(''),
@@ -179,7 +180,12 @@ export function ModelRoutingWorkspace(props: {
               value={filters.mode || 'all'}
               onValueChange={(value) =>
                 updateFilters({
-                  mode: value === 'priority' || value === 'smart' ? value : '',
+                  mode:
+                    value === 'priority' ||
+                    value === 'smart' ||
+                    value === 'discount'
+                      ? value
+                      : '',
                 })
               }
               disabled={dirty}
@@ -196,6 +202,9 @@ export function ModelRoutingWorkspace(props: {
                   {t('Priority routing')}
                 </SelectItem>
                 <SelectItem value='smart'>{t('Smart routing')}</SelectItem>
+                <SelectItem value='discount'>
+                  {t('Discount-first routing')}
+                </SelectItem>
               </SelectContent>
             </Select>
             <Button

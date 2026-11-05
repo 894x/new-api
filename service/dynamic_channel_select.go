@@ -78,7 +78,7 @@ func getSatisfiedChannelForRoute(param *RetryParam, group string, retry int) (*m
 	if err != nil {
 		return nil, false, err
 	}
-	smart := pool != nil && pool.Mode == model.RoutingModeSmart
+	smart := pool.UsesDynamicRouting()
 	param.Ctx.Set(modelRoutingSmartContextKey, smart)
 	if param.DynamicRoutingEligible && (smart || pool == nil && len(userRouting) == 0) {
 		channel, handled, allAttempted, err := selectDynamicSatisfiedChannel(param, group)
@@ -106,7 +106,7 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 	if err != nil {
 		return nil, true, false, err
 	}
-	controller, enabled, err := currentDynamicRoutingController(pool != nil && pool.Mode == model.RoutingModeSmart)
+	controller, enabled, err := currentDynamicRoutingController(pool.UsesDynamicRouting())
 	if err != nil || !enabled {
 		return nil, false, false, err
 	}
@@ -151,6 +151,13 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 			excluded[id] = struct{}{}
 		}
 	}
+	var discounts map[int]*float64
+	if pool != nil && pool.Mode == model.RoutingModeDiscount {
+		discounts, err = model.ResolveChannelSelectionDiscounts(eligible)
+		if err != nil {
+			return nil, true, false, err
+		}
+	}
 	candidates := make([]dynamicrouting.Candidate, 0, len(eligible))
 	for _, candidate := range eligible {
 		priority := int64(0)
@@ -158,9 +165,10 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 			priority = *candidate.Priority
 		}
 		candidates = append(candidates, dynamicrouting.Candidate{
-			ChannelID: candidate.ChannelId,
-			Priority:  priority,
-			Weight:    candidate.Weight,
+			ChannelID:    candidate.ChannelId,
+			Priority:     priority,
+			Weight:       candidate.Weight,
+			CostDiscount: discounts[candidate.ChannelId],
 		})
 	}
 	key := dynamicrouting.RouteKey{
@@ -170,7 +178,13 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 	if len(filters.UserRoutingOverrides) > 0 {
 		key.Policy = fmt.Sprintf("user:%d", common.GetContextKeyInt(param.Ctx, constant.ContextKeyUserId))
 	}
-	decision := controller.SelectAvoiding(key, candidates, excluded, time.Now())
+	var decision dynamicrouting.Decision
+	if pool != nil && pool.Mode == model.RoutingModeDiscount {
+		limits := dynamicrouting.DiscountLimits{MaxTTFT: time.Duration(pool.MaxTTFTMS) * time.Millisecond, MaxTPOT: time.Duration(pool.MaxTPOTMS) * time.Millisecond}
+		decision = controller.SelectDiscountAvoiding(key, candidates, excluded, limits, time.Now())
+	} else {
+		decision = controller.SelectAvoiding(key, candidates, excluded, time.Now())
+	}
 	if !decision.HasSelection {
 		return nil, true, allAttempted, nil
 	}

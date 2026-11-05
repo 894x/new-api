@@ -73,6 +73,63 @@ then grants only a small reprobe share. Recovery requires a fresh successful
 metric streak after the hard-failure cooldown; old in-flight completions cannot
 clear the ejection.
 
+## Discount-first pools
+
+The explicit `discount` pool strategy is separate from `priority` and `smart`;
+existing pools keep their strategy. It applies to eligible streaming text
+requests and uses the same retry, capacity, hard-failure cooldown, observation,
+and weighted-fair selection mechanisms. Non-streaming and media requests keep
+the pool's priority routing.
+
+For comparable model price bases, configured lower cost multipliers rank first.
+Model-specific discounts override channel defaults; a configured zero is valid,
+while missing or invalid discounts rank after every configured value. Within
+one discount tier, priority and weight decide the primary allocation. Other
+channels share the existing exploration budget.
+
+Each pool sets `max_ttft_ms` (default 15000, range 1–3600000) and `max_tpot_ms`
+(default 200, range 1–60000). A more expensive channel being faster alone does
+not move traffic away from a primary meeting these limits. Observed quality
+violations move traffic to the cheapest verified non-degraded tier. Hard
+failures can fail over before verification. The former cheap primary keeps a
+small recovery share unless ejected by a hard failure.
+
+These are quality limits evaluated from completed observations, not per-request
+timeouts; the existing upstream timeout settings remain in effect.
+
+Recovery uses the existing hysteresis and cooldown, gradually targeting the
+cheapest usable tier again. Discount/limit edits rebuild allocation targets
+without dropping current hard-failure ejections. Discount and smart strategies
+have separate allocation state but share channel/model observations.
+
+The two additive integer columns preserve existing rows and revisions. Routing
+uses the discount metadata only; customer charging and upstream cost accounting
+are unchanged. No request-time query is issued per individual candidate:
+discount metadata is fetched in two bulk reads using the matched ability model,
+including normalized model fallback and current model-specific overrides.
+
+### Discount strategy verification (2026-11-06)
+
+- Real database matrix: SQLite 3.50.4, MySQL 8.0.46, and PostgreSQL 16.15.
+  Fresh tables and upgrades from the pre-discount pool schema passed, with
+  repeated migrations, preserved rows/revisions/composite uniqueness, default
+  limits, stale revision rejection, API persistence/filtering, cached and
+  uncached selection, model-specific zero discounts, model modifiers, retry
+  exclusion, and static routing for ineligible requests. Existing pool and
+  separate-log-database metrics regressions also passed.
+- `go test ./controller -p 1 -run 'Test(DiscountRoutingPoolDatabaseMatrix|ModelRoutingPoolDatabaseMatrix|RoutingPoolChannelMetricsDatabaseMatrix)$' -count=1 -v`
+  passed with `TEST_MYSQL_DSN` and `TEST_POSTGRES_DSN` pointing to isolated
+  loopback test instances; PostgreSQL used `client_encoding=UTF8`.
+- `go test ./pkg/dynamicrouting ./service ./model ./controller -p 2 -count=1`
+  passed. The deterministic controller tests cover cost ordering, invalid and
+  unknown discounts, explicit zero, quality limits, cheapest viable fallback,
+  gradual recovery despite degraded backups, probe retention, policy isolation,
+  and preserved hard-failure cooldown during cost or limit edits.
+- `bun run test -- src/features/model-routing/__tests__` passed: 45 tests.
+  `bun run typecheck`, targeted `oxlint`, protected-header-safe formatting,
+  seven-locale synchronization, and `bun run build` passed. Existing locale
+  values were preserved; each language gained five translated keys.
+
 ## Attempt metrics
 
 - Successful streaming attempts measure TTFT from attempt start to the first

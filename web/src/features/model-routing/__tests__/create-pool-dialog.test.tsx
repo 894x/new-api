@@ -58,63 +58,71 @@ async function chooseIdentity() {
   await userEvent.click(await screen.findByRole('option', { name: 'kimi-k3' }))
 }
 
-test('administrators create a model and group pool from available channel defaults with their chosen strategy', async () => {
-  vi.spyOn(api, 'get').mockImplementation(async (url) => ({
-    data: {
-      success: true,
-      data: url.endsWith('/catalog')
-        ? { groups: { standard: 'Standard' }, models: ['kimi-k3'] }
-        : {
-            pool: null,
-            candidates: [
-              {
-                channel_id: 1,
-                channel_name: 'Alpha',
-                priority: 0,
-                weight: 0,
-                available: true,
-              },
-              {
-                channel_id: 2,
-                channel_name: 'Closed',
-                priority: 100,
-                weight: 10,
-                available: false,
-              },
-            ],
-          },
-    },
-  }))
-  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, data) => ({
-    data: {
-      success: true,
-      data: { ...(data as object), revision: 'created' },
-    },
-  }))
-  const close = mountDialog()
-  expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled()
-  await chooseIdentity()
-  await userEvent.click(
-    screen.getByRole('combobox', { name: 'Scheduling strategy' })
-  )
-  await userEvent.click(
-    await screen.findByRole('option', { name: 'Smart routing' })
-  )
-  await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled()
-  )
-  await userEvent.click(screen.getByRole('button', { name: 'Create' }))
-  await waitFor(() =>
-    expect(put).toHaveBeenCalledWith('/api/channel/routing-pool', {
-      routing_group: 'standard',
-      model: 'kimi-k3',
-      mode: 'smart',
-      revision: '',
-      channels: [{ channel_id: 1, priority: 0, weight: 0, enabled: true }],
-    })
-  )
-  await waitFor(() => expect(close).toHaveBeenCalledWith(false))
-})
+test.each(['smart', 'discount'] as const)(
+  'administrators create a pool with the %s strategy and its required settings',
+  async (mode) => {
+    vi.spyOn(api, 'get').mockImplementation(async (url) => ({
+      data: {
+        success: true,
+        data: url.endsWith('/catalog')
+          ? { groups: { standard: 'Standard' }, models: ['kimi-k3'] }
+          : {
+              pool: null,
+              candidates: [
+                {
+                  channel_id: 1,
+                  channel_name: 'Alpha',
+                  priority: 0,
+                  weight: 0,
+                  available: true,
+                },
+                {
+                  channel_id: 2,
+                  channel_name: 'Closed',
+                  priority: 100,
+                  weight: 10,
+                  available: false,
+                },
+              ],
+            },
+      },
+    }))
+    const put = vi.spyOn(api, 'put').mockImplementation(async (_url, data) => ({
+      data: {
+        success: true,
+        data: { ...(data as object), revision: 'created' },
+      },
+    }))
+    const close = mountDialog()
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled()
+    await chooseIdentity()
+    await userEvent.click(
+      screen.getByRole('combobox', { name: 'Scheduling strategy' })
+    )
+    await userEvent.click(
+      await screen.findByRole('option', {
+        name: mode === 'discount' ? 'Discount-first routing' : 'Smart routing',
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled()
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith('/api/channel/routing-pool', {
+        routing_group: 'standard',
+        model: 'kimi-k3',
+        mode,
+        ...(mode === 'discount'
+          ? { max_ttft_ms: 15000, max_tpot_ms: 200 }
+          : {}),
+        revision: '',
+        channels: [{ channel_id: 1, priority: 0, weight: 0, enabled: true }],
+      })
+    )
+    await waitFor(() => expect(close).toHaveBeenCalledWith(false))
+  }
+)
 
 test('choosing an existing pool keeps creation disabled and points administrators to its existing configuration', async () => {
   vi.spyOn(api, 'get').mockImplementation(async (url) => ({

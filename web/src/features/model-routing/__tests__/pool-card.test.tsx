@@ -81,6 +81,71 @@ function mountCard(pool = fixture(), canWrite = true) {
   return { client, onDirtyChange }
 }
 
+test('discount-first strategy saves model latency limits and preserves the existing pool members', async () => {
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+    data: { success: true, data: { ...(body as object), revision: 'saved' } },
+  }))
+  mountCard()
+  await userEvent.click(screen.getByRole('button', { name: 'Edit strategy' }))
+  await userEvent.click(
+    screen.getByRole('combobox', { name: 'Scheduling strategy' })
+  )
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'Discount-first routing' })
+  )
+  expect(
+    screen.getByRole('spinbutton', { name: 'Maximum first-token latency (ms)' })
+  ).toHaveValue(15000)
+  fireEvent.change(
+    screen.getByRole('spinbutton', {
+      name: 'Maximum first-token latency (ms)',
+    }),
+    { target: { value: '5000' } }
+  )
+  fireEvent.change(
+    screen.getByRole('spinbutton', {
+      name: 'Maximum time per output token (ms)',
+    }),
+    { target: { value: '100' } }
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Done' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        mode: 'discount',
+        max_ttft_ms: 5000,
+        max_tpot_ms: 100,
+        channels: fixture().channels,
+      })
+    )
+  )
+})
+
+test('invalid discount latency limits prevent persistence and explain the validation error', async () => {
+  const put = vi.spyOn(api, 'put')
+  const pool = fixture()
+  pool.mode = 'discount'
+  mountCard(pool)
+  await userEvent.click(screen.getByRole('button', { name: 'Edit strategy' }))
+  fireEvent.change(
+    screen.getByRole('spinbutton', {
+      name: 'Maximum time per output token (ms)',
+    }),
+    { target: { value: '-1' } }
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Done' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(put).not.toHaveBeenCalled()
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Enter valid positive latency limits in milliseconds.'
+  )
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  )
+})
+
 test('keyboard reordering persists channel order and priorities while preserving zero weights', async () => {
   const pool = fixture()
   const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({

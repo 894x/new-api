@@ -31,17 +31,21 @@ import { handleServerError } from '@/lib/handle-server-error'
 
 import {
   getRoutingCatalog,
+  DEFAULT_DISCOUNT_LIMITS,
   getRoutingPool,
   routingPoolKeys,
   saveRoutingPool,
   type RoutingPool,
 } from './api'
+import { DiscountRoutingFields } from './discount-routing-fields'
 import { PoolModeSelect } from './pool-mode-select'
 
 const identitySchema = z.object({
   group: z.string().min(1).max(64),
   model: z.string().min(1).max(255),
-  mode: z.enum(['priority', 'smart']),
+  mode: z.enum(['priority', 'smart', 'discount']),
+  max_ttft_ms: z.number().int().min(1).max(3600000),
+  max_tpot_ms: z.number().int().min(1).max(60000),
 })
 type IdentityValues = z.infer<typeof identitySchema>
 
@@ -56,7 +60,12 @@ export function CreatePoolDialog(props: {
   const queryClient = useQueryClient()
   const form = useForm<IdentityValues>({
     resolver: zodResolver(identitySchema),
-    defaultValues: { group: '', model: '', mode: 'priority' },
+    defaultValues: {
+      group: '',
+      model: '',
+      mode: 'priority',
+      ...DEFAULT_DISCOUNT_LIMITS,
+    },
   })
   const values = form.watch()
   const catalog = useQuery({
@@ -85,6 +94,12 @@ export function CreatePoolDialog(props: {
         routing_group: data.group,
         model: data.model,
         mode: data.mode,
+        ...(data.mode === 'discount'
+          ? {
+              max_ttft_ms: data.max_ttft_ms,
+              max_tpot_ms: data.max_tpot_ms,
+            }
+          : {}),
         revision: '',
         channels: detail.data.candidates
           .filter((entry) => entry.available)
@@ -177,10 +192,39 @@ export function CreatePoolDialog(props: {
           <Label>{t('Scheduling strategy')}</Label>
           <PoolModeSelect
             value={values.mode}
-            onChange={(mode) => form.setValue('mode', mode)}
+            onChange={(mode) => {
+              form.setValue('mode', mode)
+              if (mode !== 'discount') {
+                form.setValue(
+                  'max_ttft_ms',
+                  DEFAULT_DISCOUNT_LIMITS.max_ttft_ms
+                )
+                form.setValue(
+                  'max_tpot_ms',
+                  DEFAULT_DISCOUNT_LIMITS.max_tpot_ms
+                )
+                form.clearErrors(['max_ttft_ms', 'max_tpot_ms'])
+              }
+            }}
             disabled={create.isPending}
           />
         </div>
+        {values.mode === 'discount' && (
+          <DiscountRoutingFields
+            maxTTFT={values.max_ttft_ms}
+            maxTPOT={values.max_tpot_ms}
+            disabled={create.isPending}
+            onChange={(field, value) => form.setValue(field, value)}
+            invalidTTFT={!!form.formState.errors.max_ttft_ms}
+            invalidTPOT={!!form.formState.errors.max_tpot_ms}
+          />
+        )}
+        {(form.formState.errors.max_ttft_ms ||
+          form.formState.errors.max_tpot_ms) && (
+          <p role='alert' className='text-destructive text-sm'>
+            {t('Enter valid positive latency limits in milliseconds.')}
+          </p>
+        )}
         {detail.data?.pool && (
           <p role='status' className='text-muted-foreground text-sm'>
             {t('This routing pool is already configured.')}

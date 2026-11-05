@@ -40,16 +40,21 @@ import { handleServerError } from '@/lib/handle-server-error'
 
 import {
   deleteRoutingPool,
+  DEFAULT_DISCOUNT_LIMITS,
+  ROUTING_MODE_LABELS,
   getRoutingPool,
   routingPoolKeys,
   saveRoutingPool,
   type RoutingPoolView,
 } from './api'
+import { DiscountRoutingFields } from './discount-routing-fields'
 import { PoolChannelList } from './pool-channel-list'
 import { PoolModeSelect } from './pool-mode-select'
 
 const poolFormSchema = z.object({
-  mode: z.enum(['priority', 'smart']),
+  mode: z.enum(['priority', 'smart', 'discount']),
+  max_ttft_ms: z.number().int().min(1).max(3600000),
+  max_tpot_ms: z.number().int().min(1).max(60000),
   channels: z
     .array(
       z.object({
@@ -77,7 +82,14 @@ export function PoolCard(props: {
   const [restoring, setRestoring] = useState(false)
   const form = useForm<PoolFormValues>({
     resolver: zodResolver(poolFormSchema),
-    defaultValues: { mode: props.pool.mode, channels: props.pool.channels },
+    defaultValues: {
+      mode: props.pool.mode,
+      channels: props.pool.channels,
+      max_ttft_ms:
+        props.pool.max_ttft_ms || DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
+      max_tpot_ms:
+        props.pool.max_tpot_ms || DEFAULT_DISCOUNT_LIMITS.max_tpot_ms,
+    },
   })
   const values = form.watch()
   const dirty = form.formState.isDirty
@@ -88,9 +100,24 @@ export function PoolCard(props: {
   useEffect(() => () => notifyDirty(false), [])
   useEffect(() => {
     if (!dirty) {
-      form.reset({ mode: props.pool.mode, channels: props.pool.channels })
+      form.reset({
+        mode: props.pool.mode,
+        channels: props.pool.channels,
+        max_ttft_ms:
+          props.pool.max_ttft_ms || DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
+        max_tpot_ms:
+          props.pool.max_tpot_ms || DEFAULT_DISCOUNT_LIMITS.max_tpot_ms,
+      })
     }
-  }, [props.pool.revision, dirty, form, props.pool.mode, props.pool.channels])
+  }, [
+    props.pool.revision,
+    dirty,
+    form,
+    props.pool.mode,
+    props.pool.channels,
+    props.pool.max_ttft_ms,
+    props.pool.max_tpot_ms,
+  ])
   const candidates = useQuery({
     queryKey: routingPoolKeys.detail(
       props.pool.routing_group,
@@ -106,10 +133,20 @@ export function PoolCard(props: {
       if (!props.canWrite) {
         throw new Error(t('No permission to perform this action'))
       }
-      return saveRoutingPool({ ...props.pool, ...data })
+      return saveRoutingPool({
+        ...props.pool,
+        ...data,
+        max_ttft_ms: data.mode === 'discount' ? data.max_ttft_ms : 0,
+        max_tpot_ms: data.mode === 'discount' ? data.max_tpot_ms : 0,
+      })
     },
     onSuccess: async (pool) => {
-      form.reset({ mode: pool.mode, channels: pool.channels })
+      form.reset({
+        mode: pool.mode,
+        channels: pool.channels,
+        max_ttft_ms: pool.max_ttft_ms || DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
+        max_tpot_ms: pool.max_tpot_ms || DEFAULT_DISCOUNT_LIMITS.max_tpot_ms,
+      })
       toast.success(t('Saved successfully'))
       await queryClient.invalidateQueries({ queryKey: routingPoolKeys.all })
     },
@@ -160,9 +197,7 @@ export function PoolCard(props: {
         </div>
         <div className='flex flex-wrap items-center justify-between gap-2'>
           <span className='text-muted-foreground text-xs'>
-            {values.mode === 'smart'
-              ? t('Smart routing')
-              : t('Priority routing')}
+            {t(ROUTING_MODE_LABELS[values.mode])}
           </span>
           <Button
             type='button'
@@ -182,6 +217,12 @@ export function PoolCard(props: {
         }}
       >
         <CardContent className='space-y-3 px-3'>
+          {(form.formState.errors.max_ttft_ms ||
+            form.formState.errors.max_tpot_ms) && (
+            <p role='alert' className='text-destructive text-sm'>
+              {t('Enter valid positive latency limits in milliseconds.')}
+            </p>
+          )}
           {values.channels.length === 0 ? (
             <p
               role='status'
@@ -296,6 +337,12 @@ export function PoolCard(props: {
                 form.reset({
                   mode: props.pool.mode,
                   channels: props.pool.channels,
+                  max_ttft_ms:
+                    props.pool.max_ttft_ms ||
+                    DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
+                  max_tpot_ms:
+                    props.pool.max_tpot_ms ||
+                    DEFAULT_DISCOUNT_LIMITS.max_tpot_ms,
                 })
               }
             >
@@ -334,15 +381,44 @@ export function PoolCard(props: {
           <PoolModeSelect
             value={values.mode}
             disabled={disabled}
-            onChange={(mode) =>
+            onChange={(mode) => {
               form.setValue('mode', mode, { shouldDirty: true })
-            }
+              if (mode !== 'discount') {
+                form.setValue(
+                  'max_ttft_ms',
+                  DEFAULT_DISCOUNT_LIMITS.max_ttft_ms
+                )
+                form.setValue(
+                  'max_tpot_ms',
+                  DEFAULT_DISCOUNT_LIMITS.max_tpot_ms
+                )
+                form.clearErrors(['max_ttft_ms', 'max_tpot_ms'])
+              }
+            }}
           />
           <p className='text-muted-foreground text-sm'>
             {t(
               'Smart routing adjusts traffic using recent first-token latency, output speed and failures. Non-streaming and media requests use pool priorities.'
             )}
           </p>
+          {values.mode === 'discount' && (
+            <DiscountRoutingFields
+              maxTTFT={values.max_ttft_ms}
+              maxTPOT={values.max_tpot_ms}
+              disabled={disabled}
+              onChange={(field, value) =>
+                form.setValue(field, value, { shouldDirty: true })
+              }
+              invalidTTFT={!!form.formState.errors.max_ttft_ms}
+              invalidTPOT={!!form.formState.errors.max_tpot_ms}
+            />
+          )}
+          {(form.formState.errors.max_ttft_ms ||
+            form.formState.errors.max_tpot_ms) && (
+            <p role='alert' className='text-destructive text-sm'>
+              {t('Enter valid positive latency limits in milliseconds.')}
+            </p>
+          )}
           <p className='text-muted-foreground text-sm'>
             {t('Save the card to apply strategy changes.')}
           </p>

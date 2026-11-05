@@ -24,6 +24,145 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The pre-discount schema is the deployed routing-pool contract. The latest
+// upstream release predates routing pools entirely (covered by the fresh case).
+type preDiscountRoutingPool struct {
+	RoutingGroup string `gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+	Model        string `gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
+	Mode         string `gorm:"type:varchar(16);not null"`
+	Revision     string `gorm:"type:varchar(64);not null"`
+	ChannelsJSON string `gorm:"type:text;not null"`
+}
+
+func (preDiscountRoutingPool) TableName() string { return "model_routing_pools" }
+
+func TestDiscountRoutingPoolDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		for _, upgrade := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/upgrade_%t", dialect, upgrade), func(t *testing.T) {
+				if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+					t.Skip("isolated database DSN not configured")
+				}
+				t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+				db := setupManageUserTestDB(t)
+				originalCache := common.MemoryCacheEnabled
+				originalGroups := setting.UserUsableGroups2JSONString()
+				originalRatios := ratio_setting.GroupRatio2JSONString()
+				t.Cleanup(func() {
+					common.MemoryCacheEnabled = originalCache
+					require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalGroups))
+					require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+				})
+				common.MemoryCacheEnabled = false
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Standard"}`))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+				require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+				if upgrade {
+					require.NoError(t, db.AutoMigrate(&preDiscountRoutingPool{}))
+					require.NoError(t, db.Create(&preDiscountRoutingPool{RoutingGroup: "legacy", Model: "legacy-model", Mode: model.RoutingModeSmart, Revision: "legacy-revision", ChannelsJSON: `[{"channel_id":1,"priority":0,"weight":0,"enabled":true}]`}).Error)
+				}
+				for range 2 {
+					require.NoError(t, db.AutoMigrate(&model.ModelRoutingPool{}))
+				}
+				if upgrade {
+					legacy, err := model.GetModelRoutingPool("legacy", "legacy-model")
+					require.NoError(t, err)
+					require.NotNil(t, legacy)
+					assert.Equal(t, model.RoutingModeSmart, legacy.Mode)
+					assert.Equal(t, "legacy-revision", legacy.Revision)
+					assert.Zero(t, legacy.MaxTTFTMS)
+					assert.Zero(t, legacy.MaxTPOTMS)
+					assert.Equal(t, 1, legacy.Channels[0].ChannelID)
+					assert.Error(t, db.Create(&preDiscountRoutingPool{RoutingGroup: "legacy", Model: "legacy-model", Mode: model.RoutingModeSmart}).Error, "migration retains composite uniqueness")
+				}
+				channels := []model.Channel{
+					{Id: 9901, Type: 1, Name: "Cheap", Models: "discount-model", Group: "default", Status: common.ChannelStatusEnabled, CostDiscount: common.GetPointer(0.5)},
+					{Id: 9902, Type: 1, Name: "Expensive", Models: "discount-model", Group: "default", Status: common.ChannelStatusEnabled, CostDiscount: common.GetPointer(0.8)},
+				}
+				for i := range channels {
+					require.NoError(t, db.Create(&channels[i]).Error)
+					require.NoError(t, channels[i].AddAbilities(nil))
+				}
+				pool := model.ModelRoutingPool{RoutingGroup: "default", Model: "discount-model", Mode: model.RoutingModeDiscount, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 9901, Enabled: true}, {ChannelID: 9902, Priority: 100, Enabled: true}}}
+				require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+				assert.Equal(t, model.DefaultDiscountMaxTTFTMS, pool.MaxTTFTMS)
+				assert.Equal(t, model.DefaultDiscountMaxTPOTMS, pool.MaxTPOTMS)
+				for range 2 {
+					require.NoError(t, db.AutoMigrate(&model.ModelRoutingPool{}))
+				}
+				loaded, err := model.GetModelRoutingPool("default", "discount-model")
+				require.NoError(t, err)
+				require.NotNil(t, loaded)
+				assert.Equal(t, pool.Revision, loaded.Revision)
+				assert.Equal(t, pool.MaxTTFTMS, loaded.MaxTTFTMS)
+				oldRevision := pool.Revision
+				pool.MaxTTFTMS = 7000
+				require.NoError(t, model.SaveModelRoutingPool(&pool, oldRevision))
+				assert.NotEqual(t, oldRevision, pool.Revision)
+				assert.ErrorIs(t, model.SaveModelRoutingPool(&pool, oldRevision), model.ErrRoutingPoolConflict)
+				pool.MaxTTFTMS = 9000
+				body, err := common.Marshal(pool)
+				require.NoError(t, err)
+				response := httptest.NewRecorder()
+				apiCtx, _ := gin.CreateTestContext(response)
+				apiCtx.Request = httptest.NewRequest(http.MethodPut, "/api/channel/routing-pool", strings.NewReader(string(body)))
+				apiCtx.Request.Header.Set("Content-Type", "application/json")
+				SaveModelRoutingPool(apiCtx)
+				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+				var saved struct {
+					Success bool                   `json:"success"`
+					Data    model.ModelRoutingPool `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(response.Body.Bytes(), &saved))
+				require.True(t, saved.Success)
+				assert.EqualValues(t, 9000, saved.Data.MaxTTFTMS)
+				pool = saved.Data
+				response = httptest.NewRecorder()
+				apiCtx, _ = gin.CreateTestContext(response)
+				apiCtx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/routing-pools?mode=discount", nil)
+				ListModelRoutingPools(apiCtx)
+				require.Equal(t, http.StatusOK, response.Code)
+				assert.Contains(t, response.Body.String(), `"mode":"discount"`)
+				assert.NotContains(t, response.Body.String(), "legacy-model")
+				for _, cached := range []bool{false, true} {
+					common.MemoryCacheEnabled = cached
+					model.InitChannelCache()
+					ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+					param := &service.RetryParam{Ctx: ctx, TokenGroup: "default", ModelName: "discount-model@effort:high", DynamicRoutingEligible: true}
+					selected, _, err := service.CacheGetRandomSatisfiedChannel(param)
+					require.NoError(t, err)
+					require.NotNil(t, selected)
+					assert.Equal(t, 9901, selected.Id)
+					assert.True(t, service.RequestDynamicRoutingEnabled(ctx))
+					param.AttemptedChannelIds = map[int]struct{}{9901: {}}
+					selected, _, err = service.CacheGetRandomSatisfiedChannel(param)
+					require.NoError(t, err)
+					require.NotNil(t, selected)
+					assert.Equal(t, 9902, selected.Id, "retries must exclude the failed cheap channel")
+					// Per-model zero overrides must beat both the channel discount
+					// and cached routing metadata, including normalized model names.
+					require.NoError(t, db.Create(&model.ChannelModelOverride{ChannelId: 9902, Model: "discount-model", CostDiscount: common.GetPointer(0.0)}).Error)
+					param = &service.RetryParam{Ctx: ctx, TokenGroup: "default", ModelName: "discount-model@effort:high", DynamicRoutingEligible: true}
+					selected, _, err = service.CacheGetRandomSatisfiedChannel(param)
+					require.NoError(t, err)
+					require.NotNil(t, selected)
+					assert.Equal(t, 9902, selected.Id)
+					require.NoError(t, db.Where("channel_id = ?", 9902).Delete(&model.ChannelModelOverride{}).Error)
+					// Media/non-streaming retains the explicit priority policy.
+					param = &service.RetryParam{Ctx: ctx, TokenGroup: "default", ModelName: "discount-model"}
+					selected, _, err = service.CacheGetRandomSatisfiedChannel(param)
+					require.NoError(t, err)
+					require.NotNil(t, selected)
+					assert.Equal(t, 9902, selected.Id)
+				}
+				invalid := pool
+				invalid.MaxTPOTMS = -1
+				assert.ErrorIs(t, model.SaveModelRoutingPool(&invalid, pool.Revision), model.ErrInvalidRoutingPool)
+			})
+		}
+	}
+}
+
 func TestRoutingPoolChannelMetricsDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {

@@ -14,8 +14,11 @@ import (
 )
 
 const (
-	RoutingModePriority = "priority"
-	RoutingModeSmart    = "smart"
+	RoutingModePriority            = "priority"
+	RoutingModeSmart               = "smart"
+	RoutingModeDiscount            = "discount"
+	DefaultDiscountMaxTTFTMS int64 = 15000
+	DefaultDiscountMaxTPOTMS int64 = 200
 )
 
 var (
@@ -33,6 +36,12 @@ type ModelRoutingPool struct {
 	Revision     string                    `json:"revision" gorm:"type:varchar(64);not null"`
 	ChannelsJSON string                    `json:"-" gorm:"type:text;not null"`
 	Channels     []ModelRoutingPoolChannel `json:"channels" gorm:"-"`
+	MaxTTFTMS    int64                     `json:"max_ttft_ms" gorm:"column:max_ttft_ms"`
+	MaxTPOTMS    int64                     `json:"max_tpot_ms" gorm:"column:max_tpot_ms"`
+}
+
+func (pool *ModelRoutingPool) UsesDynamicRouting() bool {
+	return pool != nil && (pool.Mode == RoutingModeSmart || pool.Mode == RoutingModeDiscount)
 }
 
 type ModelRoutingPoolChannel struct {
@@ -129,8 +138,16 @@ func ListModelRoutingPoolCandidates(group, modelName string) ([]ModelRoutingPool
 }
 
 func SaveModelRoutingPool(pool *ModelRoutingPool, expectedRevision string) error {
-	if pool == nil || pool.RoutingGroup == "" || pool.RoutingGroup == "auto" || len(pool.RoutingGroup) > 64 || strings.TrimSpace(pool.RoutingGroup) != pool.RoutingGroup || strings.ContainsAny(pool.RoutingGroup, ",\x00\r\n") || pool.Model == "" || len(pool.Model) > 255 || strings.TrimSpace(pool.Model) != pool.Model || strings.ContainsAny(pool.Model, "\x00\r\n") || !slices.Contains([]string{RoutingModePriority, RoutingModeSmart}, pool.Mode) || len(pool.Channels) > 500 {
+	if pool == nil || pool.RoutingGroup == "" || pool.RoutingGroup == "auto" || len(pool.RoutingGroup) > 64 || strings.TrimSpace(pool.RoutingGroup) != pool.RoutingGroup || strings.ContainsAny(pool.RoutingGroup, ",\x00\r\n") || pool.Model == "" || len(pool.Model) > 255 || strings.TrimSpace(pool.Model) != pool.Model || strings.ContainsAny(pool.Model, "\x00\r\n") || !slices.Contains([]string{RoutingModePriority, RoutingModeSmart, RoutingModeDiscount}, pool.Mode) || len(pool.Channels) > 500 || pool.MaxTTFTMS < 0 || pool.MaxTTFTMS > 3600000 || pool.MaxTPOTMS < 0 || pool.MaxTPOTMS > 60000 {
 		return ErrInvalidRoutingPool
+	}
+	if pool.Mode == RoutingModeDiscount {
+		if pool.MaxTTFTMS == 0 {
+			pool.MaxTTFTMS = DefaultDiscountMaxTTFTMS
+		}
+		if pool.MaxTPOTMS == 0 {
+			pool.MaxTPOTMS = DefaultDiscountMaxTPOTMS
+		}
 	}
 	candidates, err := ListModelRoutingPoolCandidates(pool.RoutingGroup, pool.Model)
 	if err != nil {
@@ -155,7 +172,11 @@ func SaveModelRoutingPool(pool *ModelRoutingPool, expectedRevision string) error
 		return err
 	}
 	pool.ChannelsJSON = string(encoded)
-	pool.Revision = fmt.Sprintf("%x", sha256.Sum256([]byte(pool.RoutingGroup+"\x00"+pool.Model+"\x00"+pool.Mode+"\x00"+pool.ChannelsJSON)))
+	revisionData := pool.RoutingGroup + "\x00" + pool.Model + "\x00" + pool.Mode + "\x00" + pool.ChannelsJSON
+	if pool.MaxTTFTMS != 0 || pool.MaxTPOTMS != 0 {
+		revisionData += fmt.Sprintf("\x00%d\x00%d", pool.MaxTTFTMS, pool.MaxTPOTMS)
+	}
+	pool.Revision = fmt.Sprintf("%x", sha256.Sum256([]byte(revisionData)))
 	if expectedRevision == "" {
 		result := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(pool)
 		if result.Error != nil {
@@ -186,7 +207,7 @@ func SaveModelRoutingPool(pool *ModelRoutingPool, expectedRevision string) error
 		if current.Revision != expectedRevision {
 			return ErrRoutingPoolConflict
 		}
-		return tx.Model(&current).Updates(map[string]any{"mode": pool.Mode, "revision": pool.Revision, "channels_json": pool.ChannelsJSON}).Error
+		return tx.Model(&current).Updates(map[string]any{"mode": pool.Mode, "revision": pool.Revision, "channels_json": pool.ChannelsJSON, "max_ttft_ms": pool.MaxTTFTMS, "max_tpot_ms": pool.MaxTPOTMS}).Error
 	})
 }
 

@@ -395,7 +395,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			if err != nil {
 				return nil, "", &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: "model_routing_pool_unavailable"}
 			}
-			if pool != nil && pool.Mode == model.RoutingModeSmart {
+			if pool.UsesDynamicRouting() {
 				preferDynamic = true
 			}
 			if pool == nil && DynamicRoutingEnabled() {
