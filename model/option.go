@@ -47,8 +47,10 @@ func AllOption() ([]*Option, error) {
 }
 
 func InitOptionMap() {
+	_ = applyGroupModelAccess("{}")
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap = make(map[string]string)
+	common.OptionMap[GroupModelAccessOptionKey] = "{}"
 	common.OptionMap[LogExportMaxRowsOptionKey] = strconv.Itoa(DefaultLogExportMaxRows)
 	common.OptionMap[RequestCaptureStorageOptionKey] = DefaultRequestCaptureStorageJSON
 
@@ -313,6 +315,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == GroupModelAccessOptionKey {
+		return errors.New("group-model access requires its dedicated matrix endpoint")
+	}
 	if key == LogExportMaxRowsOptionKey {
 		_, err := ParseLogExportMaxRows(value)
 		return err
@@ -591,6 +596,15 @@ func updateOptionMap(key string, value string) (err error) {
 	if key == retiredThemeOptionKey || key == "GroupModelChannelGroups" {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
+		common.OptionMapRWMutex.Unlock()
+		return nil
+	}
+	if key == GroupModelAccessOptionKey {
+		if err := applyGroupModelAccess(value); err != nil {
+			return err
+		}
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap[key] = value
 		common.OptionMapRWMutex.Unlock()
 		return nil
 	}

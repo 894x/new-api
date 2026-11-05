@@ -8,7 +8,7 @@ import (
 )
 
 func IsChannelEnabledForGroupModel(group string, modelName string, channelID int) bool {
-	if group == "" || modelName == "" || channelID <= 0 {
+	if group == "" || modelName == "" || channelID <= 0 || !IsGroupModelAllowed(group, modelName) {
 		return false
 	}
 	if !common.MemoryCacheEnabled {

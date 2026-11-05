@@ -214,6 +214,9 @@ func GetRandomSatisfiedChannelWithSelectionFilters(group string, model string, r
 
 // Caller holds channelSyncLock. The returned slice must not be mutated.
 func listCachedChannelCandidates(group, model string, filters ChannelSelectionFilters) ([]cachedChannelRouting, error) {
+	if !IsGroupModelAllowed(group, model) {
+		return nil, nil
+	}
 	// First, try the exact model abilities. If all exact candidates fail request
 	// constraints, normalized-model abilities remain eligible as a fallback.
 	routings, parameterCandidateCount, firstParameterViolation, selectionErr := filterCachedChannelSelectionCandidates(

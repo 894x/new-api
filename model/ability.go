@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -73,6 +74,9 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 		Joins("left join channels on abilities.channel_id = channels.id").
 		Where("abilities.enabled = ?", true).
 		Scan(&abilities).Error
+	abilities = slices.DeleteFunc(abilities, func(ability AbilityWithChannel) bool {
+		return !IsGroupModelAllowed(ability.Group, ability.Model)
+	})
 	return abilities, err
 }
 
@@ -80,7 +84,7 @@ func GetGroupEnabledModels(group string) []string {
 	var models []string
 	// Find distinct models
 	DB.Model(&Ability{}).Where(map[string]any{"group": group, "enabled": true}).Distinct("model").Pluck("model", &models)
-	return models
+	return slices.DeleteFunc(models, func(name string) bool { return !IsGroupModelAllowed(group, name) })
 }
 
 func GetEnabledModels() []string {
@@ -145,6 +149,9 @@ func GetChannelWithSelectionFilters(group string, model string, retry int, filte
 }
 
 func listDBChannelCandidates(group, model string, filters ChannelSelectionFilters) ([]Ability, error) {
+	if !IsGroupModelAllowed(group, model) {
+		return nil, nil
+	}
 	var abilities []Ability
 	allowedChannelIdSlice := make([]int, 0, len(filters.AllowedChannelIds))
 	if filters.AllowedChannelIds != nil {

@@ -26,6 +26,7 @@ import { ModelRoutingWorkspace } from '@/features/model-routing'
 import { RoutingScopeSelect } from '@/features/model-routing/scope-select'
 import { UserRoutingWorkspace } from '@/features/model-routing/user-workspace'
 
+import { GroupModelWorkspace } from './components/group-model-workspace'
 import { MatrixWorkspace } from './components/matrix-workspace'
 
 const route = getRouteApi('/_authenticated/model-channel-matrix/')
@@ -34,7 +35,7 @@ export function ModelChannelMatrix() {
   const { t } = useTranslation()
   const search = route.useSearch()
   const navigate = route.useNavigate()
-  const [view, setView] = useState<'pools' | 'matrix'>('pools')
+  const [view, setView] = useState<'pools' | 'matrix' | 'groups'>('pools')
   const [dirty, setDirty] = useState(false)
   let workspace = <ModelRoutingWorkspace onDirtyChange={setDirty} />
   if (search.user_id) {
@@ -45,6 +46,8 @@ export function ModelChannelMatrix() {
         onDirtyChange={setDirty}
       />
     )
+  } else if (view === 'groups') {
+    workspace = <GroupModelWorkspace onDirtyChange={setDirty} />
   } else if (view === 'matrix') {
     workspace = (
       <MatrixWorkspace
@@ -73,7 +76,7 @@ export function ModelChannelMatrix() {
           />
           {!search.user_id && (
             <div
-              className='flex shrink-0 gap-2'
+              className='flex shrink-0 flex-wrap gap-2'
               role='group'
               aria-label={t('Routing view')}
             >
@@ -84,6 +87,14 @@ export function ModelChannelMatrix() {
                 onClick={() => setView('pools')}
               >
                 {t('Routing pools')}
+              </Button>
+              <Button
+                variant={view === 'groups' ? 'default' : 'outline'}
+                size='sm'
+                disabled={dirty && view !== 'groups'}
+                onClick={() => setView('groups')}
+              >
+                {t('Group-model matrix')}
               </Button>
               <Button
                 variant={view === 'matrix' ? 'default' : 'outline'}

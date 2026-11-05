@@ -19,48 +19,60 @@ For commercial licensing, please contact support@quantumnous.com
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber } from '@/lib/format'
 
 export function MatrixPagination(props: {
-  axis: 'models' | 'channels'
+  axis: 'models' | 'channels' | 'groups'
   page: number
   pageSize: number
   total: number
   disabled: boolean
   onPageChange: (page: number) => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const pages = Math.max(1, Math.ceil(props.total / props.pageSize))
-  const label = props.axis === 'models' ? t('Models') : t('Channels')
+  const labels = {
+    models: t('Models'),
+    channels: t('Channels'),
+    groups: t('Groups'),
+  }
+  const previousLabels = {
+    models: t('Previous models'),
+    channels: t('Previous channels'),
+    groups: t('Previous groups'),
+  }
+  const nextLabels = {
+    models: t('Next models'),
+    channels: t('Next channels'),
+    groups: t('Next groups'),
+  }
+  const label = labels[props.axis]
   return (
     <nav aria-label={label} className='flex flex-wrap items-center gap-2'>
       <span className='text-muted-foreground text-xs'>
-        {label} · {props.total}
+        {label} · {formatNumber(props.total, locale)}
       </span>
       <Button
         type='button'
         variant='outline'
         size='sm'
         disabled={props.disabled || props.page <= 1}
-        aria-label={
-          props.axis === 'models'
-            ? t('Previous models')
-            : t('Previous channels')
-        }
+        aria-label={previousLabels[props.axis]}
         onClick={() => props.onPageChange(props.page - 1)}
       >
         {t('Previous')}
       </Button>
       <span className='min-w-10 text-center text-xs tabular-nums'>
-        {props.page} / {pages}
+        {formatNumber(props.page, locale)} / {formatNumber(pages, locale)}
       </span>
       <Button
         type='button'
         variant='outline'
         size='sm'
         disabled={props.disabled || props.page >= pages}
-        aria-label={
-          props.axis === 'models' ? t('Next models') : t('Next channels')
-        }
+        aria-label={nextLabels[props.axis]}
         onClick={() => props.onPageChange(props.page + 1)}
       >
         {t('Next')}

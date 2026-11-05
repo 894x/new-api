@@ -37,9 +37,17 @@ func GetModelRoutingPoolCatalog(c *gin.Context) {
 		groupNames = []string{group}
 	}
 	if len(groupNames) > 0 {
-		if err := query.Where(map[string]any{"group": groupNames}).Distinct("model").Order("model").Pluck("model", &models).Error; err != nil {
+		var abilities []model.Ability
+		if err := query.Where(map[string]any{"group": groupNames}).Select("group", "model").Distinct().Order("model").Find(&abilities).Error; err != nil {
 			common.ApiError(c, err)
 			return
+		}
+		seen := make(map[string]bool)
+		for _, ability := range abilities {
+			if !seen[ability.Model] && model.IsGroupModelAllowed(ability.Group, ability.Model) {
+				seen[ability.Model] = true
+				models = append(models, ability.Model)
+			}
 		}
 	}
 	common.ApiSuccess(c, gin.H{"groups": groups, "models": models})
@@ -67,16 +75,17 @@ func ListModelRoutingPools(c *gin.Context) {
 	if filter.Mode != "" {
 		query = query.Where("mode = ?", filter.Mode)
 	}
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		common.ApiError(c, err)
-		return
-	}
 	var rows []model.ModelRoutingPool
-	if err := query.Order("model, routing_group").Offset((filter.Page - 1) * filter.PageSize).Limit(filter.PageSize).Find(&rows).Error; err != nil {
+	if err := query.Order("model, routing_group").Find(&rows).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	rows = slices.DeleteFunc(rows, func(row model.ModelRoutingPool) bool {
+		return !model.IsGroupModelAllowed(row.RoutingGroup, row.Model)
+	})
+	total := len(rows)
+	start := min((filter.Page-1)*filter.PageSize, total)
+	rows = rows[start:min(start+filter.PageSize, total)]
 	items := make([]modelRoutingPoolView, 0, len(rows))
 	for _, row := range rows {
 		if err := common.UnmarshalJsonStr(row.ChannelsJSON, &row.Channels); err != nil {
@@ -100,6 +109,10 @@ func GetModelRoutingPool(c *gin.Context) {
 	group, name := c.Query("routing_group"), c.Query("model")
 	if group == "" || group == "auto" || name == "" || len(group) > 64 || len(name) > 255 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid routing pool identity"})
+		return
+	}
+	if !model.IsGroupModelAllowed(group, name) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "the group-model matrix does not allow this model"})
 		return
 	}
 	pool, err := model.GetModelRoutingPool(group, name)
@@ -129,6 +142,10 @@ func SaveModelRoutingPool(c *gin.Context) {
 	}
 	if _, public := setting.GetUserUsableGroupsCopy()[request.Group]; !public || !ratio_setting.ContainsGroupRatio(request.Group) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid public group"})
+		return
+	}
+	if !model.IsGroupModelAllowed(request.Group, request.Model) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "the group-model matrix does not allow this model"})
 		return
 	}
 	pool := model.ModelRoutingPool{RoutingGroup: request.Group, Model: request.Model, Mode: request.Mode, Channels: *request.Channels}

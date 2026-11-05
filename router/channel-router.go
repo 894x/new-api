@@ -46,6 +46,8 @@ var channelPermissionRoutes = []permissionRoute{
 	{method: http.MethodGet, path: "/monitoring", permission: authz.ChannelRead, handler: controller.GetChannelMonitoring},
 	{method: http.MethodGet, path: "/model-capabilities", permission: authz.ChannelRead, handler: controller.GetModelChannelCapabilities},
 	{method: http.MethodGet, path: "/model-matrix", permission: authz.ChannelRead, handler: controller.GetChannelModelMatrix},
+	{method: http.MethodGet, path: "/group-model-matrix", permission: authz.ChannelRead, handler: controller.GetGroupModelMatrix},
+	{method: http.MethodPut, path: "/group-model-matrix", permission: authz.ChannelWrite, handler: controller.SaveGroupModelMatrix},
 	{method: http.MethodGet, path: "/routing-pools/catalog", permission: authz.ChannelRead, handler: controller.GetModelRoutingPoolCatalog},
 	{method: http.MethodGet, path: "/routing-pools", permission: authz.ChannelRead, handler: controller.ListModelRoutingPools},
 	{method: http.MethodGet, path: "/routing-pool", permission: authz.ChannelRead, handler: controller.GetModelRoutingPool},
