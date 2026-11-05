@@ -177,6 +177,7 @@ type ChannelMonitorSummary struct {
 	SourceCounts map[string]int         `json:"source_counts"`
 	Buckets      []ChannelMonitorBucket `json:"buckets"`
 	Truncated    bool                   `json:"truncated"`
+	Cache        *ChannelCacheStats     `json:"cache"`
 }
 
 func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName string, enabled bool, interval time.Duration, excludedStatusCodes []operation_setting.StatusCodeRange, now time.Time) ([]ChannelMonitorSummary, error) {

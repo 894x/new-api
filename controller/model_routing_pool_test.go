@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,11 +17,95 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRoutingPoolChannelMetricsDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+				t.Skip("isolated database DSN not configured")
+			}
+			t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+			t.Setenv("TEST_MANAGE_USER_SEPARATE_LOG_DB", "1")
+			db := setupManageUserTestDB(t)
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ChannelMonitorRecord{}))
+			channels := []model.Channel{
+				{Id: 9801, Name: "Inherited", Key: "private-metrics-key", Models: "metrics-model", Group: "default", Status: common.ChannelStatusEnabled, CostDiscount: common.GetPointer(0.3)},
+				{Id: 9802, Name: "Override", Models: "metrics-model", Group: "default", Status: common.ChannelStatusEnabled, CostDiscount: common.GetPointer(0.5)},
+				{Id: 9803, Name: "Unknown", Models: "metrics-model", Group: "default", Status: common.ChannelStatusEnabled},
+			}
+			for i := range channels {
+				require.NoError(t, db.Create(&channels[i]).Error)
+				require.NoError(t, channels[i].AddAbilities(nil))
+			}
+			require.NoError(t, db.Create(&model.ChannelModelOverride{ChannelId: 9802, Model: "metrics-model", CostDiscount: common.GetPointer(0.0)}).Error)
+			candidates, err := model.ListModelRoutingPoolCandidates("default", "metrics-model@effort:high")
+			require.NoError(t, err)
+			require.Len(t, candidates, 3)
+			assert.Equal(t, common.GetPointer(0.3), candidates[0].EffectiveCostDiscount)
+			assert.Equal(t, common.GetPointer(0.0), candidates[1].EffectiveCostDiscount)
+			assert.Nil(t, candidates[2].EffectiveCostDiscount)
+
+			now := time.Now().Unix()
+			logs := []model.Log{
+				{ChannelId: 9801, ModelName: "metrics-model", Type: model.LogTypeConsume, CreatedAt: now - 10, PromptTokens: 100, Other: `{"cache_tokens":100}`},
+				{ChannelId: 9801, ModelName: "metrics-model", Type: model.LogTypeConsume, CreatedAt: now - 20, PromptTokens: 900, Other: `{"cache_tokens":0}`},
+				{ChannelId: 9802, ModelName: "metrics-model", Type: model.LogTypeConsume, CreatedAt: now - 10, PromptTokens: 100, Other: `{"cache_tokens":0}`},
+				{ChannelId: 9803, ModelName: "metrics-model", Type: model.LogTypeConsume, CreatedAt: now - 10, PromptTokens: 100, Other: `{}`},
+				{ChannelId: 9801, ModelName: "another-model", Type: model.LogTypeConsume, CreatedAt: now - 10, PromptTokens: 100, Other: `{"cache_tokens":100}`},
+				{ChannelId: 9801, ModelName: "metrics-model", Type: model.LogTypeError, CreatedAt: now - 10, PromptTokens: 100, Other: `{"cache_tokens":100}`},
+				{ChannelId: 9801, ModelName: "metrics-model", Type: model.LogTypeConsume, CreatedAt: now - 86401, PromptTokens: 100, Other: `{"cache_tokens":100}`},
+				{ChannelId: 9804, ModelName: "metrics-model", Type: model.LogTypeConsume, CreatedAt: now - 10, PromptTokens: 100, Other: `{"cache_tokens":100}`},
+			}
+			require.NoError(t, model.LOG_DB.Create(&logs).Error)
+			previousSettings := *operation_setting.GetMonitorSetting()
+			t.Cleanup(func() { *operation_setting.GetMonitorSetting() = previousSettings })
+			operation_setting.GetMonitorSetting().ChannelMonitoringEnabled = false
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/monitoring?model=metrics-model&channel_ids=9801,9802,9803", nil)
+			GetChannelMonitoring(ctx)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var response struct {
+				Data []model.ChannelMonitorSummary `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			require.Len(t, response.Data, 3)
+			for i, expected := range []*float64{common.GetPointer(10.0), common.GetPointer(0.0), nil} {
+				require.NotNil(t, response.Data[i].Cache)
+				assert.Equal(t, expected, response.Data[i].Cache.HitRate)
+				assert.False(t, response.Data[i].Cache.Truncated)
+			}
+			assert.NotContains(t, recorder.Body.String(), "private-metrics-key")
+
+			// Invalid/missing cache measurements stay distinct from a measured zero.
+			require.NoError(t, model.LOG_DB.Create(&[]model.Log{
+				{ChannelId: 9803, ModelName: "metrics-model", Type: model.LogTypeConsume, CreatedAt: now - 10, PromptTokens: 100, Other: `{"cache_tokens":-1}`},
+				{ChannelId: 9803, ModelName: "metrics-model", Type: model.LogTypeConsume, CreatedAt: now - 10, PromptTokens: 100, Other: `not json`},
+			}).Error)
+			stats, err := model.QueryChannelCacheStats(context.Background(), []int{9803}, "metrics-model", now-86400, now)
+			require.NoError(t, err)
+			assert.Nil(t, stats[9803].HitRate)
+			// An unavailable log database must not hide the channel's probe status.
+			logDB := model.LOG_DB
+			model.LOG_DB = nil
+			recorder = httptest.NewRecorder()
+			ctx, _ = gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/monitoring?model=metrics-model&channel_ids=9801", nil)
+			GetChannelMonitoring(ctx)
+			model.LOG_DB = logDB
+			require.Equal(t, http.StatusOK, recorder.Code)
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			require.Len(t, response.Data, 1)
+			assert.Nil(t, response.Data[0].Cache)
+		})
+	}
+}
 
 func TestModelRoutingPoolDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {

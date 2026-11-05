@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -25,6 +26,8 @@ import {
   within,
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { createInstance } from 'i18next'
+import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { afterEach, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
@@ -311,4 +314,145 @@ test('channel names expose their full text in a tooltip', async () => {
     expect(labels).toHaveLength(2)
     expect(labels[1]).toBeVisible()
   })
+})
+
+test('configured discounts preserve zero and small fractions while unknown discounts stay hidden', () => {
+  const pool = fixture()
+  pool.candidates[0].effective_cost_discount = 0.003125
+  pool.candidates[1].effective_cost_discount = 0
+  mountCard(pool)
+  expect(
+    screen.getByLabelText('Upstream cost discount: 0.003125×').textContent
+  ).toBe('0.3125%')
+  expect(screen.getByLabelText('Upstream cost discount: 0×').textContent).toBe(
+    '0%'
+  )
+  const discount = screen.getByLabelText('Upstream cost discount: 0.003125×')
+  expect(
+    screen.getByText('Alpha').compareDocumentPosition(discount) &
+      Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy()
+  expect(
+    discount.compareDocumentPosition(
+      screen.getByRole('spinbutton', { name: 'Priority for Alpha' })
+    ) & Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy()
+})
+
+test('unset and invalid discounts are omitted instead of displaying a default discount', () => {
+  const pool = fixture()
+  pool.candidates[0].effective_cost_discount = null
+  pool.candidates[1].effective_cost_discount = -0.1
+  mountCard(pool)
+  expect(screen.queryByTitle('Upstream cost discount')).not.toBeInTheDocument()
+})
+
+test.each([
+  ['en', '0.07', '7%'],
+  ['zhCN', '0.07', '7%'],
+  ['zhTW', '0.07', '7%'],
+  ['fr', '0,07', '7\u00a0%'],
+  ['ru', '0,07', '7\u00a0%'],
+  ['ja', '0.07', '7%'],
+  ['vi', '0,07', '7%'],
+  ['invalid_locale', '0.07', '7%'],
+])(
+  'switching to %s updates discount numbers without floating-point artifacts',
+  async (language, multiplier, percent) => {
+    const instance = createInstance()
+    const translation = { 'Upstream cost discount': 'Upstream cost discount' }
+    await instance.use(initReactI18next).init({
+      lng: 'en',
+      fallbackLng: false,
+      resources: { en: { translation }, [language]: { translation } },
+    })
+    const pool = fixture()
+    pool.candidates[0].effective_cost_discount = 0.07
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    clients.push(client)
+    render(
+      <I18nextProvider i18n={instance}>
+        <QueryClientProvider client={client}>
+          <PoolCard
+            pool={pool}
+            canWrite={false}
+            onDirtyChange={() => undefined}
+          />
+        </QueryClientProvider>
+      </I18nextProvider>
+    )
+    await act(async () => {
+      await instance.changeLanguage(language)
+    })
+    expect(
+      screen.getByLabelText(`Upstream cost discount: ${multiplier}×`)
+        .textContent
+    ).toBe(percent)
+  }
+)
+
+test('channel cache metrics remain visible when probe monitoring is disabled and measured zero stays distinct from missing data', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: [
+        {
+          channel_id: 1,
+          state: 'disabled',
+          buckets: [],
+          cache: { hit_rate: 0, truncated: false },
+        },
+        {
+          channel_id: 2,
+          state: 'disabled',
+          buckets: [],
+          cache: { hit_rate: null, truncated: false },
+        },
+      ],
+    },
+  })
+  mountCard()
+  expect(await screen.findByLabelText('Cache hit rate: 0%')).toBeVisible()
+  expect(screen.getByLabelText('Cache hit rate: —')).toBeVisible()
+  expect(screen.getAllByText('Monitoring disabled')).toHaveLength(2)
+})
+
+test('cache metrics display only numbers with partial-data details in the tooltip and retain discounts on monitoring failure', async () => {
+  const get = vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: [
+        {
+          channel_id: 1,
+          state: 'disabled',
+          buckets: [],
+          cache: { hit_rate: 75.25, truncated: true },
+        },
+      ],
+    },
+  })
+  const pool = fixture()
+  pool.candidates[0].effective_cost_discount = 0.3
+  const { client } = mountCard(pool)
+  const metric = await screen.findByLabelText('Cache hit rate: 75.25%')
+  expect(metric.textContent).toBe('75.25%')
+  expect(metric).toHaveAttribute(
+    'title',
+    expect.stringContaining('Cache hit rate')
+  )
+  expect(metric).toHaveAttribute(
+    'title',
+    expect.stringContaining('Partial cache data')
+  )
+  get.mockRejectedValue(new Error('monitoring unavailable'))
+  await client.invalidateQueries({ queryKey: ['channel-monitoring'] })
+  await waitFor(() =>
+    expect(
+      screen.queryByLabelText('Cache hit rate: 75.25%')
+    ).not.toBeInTheDocument()
+  )
+  expect(screen.getByLabelText('Upstream cost discount: 0.3×')).toBeVisible()
+  expect(screen.getAllByLabelText('Cache hit rate: —')).toHaveLength(2)
 })

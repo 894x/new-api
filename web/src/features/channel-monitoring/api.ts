@@ -61,6 +61,10 @@ export type ChannelMonitorSummary = {
   source_counts?: Record<string, number>
   buckets: MonitorBucket[]
   truncated: boolean
+  cache?: {
+    hit_rate: number | null
+    truncated: boolean
+  } | null
 }
 
 export async function getChannelMonitoring(

@@ -43,11 +43,12 @@ type ModelRoutingPoolChannel struct {
 }
 
 type ModelRoutingPoolCandidate struct {
-	ChannelID   int    `json:"channel_id"`
-	ChannelName string `json:"channel_name"`
-	Priority    int64  `json:"priority"`
-	Weight      uint   `json:"weight"`
-	Available   bool   `json:"available"`
+	ChannelID             int      `json:"channel_id"`
+	ChannelName           string   `json:"channel_name"`
+	Priority              int64    `json:"priority"`
+	Weight                uint     `json:"weight"`
+	Available             bool     `json:"available"`
+	EffectiveCostDiscount *float64 `json:"effective_cost_discount"`
 }
 
 func GetModelRoutingPool(group, modelName string) (*ModelRoutingPool, error) {
@@ -81,13 +82,26 @@ func ListModelRoutingPoolCandidates(group, modelName string) ([]ModelRoutingPool
 	}
 	channels := make([]Channel, 0)
 	if len(ids) > 0 {
-		if err := DB.Select("id", "name", "status").Where("id IN ?", ids).Find(&channels).Error; err != nil {
+		if err := DB.Select("id", "name", "status", "cost_discount").Where("id IN ?", ids).Find(&channels).Error; err != nil {
 			return nil, err
 		}
 	}
 	byID := make(map[int]Channel, len(channels))
 	for _, channel := range channels {
 		byID[channel.Id] = channel
+	}
+	var overrides []ChannelModelOverride
+	if len(ids) > 0 {
+		if err := DB.Select("channel_id", "model", "cost_discount").Where("channel_id IN ? AND model IN ?", ids, names).Find(&overrides).Error; err != nil {
+			return nil, err
+		}
+	}
+	overridesByChannel := make(map[int]map[string]*float64)
+	for _, override := range overrides {
+		if overridesByChannel[override.ChannelId] == nil {
+			overridesByChannel[override.ChannelId] = make(map[string]*float64)
+		}
+		overridesByChannel[override.ChannelId][override.Model] = override.CostDiscount
 	}
 	result := make([]ModelRoutingPoolCandidate, 0, len(channels))
 	seen := make(map[int]bool)
@@ -99,7 +113,16 @@ func ListModelRoutingPoolCandidates(group, modelName string) ([]ModelRoutingPool
 				continue
 			}
 			seen[ability.ChannelId] = true
-			result = append(result, ModelRoutingPoolCandidate{ChannelID: channel.Id, ChannelName: channel.Name, Priority: effectiveAbilityPriority(&ability), Weight: ability.Weight, Available: ability.Enabled && channel.Status == common.ChannelStatusEnabled})
+			discount := channel.CostDiscount
+			if override := overridesByChannel[channel.Id][name]; override != nil {
+				discount = override
+			}
+			result = append(result, ModelRoutingPoolCandidate{
+				ChannelID: channel.Id, ChannelName: channel.Name,
+				Priority: effectiveAbilityPriority(&ability), Weight: ability.Weight,
+				Available:             ability.Enabled && channel.Status == common.ChannelStatusEnabled,
+				EffectiveCostDiscount: discount,
+			})
 		}
 	}
 	return result, nil

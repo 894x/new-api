@@ -69,6 +69,7 @@ export interface PoolCandidate {
   priority: number
   weight: number
   available: boolean
+  effective_cost_discount?: number | null
 }
 
 export interface RoutingPool {

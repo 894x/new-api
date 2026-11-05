@@ -29,6 +29,7 @@ import { Switch } from '@/components/ui/switch'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ChannelMonitoringStrip } from '@/features/channel-monitoring/monitoring-strip'
 import { useChannelMonitoring } from '@/features/channel-monitoring/use-channel-monitoring'
+import { toIntlLocale } from '@/i18n/languages'
 import { cn } from '@/lib/utils'
 
 import type { PoolCandidate, PoolChannel } from './api'
@@ -50,7 +51,8 @@ export function PoolChannelList(props: {
   removable?: boolean
   onChange: (channels: PoolChannelDraft[]) => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const [removingChannelId, setRemovingChannelId] = useState<number | null>(
     null
   )
@@ -141,6 +143,7 @@ export function PoolChannelList(props: {
         {props.channels.map((entry, index) => {
           const candidate = candidates.get(entry.channel_id)
           const name = candidate?.channel_name ?? `#${entry.channel_id}`
+          const discount = candidate?.effective_cost_discount
           return (
             <AutoGroupOrderItem
               key={entry.channel_id}
@@ -165,9 +168,25 @@ export function PoolChannelList(props: {
                     <TruncatedText
                       text={name}
                       maxWidth='max-w-full'
-                      className='min-w-0 flex-1'
+                      className='min-w-0'
                     />
                   </TooltipProvider>
+                  {discount != null &&
+                    Number.isFinite(discount) &&
+                    discount >= 0 &&
+                    discount <= 1 && (
+                      <Badge
+                        variant='outline'
+                        className='h-4 px-1 text-[10px] tabular-nums'
+                        title={t('Upstream cost discount')}
+                        aria-label={`${t('Upstream cost discount')}: ${discount.toLocaleString(locale, { maximumFractionDigits: 20 })}×`}
+                      >
+                        {discount.toLocaleString(locale, {
+                          style: 'percent',
+                          maximumFractionDigits: 20,
+                        })}
+                      </Badge>
+                    )}
                   <span className='text-muted-foreground shrink-0 text-[10px]'>
                     #{entry.channel_id}
                   </span>

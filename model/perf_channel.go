@@ -1,6 +1,63 @@
 package model
 
-import "context"
+import (
+	"context"
+	"errors"
+	"math"
+
+	"github.com/QuantumNous/new-api/common"
+)
+
+type ChannelCacheStats struct {
+	HitRate   *float64 `json:"hit_rate"`
+	Truncated bool     `json:"truncated"`
+}
+
+// QueryChannelCacheStats uses the same bounded log scan as channel diagnostics.
+// Cache reads are input-token weighted; unknown cache usage is not a measured zero.
+func QueryChannelCacheStats(ctx context.Context, channelIDs []int, modelName string, startTs, endTs int64) (map[int]*ChannelCacheStats, error) {
+	stats := make(map[int]*ChannelCacheStats, len(channelIDs))
+	for _, id := range channelIDs {
+		stats[id] = &ChannelCacheStats{}
+	}
+	if len(channelIDs) == 0 {
+		return stats, nil
+	}
+	if LOG_DB == nil {
+		return nil, errors.New("log database unavailable")
+	}
+	type cacheTokens struct {
+		input, read float64
+		samples     int
+	}
+	totals := make(map[int]cacheTokens, len(channelIDs))
+	_, truncated, err := visitPerfLogs(ctx, perfLogFilter{ChannelIds: channelIDs, ModelName: modelName, StartTs: startTs, EndTs: endTs, ConsumeOnly: true}, func(row PerfChannelLog) {
+		if row.PromptTokens <= 0 {
+			return
+		}
+		total := totals[row.ChannelId]
+		total.input += float64(row.PromptTokens)
+		var other struct {
+			CacheRead *int64 `json:"cache_tokens"`
+		}
+		if common.UnmarshalJsonStr(row.Other, &other) == nil && other.CacheRead != nil && *other.CacheRead >= 0 {
+			total.read += float64(min(*other.CacheRead, row.PromptTokens))
+			total.samples++
+		}
+		totals[row.ChannelId] = total
+	})
+	if err != nil {
+		return nil, err
+	}
+	for id, stat := range stats {
+		stat.Truncated = truncated
+		if total := totals[id]; total.samples > 0 && total.input > 0 {
+			rate := math.Round(total.read/total.input*10000) / 100
+			stat.HitRate = &rate
+		}
+	}
+	return stats, nil
+}
 
 // PerfChannelLog is the small read model used by channel performance
 // analytics. The request timing payload lives in Log.Other, so the query
@@ -48,13 +105,15 @@ func VisitPerfAnalyticsChannelLogs(ctx context.Context, channelID, userID int, m
 }
 
 type perfLogFilter struct {
-	ChannelId int
-	UserId    int
-	ModelName string
-	TokenId   int
-	StartTs   int64
-	EndTs     int64
-	ErrorOnly bool
+	ChannelId   int
+	ChannelIds  []int
+	UserId      int
+	ModelName   string
+	TokenId     int
+	StartTs     int64
+	EndTs       int64
+	ErrorOnly   bool
+	ConsumeOnly bool
 }
 
 func visitPerfLogs(ctx context.Context, filter perfLogFilter, visit func(PerfChannelLog)) (int, bool, error) {
@@ -63,7 +122,9 @@ func visitPerfLogs(ctx context.Context, filter perfLogFilter, visit func(PerfCha
 	for {
 		query := LOG_DB.WithContext(ctx).Model(&Log{}).
 			Select("id, user_id, channel_id, created_at, type, use_time, other, prompt_tokens, completion_tokens, is_stream")
-		if filter.ErrorOnly {
+		if filter.ConsumeOnly {
+			query = query.Where("type = ?", LogTypeConsume)
+		} else if filter.ErrorOnly {
 			query = query.Where("type = ?", LogTypeError)
 		} else {
 			query = query.Where("type IN ?", []int{LogTypeConsume, LogTypeError})
@@ -72,6 +133,9 @@ func visitPerfLogs(ctx context.Context, filter perfLogFilter, visit func(PerfCha
 			Where("created_at >= ? AND created_at <= ?", filter.StartTs, filter.EndTs)
 		if filter.ChannelId > 0 {
 			query = query.Where("channel_id = ?", filter.ChannelId)
+		}
+		if len(filter.ChannelIds) > 0 {
+			query = query.Where("channel_id IN ?", filter.ChannelIds)
 		}
 		if filter.UserId > 0 {
 			query = query.Where("user_id = ?", filter.UserId)

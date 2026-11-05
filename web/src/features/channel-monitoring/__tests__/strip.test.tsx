@@ -92,6 +92,30 @@ test('a measured zero first-response time is preserved and missing generation sp
   expect(screen.queryByText('Success rate')).not.toBeInTheDocument()
 })
 
+test('cache hit rate follows generation speed and precedes success rate without a visible label', () => {
+  const summary = fixture()
+  if (summary.latest) summary.latest.tokens_per_second = 43.29
+  summary.cache = { hit_rate: 82.46, truncated: false }
+  render(
+    <ChannelMonitoringStrip
+      channelName='Example'
+      summary={summary}
+      loading={false}
+      error={false}
+    />
+  )
+  const speed = screen.getByLabelText('Latest generation speed: 43.29 t/s')
+  const cache = screen.getByLabelText('Cache hit rate: 82.46%')
+  const success = screen.getByLabelText('24h Success rate: 100%')
+  expect(
+    speed.compareDocumentPosition(cache) & Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy()
+  expect(
+    cache.compareDocumentPosition(success) & Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy()
+  expect(cache.textContent).toBe('82.46%')
+})
+
 test('keyboard selection opens the matching historical probe bucket', async () => {
   render(
     <ChannelMonitoringStrip

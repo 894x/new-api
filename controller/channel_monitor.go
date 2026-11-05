@@ -224,10 +224,20 @@ func GetChannelMonitoring(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	data, err := model.ChannelMonitorSummaries(ctx, channels, modelName, settings.ChannelMonitoringEnabled, time.Duration(max(1, settings.ChannelMonitoringMinutes))*time.Minute, excluded, time.Now())
+	now := time.Now()
+	data, err := model.ChannelMonitorSummaries(ctx, channels, modelName, settings.ChannelMonitoringEnabled, time.Duration(max(1, settings.ChannelMonitoringMinutes))*time.Minute, excluded, now)
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// Cache statistics may be unavailable independently of probe monitoring.
+	cacheCtx, cacheCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cacheCancel()
+	cache, cacheErr := model.QueryChannelCacheStats(cacheCtx, ids, modelName, now.Add(-24*time.Hour).Unix(), now.Unix())
+	if cacheErr == nil {
+		for i := range data {
+			data[i].Cache = cache[data[i].ChannelID]
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": data})
 }

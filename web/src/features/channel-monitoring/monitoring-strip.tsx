@@ -135,18 +135,46 @@ export function ChannelMonitoringStrip(props: {
   const volumeHintId = useId()
   const [slot, setSlot] = useState(95)
   const [open, setOpen] = useState(false)
+  const cache = props.error ? undefined : props.summary?.cache
+  const cacheRate = cache?.hit_rate
+  const cacheValue =
+    cacheRate == null ? '—' : `${formatNumber(cacheRate, locale)}%`
+  let cacheHint = t('Cache statistics unavailable')
+  if (cache) {
+    cacheHint = t(
+      'Last 24 hours for this channel and model: cache read tokens divided by input tokens. Only successful requests are included.'
+    )
+    if (cacheRate == null) cacheHint += `\n${t('No data')}`
+    if (cache.truncated) cacheHint += `\n${t('Partial cache data')}`
+  }
+  const cacheMetric = (
+    <span
+      className='text-foreground tabular-nums'
+      title={`${t('Cache hit rate')}\n${cacheHint}`}
+      aria-label={`${t('Cache hit rate')}: ${cacheValue}`}
+    >
+      {cacheValue}
+    </span>
+  )
   if (props.loading && !props.summary) {
     return (
-      <Skeleton
-        className='h-8 w-full'
-        aria-label={t('Loading monitoring data')}
-      />
+      <div className='flex min-w-0 items-center gap-3 text-[11px]'>
+        <Skeleton
+          className='h-8 min-w-0 flex-1'
+          aria-label={t('Loading monitoring data')}
+        />
+        {cacheMetric}
+      </div>
     )
   }
   if (props.error || !props.summary) {
     return (
-      <p role='status' className='text-muted-foreground text-xs'>
-        {t('Monitoring unavailable')}
+      <p
+        role='status'
+        className='text-muted-foreground flex flex-wrap items-center gap-3 text-xs'
+      >
+        <span>{t('Monitoring unavailable')}</span>
+        {cacheMetric}
       </p>
     )
   }
@@ -154,7 +182,10 @@ export function ChannelMonitoringStrip(props: {
   let status = states[summary.state] ?? states.empty
   if (summary.state === 'disabled' || summary.state === 'unregistered') {
     return (
-      <p className='text-muted-foreground text-[11px]'>{t(status.label)}</p>
+      <p className='text-muted-foreground flex flex-wrap items-center gap-3 text-[11px]'>
+        <span>{t(status.label)}</span>
+        {cacheMetric}
+      </p>
     )
   }
   const bucket = summary.buckets[slot]
@@ -247,6 +278,7 @@ export function ChannelMonitoringStrip(props: {
             {formatNumber(latest.tokens_per_second, locale)} t/s
           </span>
         )}
+        {cacheMetric}
         <span
           className='text-foreground ml-auto tabular-nums'
           title={`24h ${t('Success rate')}`}
