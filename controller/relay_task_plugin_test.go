@@ -466,7 +466,7 @@ func setupTaskSubmissionDatabase(t *testing.T, migrate bool, events *[]string) *
 	t.Helper()
 	previousDB, previousMemoryCache := model.DB, common.MemoryCacheEnabled
 	previousMain, previousLog := common.MainDatabaseType(), common.LogDatabaseType()
-	models := []any{&model.ModelRoutingPool{}, &model.UserGroupChannelRoutingOverride{}, &model.Ability{}}
+	models := []any{&model.ModelRoutingPool{}, &model.UserGroupChannelRoutingOverride{}, &model.UserRoutingStrategy{}, &model.Ability{}}
 	if migrate {
 		models = append(models, &model.Task{})
 	}
@@ -527,7 +527,7 @@ schemaLoop:
 	for _, row := range models {
 		switch row.(type) {
 		case *model.Channel, *model.Task:
-			models = append(models, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.Ability{})
+			models = append(models, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.UserRoutingStrategy{}, &model.Ability{})
 			break schemaLoop
 		}
 	}

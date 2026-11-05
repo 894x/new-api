@@ -34,22 +34,27 @@ type userChannelRoutingRow struct {
 }
 
 type userChannelRoutingResponse struct {
-	Models              []string                        `json:"models"`
-	ConfiguredModels    []string                        `json:"configured_models"`
-	ConfiguredKeyGroups map[string][]string             `json:"configured_key_groups"`
-	KeyGroups           map[string]string               `json:"key_groups"`
-	Model               string                          `json:"model"`
-	RoutingGroup        string                          `json:"routing_group,omitempty"`
-	Revision            string                          `json:"revision"`
-	Channels            []userChannelRoutingRow         `json:"channels"`
-	UserID              int                             `json:"user_id"`
-	Username            string                          `json:"username"`
-	UserRole            int                             `json:"user_role"`
-	ModelGroups         map[string][]string             `json:"model_groups,omitempty"`
-	Source              string                          `json:"source,omitempty"`
-	Mode                string                          `json:"mode,omitempty"`
-	Configured          bool                            `json:"configured"`
-	PoolChannels        []model.ModelRoutingPoolChannel `json:"pool_channels,omitempty"`
+	Models               []string                        `json:"models"`
+	ConfiguredModels     []string                        `json:"configured_models"`
+	ConfiguredKeyGroups  map[string][]string             `json:"configured_key_groups"`
+	KeyGroups            map[string]string               `json:"key_groups"`
+	Model                string                          `json:"model"`
+	RoutingGroup         string                          `json:"routing_group,omitempty"`
+	Revision             string                          `json:"revision"`
+	Channels             []userChannelRoutingRow         `json:"channels"`
+	UserID               int                             `json:"user_id"`
+	Username             string                          `json:"username"`
+	UserRole             int                             `json:"user_role"`
+	ModelGroups          map[string][]string             `json:"model_groups,omitempty"`
+	Source               string                          `json:"source,omitempty"`
+	Mode                 string                          `json:"mode,omitempty"`
+	StrategyMode         string                          `json:"strategy_mode"`
+	StrategyRevision     string                          `json:"strategy_revision"`
+	StrategyUserOverride bool                            `json:"strategy_user_override"`
+	MaxTTFTMS            int64                           `json:"max_ttft_ms"`
+	MaxTPOTMS            int64                           `json:"max_tpot_ms"`
+	Configured           bool                            `json:"configured"`
+	PoolChannels         []model.ModelRoutingPoolChannel `json:"pool_channels,omitempty"`
 }
 
 // GET without model lists selectable and previously configured public models.
@@ -69,6 +74,11 @@ func GetUserChannelRouting(c *gin.Context) {
 		return
 	}
 	groupOverrides, err := model.ListUserGroupChannelRoutingOverrides(userID, modelName)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	strategies, err := model.ListUserRoutingStrategies(userID, modelName)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -100,6 +110,13 @@ func GetUserChannelRouting(c *gin.Context) {
 			if _, public := response.KeyGroups[override.RoutingGroup]; public {
 				response.ConfiguredModels = append(response.ConfiguredModels, override.Model)
 				response.ConfiguredKeyGroups[override.Model] = append(response.ConfiguredKeyGroups[override.Model], override.RoutingGroup)
+			}
+		}
+		for _, strategy := range strategies {
+			models = append(models, strategy.Model)
+			if _, public := response.KeyGroups[strategy.RoutingGroup]; public {
+				response.ConfiguredModels = append(response.ConfiguredModels, strategy.Model)
+				response.ConfiguredKeyGroups[strategy.Model] = append(response.ConfiguredKeyGroups[strategy.Model], strategy.RoutingGroup)
 			}
 		}
 		for modelName, groups := range response.ConfiguredKeyGroups {
@@ -233,6 +250,21 @@ func GetUserChannelRouting(c *gin.Context) {
 		if pool != nil {
 			response.Source, response.Mode = "default_pool", pool.Mode
 		}
+		response.StrategyMode = "inherit"
+		for _, strategy := range strategies {
+			if strategy.RoutingGroup == routingGroup {
+				response.StrategyMode, response.StrategyRevision = strategy.Mode, strategy.Revision
+			}
+		}
+		strategy, err := param.RoutingStrategy(routingGroup)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if strategy != nil {
+			response.Mode, response.MaxTTFTMS, response.MaxTPOTMS = strategy.Mode, strategy.MaxTTFTMS, strategy.MaxTPOTMS
+			response.StrategyUserOverride = strategy.UserId > 0
+		}
 		resolved, err := param.UserChannelRoutingForGroup(routingGroup)
 		if err != nil {
 			common.ApiError(c, err)
@@ -313,16 +345,24 @@ func PatchUserChannelRouting(c *gin.Context) {
 		Revision     string                          `json:"revision"`
 		Overrides    []model.UserChannelRoutingPatch `json:"overrides"`
 		Reset        bool                            `json:"reset"`
+		Strategy     *model.UserRoutingStrategy      `json:"strategy"`
 	}
 	if err != nil || userID <= 0 || common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10), &request) != nil || request.RoutingGroup == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid user channel routing"})
+		return
+	}
+	if request.Strategy != nil && (request.Reset || request.Overrides != nil) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "strategy changes cannot include channel changes"})
 		return
 	}
 	if request.Reset && len(request.Overrides) > 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "reset cannot include overrides"})
 		return
 	}
-	if request.Reset {
+	if request.Strategy != nil {
+		request.Strategy.UserId, request.Strategy.Model, request.Strategy.RoutingGroup = userID, request.Model, request.RoutingGroup
+		err = model.SaveUserRoutingStrategy(request.Strategy, request.Strategy.Revision)
+	} else if request.Reset {
 		err = model.ResetUserChannelRoutingForGroup(userID, request.Model, request.RoutingGroup, request.Revision)
 	} else {
 		err = model.PatchUserChannelRoutingForGroup(userID, request.Model, request.RoutingGroup, request.Revision, request.Overrides)
@@ -338,6 +378,10 @@ func PatchUserChannelRouting(c *gin.Context) {
 		c.JSON(status, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	recordManageAuditFor(c, userID, "user.channel_routing.update", map[string]any{"model": request.Model, "routing_group": request.RoutingGroup, "channels": len(request.Overrides), "reset": request.Reset})
+	audit := map[string]any{"model": request.Model, "routing_group": request.RoutingGroup, "channels": len(request.Overrides), "reset": request.Reset}
+	if request.Strategy != nil {
+		audit["strategy"] = request.Strategy.Mode
+	}
+	recordManageAuditFor(c, userID, "user.channel_routing.update", audit)
 	common.ApiSuccess(c, nil)
 }

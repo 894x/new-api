@@ -51,12 +51,12 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getUserRoutingPool,
-  ROUTING_MODE_LABELS,
   userRoutingPoolKeys,
   type UserRoutingPoolConfig,
 } from './api'
 import { PoolChannelList } from './pool-channel-list'
 import { PoolMonitorDisplay } from './pool-monitor-display'
+import { UserPoolStrategy } from './user-pool-strategy'
 
 const schema = z.object({
   channels: z
@@ -292,13 +292,10 @@ function UserPoolEditor(props: {
           <Badge variant={config.configured ? 'default' : 'outline'}>
             {config.configured ? t('User override') : sources[config.source]}
           </Badge>
-          <span className='text-muted-foreground'>
-            {props.group
-              ? t('Strategy: {{strategy}} (inherited)', {
-                  strategy: t(ROUTING_MODE_LABELS[config.mode]),
-                })
-              : t('Strategy follows each public group')}
-          </span>
+          <UserPoolStrategy
+            config={config}
+            disabled={editing || save.isPending}
+          />
         </div>
         {editing && (
           <p className='text-muted-foreground text-xs'>

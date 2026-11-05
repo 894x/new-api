@@ -26,7 +26,7 @@ func TestUserChannelRoutingOverridesAllSelectionPaths(t *testing.T) {
 			db := setupChannelSelectAutoGroupsTest(t)
 			common.MemoryCacheEnabled = cacheEnabled
 			configureDynamicRoutingForTest(t, true)
-			require.NoError(t, db.AutoMigrate(&model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+			require.NoError(t, db.AutoMigrate(&model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.UserRoutingStrategy{}))
 			createPrioritizedChannelSelectFixture(t, db, 9501, "default,vip", "gpt-5", 100)
 			createPrioritizedChannelSelectFixture(t, db, 9502, "default,vip", "gpt-5", 10)
 			createPrioritizedChannelSelectFixture(t, db, 9503, "private", "gpt-5", 1000)

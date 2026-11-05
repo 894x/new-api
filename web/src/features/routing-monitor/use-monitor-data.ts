@@ -137,8 +137,11 @@ export function useMonitorData(
       if (userId) {
         const data = await getUserRoutingPool(userId, group, model)
         return {
-          source: data.source,
-          mode: data.source === 'channel_defaults' ? undefined : data.mode,
+          source: data.strategy_user_override ? ('user' as const) : data.source,
+          mode:
+            data.source === 'channel_defaults' && !data.strategy_user_override
+              ? undefined
+              : data.mode,
           names: new Map(
             data.channels.map((channel) => [
               channel.channel_id,

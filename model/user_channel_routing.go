@@ -30,6 +30,74 @@ type UserGroupChannelRoutingOverride struct {
 	RoutingGroup               string `json:"routing_group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
 }
 
+// Strategy overrides are independent of channel membership. Removing one
+// restores the model/public-group strategy without changing the user's pool.
+type UserRoutingStrategy struct {
+	UserId       int    `json:"-" gorm:"primaryKey;autoIncrement:false"`
+	Model        string `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
+	RoutingGroup string `json:"routing_group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+	Mode         string `json:"mode" gorm:"type:varchar(16);not null"`
+	Revision     string `json:"revision" gorm:"type:varchar(64);not null"`
+	MaxTTFTMS    int64  `json:"max_ttft_ms" gorm:"column:max_ttft_ms"`
+	MaxTPOTMS    int64  `json:"max_tpot_ms" gorm:"column:max_tpot_ms"`
+}
+
+func (strategy *UserRoutingStrategy) UsesDynamicRouting() bool {
+	return strategy != nil && (strategy.Mode == RoutingModeSmart || strategy.Mode == RoutingModeDiscount)
+}
+
+func ListUserRoutingStrategies(userID int, modelName string) ([]UserRoutingStrategy, error) {
+	rows := make([]UserRoutingStrategy, 0)
+	if userID <= 0 {
+		return rows, nil
+	}
+	query := DB.Where("user_id = ?", userID)
+	if modelName != "" {
+		query = query.Where("model = ?", modelName)
+	}
+	err := query.Order("model, routing_group").Find(&rows).Error
+	return rows, err
+}
+
+func SaveUserRoutingStrategy(strategy *UserRoutingStrategy, expectedRevision string) error {
+	if strategy == nil || strategy.UserId <= 0 || strategy.Model == "" || len(strategy.Model) > 255 || strings.TrimSpace(strategy.Model) != strategy.Model || strings.ContainsAny(strategy.Model, "\x00\r\n") || strategy.RoutingGroup == "" || strategy.RoutingGroup == "auto" || len(strategy.RoutingGroup) > 64 || strings.TrimSpace(strategy.RoutingGroup) != strategy.RoutingGroup || strings.ContainsAny(strategy.RoutingGroup, ",\x00\r\n") || !slices.Contains([]string{"inherit", RoutingModePriority, RoutingModeSmart, RoutingModeDiscount}, strategy.Mode) || strategy.MaxTTFTMS < 0 || strategy.MaxTTFTMS > 3600000 || strategy.MaxTPOTMS < 0 || strategy.MaxTPOTMS > 60000 {
+		return ErrInvalidUserChannelRouting
+	}
+	if strategy.Mode == RoutingModeDiscount {
+		if strategy.MaxTTFTMS == 0 {
+			strategy.MaxTTFTMS = DefaultDiscountMaxTTFTMS
+		}
+		if strategy.MaxTPOTMS == 0 {
+			strategy.MaxTPOTMS = DefaultDiscountMaxTPOTMS
+		}
+	} else {
+		strategy.MaxTTFTMS, strategy.MaxTPOTMS = 0, 0
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var user User
+		if err := lockForUpdate(tx).Select("id").First(&user, strategy.UserId).Error; err != nil {
+			return err
+		}
+		query := tx.Where("user_id = ? AND model = ? AND routing_group = ?", strategy.UserId, strategy.Model, strategy.RoutingGroup)
+		var current UserRoutingStrategy
+		err := query.First(&current).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if current.Revision != expectedRevision {
+			return ErrUserChannelRoutingConflict
+		}
+		if strategy.Mode == "inherit" {
+			return query.Delete(&UserRoutingStrategy{}).Error
+		}
+		strategy.Revision = common.GetUUID()
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "user_id"}, {Name: "model"}, {Name: "routing_group"}},
+			DoUpdates: clause.AssignmentColumns([]string{"mode", "revision", "max_ttft_ms", "max_tpot_ms"}),
+		}).Create(strategy).Error
+	})
+}
+
 func ListUserGroupChannelRoutingOverrides(userID int, modelName string) ([]UserGroupChannelRoutingOverride, error) {
 	rows := make([]UserGroupChannelRoutingOverride, 0)
 	if userID <= 0 {

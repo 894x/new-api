@@ -45,6 +45,7 @@ type RetryParam struct {
 	userRoutingLoaded      bool
 	userGroupRouting       []model.UserGroupChannelRoutingOverride
 	routingPools           map[string]*model.ModelRoutingPool
+	routingStrategies      map[string]*model.UserRoutingStrategy
 	Ctx                    *gin.Context
 	TokenGroup             string
 	ModelName              string
@@ -391,14 +392,14 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			groups = GetRequestAutoGroups(c, common.GetContextKeyString(c, constant.ContextKeyUserGroup))
 		}
 		for _, group := range groups {
-			pool, err := retry.ModelRoutingPool(group)
+			strategy, err := retry.RoutingStrategy(group)
 			if err != nil {
 				return nil, "", &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: "model_routing_pool_unavailable"}
 			}
-			if pool.UsesDynamicRouting() {
+			if strategy.UsesDynamicRouting() {
 				preferDynamic = true
 			}
-			if pool == nil && DynamicRoutingEnabled() {
+			if strategy == nil && DynamicRoutingEnabled() {
 				preferDynamic = true
 			}
 		}

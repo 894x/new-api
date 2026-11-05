@@ -79,9 +79,13 @@ func getSatisfiedChannelForRoute(param *RetryParam, group string, retry int) (*m
 	if err != nil {
 		return nil, false, err
 	}
-	smart := pool.UsesDynamicRouting()
+	strategy, err := param.RoutingStrategy(group)
+	if err != nil {
+		return nil, false, err
+	}
+	smart := strategy.UsesDynamicRouting()
 	param.Ctx.Set(modelRoutingSmartContextKey, smart)
-	if param.DynamicRoutingEligible && (smart || pool == nil && len(userRouting) == 0) {
+	if param.DynamicRoutingEligible && (smart || strategy == nil && len(userRouting) == 0) {
 		channel, handled, allAttempted, err := selectDynamicSatisfiedChannel(param, group)
 		if handled || err != nil {
 			return channel, allAttempted, err
@@ -103,11 +107,11 @@ func getSatisfiedChannelForRoute(param *RetryParam, group string, retry int) (*m
 }
 
 func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Channel, bool, bool, error) {
-	pool, err := param.ModelRoutingPool(group)
+	strategy, err := param.RoutingStrategy(group)
 	if err != nil {
 		return nil, true, false, err
 	}
-	controller, enabled, err := currentDynamicRoutingController(pool.UsesDynamicRouting())
+	controller, enabled, err := currentDynamicRoutingController(strategy.UsesDynamicRouting())
 	if err != nil || !enabled {
 		return nil, false, false, err
 	}
@@ -153,7 +157,7 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 		}
 	}
 	var discounts map[int]*float64
-	if pool != nil && pool.Mode == model.RoutingModeDiscount {
+	if strategy != nil && strategy.Mode == model.RoutingModeDiscount {
 		discounts, err = model.ResolveChannelSelectionDiscounts(eligible)
 		if err != nil {
 			return nil, true, false, err
@@ -176,12 +180,12 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 		Group: group,
 		Model: param.ModelName,
 	}
-	if len(filters.UserRoutingOverrides) > 0 {
+	if len(filters.UserRoutingOverrides) > 0 || strategy != nil && strategy.UserId > 0 {
 		key.Policy = fmt.Sprintf("user:%d", common.GetContextKeyInt(param.Ctx, constant.ContextKeyUserId))
 	}
 	var decision dynamicrouting.Decision
-	if pool != nil && pool.Mode == model.RoutingModeDiscount {
-		limits := dynamicrouting.DiscountLimits{MaxTTFT: time.Duration(pool.MaxTTFTMS) * time.Millisecond, MaxTPOT: time.Duration(pool.MaxTPOTMS) * time.Millisecond}
+	if strategy != nil && strategy.Mode == model.RoutingModeDiscount {
+		limits := dynamicrouting.DiscountLimits{MaxTTFT: time.Duration(strategy.MaxTTFTMS) * time.Millisecond, MaxTPOT: time.Duration(strategy.MaxTPOTMS) * time.Millisecond}
 		decision = controller.SelectDiscountAvoiding(key, candidates, excluded, limits, time.Now())
 	} else {
 		decision = controller.SelectAvoiding(key, candidates, excluded, time.Now())

@@ -25,9 +25,13 @@ func (p *RetryParam) SelectionFilters(group string) (model.ChannelSelectionFilte
 	}
 	var poolChannels map[int]model.ModelRoutingPoolChannel
 	if pool != nil && len(userRouting) == 0 {
+		strategy, err := p.RoutingStrategy(group)
+		if err != nil {
+			return model.ChannelSelectionFilters{}, err
+		}
 		poolChannels = make(map[int]model.ModelRoutingPoolChannel, len(pool.Channels))
 		for _, entry := range pool.Channels {
-			if p.HasAttempted(entry.ChannelID) && !(p.DynamicRoutingEligible && pool.UsesDynamicRouting()) {
+			if p.HasAttempted(entry.ChannelID) && !(p.DynamicRoutingEligible && strategy.UsesDynamicRouting()) {
 				continue
 			}
 			poolChannels[entry.ChannelID] = entry

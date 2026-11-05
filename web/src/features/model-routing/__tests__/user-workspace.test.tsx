@@ -160,6 +160,110 @@ function mockPool(config = fixture()) {
   return state
 }
 
+test.each([
+  ['priority', 'Priority routing'],
+  ['smart', 'Smart routing'],
+  ['discount', 'Discount-first routing'],
+  ['inherit', 'Inherit strategy'],
+] as const)(
+  'saving the user strategy %s preserves channel membership',
+  async (mode, label) => {
+    mockPool({
+      ...fixture(),
+      strategy_mode: mode === 'inherit' ? 'discount' : 'inherit',
+      strategy_revision: 'strategy-original',
+      strategy_user_override: mode === 'inherit',
+    })
+    const patch = vi
+      .spyOn(api, 'patch')
+      .mockResolvedValue({ data: { success: true } })
+    const { card } = await mountWorkspace()
+    await userEvent.click(
+      await within(card).findByRole('button', {
+        name: 'Edit scheduling strategy',
+      })
+    )
+    const dialog = screen.getByRole('dialog', {
+      name: 'Edit scheduling strategy',
+    })
+    await userEvent.click(
+      within(dialog).getByRole('combobox', { name: 'Scheduling strategy' })
+    )
+    await userEvent.click(await screen.findByRole('option', { name: label }))
+    if (mode === 'discount') {
+      fireEvent.change(
+        within(dialog).getByLabelText('Maximum first-token latency (ms)'),
+        { target: { value: '1200' } }
+      )
+      fireEvent.change(
+        within(dialog).getByLabelText('Maximum time per output token (ms)'),
+        { target: { value: '50' } }
+      )
+    }
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(
+        '/api/user/42/channel-routing-overrides',
+        {
+          model: 'kimi-k3',
+          routing_group: 'vip',
+          strategy: {
+            mode,
+            revision: 'strategy-original',
+            max_ttft_ms: mode === 'discount' ? 1200 : 0,
+            max_tpot_ms: mode === 'discount' ? 50 : 0,
+          },
+        }
+      )
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'Edit scheduling strategy' })
+      ).not.toBeInTheDocument()
+    )
+  }
+)
+
+test('a rejected user strategy save keeps the dialog and selected mode for correction', async () => {
+  mockPool()
+  vi.spyOn(api, 'patch').mockResolvedValue({
+    data: { success: false, message: 'configuration changed' },
+  })
+  const { card } = await mountWorkspace()
+  await userEvent.click(
+    await within(card).findByRole('button', {
+      name: 'Edit scheduling strategy',
+    })
+  )
+  const dialog = screen.getByRole('dialog', {
+    name: 'Edit scheduling strategy',
+  })
+  await userEvent.click(
+    within(dialog).getByRole('combobox', { name: 'Scheduling strategy' })
+  )
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'Priority routing' })
+  )
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+    'Changes were not saved.'
+  )
+  expect(
+    within(dialog).getByRole('combobox', { name: 'Scheduling strategy' })
+  ).toHaveTextContent('Priority routing')
+})
+
+test('user strategy editing is disabled while channel edits are pending', async () => {
+  mockPool()
+  const { card } = await mountWorkspace()
+  await userEvent.click(
+    await within(card).findByRole('button', { name: 'Create user override' })
+  )
+  expect(
+    within(card).getByRole('button', { name: 'Edit scheduling strategy' })
+  ).toBeDisabled()
+})
+
 test('user monitoring retains the same unsaved override and returns focus without changing the selected user pool', async () => {
   mockPool()
   const patch = vi

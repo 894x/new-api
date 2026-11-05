@@ -41,7 +41,30 @@ export interface UserRoutingPoolConfig extends UserChannelRoutingConfig {
   source: 'user' | 'default_pool' | 'channel_defaults'
   mode: RoutingMode
   configured: boolean
+  strategy_mode?: RoutingMode | 'inherit'
+  strategy_revision?: string
+  strategy_user_override?: boolean
+  max_ttft_ms?: number
+  max_tpot_ms?: number
   pool_channels?: PoolChannel[]
+}
+
+export async function saveUserRoutingStrategy(
+  userId: number,
+  model: string,
+  group: string,
+  strategy: {
+    mode: RoutingMode | 'inherit'
+    revision: string
+    max_ttft_ms: number
+    max_tpot_ms: number
+  }
+) {
+  const response = await api.patch<{ success: boolean; message?: string }>(
+    `/api/user/${userId}/channel-routing-overrides`,
+    { model, routing_group: group, strategy }
+  )
+  requireServerSuccess(response.data)
 }
 
 export const userRoutingPoolKeys = {

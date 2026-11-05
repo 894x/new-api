@@ -17,7 +17,7 @@ import (
 
 func TestCustomerGroupConfigurationAuthorization(t *testing.T) {
 	f := setupManagedUserE2E(t)
-	require.NoError(t, model.DB.AutoMigrate(&model.Option{}, &model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.AuditLog{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.Option{}, &model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.UserRoutingStrategy{}, &model.AuditLog{}))
 	versionQuery := "SELECT VERSION()"
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		versionQuery = "SELECT sqlite_version()"

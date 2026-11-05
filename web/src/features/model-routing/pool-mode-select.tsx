@@ -32,12 +32,15 @@ export function PoolModeSelect(props: {
   value: RoutingMode
   onChange: (mode: RoutingMode) => void
   disabled?: boolean
+  inherited?: boolean
+  onInherit?: () => void
 }) {
   const { t } = useTranslation()
   return (
     <Select
-      value={props.value}
+      value={props.inherited ? 'inherit' : props.value}
       onValueChange={(value) => {
+        if (value === 'inherit') props.onInherit?.()
         if (value === 'priority' || value === 'smart' || value === 'discount') {
           props.onChange(value)
         }
@@ -48,9 +51,16 @@ export function PoolModeSelect(props: {
         aria-label={t('Scheduling strategy')}
         className='w-full sm:w-44'
       >
-        <SelectValue>{t(ROUTING_MODE_LABELS[props.value])}</SelectValue>
+        <SelectValue>
+          {props.inherited
+            ? t('Inherit strategy')
+            : t(ROUTING_MODE_LABELS[props.value])}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
+        {props.onInherit && (
+          <SelectItem value='inherit'>{t('Inherit strategy')}</SelectItem>
+        )}
         <SelectItem value='priority'>{t('Priority routing')}</SelectItem>
         <SelectItem value='smart'>{t('Smart routing')}</SelectItem>
         <SelectItem value='discount'>{t('Discount-first routing')}</SelectItem>

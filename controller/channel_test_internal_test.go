@@ -77,7 +77,7 @@ func TestChannelMonitoringLocalFailureDoesNotBecomeHealthyOrExposeUpstreamSecret
 func TestChannelMonitoringExclusionsFollowConfiguredStatusCodes(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	withSelfUseModeEnabled(t)
-	require.NoError(t, db.AutoMigrate(&model.ChannelMonitorRecord{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+	require.NoError(t, db.AutoMigrate(&model.ChannelMonitorRecord{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.UserRoutingStrategy{}))
 	root := model.User{Id: 11501, Username: "monitor-rejection-fixture", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", Quota: 1000000}
 	require.NoError(t, db.Create(&root).Error)
 	settings := *operation_setting.GetMonitorSetting()
@@ -163,7 +163,7 @@ func TestChannelMonitoringAPISelectsCurrentModelAndNeverReturnsChannelCredential
 func TestChannelMonitoringTaskUsesExistingRelayAndPreservesChannelStatus(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	withSelfUseModeEnabled(t)
-	require.NoError(t, db.AutoMigrate(&model.ChannelMonitorRecord{}, &model.SystemTask{}, &model.SystemTaskLock{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+	require.NoError(t, db.AutoMigrate(&model.ChannelMonitorRecord{}, &model.SystemTask{}, &model.SystemTaskLock{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.UserRoutingStrategy{}))
 	settings := operation_setting.GetMonitorSetting()
 	previous := *settings
 	t.Cleanup(func() { *settings = previous })

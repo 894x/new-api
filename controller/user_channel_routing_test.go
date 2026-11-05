@@ -677,6 +677,107 @@ func TestUserRoutingPoolEditorDatabaseMatrix(t *testing.T) {
 	}
 }
 
+func TestUserRoutingStrategyDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		for _, upgrade := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/upgrade_%t", dialect, upgrade), func(t *testing.T) {
+				if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+					t.Skip("isolated database DSN not configured")
+				}
+				t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+				db := setupManageUserTestDB(t)
+				require.NoError(t, db.Migrator().DropTable(&model.UserRoutingStrategy{}))
+				require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+				previousCache := common.MemoryCacheEnabled
+				common.MemoryCacheEnabled = false
+				t.Cleanup(func() { common.MemoryCacheEnabled = previousCache })
+				user := model.User{Username: "strategy-owner", Group: "default", AffCode: "strategyowner"}
+				require.NoError(t, db.Create(&user).Error)
+				channel := model.Channel{Id: 9871, Type: 1, Name: "Strategy candidate", Models: "strategy-model", Group: "default,vip", Status: common.ChannelStatusEnabled, Priority: common.GetPointer(int64(10)), Weight: common.GetPointer(uint(20))}
+				require.NoError(t, db.Create(&channel).Error)
+				require.NoError(t, channel.AddAbilities(nil))
+				pool := model.ModelRoutingPool{RoutingGroup: "default", Model: "strategy-model", Mode: model.RoutingModeSmart, Channels: []model.ModelRoutingPoolChannel{{ChannelID: channel.Id, Priority: 100, Weight: 7, Enabled: true}}}
+				require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+				if upgrade {
+					require.NoError(t, db.Create(&model.UserGroupChannelRoutingOverride{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: user.Id, Model: "strategy-model", ChannelId: channel.Id, Priority: common.GetPointer(int64(0)), Weight: common.GetPointer(uint(0))}, RoutingGroup: "default"}).Error)
+				}
+				before, err := model.ListUserGroupChannelRoutingOverrides(user.Id, "strategy-model")
+				require.NoError(t, err)
+				for range 2 {
+					require.NoError(t, db.AutoMigrate(&model.UserRoutingStrategy{}))
+				}
+				read := func() userChannelRoutingResponse {
+					response := userRoutingRequestAtURL(t, user.Id, http.MethodGet, "/api/user/1/channel-routing-overrides?view=pool&model=strategy-model&routing_group=default", "", GetUserChannelRouting)
+					require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+					var body struct {
+						Data userChannelRoutingResponse `json:"data"`
+					}
+					require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+					return body.Data
+				}
+				write := func(mode, revision string, ttft, tpot int64) *httptest.ResponseRecorder {
+					body := fmt.Sprintf(`{"model":"strategy-model","routing_group":"default","strategy":{"mode":%q,"revision":%q,"max_ttft_ms":%d,"max_tpot_ms":%d}}`, mode, revision, ttft, tpot)
+					return userRoutingRequest(t, user.Id, http.MethodPatch, body, PatchUserChannelRouting)
+				}
+				param := func(id int, name, group string) *service.RetryParam {
+					ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+					common.SetContextKey(ctx, constant.ContextKeyUserId, id)
+					common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+					return &service.RetryParam{Ctx: ctx, ModelName: name, TokenGroup: group, DynamicRoutingEligible: true}
+				}
+				inherited := read()
+				assert.Equal(t, "inherit", inherited.StrategyMode)
+				assert.Equal(t, "smart", inherited.Mode)
+				requestSnapshot := param(user.Id, "strategy-model", "default")
+				strategy, err := requestSnapshot.RoutingStrategy("default")
+				require.NoError(t, err)
+				assert.Equal(t, "smart", strategy.Mode)
+				require.Equal(t, http.StatusOK, write("priority", "", 0, 0).Code)
+				priority := read()
+				assert.Equal(t, "priority", priority.Mode)
+				assert.True(t, priority.StrategyUserOverride)
+				assert.Equal(t, inherited.PoolChannels, priority.PoolChannels)
+				strategy, err = requestSnapshot.RoutingStrategy("default")
+				require.NoError(t, err)
+				assert.Equal(t, "smart", strategy.Mode, "one request retains its strategy snapshot")
+				strategy, err = param(user.Id, "strategy-model@effort:high", "default").RoutingStrategy("default")
+				require.NoError(t, err)
+				require.NotNil(t, strategy)
+				assert.Equal(t, "priority", strategy.Mode, "request modifiers inherit the base model override")
+				assert.Equal(t, http.StatusConflict, write("discount", "", 1200, 50).Code)
+				assert.Equal(t, http.StatusBadRequest, write("discount", priority.StrategyRevision, 3600001, 50).Code)
+				require.Equal(t, http.StatusOK, write("discount", priority.StrategyRevision, 1200, 50).Code)
+				discount := read()
+				assert.Equal(t, "discount", discount.Mode)
+				assert.EqualValues(t, 1200, discount.MaxTTFTMS)
+				assert.EqualValues(t, 50, discount.MaxTPOTMS)
+				channelSelected, _, err := service.CacheGetRandomSatisfiedChannel(param(user.Id, "strategy-model", "default"))
+				require.NoError(t, err)
+				require.NotNil(t, channelSelected)
+				assert.Equal(t, channel.Id, channelSelected.Id)
+				strategy, err = param(user.Id+1000, "strategy-model", "default").RoutingStrategy("default")
+				require.NoError(t, err)
+				assert.Equal(t, "smart", strategy.Mode, "another user keeps the global strategy")
+				strategy, err = param(user.Id, "strategy-model", "vip").RoutingStrategy("vip")
+				require.NoError(t, err)
+				assert.Nil(t, strategy, "another public group keeps legacy defaults")
+				require.Equal(t, http.StatusOK, write("inherit", discount.StrategyRevision, 0, 0).Code)
+				assert.Equal(t, "smart", read().Mode)
+				assert.False(t, read().StrategyUserOverride)
+				after, err := model.ListUserGroupChannelRoutingOverrides(user.Id, "strategy-model")
+				require.NoError(t, err)
+				assert.Equal(t, before, after, "strategy changes and reset preserve channel priority, weight and membership")
+				storedPool, err := model.GetModelRoutingPool("default", "strategy-model")
+				require.NoError(t, err)
+				assert.Equal(t, pool, *storedPool)
+				for range 2 {
+					require.NoError(t, db.AutoMigrate(&model.UserRoutingStrategy{}))
+				}
+			})
+		}
+	}
+}
+
 func TestUserRoutingPoolMembershipDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {
