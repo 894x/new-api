@@ -319,6 +319,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		monitorEndpoint := service.ChannelTrafficMonitoringEndpoint(channel, relayInfo, publicModelName)
 		if observeAttempt {
 			relayInfo.BeginDynamicRoutingAttempt(channel.Id, channel.Type, publicModelName, true)
+			service.BindRoutingMonitorAttempt(c, relayInfo, channel.Id)
 		} else if monitorEndpoint != "" {
 			relayInfo.BeginChannelMonitoringAttempt(channel.Id, channel.Type, publicModelName)
 		}

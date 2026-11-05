@@ -35,6 +35,8 @@ export interface MonitorChannel {
   ttft_ms: number | null
   tpot_ms: number | null
   sample_count: number
+  ttft_sample_count?: number
+  tpot_sample_count?: number
 }
 
 export interface MonitorHistory {
@@ -48,6 +50,8 @@ export interface MonitorHistory {
 }
 
 export interface MonitorEvent {
+  node_id?: string
+  node_name?: string
   at: number
   kind:
     | 'initialized'
@@ -61,6 +65,9 @@ export interface MonitorEvent {
 }
 
 export interface MonitorRoute {
+  aggregate?: boolean
+  requests?: MonitorRequest[]
+  requests_truncated?: boolean
   group: string
   model: string
   policy: string
@@ -73,6 +80,12 @@ export interface MonitorRoute {
   history: MonitorHistory[]
   events: MonitorEvent[]
   truncated: boolean
+}
+
+export interface MonitorRequest {
+  id: string
+  at: number
+  channel_id: number
 }
 
 export interface MonitorNode {

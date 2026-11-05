@@ -26,6 +26,7 @@ import {
   routingPoolKeys,
 } from '@/features/model-routing/api'
 
+import { aggregateMonitorRoutes } from './aggregate-route'
 import { getRoutingMonitor, monitorKey } from './api'
 import { effectiveMonitorRoute } from './route-data'
 
@@ -70,15 +71,20 @@ export function useMonitorData(
   const nodes = monitor.data?.nodes ?? []
   const node = selectedNode
     ? nodes.find((item) => item.id === selectedNode.id)
-    : (nodes.find((item) => item.local) ?? nodes[0])
+    : undefined
   const nodeUnavailable = !!selectedNode && !node
   const setNode = (id: string) => {
+    if (id === '__all') {
+      setSelectedNode(undefined)
+      return
+    }
     const option = nodes.find((item) => item.id === id)
     setSelectedNode({ id, name: option?.name ?? id })
   }
   const preferredPolicy = userId ? `user:${userId}` : ''
-  const activeRoutes =
-    node?.routes.filter((route) => route.selection_count > 0) ?? []
+  const activeRoutes = (node ? [node] : nodes).flatMap((item) =>
+    item.routes.filter((route) => route.selection_count > 0)
+  )
   const preferredRoute =
     activeRoutes.find((route) => route.policy === preferredPolicy) ??
     activeRoutes.find((route) => route.policy === '')
@@ -172,7 +178,7 @@ export function useMonitorData(
   })
   const effectiveMode =
     detail.data?.mode ?? (monitor.data?.legacy_enabled ? 'smart' : 'priority')
-  const route = effectiveMonitorRoute(
+  let route = effectiveMonitorRoute(
     node,
     group,
     model,
@@ -180,6 +186,21 @@ export function useMonitorData(
     detail.data?.source,
     effectiveMode
   )
+  if (!selectedNode) {
+    route = aggregateMonitorRoutes(
+      nodes,
+      monitor.data?.generated_at ?? 0,
+      (item) =>
+        effectiveMonitorRoute(
+          item,
+          group,
+          model,
+          userId,
+          detail.data?.source,
+          effectiveMode
+        )
+    )
+  }
   return {
     monitor,
     fixed: !!fixedIdentity,

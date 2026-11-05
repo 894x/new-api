@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useReducedMotion } from 'motion/react'
-import { useId, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Card, CardContent } from '@/components/ui/card'
@@ -25,7 +25,7 @@ import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-import type { MonitorRoute } from './api'
+import type { MonitorRequest, MonitorRoute } from './api'
 import { ChannelStatus } from './channel-status'
 import { channelColor } from './route-data'
 
@@ -34,6 +34,95 @@ interface FlowGeometry {
   height: number
   entry: string
   branches: string[]
+}
+
+interface RequestFlight extends MonitorRequest {
+  delay_ms: number
+}
+
+function RequestParticle(props: { request: RequestFlight; path: string }) {
+  const motion = useRef<SVGAnimationElement>(null)
+  const [started, setStarted] = useState(props.request.delay_ms === 0)
+  const [finished, setFinished] = useState(false)
+  useEffect(() => {
+    if (started) return
+    const timer = setTimeout(() => setStarted(true), props.request.delay_ms)
+    return () => clearTimeout(timer)
+  }, [started, props.request.delay_ms])
+  useLayoutEffect(() => {
+    if (!started) return
+    motion.current?.beginElement?.()
+    const timer = setTimeout(() => setFinished(true), 4000)
+    return () => clearTimeout(timer)
+  }, [started])
+  if (!started || finished) return null
+  return (
+    <circle
+      r={3}
+      fill={channelColor(props.request.channel_id)}
+      data-routing-request-id={props.request.id}
+      data-routing-channel-id={props.request.channel_id}
+    >
+      <animateMotion
+        ref={motion}
+        path={props.path}
+        dur='4s'
+        begin='indefinite'
+        repeatCount='1'
+        fill='freeze'
+      />
+    </circle>
+  )
+}
+
+export function RequestParticles(props: {
+  requests: MonitorRequest[]
+  paths: Map<number, string>
+  at: number
+  disabled: boolean
+}) {
+  const seen = useRef(new Map<string, number>())
+  const [flights, setFlights] = useState<RequestFlight[]>([])
+  useEffect(() => {
+    const cutoff = props.at - 15000
+    for (const [id, at] of seen.current) {
+      if (at < cutoff) seen.current.delete(id)
+    }
+    const next: MonitorRequest[] = []
+    for (const request of props.requests) {
+      if (
+        request.at < cutoff ||
+        request.at > props.at ||
+        seen.current.has(request.id)
+      ) {
+        continue
+      }
+      seen.current.set(request.id, request.at)
+      if (!props.disabled) next.push(request)
+    }
+    // Replay a polling batch in recorded arrival order so requests on the same
+    // channel do not all overlap at the start of the next refresh.
+    next.sort((a, b) => a.at - b.at)
+    const firstAt = next[0]?.at ?? props.at
+    const incoming = next.map((request) => ({
+      ...request,
+      delay_ms: Math.min(2500, request.at - firstAt),
+    }))
+    setFlights((current) =>
+      props.disabled
+        ? []
+        : [...current.filter((item) => item.at >= cutoff), ...incoming].slice(
+            -512
+          )
+    )
+  }, [props.requests, props.at, props.disabled])
+  if (props.disabled) return null
+  return flights.map((request) => {
+    const path = props.paths.get(request.channel_id)
+    return path ? (
+      <RequestParticle key={request.id} request={request} path={path} />
+    ) : null
+  })
 }
 
 export function RoutingFlow(props: {
@@ -96,8 +185,11 @@ export function RoutingFlow(props: {
     observer.observe(element)
     return () => observer.disconnect()
   }, [fingerprint])
-  const animate =
-    !props.paused && !reduceMotion && props.route.selection_count > 0
+  const paths = new Map<number, string>()
+  geometry?.branches.forEach((branch, index) => {
+    const channel = props.route.channels[index]
+    if (channel) paths.set(channel.channel_id, `${geometry.entry} ${branch}`)
+  })
   const mainShare = Math.max(
     ...props.route.channels.map((channel) => channel.target_share)
   )
@@ -114,7 +206,11 @@ export function RoutingFlow(props: {
           className='pointer-events-none absolute inset-0 hidden h-full w-full md:block'
           viewBox={`0 0 ${geometry.width} ${geometry.height}`}
           role='img'
-          aria-label={t('Routing flow: line width represents target share')}
+          aria-label={
+            props.route.aggregate
+              ? t('Routing flow: line width represents selection share')
+              : t('Routing flow: line width represents target share')
+          }
         >
           <path
             id={`${id}-entry`}
@@ -124,13 +220,6 @@ export function RoutingFlow(props: {
             strokeWidth={2}
             opacity={0.25}
           />
-          {animate && (
-            <circle r={3} fill='var(--primary)'>
-              <animateMotion dur='2s' repeatCount='indefinite'>
-                <mpath href={`#${id}-entry`} />
-              </animateMotion>
-            </circle>
-          )}
           {geometry.branches.map((path, index) => {
             const channel = props.route.channels[index]
             if (!channel) return null
@@ -148,33 +237,15 @@ export function RoutingFlow(props: {
                   strokeDasharray={channel.probe ? '4 6' : undefined}
                   opacity={channel.target_share > 0 ? 0.8 : 0.2}
                 />
-                {animate &&
-                  channel.target_share > 0 &&
-                  Array.from(
-                    {
-                      length: Math.max(1, Math.ceil(channel.target_share * 4)),
-                    },
-                    (_, packet) => (
-                      <circle
-                        key={packet}
-                        r={3}
-                        fill={channelColor(channel.channel_id)}
-                      >
-                        <animateMotion
-                          dur='3s'
-                          begin={`-${packet * 0.75}s`}
-                          repeatCount='indefinite'
-                        >
-                          <mpath
-                            href={`#${id}-channel-${channel.channel_id}`}
-                          />
-                        </animateMotion>
-                      </circle>
-                    )
-                  )}
               </g>
             )
           })}
+          <RequestParticles
+            requests={props.route.requests ?? []}
+            paths={paths}
+            at={props.at}
+            disabled={props.paused || !!reduceMotion}
+          />
         </svg>
       )}
       <Card
@@ -250,7 +321,7 @@ export function RoutingFlow(props: {
                 </span>
                 <span className='text-lg font-medium tabular-nums'>
                   <span className='text-muted-foreground mr-1 text-xs font-normal'>
-                    {t('Target')}
+                    {props.route.aggregate ? t('Selection share') : t('Target')}
                   </span>
                   {formatNumber(channel.target_share * 100, locale)}%
                 </span>

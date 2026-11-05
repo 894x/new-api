@@ -12,6 +12,7 @@ import (
 	"time"
 
 	rootcommon "github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -504,6 +505,38 @@ func TestDoApiRequestMarksAttemptAtPhysicalDispatch(t *testing.T) {
 
 	require.True(t, observed)
 	assert.False(t, sample.UpstreamStartedAt.IsZero())
+}
+
+func TestRoutingMonitorDotsRecordPhysicalDispatchOnceAndKeepRetryChannels(t *testing.T) {
+	controller, err := dynamicrouting.NewController(dynamicrouting.Config{Enabled: true, MaxSamples: 6, MaxAge: time.Minute, MinSamples: 1, ProbeFraction: .015})
+	require.NoError(t, err)
+	key := dynamicrouting.RouteKey{Group: "default", Model: "public-model", Policy: "user:7"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(server.Close)
+	c, info := newAttemptBoundaryFixture(server.URL)
+	for index, channelID := range []int{17, 23} {
+		decision := controller.SelectAvoiding(key, []dynamicrouting.Candidate{{ChannelID: channelID}}, nil, time.Now())
+		require.True(t, decision.HasSelection)
+		info.BeginDynamicRoutingAttempt(channelID, info.GetChannelType(), key.Model, true)
+		info.OnDynamicRoutingUpstreamStarted(func(at time.Time) { controller.RecordDispatch(key, false, channelID, at) })
+		_, err := DoApiRequest(&attemptBoundaryAdaptor{urlErr: errors.New("invalid configuration")}, c, info, nil)
+		require.Error(t, err)
+		before := controller.MonitorSnapshot(time.Now())
+		require.Len(t, before, 1)
+		assert.Len(t, before[0].Requests, index, "local construction failures must not produce a dot")
+		resp, err := DoApiRequest(&attemptBoundaryAdaptor{requestURL: server.URL}, c, info, strings.NewReader(`{}`))
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		info.MarkAttemptUpstreamStarted()
+	}
+	snapshot := controller.MonitorSnapshot(time.Now())
+	require.Len(t, snapshot, 1)
+	require.Len(t, snapshot[0].Requests, 2)
+	assert.Equal(t, 17, snapshot[0].Requests[0].ChannelID)
+	assert.Equal(t, 23, snapshot[0].Requests[1].ChannelID)
+	assert.NotEqual(t, snapshot[0].Requests[0].ID, snapshot[0].Requests[1].ID)
+	assert.Equal(t, "user:7", snapshot[0].Policy)
+	assert.Empty(t, controller.MonitorSnapshot(time.Now().Add(16 * time.Second))[0].Requests)
 }
 
 func TestDoApiRequestInvalidatesTimingWhenPreHeaderPingIsStillWriting(t *testing.T) {

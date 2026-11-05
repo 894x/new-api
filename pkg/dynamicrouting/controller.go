@@ -98,6 +98,7 @@ type Controller struct {
 	selections         map[RouteKey]*selectionState
 	monitor            map[RouteKey]*routeMonitor
 	monitorScratch     *monitorScratch
+	nextDispatchID     uint64
 	lastCleanup        time.Time
 }
 

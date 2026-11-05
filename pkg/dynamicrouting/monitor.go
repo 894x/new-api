@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"math"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -12,6 +13,8 @@ const (
 	maxMonitorRoutes     = 512
 	maxMonitorChannels   = 128
 	maxMonitorEvents     = 20
+	maxMonitorRequests   = 256
+	monitorRequestAge    = 15 * time.Second
 )
 
 // RouteSnapshot describes controller decisions, including retries and attempts
@@ -19,18 +22,28 @@ const (
 // Performance observations are shared by channel/model, while allocations and
 // selection counts are isolated by group, model, policy and routing mode.
 type RouteSnapshot struct {
-	Group          string                 `json:"group"`
-	Model          string                 `json:"model"`
-	Policy         string                 `json:"policy"`
-	Mode           string                 `json:"mode"`
-	Dynamic        bool                   `json:"dynamic"`
-	LastSeen       int64                  `json:"last_seen"`
-	WindowSeconds  int                    `json:"window_seconds"`
-	SelectionCount int64                  `json:"selection_count"`
-	Truncated      bool                   `json:"truncated"`
-	Channels       []RouteChannelSnapshot `json:"channels"`
-	History        []RouteHistorySnapshot `json:"history"`
-	Events         []RouteEventSnapshot   `json:"events"`
+	Group             string                 `json:"group"`
+	Model             string                 `json:"model"`
+	Policy            string                 `json:"policy"`
+	Mode              string                 `json:"mode"`
+	Dynamic           bool                   `json:"dynamic"`
+	LastSeen          int64                  `json:"last_seen"`
+	WindowSeconds     int                    `json:"window_seconds"`
+	SelectionCount    int64                  `json:"selection_count"`
+	Truncated         bool                   `json:"truncated"`
+	Channels          []RouteChannelSnapshot `json:"channels"`
+	History           []RouteHistorySnapshot `json:"history"`
+	Events            []RouteEventSnapshot   `json:"events"`
+	Requests          []RequestSnapshot      `json:"requests"`
+	RequestsTruncated bool                   `json:"requests_truncated"`
+}
+
+// RequestSnapshot is an actual physical upstream attempt, independent of the
+// controller's candidate-selection counters. It contains no client payload.
+type RequestSnapshot struct {
+	ID        string `json:"id"`
+	At        int64  `json:"at"`
+	ChannelID int    `json:"channel_id"`
 }
 
 type RouteChannelSnapshot struct {
@@ -49,6 +62,8 @@ type RouteChannelSnapshot struct {
 	TTFTMS                *float64 `json:"ttft_ms"`
 	TPOTMS                *float64 `json:"tpot_ms"`
 	SampleCount           int      `json:"sample_count"`
+	TTFTSampleCount       int      `json:"ttft_sample_count"`
+	TPOTSampleCount       int      `json:"tpot_sample_count"`
 }
 
 type RouteHistoryChannel struct {
@@ -77,12 +92,32 @@ type RouteEventSnapshot struct {
 }
 
 type routeMonitor struct {
-	lastSeen  time.Time
-	dynamic   bool
-	truncated bool
-	channels  map[int]monitoredChannel
-	buckets   [monitorWindowSeconds]monitorBucket
-	events    []RouteEventSnapshot
+	lastSeen          time.Time
+	dynamic           bool
+	truncated         bool
+	channels          map[int]monitoredChannel
+	buckets           [monitorWindowSeconds]monitorBucket
+	events            []RouteEventSnapshot
+	requests          []RequestSnapshot
+	requestsDroppedAt time.Time
+}
+
+func (c *Controller) RecordDispatch(key RouteKey, discount bool, channelID int, at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key.discountFirst = discount
+	state := c.monitor[key]
+	if state == nil || channelID <= 0 {
+		return
+	}
+	cutoff := at.Add(-monitorRequestAge).UnixMilli()
+	state.requests = slices.DeleteFunc(state.requests, func(request RequestSnapshot) bool { return request.At < cutoff })
+	if len(state.requests) >= maxMonitorRequests {
+		state.requestsDroppedAt = at
+		state.requests = slices.Delete(state.requests, 0, 1)
+	}
+	c.nextDispatchID++
+	state.requests = append(state.requests, RequestSnapshot{ID: strconv.FormatUint(c.nextDispatchID, 10), At: at.UnixMilli(), ChannelID: channelID})
 }
 
 type monitoredChannel struct {
@@ -269,6 +304,13 @@ func (c *Controller) MonitorSnapshot(now time.Time) []RouteSnapshot {
 			continue
 		}
 		snapshot := RouteSnapshot{Group: key.Group, Model: key.Model, Policy: key.Policy, Mode: "smart", Dynamic: state.dynamic, LastSeen: state.lastSeen.UnixMilli(), WindowSeconds: monitorWindowSeconds, Truncated: state.truncated, Channels: make([]RouteChannelSnapshot, 0, len(state.channels)), History: make([]RouteHistorySnapshot, 0, monitorWindowSeconds), Events: make([]RouteEventSnapshot, 0, len(state.events))}
+		snapshot.Requests = make([]RequestSnapshot, 0, len(state.requests))
+		for _, request := range state.requests {
+			if request.At >= now.Add(-monitorRequestAge).UnixMilli() && request.At <= now.UnixMilli() {
+				snapshot.Requests = append(snapshot.Requests, request)
+			}
+		}
+		snapshot.RequestsTruncated = !state.requestsDroppedAt.IsZero() && now.Sub(state.requestsDroppedAt) <= monitorRequestAge
 		if key.discountFirst {
 			snapshot.Mode = "discount"
 		}
@@ -341,10 +383,12 @@ func (c *Controller) MonitorSnapshot(now time.Time) []RouteSnapshot {
 			if ttftCount > 0 {
 				metric := float64(ttftTotal) / float64(ttftCount) / float64(time.Millisecond)
 				value.TTFTMS = &metric
+				value.TTFTSampleCount = ttftCount
 			}
 			if tpotCount > 0 {
 				metric := float64(tpotTotal) / float64(tpotCount) / float64(time.Millisecond)
 				value.TPOTMS = &metric
+				value.TPOTSampleCount = tpotCount
 			}
 			value.Unverified = value.Unverified || max(ttftCount, tpotCount) < c.config.MinSamples
 			snapshot.Channels = append(snapshot.Channels, value)

@@ -67,7 +67,9 @@ export function ChannelDetails(props: {
           header: t('Target share'),
           className: 'text-right',
           cell: (channel) =>
-            `${formatNumber(channel.target_share * 100, locale)}%`,
+            props.route.aggregate
+              ? '—'
+              : `${formatNumber(channel.target_share * 100, locale)}%`,
         },
         {
           id: 'actual',
@@ -295,12 +297,17 @@ export function RoutingEvents(props: {
         <ol className='divide-y' aria-label={t('Routing changes')}>
           {props.route.events.map((event) => (
             <li
-              key={`${event.at}-${event.kind}-${event.allocations.map((allocation) => `${allocation.channel_id}:${allocation.share}`).join(',')}`}
+              key={`${event.node_id ?? ''}-${event.at}-${event.kind}-${event.allocations.map((allocation) => `${allocation.channel_id}:${allocation.share}`).join(',')}`}
               className='py-3 first:pt-0 last:pb-0'
             >
               <div className='flex items-start justify-between gap-3'>
                 <p className='text-sm'>
                   <EventLabel event={event} />
+                  {event.node_name && (
+                    <span className='text-muted-foreground ml-2 text-xs'>
+                      {event.node_name}
+                    </span>
+                  )}
                 </p>
                 <time className='text-muted-foreground shrink-0 text-xs tabular-nums'>
                   {new Date(event.at).toLocaleTimeString(locale, {

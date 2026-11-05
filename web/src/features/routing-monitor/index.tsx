@@ -72,8 +72,13 @@ export default function RoutingMonitorWorkspace(
   const snapshot = data.monitor.data
   const route = data.route
   const at = snapshot?.generated_at ?? 0
+  const dispatchedChannels = new Set(
+    route?.requests?.map((request) => request.channel_id)
+  )
   const activeChannels =
-    route?.channels.filter((channel) => channel.active) ?? []
+    route?.channels.filter(
+      (channel) => channel.active || dispatchedChannels.has(channel.channel_id)
+    ) ?? []
   const inherited =
     !!props.userId && data.detail.data && data.detail.data.source !== 'user'
   const nodeStale = !!data.node && at - data.node.updated_at > 20000
@@ -181,8 +186,15 @@ export default function RoutingMonitorWorkspace(
             </TabsContent>
           </Tabs>
           <CardContent className='text-muted-foreground shrink-0 space-y-1 border-t pt-3 text-xs'>
+            <p>
+              {t(
+                'Each dot represents one upstream attempt on its channel, including retries.'
+              )}
+            </p>
             {t(
-              'Line width represents target share. Dashed lines represent exploration or recovery probes.'
+              route.aggregate
+                ? 'Line width represents selection share across reporting nodes. Select a node to inspect its target allocation and quality.'
+                : 'Line width represents target share. Dashed lines represent exploration or recovery probes.'
             )}
             <p>
               {t(
@@ -214,7 +226,7 @@ export default function RoutingMonitorWorkspace(
       </div>
     )
   }
-  let selectedNodeLabel = t('No reporting nodes')
+  let selectedNodeLabel = t('All nodes (combined)')
   if (data.node) {
     selectedNodeLabel =
       data.node.name + (data.node.local ? ` · ${t('Current node')}` : '')
@@ -224,7 +236,7 @@ export default function RoutingMonitorWorkspace(
   }
   const nodePicker = (
     <Select
-      value={data.selectedNode?.id ?? data.node?.id ?? ''}
+      value={data.selectedNode?.id ?? '__all'}
       onValueChange={(value) => {
         if (value) data.setNode(value)
       }}
@@ -236,6 +248,7 @@ export default function RoutingMonitorWorkspace(
         <SelectValue>{selectedNodeLabel}</SelectValue>
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false}>
+        <SelectItem value='__all'>{t('All nodes (combined)')}</SelectItem>
         {data.nodes.length === 0 && !data.selectedNode && (
           <SelectItem value='__none' disabled>
             {t('No reporting nodes')}
@@ -401,6 +414,13 @@ export default function RoutingMonitorWorkspace(
         <p role='status' className='text-warning text-xs'>
           {t(
             'Some node snapshots are unavailable. This view may be incomplete.'
+          )}
+        </p>
+      )}
+      {route?.requests_truncated && (
+        <p role='status' className='text-warning text-xs'>
+          {t(
+            'Some request events exceeded the live display limit. Traffic counters remain available.'
           )}
         </p>
       )}

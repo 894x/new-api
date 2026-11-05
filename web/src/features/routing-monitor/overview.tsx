@@ -101,14 +101,17 @@ export function RoutingOverview(props: {
             {primary
               ? `${formatNumber(primary.target_share * 100, locale)}%`
               : '—'}{' '}
-            · {t('Target share')}
+            ·{' '}
+            {props.route?.aggregate ? t('Selection share') : t('Target share')}
           </p>
         </CardContent>
       </Card>
       <Card size='sm'>
         <CardContent>
           <p className='text-muted-foreground text-xs'>
-            {t('Target weighted discount')}
+            {props.route?.aggregate
+              ? t('Selection weighted discount')
+              : t('Target weighted discount')}
           </p>
           {props.loading ? (
             <Skeleton className='my-2 h-7 w-20' />
@@ -118,7 +121,9 @@ export function RoutingOverview(props: {
             </p>
           )}
           <p className='text-muted-foreground text-xs'>
-            {t('Based on effective discounts and target shares')}
+            {props.route?.aggregate
+              ? t('Based on effective discounts and selection shares')
+              : t('Based on effective discounts and target shares')}
           </p>
         </CardContent>
       </Card>

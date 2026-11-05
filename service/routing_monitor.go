@@ -12,7 +12,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/bytedance/gopkg/util/gopool"
+	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 )
@@ -48,6 +50,24 @@ type RoutingMonitorResponse struct {
 
 var routingMonitorInstanceID = uuid.NewString()
 var routingMonitorReporterOnce sync.Once
+
+const routingMonitorDispatchContextKey = "routing_monitor_dispatch"
+
+type routingMonitorDispatch struct {
+	channelID int
+	started   func(time.Time)
+}
+
+// BindRoutingMonitorAttempt consumes the selection's immutable observer. Only
+// physical dispatch can invoke it; local rejection and retry selection cannot.
+func BindRoutingMonitorAttempt(c *gin.Context, info *relaycommon.RelayInfo, channelID int) {
+	observer, _ := c.Get(routingMonitorDispatchContextKey)
+	c.Set(routingMonitorDispatchContextKey, nil)
+	if dispatch, ok := observer.(routingMonitorDispatch); ok && dispatch.channelID == channelID {
+		info.OnDynamicRoutingUpstreamStarted(dispatch.started)
+	}
+}
+
 var routingMonitorRemoteCache = struct {
 	sync.Mutex
 	client    *redis.Client

@@ -110,6 +110,7 @@ type DynamicRoutingAttemptSample struct {
 }
 
 type dynamicRoutingAttempt struct {
+	onUpstreamStarted    func(time.Time)
 	enabled              bool
 	monitorOnly          bool
 	monitorTextBytes     int
@@ -1198,13 +1199,32 @@ func (info *RelayInfo) MarkAttemptUpstreamStarted() {
 		return
 	}
 	info.attemptMu.Lock()
-	defer info.attemptMu.Unlock()
 	info.UpstreamRequestStarted = true
 	if !info.currentAttempt.enabled || info.currentAttempt.reachedUpstream {
+		info.attemptMu.Unlock()
 		return
 	}
 	info.currentAttempt.reachedUpstream = true
 	info.currentAttempt.upstreamStarted = info.attemptTimeNowLocked()
+	started, observer := info.currentAttempt.upstreamStarted, info.currentAttempt.onUpstreamStarted
+	info.currentAttempt.onUpstreamStarted = nil
+	info.attemptMu.Unlock()
+	if observer != nil {
+		observer(started)
+	}
+}
+
+// OnDynamicRoutingUpstreamStarted binds one observation to this attempt's
+// physical dispatch. Beginning or discarding an attempt clears the observer.
+func (info *RelayInfo) OnDynamicRoutingUpstreamStarted(observer func(time.Time)) {
+	if info == nil {
+		return
+	}
+	info.attemptMu.Lock()
+	defer info.attemptMu.Unlock()
+	if info.currentAttempt.enabled && !info.currentAttempt.reachedUpstream {
+		info.currentAttempt.onUpstreamStarted = observer
+	}
 }
 
 // MarkDynamicRoutingAttemptPreUpstreamHard records a channel-owned preflight

@@ -195,5 +195,11 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 	}
 
 	channel, err := model.CacheGetChannel(decision.SelectedChannelID)
+	if err == nil && channel != nil {
+		discount := strategy != nil && strategy.Mode == model.RoutingModeDiscount
+		param.Ctx.Set(routingMonitorDispatchContextKey, routingMonitorDispatch{channelID: decision.SelectedChannelID, started: func(at time.Time) {
+			controller.RecordDispatch(key, discount, decision.SelectedChannelID, at)
+		}})
+	}
 	return channel, true, false, err
 }

@@ -225,6 +225,10 @@ test('shows target shares separately from actual selection shares and channel me
   mockApi()
   mount()
   await screen.findByRole('list', { name: 'Candidate channels' })
+  await userEvent.click(screen.getByRole('combobox', { name: 'Monitor node' }))
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'gateway-01 · Current node' })
+  )
   fireEvent.click(screen.getByRole('tab', { name: 'Channel details' }))
   const table = screen.getByRole('table')
   const row = within(table).getByRole('row', { name: /Channel A/ })
@@ -567,6 +571,69 @@ test('an unavailable explicitly selected node never silently displays local-node
     screen.getByRole('option', { name: 'gateway-01 · Current node' })
   )
   await screen.findAllByText('123')
+})
+
+test('defaults to all-node totals and preserves them when the responding gateway changes', async () => {
+  const snapshot = snapshotFixture()
+  snapshot.nodes.push({
+    id: 'node-2',
+    name: 'gateway-02',
+    local: false,
+    updated_at: Date.now(),
+    routes: [routeFixture('', 77)],
+  })
+  const options = { snapshot }
+  mockApi(options)
+  const { client } = mount(undefined, undefined, {
+    fixedGroup: 'standard',
+    fixedModel: 'kimi-k3',
+  })
+  await screen.findByRole('list', { name: 'Candidate channels' })
+  expect(
+    screen.getByRole('combobox', { name: 'Monitor node' })
+  ).toHaveTextContent('All nodes (combined)')
+  expect(
+    within(screen.getByRole('region', { name: 'Routing overview' })).getByText(
+      '200'
+    )
+  ).toBeVisible()
+  options.snapshot = {
+    ...snapshot,
+    nodes: snapshot.nodes.map((node) => ({ ...node, local: !node.local })),
+  }
+  await act(async () => {
+    await client.refetchQueries({ queryKey: monitorKey(), exact: true })
+  })
+  expect(screen.getByRole('list', { name: 'Candidate channels' })).toBeVisible()
+  expect(
+    screen.queryByText('No adaptive routing observations')
+  ).not.toBeInTheDocument()
+  expect(
+    screen.getByRole('combobox', { name: 'Monitor node' })
+  ).toHaveTextContent('All nodes (combined)')
+  expect(
+    within(screen.getByRole('region', { name: 'Routing overview' })).getByText(
+      '200'
+    )
+  ).toBeVisible()
+  await userEvent.click(screen.getByRole('combobox', { name: 'Monitor node' }))
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'gateway-02 · Current node' })
+  )
+  expect(
+    within(screen.getByRole('region', { name: 'Routing overview' })).getByText(
+      '77'
+    )
+  ).toBeVisible()
+  await userEvent.click(screen.getByRole('combobox', { name: 'Monitor node' }))
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'All nodes (combined)' })
+  )
+  expect(
+    within(screen.getByRole('region', { name: 'Routing overview' })).getByText(
+      '200'
+    )
+  ).toBeVisible()
 })
 
 test('a request modifier model uses the inherited effective mode without creating an exact pool', async () => {
