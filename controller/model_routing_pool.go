@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -9,13 +10,15 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 
 type modelRoutingPoolView struct {
 	model.ModelRoutingPool
-	Candidates []model.ModelRoutingPoolCandidate `json:"candidates"`
+	Candidates     []model.ModelRoutingPoolCandidate             `json:"candidates"`
+	TuningDefaults dynamic_routing_setting.DynamicRoutingSetting `json:"tuning_defaults"`
 }
 
 func GetModelRoutingPoolCatalog(c *gin.Context) {
@@ -92,6 +95,10 @@ func ListModelRoutingPools(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
+		if err := row.DecodeTuning(); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 		candidates, err := model.ListModelRoutingPoolCandidates(row.RoutingGroup, row.Model)
 		if err != nil {
 			common.ApiError(c, err)
@@ -100,7 +107,7 @@ func ListModelRoutingPools(c *gin.Context) {
 		candidates = slices.DeleteFunc(candidates, func(candidate model.ModelRoutingPoolCandidate) bool {
 			return !slices.ContainsFunc(row.Channels, func(entry model.ModelRoutingPoolChannel) bool { return entry.ChannelID == candidate.ChannelID })
 		})
-		items = append(items, modelRoutingPoolView{ModelRoutingPool: row, Candidates: candidates})
+		items = append(items, modelRoutingPoolView{ModelRoutingPool: row, Candidates: candidates, TuningDefaults: dynamic_routing_setting.GetSetting()})
 	}
 	common.ApiSuccess(c, gin.H{"items": items, "total": total, "page": filter.Page, "page_size": filter.PageSize})
 }
@@ -139,7 +146,7 @@ func GetModelRoutingPool(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, gin.H{"pool": pool, "candidates": candidates, "effective_mode": effectiveMode})
+	common.ApiSuccess(c, gin.H{"pool": pool, "candidates": candidates, "effective_mode": effectiveMode, "tuning_defaults": dynamic_routing_setting.GetSetting()})
 }
 
 func SaveModelRoutingPool(c *gin.Context) {
@@ -151,6 +158,7 @@ func SaveModelRoutingPool(c *gin.Context) {
 		Channels  *[]model.ModelRoutingPoolChannel `json:"channels"`
 		MaxTTFTMS int64                            `json:"max_ttft_ms"`
 		MaxTPOTMS int64                            `json:"max_tpot_ms"`
+		Tuning    json.RawMessage                  `json:"tuning"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil || request.Channels == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid routing pool configuration"})
@@ -164,7 +172,25 @@ func SaveModelRoutingPool(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "the group-model matrix does not allow this model"})
 		return
 	}
-	pool := model.ModelRoutingPool{RoutingGroup: request.Group, Model: request.Model, Mode: request.Mode, Channels: *request.Channels, MaxTTFTMS: request.MaxTTFTMS, MaxTPOTMS: request.MaxTPOTMS}
+	var tuning *dynamic_routing_setting.Overrides
+	if len(request.Tuning) > 0 {
+		if err := common.Unmarshal(request.Tuning, &tuning); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid routing tuning"})
+			return
+		}
+	} else if request.Revision != "" {
+		// Older clients editing membership do not know about tuning. Omission
+		// preserves it; an explicit empty object or null restores inheritance.
+		current, err := model.GetModelRoutingPool(request.Group, request.Model)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if current != nil {
+			tuning = current.Tuning
+		}
+	}
+	pool := model.ModelRoutingPool{RoutingGroup: request.Group, Model: request.Model, Mode: request.Mode, Channels: *request.Channels, MaxTTFTMS: request.MaxTTFTMS, MaxTPOTMS: request.MaxTPOTMS, Tuning: tuning}
 	if err := model.SaveModelRoutingPool(&pool, request.Revision); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, model.ErrInvalidRoutingPool) {

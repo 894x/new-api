@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 
@@ -20,6 +21,22 @@ func UpdateDynamicRoutingOptions(setting dynamic_routing_setting.DynamicRoutingS
 
 	if err := dynamic_routing_setting.Validate(setting); err != nil {
 		return err
+	}
+	// Reject global changes that would make an existing pool's inherited
+	// configuration invalid, before persisting or publishing any option.
+	if DB.Migrator().HasTable(&ModelRoutingPool{}) {
+		var pools []ModelRoutingPool
+		if err := DB.Where("tuning_json IS NOT NULL AND tuning_json <> ?", "").Find(&pools).Error; err != nil {
+			return err
+		}
+		for _, pool := range pools {
+			if err := pool.DecodeTuning(); err != nil {
+				return err
+			}
+			if _, err := pool.Tuning.Resolve(setting); err != nil {
+				return fmt.Errorf("invalid tuning for pool %s/%s: %w", pool.RoutingGroup, pool.Model, err)
+			}
+		}
 	}
 	values := dynamic_routing_setting.ToOptionValues(setting)
 	keys := make([]string, 0, len(values))

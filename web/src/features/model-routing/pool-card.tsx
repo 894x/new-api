@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useEffectEvent, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, type FieldErrors } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -36,6 +36,8 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Combobox } from '@/components/ui/combobox'
+import { Form } from '@/components/ui/form'
+import { dynamicRoutingSettingsSchema } from '@/features/system-settings/models/lib/dynamic-routing-schema'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -58,9 +60,14 @@ import { DiscountRoutingFields } from './discount-routing-fields'
 import { PoolChannelList } from './pool-channel-list'
 import { PoolModeSelect } from './pool-mode-select'
 import { PoolMonitorDisplay } from './pool-monitor-display'
+import { PoolTuningPanel } from './pool-tuning-panel'
 
 const poolFormSchema = z.object({
   mode: z.enum(['priority', 'smart', 'discount']),
+  tuning: z
+    .object(dynamicRoutingSettingsSchema.shape)
+    .omit({ enabled: true })
+    .partial(),
   max_ttft_ms: z.number().int().min(1).max(3600000),
   max_tpot_ms: z.number().int().min(1).max(60000),
   channels: z
@@ -74,7 +81,7 @@ const poolFormSchema = z.object({
     )
     .max(500),
 })
-type PoolFormValues = z.infer<typeof poolFormSchema>
+export type PoolFormValues = z.infer<typeof poolFormSchema>
 
 export function PoolCard(props: {
   pool: RoutingPoolView
@@ -91,6 +98,7 @@ export function PoolCard(props: {
     ADMIN_PERMISSION_ACTIONS.READ
   )
   const [monitorOpen, setMonitorOpen] = useState(false)
+  const [tuningOpen, setTuningOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [channelToAdd, setChannelToAdd] = useState<string | null>(null)
   const [editingStrategy, setEditingStrategy] = useState(false)
@@ -99,6 +107,7 @@ export function PoolCard(props: {
     resolver: zodResolver(poolFormSchema),
     defaultValues: {
       mode: props.pool.mode,
+      tuning: props.pool.tuning ?? {},
       channels: props.pool.channels,
       max_ttft_ms:
         props.pool.max_ttft_ms || DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
@@ -117,6 +126,7 @@ export function PoolCard(props: {
     if (!dirty) {
       form.reset({
         mode: props.pool.mode,
+        tuning: props.pool.tuning ?? {},
         channels: props.pool.channels,
         max_ttft_ms:
           props.pool.max_ttft_ms || DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
@@ -132,6 +142,7 @@ export function PoolCard(props: {
     props.pool.channels,
     props.pool.max_ttft_ms,
     props.pool.max_tpot_ms,
+    props.pool.tuning,
   ])
   const candidates = useQuery({
     queryKey: routingPoolKeys.detail(
@@ -139,7 +150,7 @@ export function PoolCard(props: {
       props.pool.model
     ),
     queryFn: () => getRoutingPool(props.pool.routing_group, props.pool.model),
-    enabled: adding && props.canWrite,
+    enabled: tuningOpen || (adding && props.canWrite),
     refetchOnWindowFocus: false,
     meta: { errorToast: false },
   })
@@ -158,6 +169,7 @@ export function PoolCard(props: {
     onSuccess: async (pool) => {
       form.reset({
         mode: pool.mode,
+        tuning: pool.tuning ?? {},
         channels: pool.channels,
         max_ttft_ms: pool.max_ttft_ms || DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
         max_tpot_ms: pool.max_tpot_ms || DEFAULT_DISCOUNT_LIMITS.max_tpot_ms,
@@ -199,6 +211,44 @@ export function PoolCard(props: {
       )
   )
 
+  const tuningDefaults =
+    candidates.data?.tuning_defaults ?? props.pool.tuning_defaults
+  const revealTuning = () => {
+    if (canMonitor) setMonitorOpen(true)
+    setTuningOpen(true)
+  }
+  const handleInvalid = (errors: FieldErrors<PoolFormValues>) => {
+    if (errors.tuning) revealTuning()
+  }
+  const validateAndSave = (data: PoolFormValues) => {
+    form.clearErrors()
+    if (Object.values(data.tuning).some((value) => value !== undefined)) {
+      if (!tuningDefaults) {
+        form.setError('root.tuning', {
+          message: t('Scheduling defaults are unavailable'),
+        })
+        revealTuning()
+        return
+      }
+      const result = dynamicRoutingSettingsSchema.safeParse({
+        ...tuningDefaults,
+        enabled: true,
+        ...Object.fromEntries(
+          Object.entries(data.tuning).filter(([, value]) => value !== undefined)
+        ),
+      })
+      if (!result.success) {
+        for (const issue of result.error.issues) {
+          const field = issue.path[0] as keyof PoolFormValues['tuning']
+          form.setError(`tuning.${field}`, { message: t(issue.message) })
+        }
+        revealTuning()
+        return
+      }
+    }
+    save.mutate(data)
+  }
+
   return (
     <PoolMonitorDisplay
       open={monitorOpen && canMonitor}
@@ -206,6 +256,22 @@ export function PoolCard(props: {
       model={props.pool.model}
       group={props.pool.routing_group}
       groupLabel={props.groupLabel}
+      toolbarActions={
+        <Form {...form}>
+          <PoolTuningPanel
+            open={tuningOpen}
+            onOpenChange={setTuningOpen}
+            defaults={tuningDefaults}
+            loading={candidates.isFetching && !tuningDefaults}
+            disabled={disabled}
+            saving={save.isPending}
+            onSave={() =>
+              void form.handleSubmit(validateAndSave, handleInvalid)()
+            }
+            onRetry={() => void candidates.refetch()}
+          />
+        </Form>
+      }
     >
       <Card
         className={cn(
@@ -262,7 +328,7 @@ export function PoolCard(props: {
         <form
           className='contents'
           onSubmit={(event) => {
-            void form.handleSubmit((data) => save.mutate(data))(event)
+            void form.handleSubmit(validateAndSave, handleInvalid)(event)
           }}
         >
           <CardContent
@@ -392,6 +458,7 @@ export function PoolCard(props: {
                 onClick={() =>
                   form.reset({
                     mode: props.pool.mode,
+                    tuning: props.pool.tuning ?? {},
                     channels: props.pool.channels,
                     max_ttft_ms:
                       props.pool.max_ttft_ms ||

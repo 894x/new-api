@@ -36,6 +36,7 @@ export function PoolMonitorDisplay(props: {
   userId?: number
   username?: string
   children: ReactNode
+  toolbarActions?: ReactNode
 }) {
   const { t } = useTranslation()
   const [headerContainer, setHeaderContainer] = useState<HTMLElement | null>(
@@ -53,6 +54,7 @@ export function PoolMonitorDisplay(props: {
       hideToolbar={!props.open}
       label={`${props.model} · ${groupLabel} · ${identity}`}
       exitFullscreenLabel={t('Back to card view')}
+      toolbarActions={props.toolbarActions}
       toolbar={
         <div className='flex min-w-0 flex-1 flex-wrap items-center gap-3'>
           <div className='flex min-w-0 flex-wrap items-center gap-2'>

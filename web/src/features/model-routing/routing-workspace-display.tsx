@@ -51,6 +51,7 @@ export function RoutingWorkspaceDisplay(props: {
   hideToolbar?: boolean
   label?: string
   exitFullscreenLabel?: string
+  toolbarActions?: ReactNode
 }) {
   const { t } = useTranslation()
   const [localFullscreen, setLocalFullscreen] = useState(false)
@@ -150,7 +151,7 @@ export function RoutingWorkspaceDisplay(props: {
     function hasOpenOverlay() {
       return [
         ...document.querySelectorAll(
-          '[data-slot="dialog-content"][data-open], [role="listbox"], [role="menu"]'
+          '[data-slot="dialog-content"][data-open], [data-slot="popover-content"][data-open], [role="listbox"], [role="menu"]'
         ),
       ].some(
         (overlay) =>
@@ -219,6 +220,7 @@ export function RoutingWorkspaceDisplay(props: {
             <div className='flex shrink-0 flex-wrap items-center gap-2'>
               {props.toolbar}
               <div className='flex shrink-0 items-center gap-2'>
+                {props.toolbarActions}
                 {props.refreshAction}
                 <Button
                   type='button'

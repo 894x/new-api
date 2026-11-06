@@ -36,6 +36,137 @@ type preDiscountRoutingPool struct {
 
 func (preDiscountRoutingPool) TableName() string { return "model_routing_pools" }
 
+// The pool schema before tuning already contains discount latency limits.
+type preTuningRoutingPool struct {
+	RoutingGroup string `gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+	Model        string `gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
+	Mode         string `gorm:"type:varchar(16);not null"`
+	Revision     string `gorm:"type:varchar(64);not null"`
+	ChannelsJSON string `gorm:"type:text;not null"`
+	MaxTTFTMS    int64  `gorm:"column:max_ttft_ms"`
+	MaxTPOTMS    int64  `gorm:"column:max_tpot_ms"`
+}
+
+func (preTuningRoutingPool) TableName() string { return "model_routing_pools" }
+
+func TestRoutingPoolTuningDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		for _, upgrade := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/upgrade_%t", dialect, upgrade), func(t *testing.T) {
+				if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+					t.Skip("isolated database DSN not configured")
+				}
+				t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+				db := setupManageUserTestDB(t)
+				originalGroups, originalRatios, originalSetting := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString(), dynamic_routing_setting.GetSetting()
+				originalCache := common.MemoryCacheEnabled
+				t.Cleanup(func() {
+					common.MemoryCacheEnabled = originalCache
+					require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalGroups))
+					require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+					require.NoError(t, dynamic_routing_setting.ReplaceAndSync(originalSetting))
+				})
+				common.MemoryCacheEnabled = false
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Standard","control":"Control"}`))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"control":1}`))
+				require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.Option{}))
+				if upgrade {
+					require.NoError(t, db.AutoMigrate(&preTuningRoutingPool{}))
+					require.NoError(t, db.Create(&preTuningRoutingPool{RoutingGroup: "legacy", Model: "legacy-model", Mode: model.RoutingModeDiscount, Revision: "legacy-revision", ChannelsJSON: "[]", MaxTTFTMS: 4000, MaxTPOTMS: 100}).Error)
+				}
+				for range 2 {
+					require.NoError(t, db.AutoMigrate(&model.ModelRoutingPool{}))
+				}
+				if upgrade {
+					legacy, err := model.GetModelRoutingPool("legacy", "legacy-model")
+					require.NoError(t, err)
+					require.NotNil(t, legacy)
+					assert.Nil(t, legacy.Tuning)
+					assert.EqualValues(t, 4000, legacy.MaxTTFTMS)
+					assert.Equal(t, "legacy-revision", legacy.Revision)
+					assert.Error(t, db.Create(&preTuningRoutingPool{RoutingGroup: "legacy", Model: "legacy-model", Mode: model.RoutingModeSmart, ChannelsJSON: "[]"}).Error, "migration retains composite uniqueness")
+				}
+				name := fmt.Sprintf("tuning-%s-%t", dialect, upgrade)
+				for _, id := range []int{9701, 9702} {
+					channel := model.Channel{Id: id, Type: 1, Name: fmt.Sprint(id), Models: name, Group: "default,control", Status: common.ChannelStatusEnabled}
+					require.NoError(t, db.Create(&channel).Error)
+					require.NoError(t, channel.AddAbilities(nil))
+				}
+				pool := model.ModelRoutingPool{RoutingGroup: "default", Model: name, Mode: model.RoutingModeSmart, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 9701, Priority: 100, Weight: 100, Enabled: true}, {ChannelID: 9702, Weight: 100, Enabled: true}}, Tuning: &dynamic_routing_setting.Overrides{MaxSamples: common.GetPointer(5), HardFailureCooldownSeconds: common.GetPointer(10), CooldownSeconds: common.GetPointer(0), ProbeFraction: common.GetPointer(0.4)}}
+				require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+				for range 2 {
+					require.NoError(t, db.AutoMigrate(&model.ModelRoutingPool{}))
+				}
+				loaded, err := model.GetModelRoutingPool("default", name)
+				require.NoError(t, err)
+				require.NotNil(t, loaded.Tuning)
+				assert.Equal(t, pool.Tuning, loaded.Tuning)
+				assert.Contains(t, loaded.TuningJSON, `"cooldown_seconds":0`)
+				assert.NotContains(t, loaded.TuningJSON, "recovery_observation_seconds", "inherited defaults must not be persisted")
+				invalid := *loaded
+				invalid.Tuning = &dynamic_routing_setting.Overrides{HardFailureCooldownSeconds: common.GetPointer(100), HardFailureMaxCooldownSeconds: common.GetPointer(50)}
+				assert.ErrorIs(t, model.SaveModelRoutingPool(&invalid, loaded.Revision), model.ErrInvalidRoutingPool)
+				global := originalSetting
+				global.MinSamples = 6
+				before := dynamic_routing_setting.GetSnapshot()
+				assert.ErrorContains(t, model.UpdateDynamicRoutingOptions(global), "invalid tuning for pool")
+				assert.Equal(t, before, dynamic_routing_setting.GetSnapshot(), "incompatible global changes must not be published")
+				// An old membership editor must preserve newly configured tuning.
+				body, err := common.Marshal(loaded)
+				require.NoError(t, err)
+				var request map[string]any
+				require.NoError(t, common.Unmarshal(body, &request))
+				delete(request, "tuning")
+				body, err = common.Marshal(request)
+				require.NoError(t, err)
+				response := httptest.NewRecorder()
+				ctx, _ := gin.CreateTestContext(response)
+				ctx.Request = httptest.NewRequest(http.MethodPut, "/api/channel/routing-pool", strings.NewReader(string(body)))
+				ctx.Request.Header.Set("Content-Type", "application/json")
+				SaveModelRoutingPool(ctx)
+				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+				assert.Contains(t, response.Body.String(), `"hard_failure_cooldown_seconds":10`)
+				control := model.ModelRoutingPool{RoutingGroup: "control", Model: name, Mode: model.RoutingModeSmart, Channels: pool.Channels}
+				require.NoError(t, model.SaveModelRoutingPool(&control, ""))
+				now := time.Now()
+				for _, age := range []int{20, 19, 18} {
+					for _, id := range []int{9701, 9702} {
+						service.ObserveDynamicRoutingSample(dynamicrouting.ObservationKey{ChannelID: id, Model: name}, dynamicrouting.Sample{ObservedAt: now.Add(-time.Duration(age) * time.Second), Success: true, HasTTFT: true, TTFT: 100 * time.Millisecond}, true)
+					}
+				}
+				service.ObserveDynamicRoutingSample(dynamicrouting.ObservationKey{ChannelID: 9701, Model: name}, dynamicrouting.Sample{ObservedAt: now.Add(-15 * time.Second), HardFailure: true}, true)
+				probed := false
+				for range 4 {
+					for _, group := range []string{"default", "control"} {
+						ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+						channel, _, err := service.CacheGetRandomSatisfiedChannel(&service.RetryParam{Ctx: ctx, TokenGroup: group, ModelName: name, DynamicRoutingEligible: true})
+						require.NoError(t, err)
+						require.NotNil(t, channel)
+						if group == "default" {
+							probed = probed || channel.Id == 9701
+						} else {
+							assert.Equal(t, 9702, channel.Id, "the other pool keeps the global 30-second cooldown")
+						}
+					}
+				}
+				assert.True(t, probed, "the configured 10-second pool must already allow recovery probes")
+				loaded.Tuning = &dynamic_routing_setting.Overrides{}
+				require.NoError(t, model.SaveModelRoutingPool(loaded, loaded.Revision))
+				cleared, err := model.GetModelRoutingPool("default", name)
+				require.NoError(t, err)
+				assert.Nil(t, cleared.Tuning)
+				assert.Empty(t, cleared.TuningJSON)
+				response = httptest.NewRecorder()
+				ctx, _ = gin.CreateTestContext(response)
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/routing-pools", nil)
+				ListModelRoutingPools(ctx)
+				require.Equal(t, http.StatusOK, response.Code)
+				assert.Contains(t, response.Body.String(), `"tuning_defaults"`)
+			})
+		}
+	}
+}
+
 func TestDiscountRoutingPoolDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		for _, upgrade := range []bool{false, true} {

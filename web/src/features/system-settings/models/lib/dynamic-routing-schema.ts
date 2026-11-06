@@ -47,7 +47,7 @@ const nonNegativeDurationSeconds = nonNegativeInteger.max(
   'Duration is too large'
 )
 
-const dynamicRoutingSettingsSchema = z
+export const dynamicRoutingSettingsSchema = z
   .object({
     enabled: z.boolean(),
     max_samples: positiveInteger,

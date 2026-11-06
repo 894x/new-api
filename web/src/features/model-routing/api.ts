@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { DynamicRoutingSettings } from '@/features/system-settings/types'
 import type { UserChannelRoutingConfig } from '@/features/users/types'
 import { api } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
@@ -114,10 +115,12 @@ export interface RoutingPool {
   channels: PoolChannel[]
   max_ttft_ms?: number
   max_tpot_ms?: number
+  tuning?: Partial<Omit<DynamicRoutingSettings, 'enabled'>> | null
 }
 
 export interface RoutingPoolView extends RoutingPool {
   candidates: PoolCandidate[]
+  tuning_defaults?: DynamicRoutingSettings
 }
 
 export interface PoolFilters {
@@ -166,6 +169,7 @@ export async function getRoutingPool(group: string, model: string) {
       pool: RoutingPool | null
       candidates: PoolCandidate[]
       effective_mode?: RoutingMode | '' | null
+      tuning_defaults?: DynamicRoutingSettings
     }
   }>('/api/channel/routing-pool', { params: { routing_group: group, model } })
   return requireServerSuccess(response.data).data
