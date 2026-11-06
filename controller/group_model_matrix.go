@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -24,8 +25,8 @@ func GetGroupModelMatrix(c *gin.Context) {
 	}
 	groups, models := make(map[string]bool), make(map[string]bool)
 	available := make(map[string][]string)
-	for group := range ratio_setting.GetGroupRatioCopy() {
-		if group != "auto" {
+	for group := range setting.GetUserUsableGroupsCopy() {
+		if group != "" && group != "auto" && ratio_setting.ContainsGroupRatio(group) {
 			groups[group] = true
 		}
 	}
@@ -34,13 +35,12 @@ func GetGroupModelMatrix(c *gin.Context) {
 			continue
 		}
 		name := ratio_setting.RoutingMatchModelName(ability.Model)
-		groups[ability.Group], models[name] = true, true
+		models[name] = true
 		if !slices.Contains(available[ability.Group], name) {
 			available[ability.Group] = append(available[ability.Group], name)
 		}
 	}
-	for group, names := range config {
-		groups[group] = true
+	for _, names := range config {
 		for _, name := range names {
 			models[name] = true
 		}

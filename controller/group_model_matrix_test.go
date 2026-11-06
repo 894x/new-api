@@ -133,6 +133,50 @@ func TestGroupModelMatrixDatabaseMatrix(t *testing.T) {
 			require.Equal(t, http.StatusOK, recorder.Code)
 			assert.Contains(t, recorder.Body.String(), "model-b", "denied models remain editable")
 			assert.NotContains(t, recorder.Body.String(), channel.Key)
+			t.Run("only_public_groups", func(t *testing.T) {
+				publicGroups := setting.UserUsableGroups2JSONString()
+				groupRatios := ratio_setting.GroupRatio2JSONString()
+				originalConfig, _, err := model.GetGroupModelAccess()
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(publicGroups))
+					require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(groupRatios))
+					_, currentRevision, err := model.GetGroupModelAccess()
+					require.NoError(t, err)
+					_, err = model.SaveGroupModelAccess(originalConfig, currentRevision)
+					require.NoError(t, err)
+				})
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"vip":"Premium","empty":"No channels","stale":"No ratio","auto":"Automatic"}`))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":2,"empty":1,"ratio-only":1,"auto":1}`))
+				hiddenConfig := model.GroupModelAccess{"default": {"model-a"}, "config-only": {"model-a"}}
+				_, err = model.SaveGroupModelAccess(hiddenConfig, newRevision)
+				require.NoError(t, err)
+
+				for _, public := range []bool{true, false} {
+					if !public {
+						require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{}`))
+					}
+					recorder := httptest.NewRecorder()
+					ctx, _ := gin.CreateTestContext(recorder)
+					GetGroupModelMatrix(ctx)
+					require.Equal(t, http.StatusOK, recorder.Code)
+					var response struct {
+						Success bool
+						Data    struct {
+							Groups []string
+							Config model.GroupModelAccess
+						}
+					}
+					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+					require.True(t, response.Success)
+					if public {
+						assert.Equal(t, []string{"empty", "vip"}, response.Data.Groups)
+					} else {
+						assert.Empty(t, response.Data.Groups, "no public groups must not fall back to internal groups")
+					}
+					assert.Equal(t, hiddenConfig, response.Data.Config, "hidden policies must survive matrix saves")
+				}
+			})
 			for _, request := range []struct {
 				body   string
 				status int
