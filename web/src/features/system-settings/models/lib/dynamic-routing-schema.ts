@@ -87,8 +87,21 @@ const dynamicRoutingSettingsSchema = z
     cooldown_seconds: nonNegativeDurationSeconds,
     hard_failure_threshold: positiveInteger,
     hard_failure_cooldown_seconds: positiveDurationSeconds,
+    hard_failure_max_cooldown_seconds: positiveDurationSeconds,
+    recovery_observation_seconds: positiveDurationSeconds,
   })
   .superRefine((values, context) => {
+    if (
+      values.hard_failure_max_cooldown_seconds <
+      values.hard_failure_cooldown_seconds
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['hard_failure_max_cooldown_seconds'],
+        message:
+          'Maximum hard failure cooldown cannot be below the base cooldown',
+      })
+    }
     if (values.enabled && values.probe_fraction === 0) {
       context.addIssue({
         code: 'custom',
@@ -198,6 +211,16 @@ export function buildDynamicRoutingFormValues(
         values['dynamic_routing_setting.hard_failure_cooldown_seconds'] ??
         DYNAMIC_ROUTING_FLAT_DEFAULTS[
           'dynamic_routing_setting.hard_failure_cooldown_seconds'
+        ],
+      hard_failure_max_cooldown_seconds:
+        values['dynamic_routing_setting.hard_failure_max_cooldown_seconds'] ??
+        DYNAMIC_ROUTING_FLAT_DEFAULTS[
+          'dynamic_routing_setting.hard_failure_max_cooldown_seconds'
+        ],
+      recovery_observation_seconds:
+        values['dynamic_routing_setting.recovery_observation_seconds'] ??
+        DYNAMIC_ROUTING_FLAT_DEFAULTS[
+          'dynamic_routing_setting.recovery_observation_seconds'
         ],
     },
   }

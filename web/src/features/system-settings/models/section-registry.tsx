@@ -99,6 +99,12 @@ const MODELS_SECTIONS = [
             settings['dynamic_routing_setting.hard_failure_threshold'],
           'dynamic_routing_setting.hard_failure_cooldown_seconds':
             settings['dynamic_routing_setting.hard_failure_cooldown_seconds'],
+          'dynamic_routing_setting.hard_failure_max_cooldown_seconds':
+            settings[
+              'dynamic_routing_setting.hard_failure_max_cooldown_seconds'
+            ],
+          'dynamic_routing_setting.recovery_observation_seconds':
+            settings['dynamic_routing_setting.recovery_observation_seconds'],
         }}
       />
     ),

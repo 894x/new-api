@@ -20,6 +20,8 @@ func TestDefaultSnapshotUsesTunedDisabledConfiguration(t *testing.T) {
 	assert.InDelta(t, 0.02, snapshot.Config.RecoveryStep, 0.000001)
 	assert.Equal(t, 3*time.Second, snapshot.Config.Cooldown)
 	assert.Equal(t, 30*time.Second, snapshot.Config.HardFailureCooldown)
+	assert.Equal(t, 15*time.Minute, snapshot.Config.HardFailureMaxCooldown)
+	assert.Equal(t, time.Minute, snapshot.Config.RecoveryObservationWindow)
 }
 
 func TestReplaceAndSyncPublishesOneCompleteValidatedSetting(t *testing.T) {
@@ -66,15 +68,19 @@ func TestReplaceAndSyncRejectsWholeInvalidSettingWithoutPartialPublish(t *testin
 func TestMergeOptionValuesValidatesInterdependentFieldsAsOneCandidate(t *testing.T) {
 	base := GetSetting()
 	merged, err := MergeOptionValues(base, map[string]string{
-		OptionPrefix + "recovery_threshold":    "1.05",
-		OptionPrefix + "degradation_threshold": "1.1",
-		OptionPrefix + "critical_threshold":    "1.2",
+		OptionPrefix + "recovery_threshold":                "1.05",
+		OptionPrefix + "degradation_threshold":             "1.1",
+		OptionPrefix + "critical_threshold":                "1.2",
+		OptionPrefix + "hard_failure_max_cooldown_seconds": "600",
+		OptionPrefix + "recovery_observation_seconds":      "120",
 	})
 	require.NoError(t, err)
 
 	assert.InDelta(t, 1.05, merged.RecoveryThreshold, 0.000001)
 	assert.InDelta(t, 1.1, merged.DegradationThreshold, 0.000001)
 	assert.InDelta(t, 1.2, merged.CriticalThreshold, 0.000001)
+	assert.Equal(t, 600, merged.HardFailureMaxCooldownSeconds)
+	assert.Equal(t, 120, merged.RecoveryObservationSeconds)
 	assert.Equal(t, base, GetSetting(), "merging persisted values must not publish them")
 }
 
@@ -117,6 +123,11 @@ func TestValidateRejectsAdminZeroValuesThatControllerWouldDefault(t *testing.T) 
 		{name: "recovery step", mutate: func(setting *DynamicRoutingSetting) { setting.RecoveryStep = 0 }},
 		{name: "hard failure threshold", mutate: func(setting *DynamicRoutingSetting) { setting.HardFailureThreshold = 0 }},
 		{name: "hard failure cooldown", mutate: func(setting *DynamicRoutingSetting) { setting.HardFailureCooldownSeconds = 0 }},
+		{name: "maximum hard failure cooldown", mutate: func(setting *DynamicRoutingSetting) { setting.HardFailureMaxCooldownSeconds = 0 }},
+		{name: "cap below base cooldown", mutate: func(setting *DynamicRoutingSetting) {
+			setting.HardFailureMaxCooldownSeconds = setting.HardFailureCooldownSeconds - 1
+		}},
+		{name: "recovery observation", mutate: func(setting *DynamicRoutingSetting) { setting.RecoveryObservationSeconds = 0 }},
 	}
 
 	for _, test := range tests {

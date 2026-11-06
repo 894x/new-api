@@ -271,6 +271,8 @@ export type DynamicRoutingSettings = {
   cooldown_seconds: number
   hard_failure_threshold: number
   hard_failure_cooldown_seconds: number
+  hard_failure_max_cooldown_seconds: number
+  recovery_observation_seconds: number
 }
 
 export type DynamicRoutingFlatSettings = {
@@ -292,6 +294,8 @@ export const DYNAMIC_ROUTING_FLAT_DEFAULTS: DynamicRoutingFlatSettings = {
   'dynamic_routing_setting.cooldown_seconds': 3,
   'dynamic_routing_setting.hard_failure_threshold': 1,
   'dynamic_routing_setting.hard_failure_cooldown_seconds': 30,
+  'dynamic_routing_setting.hard_failure_max_cooldown_seconds': 900,
+  'dynamic_routing_setting.recovery_observation_seconds': 60,
 }
 
 export type ModelSettings = {

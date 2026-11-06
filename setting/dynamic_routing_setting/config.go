@@ -16,20 +16,22 @@ import (
 // DynamicRoutingSetting is the persisted admin configuration. Duration values
 // use seconds so they can be edited through the existing flat option API.
 type DynamicRoutingSetting struct {
-	Enabled                    bool    `json:"enabled"`
-	MaxSamples                 int     `json:"max_samples"`
-	MaxAgeSeconds              int     `json:"max_age_seconds"`
-	MinSamples                 int     `json:"min_samples"`
-	ProbeFraction              float64 `json:"probe_fraction"`
-	DegradationThreshold       float64 `json:"degradation_threshold"`
-	RecoveryThreshold          float64 `json:"recovery_threshold"`
-	CriticalThreshold          float64 `json:"critical_threshold"`
-	CandidateAdvantage         float64 `json:"candidate_advantage"`
-	Aggressiveness             float64 `json:"aggressiveness"`
-	RecoveryStep               float64 `json:"recovery_step"`
-	CooldownSeconds            int     `json:"cooldown_seconds"`
-	HardFailureThreshold       int     `json:"hard_failure_threshold"`
-	HardFailureCooldownSeconds int     `json:"hard_failure_cooldown_seconds"`
+	Enabled                       bool    `json:"enabled"`
+	MaxSamples                    int     `json:"max_samples"`
+	MaxAgeSeconds                 int     `json:"max_age_seconds"`
+	MinSamples                    int     `json:"min_samples"`
+	ProbeFraction                 float64 `json:"probe_fraction"`
+	DegradationThreshold          float64 `json:"degradation_threshold"`
+	RecoveryThreshold             float64 `json:"recovery_threshold"`
+	CriticalThreshold             float64 `json:"critical_threshold"`
+	CandidateAdvantage            float64 `json:"candidate_advantage"`
+	Aggressiveness                float64 `json:"aggressiveness"`
+	RecoveryStep                  float64 `json:"recovery_step"`
+	CooldownSeconds               int     `json:"cooldown_seconds"`
+	HardFailureThreshold          int     `json:"hard_failure_threshold"`
+	HardFailureCooldownSeconds    int     `json:"hard_failure_cooldown_seconds"`
+	HardFailureMaxCooldownSeconds int     `json:"hard_failure_max_cooldown_seconds"`
+	RecoveryObservationSeconds    int     `json:"recovery_observation_seconds"`
 }
 
 type Snapshot struct {
@@ -40,20 +42,22 @@ type Snapshot struct {
 const OptionPrefix = "dynamic_routing_setting."
 
 var dynamicRoutingSetting = DynamicRoutingSetting{
-	Enabled:                    false,
-	MaxSamples:                 60,
-	MaxAgeSeconds:              90,
-	MinSamples:                 3,
-	ProbeFraction:              0.015,
-	DegradationThreshold:       1.3,
-	RecoveryThreshold:          1.1,
-	CriticalThreshold:          1.9,
-	CandidateAdvantage:         1.1,
-	Aggressiveness:             0.90,
-	RecoveryStep:               0.02,
-	CooldownSeconds:            3,
-	HardFailureThreshold:       1,
-	HardFailureCooldownSeconds: 30,
+	Enabled:                       false,
+	MaxSamples:                    60,
+	MaxAgeSeconds:                 90,
+	MinSamples:                    3,
+	ProbeFraction:                 0.015,
+	DegradationThreshold:          1.3,
+	RecoveryThreshold:             1.1,
+	CriticalThreshold:             1.9,
+	CandidateAdvantage:            1.1,
+	Aggressiveness:                0.90,
+	RecoveryStep:                  0.02,
+	CooldownSeconds:               3,
+	HardFailureThreshold:          1,
+	HardFailureCooldownSeconds:    30,
+	HardFailureMaxCooldownSeconds: 900,
+	RecoveryObservationSeconds:    60,
 }
 
 var (
@@ -158,6 +162,12 @@ func validatedRuntimeConfig(setting DynamicRoutingSetting) (dynamicrouting.Confi
 	if setting.HardFailureCooldownSeconds <= 0 {
 		return dynamicrouting.Config{}, errors.New("hard failure cooldown must be positive")
 	}
+	if setting.HardFailureMaxCooldownSeconds <= 0 {
+		return dynamicrouting.Config{}, errors.New("maximum hard failure cooldown must be positive")
+	}
+	if setting.RecoveryObservationSeconds <= 0 {
+		return dynamicrouting.Config{}, errors.New("recovery observation window must be positive")
+	}
 
 	runtimeConfig, err := runtimeConfigFromSetting(setting)
 	if err != nil {
@@ -171,20 +181,22 @@ func validatedRuntimeConfig(setting DynamicRoutingSetting) (dynamicrouting.Confi
 
 func ToOptionValues(setting DynamicRoutingSetting) map[string]string {
 	return map[string]string{
-		OptionPrefix + "enabled":                       strconv.FormatBool(setting.Enabled),
-		OptionPrefix + "max_samples":                   strconv.Itoa(setting.MaxSamples),
-		OptionPrefix + "max_age_seconds":               strconv.Itoa(setting.MaxAgeSeconds),
-		OptionPrefix + "min_samples":                   strconv.Itoa(setting.MinSamples),
-		OptionPrefix + "probe_fraction":                strconv.FormatFloat(setting.ProbeFraction, 'g', -1, 64),
-		OptionPrefix + "degradation_threshold":         strconv.FormatFloat(setting.DegradationThreshold, 'g', -1, 64),
-		OptionPrefix + "recovery_threshold":            strconv.FormatFloat(setting.RecoveryThreshold, 'g', -1, 64),
-		OptionPrefix + "critical_threshold":            strconv.FormatFloat(setting.CriticalThreshold, 'g', -1, 64),
-		OptionPrefix + "candidate_advantage":           strconv.FormatFloat(setting.CandidateAdvantage, 'g', -1, 64),
-		OptionPrefix + "aggressiveness":                strconv.FormatFloat(setting.Aggressiveness, 'g', -1, 64),
-		OptionPrefix + "recovery_step":                 strconv.FormatFloat(setting.RecoveryStep, 'g', -1, 64),
-		OptionPrefix + "cooldown_seconds":              strconv.Itoa(setting.CooldownSeconds),
-		OptionPrefix + "hard_failure_threshold":        strconv.Itoa(setting.HardFailureThreshold),
-		OptionPrefix + "hard_failure_cooldown_seconds": strconv.Itoa(setting.HardFailureCooldownSeconds),
+		OptionPrefix + "enabled":                           strconv.FormatBool(setting.Enabled),
+		OptionPrefix + "max_samples":                       strconv.Itoa(setting.MaxSamples),
+		OptionPrefix + "max_age_seconds":                   strconv.Itoa(setting.MaxAgeSeconds),
+		OptionPrefix + "min_samples":                       strconv.Itoa(setting.MinSamples),
+		OptionPrefix + "probe_fraction":                    strconv.FormatFloat(setting.ProbeFraction, 'g', -1, 64),
+		OptionPrefix + "degradation_threshold":             strconv.FormatFloat(setting.DegradationThreshold, 'g', -1, 64),
+		OptionPrefix + "recovery_threshold":                strconv.FormatFloat(setting.RecoveryThreshold, 'g', -1, 64),
+		OptionPrefix + "critical_threshold":                strconv.FormatFloat(setting.CriticalThreshold, 'g', -1, 64),
+		OptionPrefix + "candidate_advantage":               strconv.FormatFloat(setting.CandidateAdvantage, 'g', -1, 64),
+		OptionPrefix + "aggressiveness":                    strconv.FormatFloat(setting.Aggressiveness, 'g', -1, 64),
+		OptionPrefix + "recovery_step":                     strconv.FormatFloat(setting.RecoveryStep, 'g', -1, 64),
+		OptionPrefix + "cooldown_seconds":                  strconv.Itoa(setting.CooldownSeconds),
+		OptionPrefix + "hard_failure_threshold":            strconv.Itoa(setting.HardFailureThreshold),
+		OptionPrefix + "hard_failure_cooldown_seconds":     strconv.Itoa(setting.HardFailureCooldownSeconds),
+		OptionPrefix + "hard_failure_max_cooldown_seconds": strconv.Itoa(setting.HardFailureMaxCooldownSeconds),
+		OptionPrefix + "recovery_observation_seconds":      strconv.Itoa(setting.RecoveryObservationSeconds),
 	}
 }
 
@@ -201,6 +213,11 @@ func MergeOptionValues(base DynamicRoutingSetting, values map[string]string) (Dy
 	if err := config.UpdateConfigFromMap(&base, updates); err != nil {
 		return DynamicRoutingSetting{}, err
 	}
+	// Existing installations may already use a base cooldown above the new
+	// default cap. Preserve that value until an explicit cap is configured.
+	if _, supplied := updates["hard_failure_max_cooldown_seconds"]; !supplied {
+		base.HardFailureMaxCooldownSeconds = max(base.HardFailureMaxCooldownSeconds, base.HardFailureCooldownSeconds)
+	}
 	if err := validateSetting(base); err != nil {
 		return DynamicRoutingSetting{}, err
 	}
@@ -209,23 +226,25 @@ func MergeOptionValues(base DynamicRoutingSetting, values map[string]string) (Dy
 
 func runtimeConfigFromSetting(setting DynamicRoutingSetting) (dynamicrouting.Config, error) {
 	const maxDurationSeconds = int64((1<<63 - 1) / int64(time.Second))
-	if int64(setting.MaxAgeSeconds) > maxDurationSeconds || int64(setting.CooldownSeconds) > maxDurationSeconds || int64(setting.HardFailureCooldownSeconds) > maxDurationSeconds {
+	if int64(setting.MaxAgeSeconds) > maxDurationSeconds || int64(setting.CooldownSeconds) > maxDurationSeconds || int64(setting.HardFailureCooldownSeconds) > maxDurationSeconds || int64(setting.HardFailureMaxCooldownSeconds) > maxDurationSeconds || int64(setting.RecoveryObservationSeconds) > maxDurationSeconds {
 		return dynamicrouting.Config{}, errors.New("dynamic routing duration exceeds time.Duration")
 	}
 	return dynamicrouting.Config{
-		Enabled:              setting.Enabled,
-		MaxSamples:           setting.MaxSamples,
-		MaxAge:               time.Duration(setting.MaxAgeSeconds) * time.Second,
-		MinSamples:           setting.MinSamples,
-		ProbeFraction:        setting.ProbeFraction,
-		DegradationThreshold: setting.DegradationThreshold,
-		RecoveryThreshold:    setting.RecoveryThreshold,
-		CriticalThreshold:    setting.CriticalThreshold,
-		CandidateAdvantage:   setting.CandidateAdvantage,
-		Aggressiveness:       setting.Aggressiveness,
-		RecoveryStep:         setting.RecoveryStep,
-		Cooldown:             time.Duration(setting.CooldownSeconds) * time.Second,
-		HardFailureThreshold: setting.HardFailureThreshold,
-		HardFailureCooldown:  time.Duration(setting.HardFailureCooldownSeconds) * time.Second,
+		Enabled:                   setting.Enabled,
+		MaxSamples:                setting.MaxSamples,
+		MaxAge:                    time.Duration(setting.MaxAgeSeconds) * time.Second,
+		MinSamples:                setting.MinSamples,
+		ProbeFraction:             setting.ProbeFraction,
+		DegradationThreshold:      setting.DegradationThreshold,
+		RecoveryThreshold:         setting.RecoveryThreshold,
+		CriticalThreshold:         setting.CriticalThreshold,
+		CandidateAdvantage:        setting.CandidateAdvantage,
+		Aggressiveness:            setting.Aggressiveness,
+		RecoveryStep:              setting.RecoveryStep,
+		Cooldown:                  time.Duration(setting.CooldownSeconds) * time.Second,
+		HardFailureThreshold:      setting.HardFailureThreshold,
+		HardFailureCooldown:       time.Duration(setting.HardFailureCooldownSeconds) * time.Second,
+		HardFailureMaxCooldown:    time.Duration(setting.HardFailureMaxCooldownSeconds) * time.Second,
+		RecoveryObservationWindow: time.Duration(setting.RecoveryObservationSeconds) * time.Second,
 	}, nil
 }

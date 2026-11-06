@@ -792,6 +792,8 @@ func UpdateDynamicRoutingOptions(c *gin.Context) {
 		"cooldown_seconds",
 		"hard_failure_threshold",
 		"hard_failure_cooldown_seconds",
+		"hard_failure_max_cooldown_seconds",
+		"recovery_observation_seconds",
 	}
 	rawSettings := make(map[string]any, len(requiredFields))
 	if err := common.DecodeJson(c.Request.Body, &rawSettings); err != nil {

@@ -20,15 +20,17 @@ type Config struct {
 	MinSamples    int
 	ProbeFraction float64
 
-	DegradationThreshold float64
-	RecoveryThreshold    float64
-	CriticalThreshold    float64
-	CandidateAdvantage   float64
-	Aggressiveness       float64
-	RecoveryStep         float64
-	Cooldown             time.Duration
-	HardFailureThreshold int
-	HardFailureCooldown  time.Duration
+	DegradationThreshold      float64
+	RecoveryThreshold         float64
+	CriticalThreshold         float64
+	CandidateAdvantage        float64
+	Aggressiveness            float64
+	RecoveryStep              float64
+	Cooldown                  time.Duration
+	HardFailureThreshold      int
+	HardFailureCooldown       time.Duration
+	HardFailureMaxCooldown    time.Duration
+	RecoveryObservationWindow time.Duration
 }
 
 type RouteKey struct {
@@ -113,6 +115,7 @@ type routeState struct {
 	candidates     map[int]candidateFingerprint
 	degraded       map[int]bool
 	ejections      map[int]hardEjection
+	backoffs       map[int]hardFailureBackoff
 	lastChanged    time.Time
 	lastAccess     time.Time
 	discountLimits DiscountLimits
@@ -125,11 +128,32 @@ type candidateFingerprint struct {
 }
 
 type hardEjection struct {
-	lastHardAt    time.Time
-	ejectedUntil  time.Time
-	lastEligible  time.Time
-	probeDebt     float64
-	probeIssuedAt []time.Time
+	ejectedUntil   time.Time
+	lastEligible   time.Time
+	probeDebt      float64
+	probeIssuedAt  []time.Time
+	observingSince time.Time
+}
+
+type hardFailureBackoff struct {
+	cooldown     time.Duration
+	lastHardAt   time.Time
+	lastEligible time.Time
+	recoveredAt  time.Time
+}
+
+func (state *routeState) expired(config Config, now time.Time) bool {
+	retention := config.MaxAge
+	if len(state.backoffs) > 0 || len(state.ejections) > 0 {
+		retention = max(retention, config.HardFailureMaxCooldown, config.RecoveryObservationWindow)
+	}
+	expiresAt := state.lastAccess.Add(retention)
+	for _, ejection := range state.ejections {
+		if deadline := ejection.ejectedUntil.Add(config.MaxAge); deadline.After(expiresAt) {
+			expiresAt = deadline
+		}
+	}
+	return !state.lastAccess.IsZero() && now.After(expiresAt)
 }
 
 type channelMeasurement struct {
@@ -259,6 +283,18 @@ func normalizeConfig(config Config) (Config, error) {
 	if config.HardFailureCooldown <= 0 {
 		return Config{}, errors.New("hard failure cooldown must be positive")
 	}
+	if config.HardFailureMaxCooldown == 0 {
+		config.HardFailureMaxCooldown = max(15*time.Minute, config.HardFailureCooldown)
+	}
+	if config.HardFailureMaxCooldown < config.HardFailureCooldown {
+		return Config{}, errors.New("maximum hard failure cooldown cannot be below hard failure cooldown")
+	}
+	if config.RecoveryObservationWindow == 0 {
+		config.RecoveryObservationWindow = time.Minute
+	}
+	if config.RecoveryObservationWindow < 0 {
+		return Config{}, errors.New("recovery observation window must be positive")
+	}
 	return config, nil
 }
 
@@ -278,25 +314,16 @@ func (c *Controller) UpdateConfig(config Config) error {
 	routingChanged := c.config
 	routingChanged.Enabled = normalized.Enabled
 	if routingChanged != normalized {
-		preservedEjections := make(map[RouteKey]*routeState)
+		preservedRoutes := make(map[RouteKey]*routeState)
 		for key, state := range c.routes {
-			if len(state.ejections) == 0 {
+			if len(state.ejections) == 0 && len(state.backoffs) == 0 {
 				continue
 			}
-			ejections := make(map[int]hardEjection, len(state.ejections))
-			for channelID, ejection := range state.ejections {
-				ejections[channelID] = ejection
-			}
-			preservedEjections[key] = &routeState{
-				shares:     make(map[int]float64),
-				probes:     make(map[int]bool),
-				candidates: make(map[int]candidateFingerprint),
-				degraded:   make(map[int]bool),
-				ejections:  ejections,
-				lastAccess: state.lastAccess,
-			}
+			// Tuning changes must not erase failure history or jump a recovering
+			// channel back to its original traffic share.
+			preservedRoutes[key] = state
 		}
-		c.routes = preservedEjections
+		c.routes = preservedRoutes
 		c.selections = make(map[RouteKey]*selectionState)
 	}
 	c.config = normalized
@@ -352,8 +379,7 @@ func (c *Controller) selectAvoiding(
 
 	decision = Decision{Dynamic: c.config.Enabled}
 	c.cleanupExpiredLocked(now)
-	cutoff := now.Add(-c.config.MaxAge)
-	if state, exists := c.routes[key]; exists && !state.lastAccess.IsZero() && state.lastAccess.Before(cutoff) {
+	if state, exists := c.routes[key]; exists && state.expired(c.config, now) {
 		delete(c.routes, key)
 		delete(c.selections, key)
 	}
@@ -410,15 +436,26 @@ func (c *Controller) selectAvoiding(
 			}
 			if now.After(retentionStart.Add(c.config.MaxAge)) {
 				delete(state.ejections, channelID)
+				delete(state.backoffs, channelID)
 			}
 		}
 	}
 	if !exists || !candidateFingerprintMatches(state, ordered) || state.discountLimits != limits {
 		ejections := make(map[int]hardEjection, len(ordered))
+		backoffs := make(map[int]hardFailureBackoff)
+		var previousShares map[int]float64
+		var previousProbes map[int]bool
 		if exists {
 			for channelID, ejection := range state.ejections {
 				ejections[channelID] = ejection
 			}
+			backoffs = state.backoffs
+			if len(backoffs) > 0 {
+				previousShares, previousProbes = state.shares, state.probes
+			}
+		}
+		if backoffs == nil {
+			backoffs = make(map[int]hardFailureBackoff)
 		}
 		state = &routeState{
 			shares:         make(map[int]float64, len(initial)),
@@ -426,12 +463,39 @@ func (c *Controller) selectAvoiding(
 			candidates:     make(map[int]candidateFingerprint, len(ordered)),
 			degraded:       make(map[int]bool, len(ordered)),
 			ejections:      ejections,
+			backoffs:       backoffs,
 			lastAccess:     now,
 			discountLimits: limits,
 		}
 		for _, allocation := range initial {
 			state.shares[allocation.ChannelID] = allocation.Share
 			state.probes[allocation.ChannelID] = allocation.Probe
+			_, recovering := backoffs[allocation.ChannelID]
+			if share, found := previousShares[allocation.ChannelID]; found && recovering {
+				state.shares[allocation.ChannelID] = share
+				state.probes[allocation.ChannelID] = previousProbes[allocation.ChannelID]
+			}
+		}
+		if len(previousShares) > 0 {
+			preserved, remaining := 0.0, 0.0
+			for id, share := range state.shares {
+				if _, recovering := backoffs[id]; recovering {
+					preserved += share
+				} else {
+					remaining += share
+				}
+			}
+			if remaining > 0 {
+				for id := range state.shares {
+					if _, recovering := backoffs[id]; !recovering {
+						state.shares[id] *= max(0, 1-preserved) / remaining
+					}
+				}
+			} else if preserved > 0 {
+				for id := range state.shares {
+					state.shares[id] /= preserved
+				}
+			}
 		}
 		for _, candidate := range ordered {
 			state.candidates[candidate.ChannelID] = candidateFingerprint{
@@ -444,6 +508,14 @@ func (c *Controller) selectAvoiding(
 		delete(c.selections, key)
 	}
 	state.lastAccess = now
+	for channelID, backoff := range state.backoffs {
+		if _, present := state.candidates[channelID]; present {
+			backoff.lastEligible = now
+			state.backoffs[channelID] = backoff
+		} else if _, ejected := state.ejections[channelID]; !ejected && now.After(backoff.lastEligible.Add(max(c.config.MaxAge, c.config.HardFailureMaxCooldown))) {
+			delete(state.backoffs, channelID)
+		}
+	}
 
 	measurements := make(map[int]channelMeasurement, len(ordered))
 	for _, candidate := range ordered {
@@ -458,11 +530,24 @@ func (c *Controller) selectAvoiding(
 	for _, candidate := range ordered {
 		measurement := measurements[candidate.ChannelID]
 		ejection, ejected := state.ejections[candidate.ChannelID]
+		backoff, backedOff := state.backoffs[candidate.ChannelID]
 		observationKey := ObservationKey{ChannelID: candidate.ChannelID, Model: key.Model}
-		if measurement.hardFail && (!ejected || measurement.lastHardAt.After(ejection.lastHardAt)) {
+		if measurement.lastHardAt.After(backoff.lastHardAt) && (measurement.hardFail || ejected || backedOff) {
+			cooldown := c.config.HardFailureCooldown
+			if backedOff {
+				cooldown = max(cooldown, backoff.cooldown)
+				// Concurrent failures from traffic already in flight extend the
+				// same cooldown. A failed recovery attempt doubles it, safely capped.
+				if !ejected || !measurement.lastHardAt.Before(ejection.ejectedUntil) {
+					cooldown += min(cooldown, c.config.HardFailureMaxCooldown-cooldown)
+				}
+			}
+			cooldown = min(cooldown, c.config.HardFailureMaxCooldown)
+			state.backoffs[candidate.ChannelID] = hardFailureBackoff{
+				cooldown: cooldown, lastHardAt: measurement.lastHardAt, lastEligible: now,
+			}
 			ejection = hardEjection{
-				lastHardAt:   measurement.lastHardAt,
-				ejectedUntil: measurement.lastHardAt.Add(c.config.HardFailureCooldown),
+				ejectedUntil: measurement.lastHardAt.Add(cooldown),
 				lastEligible: now,
 			}
 			state.ejections[candidate.ChannelID] = ejection
@@ -472,12 +557,26 @@ func (c *Controller) selectAvoiding(
 			ejected = true
 			ejectionTransition = true
 		}
-		if ejected && !now.Before(ejection.ejectedUntil) &&
-			c.recoverySuccessStreakLocked(observationKey, ejection, now) >= c.config.MinSamples {
-			delete(state.ejections, candidate.ChannelID)
-			delete(state.degraded, candidate.ChannelID)
-			ejected = false
-			ejectionTransition = true
+		if ejected && !now.Before(ejection.ejectedUntil) {
+			streak, lastSuccess := c.recoverySuccessStreakLocked(observationKey, ejection, now)
+			if streak < c.config.MinSamples || measurement.ratio > c.config.RecoveryThreshold {
+				ejection.observingSince = time.Time{}
+			} else {
+				if ejection.observingSince.IsZero() {
+					ejection.observingSince = now
+				}
+				// Time alone cannot restore traffic: require a fresh successful
+				// probe at the end of the continuous observation window as well.
+				if deadline := ejection.observingSince.Add(c.config.RecoveryObservationWindow); !lastSuccess.Before(deadline) {
+					delete(state.ejections, candidate.ChannelID)
+					delete(state.degraded, candidate.ChannelID)
+					backoff := state.backoffs[candidate.ChannelID]
+					backoff.recoveredAt = now
+					state.backoffs[candidate.ChannelID] = backoff
+					ejected = false
+					ejectionTransition = true
+				}
+			}
 		}
 		if ejected {
 			ejection.lastEligible = now
@@ -657,14 +756,29 @@ func (c *Controller) selectAvoiding(
 		}
 		changed = true
 	}
+	recoveryTarget := initial
 	if key.discountFirst {
-		target := discountRecoveryTarget(ordered, state, degraded, measurements, probeEjected, c.config.ProbeFraction)
-		changed = recoverRouteShares(state, target, c.config.RecoveryStep) || changed
+		recoveryTarget = discountRecoveryTarget(ordered, state, degraded, measurements, probeEjected, c.config.ProbeFraction)
+		changed = recoverRouteShares(state, recoveryTarget, c.config.RecoveryStep) || changed
 	}
 	if changed {
 		state.lastChanged = now
 	} else if !key.discountFirst && len(degraded) == 0 && recoverRouteShares(state, initial, c.config.RecoveryStep) {
 		state.lastChanged = now
+	}
+	for _, target := range recoveryTarget {
+		backoff, exists := state.backoffs[target.ChannelID]
+		if !exists || backoff.recoveredAt.IsZero() || degraded[target.ChannelID] || math.Abs(state.shares[target.ChannelID]-target.Share) > 1e-9 {
+			continue
+		}
+		health := c.freshHealthSamplesLocked(ObservationKey{ChannelID: target.ChannelID, Model: key.Model}, now)
+		if len(health) == 0 {
+			continue
+		}
+		latest := health[len(health)-1]
+		if latest.Success && !latest.HardFailure && !latest.UpstreamStartedAt.Before(backoff.recoveredAt) && !latest.ObservedAt.Before(backoff.recoveredAt.Add(c.config.RecoveryObservationWindow)) {
+			delete(state.backoffs, target.ChannelID)
+		}
 	}
 	decision.Allocations = allocationsFromState(ordered, state)
 	return c.completeDecisionLocked(key, decision, excludedChannelIDs, now)
@@ -700,7 +814,7 @@ func (c *Controller) cleanupExpiredLocked(now time.Time) {
 		}
 	}
 	for routeKey, state := range c.routes {
-		if !state.lastAccess.IsZero() && state.lastAccess.Before(cutoff) {
+		if state.expired(c.config, now) {
 			delete(c.routes, routeKey)
 		}
 	}
@@ -843,23 +957,24 @@ func (c *Controller) measureChannelLocked(key ObservationKey, now time.Time) cha
 	measurement := channelMeasurement{}
 	consecutiveHardFailures := 0
 	lastHardAt := time.Time{}
+	seenSuccess := false
 	for index := len(healthSamples) - 1; index >= 0; index-- {
 		sample := healthSamples[index]
 		if sample.HardFailure {
 			if lastHardAt.IsZero() {
 				lastHardAt = sample.ObservedAt
 			}
-			consecutiveHardFailures++
+			if !seenSuccess {
+				consecutiveHardFailures++
+			}
 			continue
 		}
 		if sample.Success {
-			break
+			seenSuccess = true
 		}
 	}
 	measurement.hardFail = consecutiveHardFailures >= c.config.HardFailureThreshold
-	if measurement.hardFail {
-		measurement.lastHardAt = lastHardAt
-	}
+	measurement.lastHardAt = lastHardAt
 	ttftSamples := 0
 	tpotSamples := 0
 	for _, sample := range samples {
@@ -894,12 +1009,13 @@ func (c *Controller) measureChannelLocked(key ObservationKey, now time.Time) cha
 	return measurement
 }
 
-func (c *Controller) recoverySuccessStreakLocked(key ObservationKey, ejection hardEjection, now time.Time) int {
+func (c *Controller) recoverySuccessStreakLocked(key ObservationKey, ejection hardEjection, now time.Time) (int, time.Time) {
 	samples := c.freshHealthSamplesLocked(key, now)
 	issuedProbes := append([]time.Time(nil), ejection.probeIssuedAt...)
 	sort.Slice(issuedProbes, func(i, j int) bool { return issuedProbes[i].Before(issuedProbes[j]) })
 	usedProbes := 0
 	streak := 0
+	var lastSuccess time.Time
 	for _, sample := range samples {
 		if sample.ObservedAt.Before(ejection.ejectedUntil) {
 			continue
@@ -927,8 +1043,9 @@ func (c *Controller) recoverySuccessStreakLocked(key ObservationKey, ejection ha
 			usedProbes++
 		}
 		streak++
+		lastSuccess = sample.ObservedAt
 	}
-	return streak
+	return streak, lastSuccess
 }
 
 func (c *Controller) freshSamplesLocked(key ObservationKey, now time.Time) []Sample {

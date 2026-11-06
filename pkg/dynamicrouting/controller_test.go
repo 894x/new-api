@@ -183,6 +183,8 @@ func TestConfigRejectsImpossibleCountsAndNonFiniteFloats(t *testing.T) {
 		"advantage NaN":            func(config *Config) { config.CandidateAdvantage = math.NaN() },
 		"aggressiveness infinity":  func(config *Config) { config.Aggressiveness = math.Inf(1) },
 		"recovery step NaN":        func(config *Config) { config.RecoveryStep = math.NaN() },
+		"cooldown cap below base":  func(config *Config) { config.HardFailureMaxCooldown = time.Second },
+		"negative observation":     func(config *Config) { config.RecoveryObservationWindow = -time.Second },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -1186,7 +1188,13 @@ func TestHardFailureCooldownReprobesAndRecoversSlowlyAfterValidSuccess(t *testin
 			Success:           true,
 		})
 	}
-	recovered := controller.Select(key, candidates, probeSelectedAt.Add(6*time.Millisecond))
+	observing := controller.Select(key, candidates, probeSelectedAt.Add(6*time.Millisecond))
+	assert.InDelta(t, 0.05, observing.Allocations[0].Share, 0.0001)
+	at := probeSelectedAt.Add(time.Minute + 7*time.Millisecond)
+	controller.Observe(ObservationKey{ChannelID: 1, Model: model}, Sample{
+		ObservedAt: at, UpstreamStartedAt: at.Add(-time.Millisecond), Success: true, HasTTFT: true, TTFT: 100 * time.Millisecond,
+	})
+	recovered := controller.Select(key, candidates, at)
 	require.Len(t, recovered.Allocations, 2)
 	assert.Greater(t, recovered.Allocations[0].Share, 0.05)
 	assert.LessOrEqual(t, recovered.Allocations[0].Share, 0.1501)
@@ -1268,7 +1276,12 @@ func TestHardFailureRecoveryIgnoresInFlightSuccessAndRequiresPostCooldownStreak(
 		HasTTFT:           true,
 		Success:           true,
 	})
-	recovered := controller.Select(key, candidates, base.Add(46*time.Second))
+	observing := controller.Select(key, candidates, base.Add(46*time.Second))
+	assert.InDelta(t, 0.05, observing.Allocations[0].Share, 0.0001)
+	controller.Observe(ObservationKey{ChannelID: 1, Model: model}, Sample{
+		ObservedAt: base.Add(106 * time.Second), UpstreamStartedAt: base.Add(105 * time.Second), Success: true, HasTTFT: true, TTFT: 100 * time.Millisecond,
+	})
+	recovered := controller.Select(key, candidates, base.Add(106*time.Second))
 	require.Len(t, recovered.Allocations, 2)
 	assert.Greater(t, recovered.Allocations[0].Share, 0.05)
 	assert.LessOrEqual(t, recovered.Allocations[0].Share, 0.1501)
@@ -1354,7 +1367,12 @@ func TestHardFailureRecoveryRequiresRequestsStartedAfterCooldown(t *testing.T) {
 			Success:           true,
 		})
 	}
-	recovered := controller.Select(key, candidates, base.Add(52*time.Second))
+	observing := controller.Select(key, candidates, base.Add(52*time.Second))
+	assert.InDelta(t, 0.05, observing.Allocations[0].Share, 0.0001)
+	controller.Observe(ObservationKey{ChannelID: 1, Model: model}, Sample{
+		ObservedAt: base.Add(112 * time.Second), UpstreamStartedAt: base.Add(111 * time.Second), Success: true, HasTTFT: true, TTFT: 100 * time.Millisecond,
+	})
+	recovered := controller.Select(key, candidates, base.Add(112*time.Second))
 	require.Len(t, recovered.Allocations, 2)
 	assert.Greater(t, recovered.Allocations[0].Share, 0.05)
 	assert.False(t, recovered.Allocations[0].Probe)
@@ -1426,6 +1444,18 @@ func TestEjectedChannelRecoversFromControllerSelectedHealthOnlyProbes(t *testing
 		require.True(t, selected)
 	}
 
+	observing := controller.Select(key, candidates, now.Add(time.Millisecond))
+	assert.InDelta(t, 0.10, observing.Allocations[0].Share, 0.0001)
+	now = now.Add(time.Minute + time.Millisecond)
+	for range 20 {
+		decision := controller.Select(key, candidates, now)
+		if decision.SelectedChannelID == 1 {
+			controller.Observe(ObservationKey{ChannelID: 1, Model: model}, Sample{
+				ObservedAt: now.Add(time.Millisecond), UpstreamStartedAt: now, Success: true,
+			})
+			break
+		}
+	}
 	recovered := controller.Select(key, candidates, now.Add(time.Millisecond))
 	require.Len(t, recovered.Allocations, 2)
 	assert.Greater(t, recovered.Allocations[0].Share, 0.10)
@@ -1438,7 +1468,7 @@ func TestEjectedChannelRecoversFromControllerSelectedHealthOnlyProbes(t *testing
 	assert.Equal(t, 2, stats.TTFTSampleCount)
 }
 
-func TestHardFailureDuringReprobeRestartsCooldown(t *testing.T) {
+func TestHardFailureDuringReprobeDoublesCooldown(t *testing.T) {
 	controller, err := NewController(Config{
 		Enabled:              true,
 		MaxSamples:           20,
@@ -1485,10 +1515,189 @@ func TestHardFailureDuringReprobeRestartsCooldown(t *testing.T) {
 
 	stillCooling := controller.Select(key, candidates, base.Add(70*time.Second))
 	require.Len(t, stillCooling.Allocations, 1)
-	afterResetCooldown := controller.Select(key, candidates, base.Add(71*time.Second))
+	stillBackingOff := controller.Select(key, candidates, base.Add(71*time.Second))
+	require.Len(t, stillBackingOff.Allocations, 1)
+	afterResetCooldown := controller.Select(key, candidates, base.Add(101*time.Second))
 	require.Len(t, afterResetCooldown.Allocations, 2)
 	assert.InDelta(t, 0.05, afterResetCooldown.Allocations[0].Share, 0.0001)
 	assert.True(t, afterResetCooldown.Allocations[0].Probe)
+}
+
+func hardFailureRecoveryFixture(t *testing.T) (*Controller, RouteKey, []Candidate, time.Time) {
+	t.Helper()
+	controller, err := NewController(Config{
+		Enabled: true, MaxSamples: 20, MaxAge: 90 * time.Second,
+		MinSamples: 1, ProbeFraction: 0.05, RecoveryStep: 0.1, Cooldown: 3 * time.Second,
+	})
+	require.NoError(t, err)
+	key := RouteKey{Group: "default", Model: "recovery-model"}
+	candidates := []Candidate{{ChannelID: 1, Priority: 100, Weight: 100}, {ChannelID: 2, Weight: 100}}
+	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	for _, candidate := range candidates {
+		controller.Observe(ObservationKey{ChannelID: candidate.ChannelID, Model: key.Model}, Sample{
+			ObservedAt: now, Success: true, HasTTFT: true, TTFT: time.Second,
+		})
+	}
+	controller.Select(key, candidates, now)
+	return controller, key, candidates, now
+}
+
+func TestRepeatedHardFailuresBackOffToCapWithoutExpiringAtSampleAge(t *testing.T) {
+	controller, key, candidates, base := hardFailureRecoveryFixture(t)
+	failedAt := base.Add(10 * time.Second)
+	for _, seconds := range []int{30, 60, 120, 240, 480, 900, 900} {
+		controller.Observe(ObservationKey{ChannelID: 1, Model: key.Model}, Sample{ObservedAt: failedAt, HardFailure: true})
+		failed := controller.Select(key, candidates, failedAt)
+		require.Len(t, failed.Allocations, 1)
+		assert.Equal(t, 2, failed.SelectedChannelID)
+		deadline := failedAt.Add(time.Duration(seconds) * time.Second)
+		cooling := controller.Select(key, candidates, deadline.Add(-time.Millisecond))
+		require.Len(t, cooling.Allocations, 1, "cooldown must last %d seconds", seconds)
+		probe := controller.Select(key, candidates, deadline)
+		require.Len(t, probe.Allocations, 2)
+		assert.InDelta(t, 0.05, probe.Allocations[0].Share, 1e-9)
+		assert.True(t, probe.Allocations[0].Probe)
+		failedAt = deadline.Add(time.Second)
+	}
+}
+
+func TestHardFailureBackoffHonorsConfiguredCapWithoutDurationOverflow(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		base time.Duration
+		cap  time.Duration
+	}{
+		{name: "non-power-of-two cap", base: 30 * time.Second, cap: 45 * time.Second},
+		{name: "maximum duration", base: time.Duration(1 << 62), cap: time.Duration(1<<63 - 1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controller, key, candidates, base := hardFailureRecoveryFixture(t)
+			config := controller.config
+			config.HardFailureCooldown, config.HardFailureMaxCooldown = test.base, test.cap
+			require.NoError(t, controller.UpdateConfig(config))
+			failedAt := base.Add(time.Second)
+			for _, cooldown := range []time.Duration{test.base, test.cap, test.cap} {
+				controller.Observe(ObservationKey{ChannelID: 1, Model: key.Model}, Sample{ObservedAt: failedAt, HardFailure: true})
+				controller.Select(key, candidates, failedAt)
+				deadline := failedAt.Add(cooldown)
+				require.Len(t, controller.Select(key, candidates, deadline.Add(-time.Millisecond)).Allocations, 1)
+				require.Len(t, controller.Select(key, candidates, deadline).Allocations, 2)
+				failedAt = deadline.Add(time.Second)
+			}
+		})
+	}
+}
+
+func TestRecoveryObservesSuccessfulProbesBeforeRampingAndKeepsBackoff(t *testing.T) {
+	for _, discount := range []bool{false, true} {
+		t.Run(fmt.Sprintf("discount=%t", discount), func(t *testing.T) {
+			controller, key, candidates, base := hardFailureRecoveryFixture(t)
+			if discount {
+				cheap, expensive := 0.5, 1.0
+				candidates[0].CostDiscount, candidates[1].CostDiscount = &cheap, &expensive
+				key.discountFirst = true
+			}
+			selectAt := func(seconds int) Decision {
+				return controller.selectAvoiding(key, candidates, nil, base.Add(time.Duration(seconds)*time.Second), DiscountLimits{MaxTTFT: 5 * time.Second, MaxTPOT: time.Second})
+			}
+			observationKey := ObservationKey{ChannelID: 1, Model: key.Model}
+			controller.Observe(observationKey, Sample{ObservedAt: base.Add(10 * time.Second), HardFailure: true})
+			selectAt(10)
+			controller.Observe(observationKey, Sample{
+				ObservedAt: base.Add(41 * time.Second), UpstreamStartedAt: base.Add(40 * time.Second),
+				Success: true, HasTTFT: true, TTFT: time.Second,
+			})
+			for _, seconds := range []int{41, 100, 101} {
+				observing := selectAt(seconds)
+				require.Len(t, observing.Allocations, 2)
+				assert.InDelta(t, 0.05, observing.Allocations[0].Share, 1e-9)
+				assert.True(t, observing.Allocations[0].Probe)
+			}
+			controller.Observe(observationKey, Sample{
+				ObservedAt: base.Add(102 * time.Second), UpstreamStartedAt: base.Add(101 * time.Second),
+				Success: true, HasTTFT: true, TTFT: time.Second,
+			})
+			recovered := selectAt(102)
+			require.Len(t, recovered.Allocations, 2)
+			assert.InDelta(t, 0.15, recovered.Allocations[0].Share, 1e-9)
+			assert.False(t, recovered.Allocations[0].Probe)
+			assert.InDelta(t, 0.15, selectAt(103).Allocations[0].Share, 1e-9)
+			assert.InDelta(t, 0.25, selectAt(105).Allocations[0].Share, 1e-9)
+			controller.Observe(observationKey, Sample{ObservedAt: base.Add(106 * time.Second), HardFailure: true})
+			selectAt(106)
+			require.Len(t, selectAt(165).Allocations, 1)
+			require.Len(t, selectAt(166).Allocations, 2)
+		})
+	}
+}
+
+func TestBackoffResetsOnlyAfterRestoredTrafficAndFreshStableSuccess(t *testing.T) {
+	controller, key, candidates, base := hardFailureRecoveryFixture(t)
+	observationKey := ObservationKey{ChannelID: 1, Model: key.Model}
+	controller.Observe(observationKey, Sample{ObservedAt: base.Add(10 * time.Second), HardFailure: true})
+	controller.Select(key, candidates, base.Add(10*time.Second))
+	for _, seconds := range []int{41, 102} {
+		at := base.Add(time.Duration(seconds) * time.Second)
+		controller.Observe(observationKey, Sample{ObservedAt: at, UpstreamStartedAt: at.Add(-time.Second), Success: true, HasTTFT: true, TTFT: time.Second})
+		controller.Select(key, candidates, at)
+	}
+	for seconds := 105; seconds <= 129; seconds += 3 {
+		controller.Select(key, candidates, base.Add(time.Duration(seconds)*time.Second))
+	}
+	at := base.Add(162 * time.Second)
+	controller.Observe(observationKey, Sample{ObservedAt: at, UpstreamStartedAt: at.Add(-time.Second), Success: true, HasTTFT: true, TTFT: time.Second})
+	assert.InDelta(t, 0.95, controller.Select(key, candidates, at).Allocations[0].Share, 1e-9)
+	controller.Observe(observationKey, Sample{ObservedAt: at.Add(time.Second), HardFailure: true})
+	controller.Select(key, candidates, at.Add(time.Second))
+	require.Len(t, controller.Select(key, candidates, at.Add(30*time.Second)).Allocations, 1)
+	require.Len(t, controller.Select(key, candidates, at.Add(31*time.Second)).Allocations, 2)
+}
+
+func TestFailedRecoveryRestartsBackoffEvenIfSuccessCompletesBeforeNextSelection(t *testing.T) {
+	controller, key, candidates, base := hardFailureRecoveryFixture(t)
+	observationKey := ObservationKey{ChannelID: 1, Model: key.Model}
+	for _, seconds := range []int{10, 11} {
+		at := base.Add(time.Duration(seconds) * time.Second)
+		controller.Observe(observationKey, Sample{ObservedAt: at, HardFailure: true})
+		controller.Select(key, candidates, at)
+	}
+	require.Len(t, controller.Select(key, candidates, base.Add(40*time.Second)).Allocations, 1)
+	require.Len(t, controller.Select(key, candidates, base.Add(41*time.Second)).Allocations, 2, "in-flight failures extend the current cooldown without doubling it")
+	controller.Observe(observationKey, Sample{ObservedAt: base.Add(42 * time.Second), UpstreamStartedAt: base.Add(41 * time.Second), Success: true, HasTTFT: true, TTFT: time.Second})
+	controller.Select(key, candidates, base.Add(42*time.Second))
+	controller.Observe(observationKey, Sample{ObservedAt: base.Add(50 * time.Second), HardFailure: true})
+	controller.Observe(observationKey, Sample{ObservedAt: base.Add(51 * time.Second), UpstreamStartedAt: base.Add(50 * time.Second), Success: true, HasTTFT: true, TTFT: time.Second})
+	require.Len(t, controller.Select(key, candidates, base.Add(51*time.Second)).Allocations, 1)
+	require.Len(t, controller.Select(key, candidates, base.Add(109*time.Second)).Allocations, 1)
+	require.Len(t, controller.Select(key, candidates, base.Add(110*time.Second)).Allocations, 2)
+}
+
+func TestRetuningPreservesObservationWindowAndBackoffWhileTrafficRecovers(t *testing.T) {
+	controller, key, candidates, base := hardFailureRecoveryFixture(t)
+	observationKey := ObservationKey{ChannelID: 1, Model: key.Model}
+	controller.Observe(observationKey, Sample{ObservedAt: base.Add(10 * time.Second), HardFailure: true})
+	controller.Select(key, candidates, base.Add(10*time.Second))
+	controller.Observe(observationKey, Sample{ObservedAt: base.Add(41 * time.Second), UpstreamStartedAt: base.Add(40 * time.Second), Success: true, HasTTFT: true, TTFT: time.Second})
+	controller.Select(key, candidates, base.Add(41*time.Second))
+	config := controller.config
+	config.RecoveryStep = 0.05
+	require.NoError(t, controller.UpdateConfig(config))
+	candidates[0].Weight = 200
+	observing := controller.Select(key, candidates, base.Add(100*time.Second))
+	assert.InDelta(t, 0.05, observing.Allocations[0].Share, 1e-9)
+	assert.True(t, observing.Allocations[0].Probe)
+	controller.Observe(observationKey, Sample{ObservedAt: base.Add(102 * time.Second), UpstreamStartedAt: base.Add(101 * time.Second), Success: true, HasTTFT: true, TTFT: time.Second})
+	assert.InDelta(t, 0.10, controller.Select(key, candidates, base.Add(102*time.Second)).Allocations[0].Share, 1e-9)
+	config.ProbeFraction = 0.04
+	require.NoError(t, controller.UpdateConfig(config))
+	candidates[0].Priority++
+	assert.LessOrEqual(t, controller.Select(key, candidates, base.Add(103*time.Second)).Allocations[0].Share, 0.150000001)
+	controller.Observe(observationKey, Sample{ObservedAt: base.Add(104 * time.Second), HardFailure: true})
+	controller.Select(key, candidates, base.Add(104*time.Second))
+	require.Len(t, controller.Select(key, candidates, base.Add(163*time.Second)).Allocations, 1)
+	probe := controller.Select(key, candidates, base.Add(164*time.Second))
+	require.Len(t, probe.Allocations, 2)
+	assert.InDelta(t, 0.04, probe.Allocations[0].Share, 1e-9)
 }
 
 func TestStaleCandidateOnlyReceivesProbeTraffic(t *testing.T) {

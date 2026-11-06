@@ -70,6 +70,18 @@ describe('dynamic routing settings', () => {
     renderSettings()
     const input = screen.getByRole('spinbutton', { name: 'Maximum samples' })
     fireEvent.change(input, { target: { value: '61' } })
+    fireEvent.change(
+      screen.getByRole('spinbutton', {
+        name: 'Maximum hard failure cooldown (seconds)',
+      }),
+      { target: { value: '600' } }
+    )
+    fireEvent.change(
+      screen.getByRole('spinbutton', {
+        name: 'Recovery observation time (seconds)',
+      }),
+      { target: { value: '120' } }
+    )
     expect(screen.getByRole('button', { name: 'Reset' })).toBeEnabled()
     await user.click(screen.getByRole('button', { name: 'Save Changes' }))
     await waitFor(() =>
@@ -82,6 +94,8 @@ describe('dynamic routing settings', () => {
         ...buildDynamicRoutingFormValues(DYNAMIC_ROUTING_FLAT_DEFAULTS)
           .dynamic_routing_setting,
         max_samples: 61,
+        hard_failure_max_cooldown_seconds: 600,
+        recovery_observation_seconds: 120,
       },
       { skipBusinessError: true, skipErrorHandler: true }
     )

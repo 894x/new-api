@@ -149,4 +149,22 @@ export const DYNAMIC_ROUTING_RECOVERY_FIELDS: DynamicRoutingNumericFieldDefiniti
       max: MAX_DYNAMIC_ROUTING_DURATION_SECONDS,
       step: 1,
     },
+    {
+      name: 'dynamic_routing_setting.hard_failure_max_cooldown_seconds',
+      labelKey: 'Maximum hard failure cooldown (seconds)',
+      descriptionKey:
+        'Repeated recovery failures double the cooldown up to this limit.',
+      min: 1,
+      max: MAX_DYNAMIC_ROUTING_DURATION_SECONDS,
+      step: 1,
+    },
+    {
+      name: 'dynamic_routing_setting.recovery_observation_seconds',
+      labelKey: 'Recovery observation time (seconds)',
+      descriptionKey:
+        'Keep probe traffic until this period ends with a fresh success before gradually restoring traffic.',
+      min: 1,
+      max: MAX_DYNAMIC_ROUTING_DURATION_SECONDS,
+      step: 1,
+    },
   ]

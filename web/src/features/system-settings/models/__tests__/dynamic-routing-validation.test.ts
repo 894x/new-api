@@ -52,6 +52,8 @@ describe('dynamic routing settings validation', () => {
       cooldown_seconds: 3,
       hard_failure_threshold: 1,
       hard_failure_cooldown_seconds: 30,
+      hard_failure_max_cooldown_seconds: 900,
+      recovery_observation_seconds: 60,
     })
   })
 
@@ -63,6 +65,25 @@ describe('dynamic routing settings validation', () => {
     const enabled = buildValidValues()
     enabled.dynamic_routing_setting.enabled = true
     assert.equal(dynamicRoutingFormSchema.safeParse(enabled).success, true)
+  })
+
+  test('rejects a cooldown cap below the base and a non-positive observation period', () => {
+    const values = buildValidValues()
+    values.dynamic_routing_setting.hard_failure_max_cooldown_seconds = 29
+    values.dynamic_routing_setting.recovery_observation_seconds = 0
+    const result = dynamicRoutingFormSchema.safeParse(values)
+
+    assert.equal(result.success, false)
+    if (result.success) return
+    const fields = new Set(
+      result.error.issues.map((issue) => issue.path.join('.'))
+    )
+    assert.ok(
+      fields.has('dynamic_routing_setting.hard_failure_max_cooldown_seconds')
+    )
+    assert.ok(
+      fields.has('dynamic_routing_setting.recovery_observation_seconds')
+    )
   })
 
   test('rejects a zero probe fraction when routing is enabled', () => {
