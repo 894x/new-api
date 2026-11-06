@@ -63,7 +63,6 @@ func SanitizeResponseBody(body []byte, relayFormat types.RelayFormat) ([]byte, e
 			"usage.prompt_tokens_details",
 			"usage.completion_tokens_details",
 			"usage.input_tokens_details",
-			"usage.output_tokens_details",
 			"message.usage.billing_usage",
 			"message.usage.usage_semantic",
 			"message.usage.usage_source",
@@ -75,7 +74,6 @@ func SanitizeResponseBody(body []byte, relayFormat types.RelayFormat) ([]byte, e
 			"message.usage.prompt_tokens_details",
 			"message.usage.completion_tokens_details",
 			"message.usage.input_tokens_details",
-			"message.usage.output_tokens_details",
 		}
 	default:
 		return body, nil

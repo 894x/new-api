@@ -6,10 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relay/channel/claude"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -19,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestAdaptorUsesExactRouteAndQueryAuth(t *testing.T) {
@@ -990,6 +994,140 @@ func TestAdaptorCrossProtocolChatUpstreamRequestsStreamUsage(t *testing.T) {
 			require.NotNil(t, chatReq.StreamOptions)
 			assert.True(t, chatReq.StreamOptions.IncludeUsage)
 		})
+	}
+}
+
+func TestMessagesThinkingUsageThroughAdaptors(t *testing.T) {
+	const chatUsage = `"prompt_tokens":126,"completion_tokens":271,"total_tokens":397,"completion_tokens_details":{"reasoning_tokens":255}`
+	const nativeUsage = `"input_tokens":126,"output_tokens":271,"output_tokens_details":{"thinking_tokens":255}`
+	for _, tt := range []struct {
+		name     string
+		advanced bool
+		native   bool
+		partial  bool
+		zero     bool
+	}{
+		{name: "openai"},
+		{name: "claude", native: true},
+		{name: "advanced chat conversion", advanced: true},
+		{name: "advanced native messages", advanced: true, native: true},
+		{name: "advanced native partial usage", advanced: true, native: true, partial: true},
+		{name: "advanced native zero correction", advanced: true, native: true, zero: true},
+	} {
+		for _, stream := range []bool{false, true} {
+			if !stream && (tt.partial || tt.zero) {
+				continue
+			}
+			mode := "non-stream"
+			if stream {
+				mode = "stream"
+			}
+			t.Run(tt.name+"/"+mode, func(t *testing.T) {
+				converter := relayconvert.ConverterClaudeMessagesToOpenAIChat
+				upstreamPath := "/v1/chat/completions"
+				if tt.native {
+					converter = relayconvert.ConverterNone
+					upstreamPath = "/v1/messages"
+				}
+				info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
+					IncomingPath: "/v1/messages", UpstreamPath: upstreamPath, Converter: converter,
+				}}})
+				info.RequestURLPath = "/v1/messages"
+				info.RelayFormat = types.RelayFormatClaude
+				info.IsStream = stream
+				info.ShouldIncludeUsage = true
+				wantThinking := 255
+				gin.SetMode(gin.TestMode)
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+				body := `{"id":"fixture","model":"gpt-test","choices":[{"message":{"role":"assistant","reasoning_content":"thinking fixture","content":"157"},"finish_reason":"stop"}],"usage":{` + chatUsage + `}}`
+				contentType := "application/json"
+				if tt.native {
+					body = `{"id":"fixture","type":"message","role":"assistant","model":"gpt-test","content":[{"type":"thinking","thinking":"thinking fixture"},{"type":"text","text":"157"}],"stop_reason":"end_turn","usage":{` + nativeUsage + `}}`
+				}
+				if stream {
+					contentType = "text/event-stream"
+					body = "data: " + `{"id":"fixture","model":"gpt-test","choices":[{"index":0,"delta":{"reasoning_content":"thinking fixture"}}]}` + "\n\n" +
+						"data: " + `{"id":"fixture","model":"gpt-test","choices":[{"index":0,"delta":{"content":"157"},"finish_reason":"stop"}]}` + "\n\n" +
+						"data: " + `{"id":"fixture","model":"gpt-test","choices":[],"usage":{` + chatUsage + `}}` + "\n\ndata: [DONE]\n\n"
+					if tt.native {
+						body = "event: message_start\ndata: " + `{"type":"message_start","message":{"id":"fixture","type":"message","role":"assistant","model":"gpt-test","content":[],"usage":{"input_tokens":126,"output_tokens":0,"output_tokens_details":{"thinking_tokens":25}}}}` + "\n\n" +
+							"event: content_block_start\ndata: " + `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}` + "\n\n" +
+							"event: content_block_delta\ndata: " + `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"thinking fixture"}}` + "\n\n" +
+							"event: content_block_stop\ndata: " + `{"type":"content_block_stop","index":0}` + "\n\n" +
+							"event: content_block_start\ndata: " + `{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}` + "\n\n" +
+							"event: content_block_delta\ndata: " + `{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"157"}}` + "\n\n" +
+							"event: content_block_stop\ndata: " + `{"type":"content_block_stop","index":1}` + "\n\n" +
+							"event: message_delta\ndata: " + `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":271,"output_tokens_details":{"thinking_tokens":255}}}` + "\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+						if tt.partial {
+							body = strings.Replace(body, `,"output_tokens_details":{"thinking_tokens":255}`, "", 1)
+							wantThinking = 25
+						} else if tt.zero {
+							body = strings.Replace(body, `"thinking_tokens":255`, `"thinking_tokens":0`, 1)
+							wantThinking = 0
+						}
+					}
+				}
+				resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {contentType}}, Body: io.NopCloser(strings.NewReader(body))}
+				var usageValue any
+				var relayErr *types.NewAPIError
+				switch {
+				case tt.advanced:
+					adaptor := &Adaptor{}
+					adaptor.Init(info)
+					usageValue, relayErr = adaptor.DoResponse(c, resp, info)
+				case tt.native:
+					info.ChannelType = constant.ChannelTypeAnthropic
+					adaptor := &claude.Adaptor{}
+					adaptor.Init(info)
+					usageValue, relayErr = adaptor.DoResponse(c, resp, info)
+				default:
+					info.ChannelType = constant.ChannelTypeOpenAI
+					adaptor := &openai.Adaptor{}
+					adaptor.Init(info)
+					usageValue, relayErr = adaptor.DoResponse(c, resp, info)
+				}
+				require.Nil(t, relayErr)
+				assert.Equal(t, http.StatusOK, recorder.Code)
+				usage, ok := usageValue.(*dto.Usage)
+				require.True(t, ok)
+				assert.Equal(t, 271, usage.CompletionTokens, "thinking is already included in output totals")
+				assert.Equal(t, wantThinking, usage.CompletionTokenDetails.ReasoningTokens)
+				wire := recorder.Body.String()
+				if stream {
+					var terminal string
+					stops := 0
+					for line := range strings.SplitSeq(wire, "\n") {
+						if data, ok := strings.CutPrefix(line, "data: "); ok {
+							switch gjson.Get(data, "type").String() {
+							case "message_start":
+								if tt.native {
+									assert.EqualValues(t, 25, gjson.Get(data, "message.usage.output_tokens_details.thinking_tokens").Int())
+								}
+							case "message_delta":
+								terminal = data
+							case "message_stop":
+								stops++
+							}
+						}
+					}
+					assert.Equal(t, 1, stops)
+					assert.Contains(t, wire, "thinking_delta")
+					assert.Contains(t, wire, "157")
+					wire = terminal
+				} else {
+					assert.Equal(t, "thinking", gjson.Get(wire, "content.0.type").String())
+					assert.Equal(t, "157", gjson.Get(wire, "content.1.text").String())
+				}
+				assert.EqualValues(t, 271, gjson.Get(wire, "usage.output_tokens").Int())
+				thinking := gjson.Get(wire, "usage.output_tokens_details.thinking_tokens")
+				assert.True(t, thinking.Exists(), wire)
+				assert.EqualValues(t, wantThinking, thinking.Int())
+				assert.False(t, gjson.Get(wire, "usage.billing_usage").Exists(), "billing snapshots remain internal")
+				assert.False(t, gjson.Get(wire, "usage.completion_tokens_details").Exists(), "Messages must not expose Chat usage aliases")
+			})
+		}
 	}
 }
 

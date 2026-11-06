@@ -37,6 +37,13 @@ func UsageFromOpenAI(usage *dto.Usage) *dto.ClaudeUsage {
 		CacheReadInputTokens:     usage.PromptTokensDetails.CachedTokens,
 		BillingUsage:             billingUsage,
 	}
+	thinkingTokens := usage.CompletionTokenDetails.ReasoningTokens
+	if thinkingTokens == 0 && usage.OutputTokensDetails != nil {
+		thinkingTokens = usage.OutputTokensDetails.ReasoningTokens
+	}
+	if thinkingTokens > 0 || usage.OutputTokensDetails != nil {
+		result.OutputTokensDetails = &dto.ClaudeOutputTokensDetails{ThinkingTokens: thinkingTokens}
+	}
 	if cacheCreation5m > 0 || cacheCreation1h > 0 {
 		result.CacheCreation = &dto.ClaudeCacheCreationUsage{
 			Ephemeral5mInputTokens: cacheCreation5m,

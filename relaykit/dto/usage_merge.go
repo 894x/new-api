@@ -79,6 +79,10 @@ func MergeUsageNonZero(current *Usage, incoming *Usage) *Usage {
 	if incoming.CompletionTokenDetails.ReasoningTokens > 0 {
 		current.CompletionTokenDetails.ReasoningTokens = incoming.CompletionTokenDetails.ReasoningTokens
 	}
+	if incoming.OutputTokensDetails != nil {
+		details := *incoming.OutputTokensDetails
+		current.OutputTokensDetails = &details
+	}
 
 	if incoming.UsageSemantic != "" {
 		current.UsageSemantic = incoming.UsageSemantic
@@ -177,6 +181,10 @@ func MergeClaudeUsageNonZero(current *ClaudeUsage, incoming *ClaudeUsage) *Claud
 	}
 	if incoming.OutputTokens > 0 {
 		merged.OutputTokens = incoming.OutputTokens
+	}
+	if incoming.OutputTokensDetails != nil {
+		details := *incoming.OutputTokensDetails
+		merged.OutputTokensDetails = &details
 	}
 	if incoming.ClaudeCacheCreation5mTokens > 0 {
 		merged.ClaudeCacheCreation5mTokens = incoming.ClaudeCacheCreation5mTokens

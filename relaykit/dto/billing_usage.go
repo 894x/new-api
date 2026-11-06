@@ -328,6 +328,7 @@ func (usage *BillingUsage) canonicalClaudeUsage() *Usage {
 		ClaudeCacheCreation1hTokens: cacheCreation1h,
 	}
 	canonical.PromptTokensDetails.CachedTokens = claudeUsage.CacheReadInputTokens
+	canonical.CompletionTokenDetails.ReasoningTokens = claudeUsage.GetThinkingTokens()
 	canonical.PromptTokensDetails.CachedCreationTokens = claudeUsage.CacheCreationInputTokens
 	if claudeUsage.CacheCreation != nil {
 		cacheCreation := *claudeUsage.CacheCreation
@@ -395,6 +396,10 @@ func cloneOpenAIUsage(usage *Usage) *Usage {
 	}
 	clone := *usage
 	clone.BillingUsage = nil
+	if usage.OutputTokensDetails != nil {
+		details := *usage.OutputTokensDetails
+		clone.OutputTokensDetails = &details
+	}
 	if usage.CacheCreation != nil {
 		cacheCreation := *usage.CacheCreation
 		clone.CacheCreation = &cacheCreation
@@ -413,6 +418,10 @@ func cloneClaudeUsage(usage *ClaudeUsage) *ClaudeUsage {
 	}
 	clone := *usage
 	clone.BillingUsage = nil
+	if usage.OutputTokensDetails != nil {
+		details := *usage.OutputTokensDetails
+		clone.OutputTokensDetails = &details
+	}
 	if usage.CacheCreation != nil {
 		cacheCreation := *usage.CacheCreation
 		clone.CacheCreation = &cacheCreation

@@ -5,9 +5,74 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMessagesThinkingUsagePreservesReportedCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		usage   dto.Usage
+		present bool
+		want    int
+	}{
+		{name: "chat", usage: dto.Usage{CompletionTokenDetails: dto.OutputTokenDetails{ReasoningTokens: 255}}, present: true, want: 255},
+		{name: "responses", usage: dto.Usage{OutputTokensDetails: &dto.OutputTokenDetails{ReasoningTokens: 255}}, present: true, want: 255},
+		{name: "reported zero", usage: dto.Usage{OutputTokensDetails: &dto.OutputTokenDetails{}}, present: true},
+		{name: "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.usage.CompletionTokens = 271
+			converted := buildClaudeUsageFromOpenAIUsage(&tc.usage)
+			raw, err := kitutil.Marshal(converted)
+			require.NoError(t, err)
+			var wire map[string]any
+			require.NoError(t, kitutil.Unmarshal(raw, &wire))
+			assert.EqualValues(t, 271, wire["output_tokens"])
+			details, present := wire["output_tokens_details"]
+			assert.Equal(t, tc.present, present)
+			if tc.present {
+				require.IsType(t, map[string]any{}, details)
+				assert.EqualValues(t, tc.want, details.(map[string]any)["thinking_tokens"])
+			}
+		})
+	}
+
+	native := &dto.ClaudeUsage{InputTokens: 126, OutputTokens: 271, OutputTokensDetails: &dto.ClaudeOutputTokensDetails{ThinkingTokens: 255}}
+	snapshot := dto.NewClaudeMessagesBillingUsage(native)
+	require.NotNil(t, snapshot)
+	native.OutputTokensDetails.ThinkingTokens = 999
+	canonical, ok := snapshot.CanonicalUsage()
+	require.True(t, ok)
+	assert.Equal(t, 255, canonical.CompletionTokenDetails.ReasoningTokens)
+	assert.Equal(t, 271, canonical.CompletionTokens)
+	converted := buildClaudeUsageFromOpenAIUsage(canonical)
+	assert.Equal(t, 255, converted.GetThinkingTokens())
+	require.NotNil(t, converted.OutputTokensDetails)
+	converted.OutputTokensDetails.ThinkingTokens = 888
+	assert.Equal(t, 255, snapshot.ClaudeUsage.GetThinkingTokens())
+	merged := dto.MergeClaudeUsageNonZero(snapshot.ClaudeUsage, &dto.ClaudeUsage{OutputTokens: 300})
+	assert.Equal(t, 255, merged.GetThinkingTokens(), "a partial stream update must retain earlier thinking usage")
+	correction := &dto.ClaudeUsage{OutputTokensDetails: &dto.ClaudeOutputTokensDetails{}}
+	merged = dto.MergeClaudeUsageNonZero(merged, correction)
+	assert.Zero(t, merged.GetThinkingTokens(), "an explicitly reported zero replaces the earlier count")
+	correction.OutputTokensDetails.ThinkingTokens = 777
+	assert.Zero(t, merged.GetThinkingTokens(), "merging must detach the incoming snapshot")
+	assert.Equal(t, 255, snapshot.ClaudeUsage.GetThinkingTokens())
+	assert.Equal(t, 300, merged.OutputTokens)
+
+	responses := &dto.Usage{CompletionTokens: 271, OutputTokensDetails: &dto.OutputTokenDetails{ReasoningTokens: 255}}
+	openAISnapshot := dto.NewOpenAIResponsesBillingUsage(responses)
+	require.NotNil(t, openAISnapshot)
+	require.NotNil(t, openAISnapshot.OpenAIUsage)
+	require.NotNil(t, openAISnapshot.OpenAIUsage.OutputTokensDetails)
+	responses.OutputTokensDetails.ReasoningTokens = 999
+	assert.Equal(t, 255, openAISnapshot.OpenAIUsage.OutputTokensDetails.ReasoningTokens)
+	accumulated := dto.MergeUsageNonZero(nil, openAISnapshot.OpenAIUsage)
+	accumulated = dto.MergeUsageNonZero(accumulated, &dto.Usage{CompletionTokens: 300})
+	assert.Equal(t, 255, buildClaudeUsageFromOpenAIUsage(accumulated).GetThinkingTokens())
+}
 
 func TestResponseOpenAI2ClaudeToolUseInputIsObject(t *testing.T) {
 	tests := []struct {
