@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useEffectEvent, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useEffect, useEffectEvent, useId, useState } from 'react'
+import { useForm, type FieldErrors } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -36,6 +36,16 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Combobox } from '@/components/ui/combobox'
+import { Form } from '@/components/ui/form'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { dynamicRoutingSettingsSchema } from '@/features/system-settings/models/lib/dynamic-routing-schema'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -58,9 +68,15 @@ import { DiscountRoutingFields } from './discount-routing-fields'
 import { PoolChannelList } from './pool-channel-list'
 import { PoolModeSelect } from './pool-mode-select'
 import { PoolMonitorDisplay } from './pool-monitor-display'
+import { PoolTuningPanel } from './pool-tuning-panel'
 
 const poolFormSchema = z.object({
   mode: z.enum(['priority', 'smart', 'discount']),
+  tuning: z
+    .object(dynamicRoutingSettingsSchema.shape)
+    .omit({ enabled: true })
+    .partial()
+    .extend({ chat_prefix_enabled: z.boolean().optional() }),
   max_ttft_ms: z.number().int().min(1).max(3600000),
   max_tpot_ms: z.number().int().min(1).max(60000),
   channels: z
@@ -74,15 +90,17 @@ const poolFormSchema = z.object({
     )
     .max(500),
 })
-type PoolFormValues = z.infer<typeof poolFormSchema>
+export type PoolFormValues = z.infer<typeof poolFormSchema>
 
 export function PoolCard(props: {
   pool: RoutingPoolView
   canWrite: boolean
   groupLabel?: string
+  targetLabel?: string
   onDirtyChange: (dirty: boolean) => void
 }) {
   const { t } = useTranslation()
+  const prefixControlId = useId()
   const queryClient = useQueryClient()
   const actor = useAuthStore((state) => state.auth.user)
   const canMonitor = hasPermission(
@@ -91,6 +109,7 @@ export function PoolCard(props: {
     ADMIN_PERMISSION_ACTIONS.READ
   )
   const [monitorOpen, setMonitorOpen] = useState(false)
+  const [tuningOpen, setTuningOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [channelToAdd, setChannelToAdd] = useState<string | null>(null)
   const [editingStrategy, setEditingStrategy] = useState(false)
@@ -99,6 +118,7 @@ export function PoolCard(props: {
     resolver: zodResolver(poolFormSchema),
     defaultValues: {
       mode: props.pool.mode,
+      tuning: props.pool.tuning ?? {},
       channels: props.pool.channels,
       max_ttft_ms:
         props.pool.max_ttft_ms || DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
@@ -107,6 +127,14 @@ export function PoolCard(props: {
     },
   })
   const values = form.watch()
+  let prefixValue = 'inherit'
+  let prefixLabel = t('Inherit global')
+  if (values.tuning.chat_prefix_enabled !== undefined) {
+    prefixValue = String(values.tuning.chat_prefix_enabled)
+    prefixLabel = values.tuning.chat_prefix_enabled
+      ? t('Enabled')
+      : t('Disabled')
+  }
   const dirty = form.formState.isDirty
   const notifyDirty = useEffectEvent(props.onDirtyChange)
   useEffect(() => {
@@ -117,6 +145,7 @@ export function PoolCard(props: {
     if (!dirty) {
       form.reset({
         mode: props.pool.mode,
+        tuning: props.pool.tuning ?? {},
         channels: props.pool.channels,
         max_ttft_ms:
           props.pool.max_ttft_ms || DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
@@ -132,6 +161,7 @@ export function PoolCard(props: {
     props.pool.channels,
     props.pool.max_ttft_ms,
     props.pool.max_tpot_ms,
+    props.pool.tuning,
   ])
   const candidates = useQuery({
     queryKey: routingPoolKeys.detail(
@@ -139,7 +169,7 @@ export function PoolCard(props: {
       props.pool.model
     ),
     queryFn: () => getRoutingPool(props.pool.routing_group, props.pool.model),
-    enabled: adding && props.canWrite,
+    enabled: tuningOpen || (adding && props.canWrite),
     refetchOnWindowFocus: false,
     meta: { errorToast: false },
   })
@@ -158,6 +188,7 @@ export function PoolCard(props: {
     onSuccess: async (pool) => {
       form.reset({
         mode: pool.mode,
+        tuning: pool.tuning ?? {},
         channels: pool.channels,
         max_ttft_ms: pool.max_ttft_ms || DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
         max_tpot_ms: pool.max_tpot_ms || DEFAULT_DISCOUNT_LIMITS.max_tpot_ms,
@@ -165,6 +196,7 @@ export function PoolCard(props: {
       toast.success(t('Saved successfully'))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: routingPoolKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ['user-routing-pools'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor-pool'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor'] }),
       ])
@@ -183,6 +215,7 @@ export function PoolCard(props: {
       setRestoring(false)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: routingPoolKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ['user-routing-pools'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor-pool'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor'] }),
       ])
@@ -199,6 +232,45 @@ export function PoolCard(props: {
       )
   )
 
+  const tuningDefaults =
+    candidates.data?.tuning_defaults ?? props.pool.tuning_defaults
+  const revealTuning = () => {
+    if (canMonitor) setMonitorOpen(true)
+    setTuningOpen(true)
+  }
+  const handleInvalid = (errors: FieldErrors<PoolFormValues>) => {
+    if (errors.tuning) revealTuning()
+  }
+  const validateAndSave = (data: PoolFormValues) => {
+    form.clearErrors()
+    const numericTuning = Object.entries(data.tuning).filter(
+      ([key, value]) => key !== 'chat_prefix_enabled' && value !== undefined
+    )
+    if (numericTuning.length > 0) {
+      if (!tuningDefaults) {
+        form.setError('root.tuning', {
+          message: t('Scheduling defaults are unavailable'),
+        })
+        revealTuning()
+        return
+      }
+      const result = dynamicRoutingSettingsSchema.safeParse({
+        ...tuningDefaults,
+        enabled: true,
+        ...Object.fromEntries(numericTuning),
+      })
+      if (!result.success) {
+        for (const issue of result.error.issues) {
+          const field = issue.path[0] as keyof PoolFormValues['tuning']
+          form.setError(`tuning.${field}`, { message: t(issue.message) })
+        }
+        revealTuning()
+        return
+      }
+    }
+    save.mutate(data)
+  }
+
   return (
     <PoolMonitorDisplay
       open={monitorOpen && canMonitor}
@@ -206,6 +278,22 @@ export function PoolCard(props: {
       model={props.pool.model}
       group={props.pool.routing_group}
       groupLabel={props.groupLabel}
+      toolbarActions={
+        <Form {...form}>
+          <PoolTuningPanel
+            open={tuningOpen}
+            onOpenChange={setTuningOpen}
+            defaults={tuningDefaults}
+            loading={candidates.isFetching && !tuningDefaults}
+            disabled={disabled}
+            saving={save.isPending}
+            onSave={() =>
+              void form.handleSubmit(validateAndSave, handleInvalid)()
+            }
+            onRetry={() => void candidates.refetch()}
+          />
+        </Form>
+      }
     >
       <Card
         className={cn(
@@ -217,6 +305,11 @@ export function PoolCard(props: {
           <div className='flex min-w-0 flex-wrap items-start justify-between gap-2'>
             <CardTitle className='min-w-0 text-base break-all'>
               {props.pool.model}
+              {props.targetLabel && (
+                <span className='text-muted-foreground block text-xs font-normal'>
+                  {props.targetLabel}
+                </span>
+              )}
             </CardTitle>
             <div className='flex max-w-full flex-wrap items-center justify-end gap-2'>
               <Badge
@@ -258,11 +351,39 @@ export function PoolCard(props: {
               {t('Edit strategy')}
             </Button>
           </div>
+          <div className='space-y-1.5'>
+            <Label htmlFor={prefixControlId}>{t('Prefix cache routing')}</Label>
+            <Select
+              value={prefixValue}
+              onValueChange={(value) =>
+                form.setValue(
+                  'tuning.chat_prefix_enabled',
+                  value === 'inherit' ? undefined : value === 'true',
+                  { shouldDirty: true }
+                )
+              }
+              disabled={disabled}
+            >
+              <SelectTrigger id={prefixControlId} className='w-full'>
+                <SelectValue>{prefixLabel}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value='inherit'>{t('Inherit global')}</SelectItem>
+                <SelectItem value='true'>{t('Enabled')}</SelectItem>
+                <SelectItem value='false'>{t('Disabled')}</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Override prefix cache routing for this pool. Capacity and lifetime use the global settings.'
+              )}
+            </p>
+          </div>
         </CardHeader>
         <form
           className='contents'
           onSubmit={(event) => {
-            void form.handleSubmit((data) => save.mutate(data))(event)
+            void form.handleSubmit(validateAndSave, handleInvalid)(event)
           }}
         >
           <CardContent
@@ -392,6 +513,7 @@ export function PoolCard(props: {
                 onClick={() =>
                   form.reset({
                     mode: props.pool.mode,
+                    tuning: props.pool.tuning ?? {},
                     channels: props.pool.channels,
                     max_ttft_ms:
                       props.pool.max_ttft_ms ||

@@ -31,18 +31,13 @@ func GetGroupModelMatrix(c *gin.Context) {
 		}
 	}
 	for _, ability := range abilities {
-		if ability.Group == "auto" || ability.Group == "" {
+		if !groups[ability.Group] {
 			continue
 		}
 		name := ratio_setting.RoutingMatchModelName(ability.Model)
 		models[name] = true
 		if !slices.Contains(available[ability.Group], name) {
 			available[ability.Group] = append(available[ability.Group], name)
-		}
-	}
-	for _, names := range config {
-		for _, name := range names {
-			models[name] = true
 		}
 	}
 	groupNames, modelNames := make([]string, 0, len(groups)), make([]string, 0, len(models))

@@ -51,6 +51,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getUserRoutingPool,
+  routingPoolKeys,
   userRoutingPoolKeys,
   type UserRoutingPoolConfig,
 } from './api'
@@ -66,6 +67,13 @@ const schema = z.object({
         priority: z.number().int().min(0).max(2147483647).nullable(),
         weight: z.number().int().min(0).max(2147483637).nullable(),
         enabled: z.boolean(),
+        retry_times_override: z
+          .number()
+          .int()
+          .min(0)
+          .max(99)
+          .nullable()
+          .optional(),
       })
     )
     .max(1000),
@@ -74,6 +82,8 @@ type Values = z.infer<typeof schema>
 
 export function UserPoolCard(props: {
   userId: number
+  username?: string
+  readOnly?: boolean
   model: string
   group: string
   groupLabel: string
@@ -116,11 +126,16 @@ export function UserPoolCard(props: {
           monitorOpen && canMonitor && 'xl:h-full xl:min-h-0'
         )}
         role='region'
-        aria-label={`${props.model} · ${props.groupLabel}`}
+        aria-label={`${props.username ? `${props.username} · ` : ''}${props.model} · ${props.groupLabel}`}
       >
         <CardHeader className='flex shrink-0 flex-wrap items-start justify-between gap-2 px-3'>
           <CardTitle className='min-w-0 text-base break-all'>
             {props.model}
+            {props.username && (
+              <span className='text-muted-foreground block text-xs font-normal'>
+                {props.username} · #{props.userId}
+              </span>
+            )}
           </CardTitle>
           <div className='flex max-w-full flex-wrap items-center justify-end gap-2'>
             <Badge variant='secondary' className='max-w-full'>
@@ -156,6 +171,7 @@ export function UserPoolCard(props: {
             group={props.group}
             expanded={monitorOpen && canMonitor}
             onDirtyChange={props.onDirtyChange}
+            readOnly={props.readOnly}
           />
         )}
       </Card>
@@ -167,6 +183,7 @@ function UserPoolEditor(props: {
   config: UserRoutingPoolConfig
   group: string
   expanded?: boolean
+  readOnly?: boolean
   onDirtyChange: (dirty: boolean) => void
 }) {
   const { t } = useTranslation()
@@ -177,26 +194,30 @@ function UserPoolEditor(props: {
   )
   const config = editingBase ?? props.config
   const editing = editingBase !== null
-  const canWrite = canAccessUserGroupConfig(actor, config.user_role, 'write')
+  const canWrite =
+    !props.readOnly &&
+    canAccessUserGroupConfig(actor, config.user_role, 'write')
   const [restoreRevision, setRestoreRevision] = useState<string | null>(null)
   const [channelToAdd, setChannelToAdd] = useState<string | null>(null)
+  const configuredChannels = new Map(
+    config.channels.map((row) => [row.channel_id, row])
+  )
   const initial: Values = {
     channels: (config.pool_channels ?? []).map((entry) => {
-      const row = config.channels.find(
-        (candidate) => candidate.channel_id === entry.channel_id
-      )
+      const row = configuredChannels.get(entry.channel_id)
       if (
         !config.configured ||
         config.source === 'default_pool' ||
         config.source === 'channel_defaults'
       ) {
-        return entry
+        return { ...entry, retry_times_override: row?.retry_times_override }
       }
       return {
         ...entry,
         priority: row?.priority_override ?? null,
         weight: row?.weight_override ?? null,
         enabled: entry.enabled,
+        retry_times_override: row?.retry_times_override,
       }
     }),
   }
@@ -206,6 +227,9 @@ function UserPoolEditor(props: {
   })
   const values = form.watch()
   const dirty = editing && (form.formState.isDirty || !config.configured)
+  const hasRetryError = form.formState.errors.channels?.some?.(
+    (row) => row?.retry_times_override
+  )
   const notifyDirty = useEffectEvent(props.onDirtyChange)
   useEffect(() => {
     notifyDirty(dirty)
@@ -236,6 +260,9 @@ function UserPoolEditor(props: {
             priority_override: row.priority,
             weight_override: row.weight,
             enabled: row.enabled,
+            ...(row.retry_times_override !== undefined
+              ? { retry_times_override: row.retry_times_override }
+              : {}),
           })) ?? [],
       })
     },
@@ -246,6 +273,7 @@ function UserPoolEditor(props: {
       props.onDirtyChange(false)
       toast.success(t('Saved successfully'))
       await Promise.all([
+        client.invalidateQueries({ queryKey: routingPoolKeys.all }),
         client.invalidateQueries({
           queryKey: userRoutingPoolKeys.all(config.user_id),
         }),
@@ -274,7 +302,13 @@ function UserPoolEditor(props: {
     weight: row.inherited_weight ?? 0,
     available: row.available,
   }))
-  const displayed = editing ? values.channels : (config.pool_channels ?? [])
+  const displayed = editing
+    ? values.channels
+    : (config.pool_channels ?? []).map((entry) => ({
+        ...entry,
+        retry_times_override: configuredChannels.get(entry.channel_id)
+          ?.retry_times_override,
+      }))
   const unused = candidates.filter(
     (candidate) =>
       candidate.available &&
@@ -294,13 +328,20 @@ function UserPoolEditor(props: {
           </Badge>
           <UserPoolStrategy
             config={config}
-            disabled={editing || save.isPending}
+            disabled={props.readOnly || editing || save.isPending}
           />
         </div>
         {editing && (
           <p className='text-muted-foreground text-xs'>
             {t(
               'Only channels in this user pool can be selected. Empty priority or weight inherits the channel value. Clearing the pool restores the default routing pool.'
+            )}
+          </p>
+        )}
+        {editing && (
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'Leave retries empty to inherit the global limit; 0 disables retries. Failed requests switch channels as usual.'
             )}
           </p>
         )}
@@ -390,11 +431,16 @@ function UserPoolEditor(props: {
             </Button>
           </div>
         )}
-        {form.formState.errors.channels && (
+        {form.formState.errors.channels && !hasRetryError && (
           <p role='alert' className='text-destructive text-sm'>
             {t(
               'Priority and weight must be whole numbers within the allowed range.'
             )}
+          </p>
+        )}
+        {hasRetryError && (
+          <p role='alert' className='text-destructive text-sm'>
+            {t('Retry count must be an integer from 0 to 99.')}
           </p>
         )}
         {save.isError && (

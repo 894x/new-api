@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -62,6 +63,35 @@ func IsGroupModelAllowed(group, modelName string) bool {
 	defer groupModelAccessState.RUnlock()
 	models, restricted := groupModelAccessState.models[group]
 	return !restricted || models[ratio_setting.RoutingMatchModelName(modelName)]
+}
+
+// GetAllowedGroupModelPairs lists published matrix combinations supported by
+// channel abilities. Disabled abilities remain editable in routing pools.
+func GetAllowedGroupModelPairs() (map[string]map[string]bool, error) {
+	groups := make([]string, 0)
+	for group := range setting.GetUserUsableGroupsCopy() {
+		if group != "" && group != "auto" && ratio_setting.ContainsGroupRatio(group) {
+			groups = append(groups, group)
+		}
+	}
+	pairs := make(map[string]map[string]bool)
+	if len(groups) == 0 {
+		return pairs, nil
+	}
+	var abilities []Ability
+	if err := DB.Select("group", "model").Where(map[string]any{"group": groups}).Distinct().Find(&abilities).Error; err != nil {
+		return nil, err
+	}
+	for _, ability := range abilities {
+		if !IsGroupModelAllowed(ability.Group, ability.Model) {
+			continue
+		}
+		if pairs[ability.Group] == nil {
+			pairs[ability.Group] = make(map[string]bool)
+		}
+		pairs[ability.Group][ratio_setting.RoutingMatchModelName(ability.Model)] = true
+	}
+	return pairs, nil
 }
 
 func applyGroupModelAccess(value string) error {

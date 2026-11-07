@@ -37,13 +37,38 @@ export function ModelChannelMatrix() {
   const navigate = route.useNavigate()
   const [view, setView] = useState<'pools' | 'matrix' | 'groups'>('pools')
   const [dirty, setDirty] = useState(false)
-  let workspace = <ModelRoutingWorkspace onDirtyChange={setDirty} />
+  const scopeSelect = (
+    <RoutingScopeSelect
+      userId={search.user_id}
+      allUsers={search.pool_scope === 'all'}
+      disabled={dirty}
+      onChange={(userId, allUsers) => {
+        if (dirty) return
+        setView('pools')
+        void navigate({
+          search: (previous) => ({
+            ...previous,
+            user_id: userId,
+            pool_scope: allUsers ? 'all' : undefined,
+          }),
+        })
+      }}
+    />
+  )
+  let workspace = (
+    <ModelRoutingWorkspace
+      allUsers={search.pool_scope === 'all'}
+      scopeSelect={scopeSelect}
+      onDirtyChange={setDirty}
+    />
+  )
   if (search.user_id) {
     workspace = (
       <UserRoutingWorkspace
         key={search.user_id}
         userId={search.user_id}
         onDirtyChange={setDirty}
+        scopeSelect={scopeSelect}
       />
     )
   } else if (view === 'groups') {
@@ -63,17 +88,9 @@ export function ModelChannelMatrix() {
       <SectionPageLayout.Title>{t('Model routing')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
         <div className='flex h-full min-h-0 flex-col gap-3'>
-          <RoutingScopeSelect
-            userId={search.user_id}
-            disabled={dirty}
-            onChange={(userId) => {
-              if (dirty) return
-              setView('pools')
-              void navigate({
-                search: (previous) => ({ ...previous, user_id: userId }),
-              })
-            }}
-          />
+          {!search.user_id && view !== 'pools' && (
+            <div className='flex flex-wrap gap-2'>{scopeSelect}</div>
+          )}
           {!search.user_id && (
             <div
               className='flex shrink-0 flex-wrap gap-2'

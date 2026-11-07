@@ -175,6 +175,7 @@ export interface UserChannelRoutingRow {
   inherited_priority: number
   priority_override: number | null
   weight_override?: number | null
+  retry_times_override?: number | null
   inherited_weight?: number
   effective_weight?: number
   effective_priority: number
@@ -201,7 +202,11 @@ export interface UserChannelRoutingPatch {
   reset?: boolean
   overrides: Pick<
     UserChannelRoutingRow,
-    'channel_id' | 'priority_override' | 'enabled' | 'weight_override'
+    | 'channel_id'
+    | 'priority_override'
+    | 'enabled'
+    | 'weight_override'
+    | 'retry_times_override'
   >[]
 }
 

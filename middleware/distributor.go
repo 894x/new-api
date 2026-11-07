@@ -754,6 +754,7 @@ func setupSelectedChannelContext(c *gin.Context, channel *model.Channel, modelNa
 	case constant.ChannelTypeCoze:
 		c.Set("bot_id", channel.Other)
 	}
+	service.BindChatPrefixChannel(c, channel)
 	return nil
 }
 

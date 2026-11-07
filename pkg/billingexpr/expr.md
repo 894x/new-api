@@ -164,6 +164,13 @@ OpenAI 已于 2026-05-12 下线 DALL·E 2/3；其校验、默认值和倍率保�
 `Msh-Usage-Cache-Write-Tokens-1h` 上游响应头补齐。仅有总量的写入仍归入 `cc`，不从请求的 `ttl`
 推测时长。无效明细回退到总量，避免负数或重复收费。新增字段不改变历史快照的读取格式。
 
+渠道可显式启用 `cache_write_simulation`：Chat Completions、Responses 和 Messages 的总输入严格超过
+`min_input_tokens`，且上游没有缓存写入时，将无缓存文本输入的 `percentage`（0–100）按向下取整
+归为缓存写入。TTL 默认 `5m`（`cc`），可选 `1h`（`cc1h`），仍由模型表达式定义价格。
+响应、消费日志和结算使用相同分类；总上下文长度与缓存读取保持不变，原始上游用量不被修改，
+模拟策略与数量仅在管理员日志中记录。预扣取原输入估价与模拟写入估价的较高者；模型表达式未
+引用对应缓存变量时，仍按原有输入价格计费。此设置不在上游创建实际缓存，也不推测缓存命中。
+
 ### Built-in Functions
 
 | Function | Signature | Purpose |

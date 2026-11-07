@@ -12,6 +12,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -27,6 +28,7 @@ import { SettingsAccordion } from '../components/settings-accordion'
 import { SettingsCard } from '../components/settings-card'
 import {
   SettingsControlChildren,
+  SettingsFormGrid,
   SettingsSwitchField,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
@@ -145,6 +147,7 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
               </FormItem>
             )}
           />
+          <ChatPrefixCacheSettings />
           <RetrySection />
           {mutation.isError ? (
             <p role='alert' className='text-destructive text-sm'>
@@ -162,6 +165,82 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
         </div>
       </div>
     </Form>
+  )
+}
+
+function ChatPrefixCacheSettings() {
+  const { t } = useTranslation()
+  const form = useFormContext<RoutingPolicyFormValues>()
+  return (
+    <SettingsCard
+      title={t('Chat Completions prefix cache')}
+      description={t(
+        'Share sampled request prefixes across instances through Redis. Without Redis, each instance keeps its own cache. Applies only to streaming Chat Completions.'
+      )}
+      className='shadow-none'
+    >
+      <FormField
+        control={form.control}
+        name='chat_prefix_routing_setting.enabled'
+        render={({ field }) => (
+          <SettingsSwitchField
+            controlId='chat_prefix_routing_setting.enabled'
+            checked={field.value}
+            onCheckedChange={field.onChange}
+            label={t('Enable prefix cache routing by default')}
+            description={t(
+              'Individual channel pools can override this default for staged rollout.'
+            )}
+          />
+        )}
+      />
+      <SettingsFormGrid>
+        {(
+          [
+            {
+              name: 'chat_prefix_routing_setting.max_entries',
+              label: t('Maximum prefix cache records'),
+              min: 0,
+              max: 1000000,
+              description: t(
+                'Maximum records in the shared Redis cache, or per instance without Redis. Set to 0 to disable.'
+              ),
+            },
+            {
+              name: 'chat_prefix_routing_setting.ttl_seconds',
+              label: t('Prefix cache lifetime (seconds)'),
+              min: 1,
+              max: 86400,
+              description: t(
+                'Expires after the last successful update. Records may be evicted sooner at capacity. Changes apply without restarting.'
+              ),
+            },
+          ] as const
+        ).map((item) => (
+          <FormField
+            key={item.name}
+            control={form.control}
+            name={item.name}
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{item.label}</FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={item.min}
+                    max={item.max}
+                    step={1}
+                    {...safeNumberFieldProps(field)}
+                  />
+                </FormControl>
+                <FormDescription>{item.description}</FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        ))}
+      </SettingsFormGrid>
+    </SettingsCard>
   )
 }
 

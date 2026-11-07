@@ -410,6 +410,9 @@ func migrateDB() error {
 	if err := finalizeQuotaVersionMigration(DB); err != nil {
 		return err
 	}
+	if err := MigrateGrossProfit(DB); err != nil {
+		return err
+	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}

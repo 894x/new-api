@@ -165,6 +165,11 @@ export type ChannelAnalyticsPoint = {
   success_rate: number
   active_concurrency: ChannelAnalyticsConcurrency
   latency: ChannelAnalyticsLatency
+  request_body_bytes?: ChannelAnalyticsBodySize
+}
+
+export type ChannelAnalyticsBodySize = PerformanceValuePercentiles & {
+  avg: number | null
 }
 
 export type ChannelAnalyticsData = {

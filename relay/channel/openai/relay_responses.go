@@ -44,7 +44,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 	}
-	responseBody, err = helper.SanitizeResponseBody(responseBody, types.RelayFormatOpenAIResponses)
+	responseBody, err = helper.SanitizeResponseBody(responseBody, types.RelayFormatOpenAIResponses, c)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}

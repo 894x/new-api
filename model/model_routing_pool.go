@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -30,14 +31,24 @@ var (
 // of one public model and outlet group. An empty Channels list is deny-all.
 // Channel defaults, credentials and shared channel/model capacity are untouched.
 type ModelRoutingPool struct {
-	RoutingGroup string                    `json:"routing_group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
-	Model        string                    `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
-	Mode         string                    `json:"mode" gorm:"type:varchar(16);not null"`
-	Revision     string                    `json:"revision" gorm:"type:varchar(64);not null"`
-	ChannelsJSON string                    `json:"-" gorm:"type:text;not null"`
-	Channels     []ModelRoutingPoolChannel `json:"channels" gorm:"-"`
-	MaxTTFTMS    int64                     `json:"max_ttft_ms" gorm:"column:max_ttft_ms"`
-	MaxTPOTMS    int64                     `json:"max_tpot_ms" gorm:"column:max_tpot_ms"`
+	RoutingGroup string                             `json:"routing_group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+	Model        string                             `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
+	Mode         string                             `json:"mode" gorm:"type:varchar(16);not null"`
+	Revision     string                             `json:"revision" gorm:"type:varchar(64);not null"`
+	ChannelsJSON string                             `json:"-" gorm:"type:text;not null"`
+	Channels     []ModelRoutingPoolChannel          `json:"channels" gorm:"-"`
+	MaxTTFTMS    int64                              `json:"max_ttft_ms" gorm:"column:max_ttft_ms"`
+	MaxTPOTMS    int64                              `json:"max_tpot_ms" gorm:"column:max_tpot_ms"`
+	TuningJSON   string                             `json:"-" gorm:"type:text"`
+	Tuning       *dynamic_routing_setting.Overrides `json:"tuning,omitempty" gorm:"-"`
+}
+
+func (pool *ModelRoutingPool) DecodeTuning() error {
+	pool.Tuning = nil
+	if pool.TuningJSON == "" {
+		return nil
+	}
+	return common.UnmarshalJsonStr(pool.TuningJSON, &pool.Tuning)
 }
 
 func (pool *ModelRoutingPool) UsesDynamicRouting() bool {
@@ -71,6 +82,9 @@ func GetModelRoutingPool(group, modelName string) (*ModelRoutingPool, error) {
 	pool := &rows[0]
 	if err := common.UnmarshalJsonStr(pool.ChannelsJSON, &pool.Channels); err != nil {
 		return nil, fmt.Errorf("decode model routing pool: %w", err)
+	}
+	if err := pool.DecodeTuning(); err != nil {
+		return nil, fmt.Errorf("decode model routing tuning: %w", err)
 	}
 	return pool, nil
 }
@@ -138,6 +152,8 @@ func ListModelRoutingPoolCandidates(group, modelName string) ([]ModelRoutingPool
 }
 
 func SaveModelRoutingPool(pool *ModelRoutingPool, expectedRevision string) error {
+	dynamicRoutingOptionsMu.Lock()
+	defer dynamicRoutingOptionsMu.Unlock()
 	if pool == nil || pool.RoutingGroup == "" || pool.RoutingGroup == "auto" || len(pool.RoutingGroup) > 64 || strings.TrimSpace(pool.RoutingGroup) != pool.RoutingGroup || strings.ContainsAny(pool.RoutingGroup, ",\x00\r\n") || pool.Model == "" || len(pool.Model) > 255 || strings.TrimSpace(pool.Model) != pool.Model || strings.ContainsAny(pool.Model, "\x00\r\n") || !slices.Contains([]string{RoutingModePriority, RoutingModeSmart, RoutingModeDiscount}, pool.Mode) || len(pool.Channels) > 500 || pool.MaxTTFTMS < 0 || pool.MaxTTFTMS > 3600000 || pool.MaxTPOTMS < 0 || pool.MaxTPOTMS > 60000 {
 		return ErrInvalidRoutingPool
 	}
@@ -147,6 +163,23 @@ func SaveModelRoutingPool(pool *ModelRoutingPool, expectedRevision string) error
 		}
 		if pool.MaxTPOTMS == 0 {
 			pool.MaxTPOTMS = DefaultDiscountMaxTPOTMS
+		}
+	}
+	pool.TuningJSON = ""
+	if pool.Tuning != nil {
+		encoded, err := common.Marshal(pool.Tuning)
+		if err != nil {
+			return err
+		}
+		if string(encoded) != "{}" {
+			pool.TuningJSON = string(encoded)
+		} else {
+			pool.Tuning = nil
+		}
+	}
+	if pool.Tuning != nil {
+		if _, err := pool.Tuning.Resolve(dynamic_routing_setting.GetSetting()); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidRoutingPool, err)
 		}
 	}
 	candidates, err := ListModelRoutingPoolCandidates(pool.RoutingGroup, pool.Model)
@@ -175,6 +208,9 @@ func SaveModelRoutingPool(pool *ModelRoutingPool, expectedRevision string) error
 	revisionData := pool.RoutingGroup + "\x00" + pool.Model + "\x00" + pool.Mode + "\x00" + pool.ChannelsJSON
 	if pool.MaxTTFTMS != 0 || pool.MaxTPOTMS != 0 {
 		revisionData += fmt.Sprintf("\x00%d\x00%d", pool.MaxTTFTMS, pool.MaxTPOTMS)
+	}
+	if pool.TuningJSON != "" {
+		revisionData += "\x00" + pool.TuningJSON
 	}
 	pool.Revision = fmt.Sprintf("%x", sha256.Sum256([]byte(revisionData)))
 	if expectedRevision == "" {
@@ -207,7 +243,7 @@ func SaveModelRoutingPool(pool *ModelRoutingPool, expectedRevision string) error
 		if current.Revision != expectedRevision {
 			return ErrRoutingPoolConflict
 		}
-		return tx.Model(&current).Updates(map[string]any{"mode": pool.Mode, "revision": pool.Revision, "channels_json": pool.ChannelsJSON, "max_ttft_ms": pool.MaxTTFTMS, "max_tpot_ms": pool.MaxTPOTMS}).Error
+		return tx.Model(&current).Updates(map[string]any{"mode": pool.Mode, "revision": pool.Revision, "channels_json": pool.ChannelsJSON, "max_ttft_ms": pool.MaxTTFTMS, "max_tpot_ms": pool.MaxTPOTMS, "tuning_json": pool.TuningJSON}).Error
 	})
 }
 

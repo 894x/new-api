@@ -18,19 +18,20 @@ import (
 )
 
 type userChannelRoutingRow struct {
-	ChannelID         int    `json:"channel_id"`
-	ChannelName       string `json:"channel_name"`
-	DefaultPriority   int64  `json:"default_priority"`
-	ModelPriority     *int64 `json:"model_priority"`
-	InheritedPriority int64  `json:"inherited_priority"`
-	PriorityOverride  *int64 `json:"priority_override"`
-	EffectivePriority int64  `json:"effective_priority"`
-	Enabled           bool   `json:"enabled"`
-	Available         bool   `json:"available"`
-	Configured        bool   `json:"configured"`
-	WeightOverride    *uint  `json:"weight_override"`
-	InheritedWeight   uint   `json:"inherited_weight"`
-	EffectiveWeight   uint   `json:"effective_weight"`
+	ChannelID          int    `json:"channel_id"`
+	ChannelName        string `json:"channel_name"`
+	DefaultPriority    int64  `json:"default_priority"`
+	ModelPriority      *int64 `json:"model_priority"`
+	InheritedPriority  int64  `json:"inherited_priority"`
+	PriorityOverride   *int64 `json:"priority_override"`
+	EffectivePriority  int64  `json:"effective_priority"`
+	Enabled            bool   `json:"enabled"`
+	Available          bool   `json:"available"`
+	Configured         bool   `json:"configured"`
+	WeightOverride     *uint  `json:"weight_override"`
+	InheritedWeight    uint   `json:"inherited_weight"`
+	EffectiveWeight    uint   `json:"effective_weight"`
+	RetryTimesOverride *int   `json:"retry_times_override,omitempty"`
 }
 
 type userChannelRoutingResponse struct {
@@ -105,7 +106,19 @@ func GetUserChannelRouting(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
+		poolView := c.Query("view") == "pool"
+		var allowedPairs map[string]map[string]bool
+		if poolView {
+			allowedPairs, err = model.GetAllowedGroupModelPairs()
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+		}
 		for _, override := range groupOverrides {
+			if poolView && !allowedPairs[override.RoutingGroup][ratio_setting.RoutingMatchModelName(override.Model)] {
+				continue
+			}
 			models = append(models, override.Model)
 			if _, public := response.KeyGroups[override.RoutingGroup]; public {
 				response.ConfiguredModels = append(response.ConfiguredModels, override.Model)
@@ -113,6 +126,9 @@ func GetUserChannelRouting(c *gin.Context) {
 			}
 		}
 		for _, strategy := range strategies {
+			if poolView && !allowedPairs[strategy.RoutingGroup][ratio_setting.RoutingMatchModelName(strategy.Model)] {
+				continue
+			}
 			models = append(models, strategy.Model)
 			if _, public := response.KeyGroups[strategy.RoutingGroup]; public {
 				response.ConfiguredModels = append(response.ConfiguredModels, strategy.Model)
@@ -127,7 +143,7 @@ func GetUserChannelRouting(c *gin.Context) {
 		response.ConfiguredModels = slices.Compact(response.ConfiguredModels)
 		slices.Sort(models)
 		response.Models = slices.Compact(models)
-		if c.Query("view") == "pool" {
+		if poolView {
 			response.ModelGroups = make(map[string][]string)
 			for group := range response.KeyGroups {
 				for _, name := range model.GetGroupEnabledModels(group) {
@@ -211,6 +227,7 @@ func GetUserChannelRouting(c *gin.Context) {
 				InheritedPriority: inherited, EffectivePriority: inherited,
 				PriorityOverride: override.Priority, Enabled: !override.Disabled, Available: usable, Configured: configured}
 			row.WeightOverride, row.InheritedWeight, row.EffectiveWeight = override.Weight, inheritedWeight, inheritedWeight
+			row.RetryTimesOverride = override.RetryTimes
 			if override.Priority != nil {
 				row.EffectivePriority = *override.Priority
 			}
@@ -223,7 +240,7 @@ func GetUserChannelRouting(c *gin.Context) {
 	// Stale records remain visible and can be reset even after channel removal.
 	for _, override := range overrides {
 		if !seen[override.ChannelId] {
-			row := userChannelRoutingRow{ChannelID: override.ChannelId, PriorityOverride: override.Priority, WeightOverride: override.Weight, Enabled: !override.Disabled, Configured: true}
+			row := userChannelRoutingRow{ChannelID: override.ChannelId, PriorityOverride: override.Priority, WeightOverride: override.Weight, Enabled: !override.Disabled, Configured: true, RetryTimesOverride: override.RetryTimes}
 			if override.Priority != nil {
 				row.EffectivePriority = *override.Priority
 			}

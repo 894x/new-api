@@ -85,7 +85,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
-	responseBody, err = helper.SanitizeResponseBody(responseBody, info.RelayFormat)
+	responseBody, err = helper.SanitizeResponseBody(responseBody, info.RelayFormat, c)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
@@ -212,7 +212,7 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
-	responseBody, err = helper.SanitizeResponseBody(responseBody, info.RelayFormat)
+	responseBody, err = helper.SanitizeResponseBody(responseBody, info.RelayFormat, c)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}

@@ -24,7 +24,10 @@ make room. Recheck the budget before every additional slot or expensive phase.
 
 Monitor available memory, process/container usage, memory pressure, swap, CPU,
 I/O, disk capacity, service latency/health, and OOM/restart deltas. Check monitor
-freshness at every gate. An alert must stop further rollout and the responsible
+freshness at every gate. Distinguish warnings from stop-level alerts using the
+baseline, sustained duration, and business impact described in the resource
+reference; an isolated PSI sample is not an automatic cancellation condition.
+A stop-level alert must block further rollout and stop the responsible
 auxiliary producer, not merely write a marker and exit. Keep monitoring while
 reconciling the incident, preserving live services and the healthy route.
 

@@ -297,9 +297,13 @@ func (c *Controller) MonitorSnapshot(now time.Time) []RouteSnapshot {
 	defer c.mu.Unlock()
 
 	result := make([]RouteSnapshot, 0, len(c.monitor))
-	cutoff := now.Add(-max(c.config.MaxAge, monitorWindowSeconds*time.Second))
 	firstSecond := now.Unix() - monitorWindowSeconds + 1
 	for key, state := range c.monitor {
+		config := c.config
+		if route := c.routes[key]; route != nil {
+			config = route.config
+		}
+		cutoff := now.Add(-max(config.MaxAge, monitorWindowSeconds*time.Second))
 		if state.lastSeen.Before(cutoff) || state.lastSeen.After(now) {
 			continue
 		}
@@ -360,7 +364,7 @@ func (c *Controller) MonitorSnapshot(now time.Time) []RouteSnapshot {
 				value.EjectedUntil = channel.ejectedUntil.UnixMilli()
 			}
 			observationKey := ObservationKey{ChannelID: id, Model: key.Model}
-			observationCutoff := now.Add(-c.config.MaxAge)
+			observationCutoff := now.Add(-config.MaxAge)
 			reset := c.performanceAfter[observationKey]
 			var ttftTotal, tpotTotal time.Duration
 			ttftCount, tpotCount := 0, 0
@@ -370,12 +374,15 @@ func (c *Controller) MonitorSnapshot(now time.Time) []RouteSnapshot {
 				if sample.ObservedAt.Before(observationCutoff) || !sample.ObservedAt.After(reset) || sample.ObservedAt.After(now) || !sample.Success || sample.HardFailure {
 					continue
 				}
+				if value.SampleCount >= config.MaxSamples {
+					break
+				}
 				value.SampleCount++
-				if sample.HasTTFT && sample.TTFT > 0 && ttftCount < c.config.MinSamples {
+				if sample.HasTTFT && sample.TTFT > 0 && ttftCount < config.MinSamples {
 					ttftTotal += sample.TTFT
 					ttftCount++
 				}
-				if sample.HasTPOT && sample.TPOT > 0 && tpotCount < c.config.MinSamples {
+				if sample.HasTPOT && sample.TPOT > 0 && tpotCount < config.MinSamples {
 					tpotTotal += sample.TPOT
 					tpotCount++
 				}

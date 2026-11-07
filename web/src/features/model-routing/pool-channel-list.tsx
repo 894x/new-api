@@ -40,6 +40,7 @@ export interface PoolChannelDraft extends Omit<
 > {
   priority: number | null
   weight: number | null
+  retry_times_override?: number | null
 }
 
 export function PoolChannelList(props: {
@@ -150,15 +151,57 @@ export function PoolChannelList(props: {
               group={String(entry.channel_id)}
               compact
               footer={
-                props.model ? (
-                  <ChannelMonitoringStrip
-                    channelName={name}
-                    summary={observations.get(entry.channel_id)}
-                    loading={monitoring.isLoading}
-                    error={monitoring.isError}
-                    maxSampleCount={maxSampleCount}
-                  />
-                ) : undefined
+                (props.allowInheritance || props.model) && (
+                  <>
+                    {props.allowInheritance && (
+                      <label className='text-muted-foreground mb-1 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs'>
+                        <span>{t('Maximum retries')}</span>
+                        <Input
+                          type='number'
+                          inputMode='numeric'
+                          min={0}
+                          max={99}
+                          step={1}
+                          className='h-7 w-16 [appearance:textfield] px-1 text-center text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
+                          value={
+                            entry.retry_times_override != null &&
+                            Number.isFinite(entry.retry_times_override)
+                              ? entry.retry_times_override
+                              : ''
+                          }
+                          placeholder={t('Inherit global')}
+                          aria-label={t('Retries for {{channel}}', {
+                            channel: name,
+                          })}
+                          aria-invalid={
+                            entry.retry_times_override != null &&
+                            (!Number.isInteger(entry.retry_times_override) ||
+                              entry.retry_times_override < 0 ||
+                              entry.retry_times_override > 99)
+                          }
+                          disabled={props.disabled}
+                          onChange={(event) =>
+                            update(entry.channel_id, {
+                              retry_times_override:
+                                event.target.value === ''
+                                  ? null
+                                  : event.target.valueAsNumber,
+                            })
+                          }
+                        />
+                      </label>
+                    )}
+                    {props.model && (
+                      <ChannelMonitoringStrip
+                        channelName={name}
+                        summary={observations.get(entry.channel_id)}
+                        loading={monitoring.isLoading}
+                        error={monitoring.isError}
+                        maxSampleCount={maxSampleCount}
+                      />
+                    )}
+                  </>
+                )
               }
               labelClassName='flex-1 basis-0 text-xs'
               removeClassName='text-destructive hover:bg-destructive/10 hover:text-destructive'

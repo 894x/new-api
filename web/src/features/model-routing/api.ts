@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { DynamicRoutingSettings } from '@/features/system-settings/types'
 import type { UserChannelRoutingConfig } from '@/features/users/types'
 import { api } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
@@ -114,13 +115,24 @@ export interface RoutingPool {
   channels: PoolChannel[]
   max_ttft_ms?: number
   max_tpot_ms?: number
+  tuning?:
+    | (Partial<Omit<DynamicRoutingSettings, 'enabled'>> & {
+        chat_prefix_enabled?: boolean
+      })
+    | null
 }
 
 export interface RoutingPoolView extends RoutingPool {
+  user_id?: number
+  username?: string
   candidates: PoolCandidate[]
+  tuning_defaults?: DynamicRoutingSettings
 }
 
 export interface PoolFilters {
+  scope?: 'all'
+  channel_id?: number
+  channel_role?: 'primary' | 'non_primary'
   model: string
   routing_group: string
   mode: RoutingMode | ''
@@ -153,7 +165,11 @@ export async function getRoutingCatalog(group = '') {
   const response = await api.get<{
     success: boolean
     message?: string
-    data: { groups: Record<string, string>; models: string[] }
+    data: {
+      groups: Record<string, string>
+      models: string[]
+      channels?: { id: number; name: string }[]
+    }
   }>('/api/channel/routing-pools/catalog', { params: { routing_group: group } })
   return requireServerSuccess(response.data).data
 }
@@ -166,6 +182,7 @@ export async function getRoutingPool(group: string, model: string) {
       pool: RoutingPool | null
       candidates: PoolCandidate[]
       effective_mode?: RoutingMode | '' | null
+      tuning_defaults?: DynamicRoutingSettings
     }
   }>('/api/channel/routing-pool', { params: { routing_group: group, model } })
   return requireServerSuccess(response.data).data

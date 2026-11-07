@@ -1588,6 +1588,39 @@ func TestHardFailureBackoffHonorsConfiguredCapWithoutDurationOverflow(t *testing
 	}
 }
 
+func TestConfiguredPoolsKeepIndependentWindowsAndCooldownsWithSharedObservations(t *testing.T) {
+	controller, key, candidates, base := hardFailureRecoveryFixture(t)
+	global := controller.config
+	global.MaxSamples, global.MaxAge = 2, 10*time.Second
+	require.NoError(t, controller.UpdateConfig(global))
+	wide := global
+	wide.MaxSamples, wide.MaxAge, wide.MinSamples, wide.HardFailureCooldown = 4, time.Minute, 3, 10*time.Second
+	wideKey := key
+	wideKey.Group = "wide-window"
+	_, err := controller.SelectConfiguredAvoiding(wideKey, candidates, nil, base, wide, nil)
+	require.NoError(t, err)
+	for _, seconds := range []int{1, 2, 3} {
+		for _, id := range []int{1, 2} {
+			controller.Observe(ObservationKey{ChannelID: id, Model: key.Model}, Sample{ObservedAt: base.Add(time.Duration(seconds) * time.Second), Success: true, HasTTFT: true, TTFT: time.Second})
+		}
+	}
+	narrow := controller.Select(key, candidates, base.Add(20*time.Second))
+	assert.ElementsMatch(t, []int{1, 2}, narrow.UnverifiedCandidates)
+	verified, err := controller.SelectConfiguredAvoiding(wideKey, candidates, nil, base.Add(20*time.Second), wide, nil)
+	require.NoError(t, err)
+	assert.Empty(t, verified.UnverifiedCandidates, "reading a short window must not prune a wider pool's samples")
+	failedAt := base.Add(21 * time.Second)
+	controller.Observe(ObservationKey{ChannelID: 1, Model: key.Model}, Sample{ObservedAt: failedAt, HardFailure: true})
+	controller.Select(key, candidates, failedAt)
+	_, err = controller.SelectConfiguredAvoiding(wideKey, candidates, nil, failedAt, wide, nil)
+	require.NoError(t, err)
+	probe, err := controller.SelectConfiguredAvoiding(wideKey, candidates, nil, base.Add(32*time.Second), wide, nil)
+	require.NoError(t, err)
+	require.Len(t, probe.Allocations, 2)
+	assert.True(t, probe.Allocations[0].Probe)
+	require.Len(t, controller.Select(key, candidates, base.Add(32*time.Second)).Allocations, 1, "pool tuning must not change the global cooldown")
+}
+
 func TestRecoveryObservesSuccessfulProbesBeforeRampingAndKeepsBackoff(t *testing.T) {
 	for _, discount := range []bool{false, true} {
 		t.Run(fmt.Sprintf("discount=%t", discount), func(t *testing.T) {

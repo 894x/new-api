@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"time"
 
@@ -136,17 +137,24 @@ func selectChannelWithCapacity(param *RetryParam, group string, retry int) (*mod
 	if err != nil {
 		return nil, err
 	}
-	if param.Capacity == nil {
+	if param.Capacity == nil && (!param.chatPrefixRoutingEnabled(group) || param.chatPrefixRequest() == nil) {
 		return model.GetRandomSatisfiedChannelWithSelectionFilters(group, param.ModelName, retry, filters)
 	}
 	candidates, err := model.ListChannelSelectionCandidates(group, param.ModelName, filters)
 	if err != nil || len(candidates) == 0 {
 		return nil, err
 	}
+	matches := param.ChatPrefixMatches(group, candidates)
+	var blocked map[int]struct{}
+	if param.Capacity != nil {
+		blocked = param.Capacity.blocked
+	}
 	priorities := make([]int64, 0)
 	seen := make(map[int64]bool)
 	for _, candidate := range candidates {
-		param.Capacity.eligible[candidate.ChannelId] = struct{}{}
+		if param.Capacity != nil {
+			param.Capacity.eligible[candidate.ChannelId] = struct{}{}
+		}
 		priority := int64(0)
 		if candidate.Priority != nil {
 			priority = *candidate.Priority
@@ -159,25 +167,42 @@ func selectChannelWithCapacity(param *RetryParam, group string, retry int) (*mod
 	sort.Slice(priorities, func(i, j int) bool { return priorities[i] > priorities[j] })
 	for _, priority := range priorities[min(max(retry, 0), len(priorities)-1):] {
 		var tier []model.Ability
-		weightSum := int64(0)
+		bestPrefixBytes := 0
 		for _, candidate := range candidates {
 			value := int64(0)
 			if candidate.Priority != nil {
 				value = *candidate.Priority
 			}
-			if _, blocked := param.Capacity.blocked[candidate.ChannelId]; blocked || value != priority {
+			if _, denied := blocked[candidate.ChannelId]; denied || value != priority {
+				continue
+			}
+			matchedBytes := matches[candidate.ChannelId].MatchedBytes
+			if matchedBytes > bestPrefixBytes {
+				bestPrefixBytes = matchedBytes
+				tier = tier[:0]
+			}
+			if matchedBytes < bestPrefixBytes {
 				continue
 			}
 			tier = append(tier, candidate)
-			weightSum += int64(candidate.Weight) + 10
 		}
 		if len(tier) == 0 {
 			continue
+		}
+		weightSum := int64(0)
+		for _, candidate := range tier {
+			effectiveWeight := int64(candidate.Weight) + 10
+			if effectiveWeight <= 0 || weightSum > int64(math.MaxInt)-effectiveWeight {
+				param.recordChatPrefixSelection(group, tier[0].ChannelId, matches)
+				return model.CacheGetChannel(tier[0].ChannelId)
+			}
+			weightSum += effectiveWeight
 		}
 		choice := common.GetRandomInt(int(weightSum))
 		for _, candidate := range tier {
 			choice -= int(candidate.Weight) + 10
 			if choice < 0 {
+				param.recordChatPrefixSelection(group, candidate.ChannelId, matches)
 				return model.CacheGetChannel(candidate.ChannelId)
 			}
 		}

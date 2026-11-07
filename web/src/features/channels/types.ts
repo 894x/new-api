@@ -58,6 +58,7 @@ export const channelSchema = z.object({
   status_code_mapping: z.string().nullish(),
   priority: z.number().nullish(),
   cost_discount: z.number().nullish(),
+  invoice_vat_rate: z.number().nullish(),
   rpm: z.number().nullish(),
   tpm: z.number().nullish(),
   auto_ban: z.number().nullish(),
@@ -138,6 +139,12 @@ export interface ChannelSettings {
 }
 
 export interface ChannelOtherSettings {
+  cache_write_simulation?: {
+    enabled: boolean
+    min_input_tokens: number
+    percentage: number
+    ttl?: '5m' | '1h'
+  }
   azure_responses_version?: string
   vertex_key_type?: 'json' | 'api_key'
   doubao_video_api_mode?: 'v3' | 'video_generations' | 'custom'
@@ -434,6 +441,7 @@ export interface TagOperationParams {
   new_tag?: string
   priority?: number
   cost_discount?: number | null
+  invoice_vat_rate?: number | null
   weight?: number
   rpm?: number
   tpm?: number

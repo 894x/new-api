@@ -1,13 +1,24 @@
 package helper
 
 import (
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/sjson"
 )
 
 // SanitizeResponseBody removes internal billing metadata and usage fields owned
 // by other client protocols. Billing must be captured before calling this.
-func SanitizeResponseBody(body []byte, relayFormat types.RelayFormat) ([]byte, error) {
+func SanitizeResponseBody(body []byte, relayFormat types.RelayFormat, contexts ...*gin.Context) ([]byte, error) {
+	// Apply the channel policy while converted responses still carry their
+	// authoritative upstream usage, including image and audio categories.
+	if len(contexts) > 0 {
+		var err error
+		body, err = common.RewriteResponseCacheWrite(contexts[0], body)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var paths []string
 	switch relayFormat {
 	case types.RelayFormatOpenAI:

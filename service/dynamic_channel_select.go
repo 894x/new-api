@@ -163,6 +163,7 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 			return nil, true, false, err
 		}
 	}
+	prefixMatches := param.ChatPrefixMatches(group, eligible)
 	candidates := make([]dynamicrouting.Candidate, 0, len(eligible))
 	for _, candidate := range eligible {
 		priority := int64(0)
@@ -170,10 +171,11 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 			priority = *candidate.Priority
 		}
 		candidates = append(candidates, dynamicrouting.Candidate{
-			ChannelID:    candidate.ChannelId,
-			Priority:     priority,
-			Weight:       candidate.Weight,
-			CostDiscount: discounts[candidate.ChannelId],
+			ChannelID:          candidate.ChannelId,
+			Priority:           priority,
+			Weight:             candidate.Weight,
+			CostDiscount:       discounts[candidate.ChannelId],
+			PrefixMatchedBytes: prefixMatches[candidate.ChannelId].MatchedBytes,
 		})
 	}
 	key := dynamicrouting.RouteKey{
@@ -184,7 +186,28 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 		key.Policy = fmt.Sprintf("user:%d", common.GetContextKeyInt(param.Ctx, constant.ContextKeyUserId))
 	}
 	var decision dynamicrouting.Decision
-	if strategy != nil && strategy.Mode == model.RoutingModeDiscount {
+	pool, err := param.ModelRoutingPool(group)
+	if err != nil {
+		return nil, true, false, err
+	}
+	if pool != nil && pool.Tuning != nil {
+		effective, err := pool.Tuning.Resolve(dynamic_routing_setting.GetSetting())
+		if err != nil {
+			return nil, true, false, err
+		}
+		config, err := dynamic_routing_setting.RuntimeConfig(effective)
+		if err != nil {
+			return nil, true, false, err
+		}
+		var limits *dynamicrouting.DiscountLimits
+		if strategy != nil && strategy.Mode == model.RoutingModeDiscount {
+			limits = &dynamicrouting.DiscountLimits{MaxTTFT: time.Duration(strategy.MaxTTFTMS) * time.Millisecond, MaxTPOT: time.Duration(strategy.MaxTPOTMS) * time.Millisecond}
+		}
+		decision, err = controller.SelectConfiguredAvoiding(key, candidates, excluded, time.Now(), config, limits)
+		if err != nil {
+			return nil, true, false, err
+		}
+	} else if strategy != nil && strategy.Mode == model.RoutingModeDiscount {
 		limits := dynamicrouting.DiscountLimits{MaxTTFT: time.Duration(strategy.MaxTTFTMS) * time.Millisecond, MaxTPOT: time.Duration(strategy.MaxTPOTMS) * time.Millisecond}
 		decision = controller.SelectDiscountAvoiding(key, candidates, excluded, limits, time.Now())
 	} else {
@@ -196,6 +219,7 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 
 	channel, err := model.CacheGetChannel(decision.SelectedChannelID)
 	if err == nil && channel != nil {
+		param.recordChatPrefixSelection(group, channel.Id, prefixMatches)
 		discount := strategy != nil && strategy.Mode == model.RoutingModeDiscount
 		param.Ctx.Set(routingMonitorDispatchContextKey, routingMonitorDispatch{channelID: decision.SelectedChannelID, started: func(at time.Time) {
 			controller.RecordDispatch(key, discount, decision.SelectedChannelID, at)

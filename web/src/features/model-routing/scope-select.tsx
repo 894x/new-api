@@ -30,7 +30,6 @@ import {
   useComboboxAnchor,
 } from '@/components/ui/combobox'
 import { searchUsers } from '@/features/users/api'
-import type { User } from '@/features/users/types'
 import { useDebounce } from '@/hooks'
 import {
   canAccessUserGroupConfig,
@@ -43,8 +42,9 @@ import { useAuthStore } from '@/stores/auth-store'
 
 export function RoutingScopeSelect(props: {
   userId?: number
+  allUsers?: boolean
   disabled: boolean
-  onChange: (userId?: number) => void
+  onChange: (userId?: number, allUsers?: boolean) => void
 }) {
   const { t } = useTranslation()
   const actor = useAuthStore((s) => s.auth.user)
@@ -72,79 +72,93 @@ export function RoutingScopeSelect(props: {
     staleTime: 30000,
     meta: { errorToast: false },
   })
-  const options = (users.data ?? []).filter(
-    (user) => !user.DeletedAt && canAccessUserGroupConfig(actor, user.role)
+  const canReadDefaults = hasPermission(
+    actor,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.READ
   )
+  const options = [
+    ...(canReadDefaults
+      ? [{ value: '__default', label: t('Default resource pool') }]
+      : []),
+    ...(canReadDefaults && canSearch
+      ? [{ value: '__all', label: t('All') }]
+      : []),
+    ...(users.data ?? [])
+      .filter(
+        (user) => !user.DeletedAt && canAccessUserGroupConfig(actor, user.role)
+      )
+      .map((user) => ({
+        value: String(user.id),
+        label: `${user.username} · #${user.id}`,
+      })),
+  ]
+  let value = '__default'
+  if (props.allUsers) value = '__all'
+  if (props.userId) value = String(props.userId)
+  const selected = options.find((option) => option.value === value) ?? {
+    value,
+    label: t('User #{{id}}', { id: props.userId }),
+  }
   return (
-    <div className='flex min-w-0 flex-wrap items-center gap-2'>
-      <span className='text-muted-foreground text-sm'>
-        {t('Configuration target')}
-      </span>
-      <Button
-        size='sm'
-        variant={!props.userId ? 'default' : 'outline'}
-        disabled={
-          props.disabled ||
-          !hasPermission(
-            actor,
-            ADMIN_PERMISSION_RESOURCES.CHANNEL,
-            ADMIN_PERMISSION_ACTIONS.READ
-          )
-        }
-        onClick={() => props.onChange()}
-      >
-        {t('Default configuration')}
-      </Button>
-      {canSearch && (
-        <Combobox<User>
-          items={options}
-          value={null}
-          open={open && !props.disabled}
-          onOpenChange={setOpen}
-          inputValue={search}
-          onInputValueChange={setSearch}
-          filter={null}
-          itemToStringLabel={(user) => `${user.username} #${user.id}`}
-          isItemEqualToValue={(a, b) => a.id === b.id}
-          onValueChange={(user) => {
-            if (user) {
-              props.onChange(user.id)
-              setOpen(false)
-              setSearch('')
-            }
-          }}
-        >
-          <div ref={anchor} className='w-full sm:w-72'>
-            <ComboboxInput
-              aria-label={t('Select routing user')}
-              placeholder={t('Search users by name or ID...')}
-              disabled={props.disabled}
-            />
-          </div>
-          <ComboboxContent anchor={anchor}>
-            <ComboboxList>
-              {users.isFetching && (
-                <p role='status' className='p-3 text-sm'>
-                  {t('Loading users...')}
-                </p>
-              )}
-              {users.isError && (
-                <Button variant='ghost' onClick={() => void users.refetch()}>
-                  {t('Retry')}
-                </Button>
-              )}
-              {!users.isFetching && !users.isError && options.length === 0 && (
-                <p className='p-3 text-sm'>{t('No users found')}</p>
-              )}
-              {options.map((user) => (
-                <ComboboxItem key={user.id} value={user}>
-                  {user.username} · #{user.id}
-                </ComboboxItem>
-              ))}
-            </ComboboxList>
-          </ComboboxContent>
-        </Combobox>
-      )}
-    </div>
+    <Combobox<{ value: string; label: string }>
+      items={options}
+      value={selected}
+      disabled={props.disabled}
+      open={open && !props.disabled}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen)
+        setSearch('')
+      }}
+      inputValue={open ? search : selected.label}
+      onInputValueChange={(text, details) => {
+        if (details.reason === 'input-change') setSearch(text)
+      }}
+      filter={null}
+      itemToStringLabel={(option) => option.label}
+      isItemEqualToValue={(a, b) => a.value === b.value}
+      onValueChange={(option) => {
+        if (!option || props.disabled) return
+        if (option.value === '__default') props.onChange()
+        else if (option.value === '__all') props.onChange(undefined, true)
+        else props.onChange(Number(option.value))
+        setOpen(false)
+        setSearch('')
+      }}
+    >
+      <div ref={anchor} className='h-8 min-w-40 flex-1 sm:max-w-64'>
+        <ComboboxInput
+          aria-label={t('Select routing user')}
+          placeholder={t('Search users by name or ID...')}
+          className='h-full min-h-8'
+          disabled={props.disabled}
+        />
+      </div>
+      <ComboboxContent anchor={anchor}>
+        <ComboboxList>
+          {options.map((option) => (
+            <ComboboxItem key={option.value} value={option}>
+              {option.label}
+            </ComboboxItem>
+          ))}
+          {users.isFetching && (
+            <p role='status' className='p-3 text-sm'>
+              {t('Loading users...')}
+            </p>
+          )}
+          {users.isError && (
+            <Button variant='ghost' onClick={() => void users.refetch()}>
+              {t('Retry')}
+            </Button>
+          )}
+          {canSearch &&
+            !users.isFetching &&
+            !users.isError &&
+            !users.data?.length && (
+              <p className='p-3 text-sm'>{t('No users found')}</p>
+            )}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
   )
 }

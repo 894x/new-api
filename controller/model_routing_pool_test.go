@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -35,6 +36,153 @@ type preDiscountRoutingPool struct {
 }
 
 func (preDiscountRoutingPool) TableName() string { return "model_routing_pools" }
+
+// The pool schema before tuning already contains discount latency limits.
+type preTuningRoutingPool struct {
+	RoutingGroup string `gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+	Model        string `gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
+	Mode         string `gorm:"type:varchar(16);not null"`
+	Revision     string `gorm:"type:varchar(64);not null"`
+	ChannelsJSON string `gorm:"type:text;not null"`
+	MaxTTFTMS    int64  `gorm:"column:max_ttft_ms"`
+	MaxTPOTMS    int64  `gorm:"column:max_tpot_ms"`
+}
+
+func (preTuningRoutingPool) TableName() string { return "model_routing_pools" }
+
+func TestRoutingPoolTuningDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		for _, upgrade := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/upgrade_%t", dialect, upgrade), func(t *testing.T) {
+				if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+					t.Skip("isolated database DSN not configured")
+				}
+				t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+				db := setupManageUserTestDB(t)
+				originalGroups, originalRatios, originalSetting := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString(), dynamic_routing_setting.GetSetting()
+				originalCache := common.MemoryCacheEnabled
+				t.Cleanup(func() {
+					common.MemoryCacheEnabled = originalCache
+					require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalGroups))
+					require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+					require.NoError(t, dynamic_routing_setting.ReplaceAndSync(originalSetting))
+				})
+				common.MemoryCacheEnabled = false
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Standard","control":"Control"}`))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"control":1}`))
+				require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.Option{}))
+				if upgrade {
+					require.NoError(t, db.AutoMigrate(&preTuningRoutingPool{}))
+					require.NoError(t, db.Create(&preTuningRoutingPool{RoutingGroup: "legacy", Model: "legacy-model", Mode: model.RoutingModeDiscount, Revision: "legacy-revision", ChannelsJSON: "[]", MaxTTFTMS: 4000, MaxTPOTMS: 100}).Error)
+				}
+				for range 2 {
+					require.NoError(t, db.AutoMigrate(&model.ModelRoutingPool{}))
+				}
+				if upgrade {
+					legacy, err := model.GetModelRoutingPool("legacy", "legacy-model")
+					require.NoError(t, err)
+					require.NotNil(t, legacy)
+					assert.Nil(t, legacy.Tuning)
+					assert.EqualValues(t, 4000, legacy.MaxTTFTMS)
+					assert.Equal(t, "legacy-revision", legacy.Revision)
+					assert.Error(t, db.Create(&preTuningRoutingPool{RoutingGroup: "legacy", Model: "legacy-model", Mode: model.RoutingModeSmart, ChannelsJSON: "[]"}).Error, "migration retains composite uniqueness")
+				}
+				name := fmt.Sprintf("tuning-%s-%t", dialect, upgrade)
+				for _, id := range []int{9701, 9702} {
+					channel := model.Channel{Id: id, Type: 1, Name: fmt.Sprint(id), Models: name, Group: "default,control", Status: common.ChannelStatusEnabled}
+					require.NoError(t, db.Create(&channel).Error)
+					require.NoError(t, channel.AddAbilities(nil))
+				}
+				pool := model.ModelRoutingPool{RoutingGroup: "default", Model: name, Mode: model.RoutingModeSmart, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 9701, Priority: 100, Weight: 100, Enabled: true}, {ChannelID: 9702, Weight: 100, Enabled: true}}, Tuning: &dynamic_routing_setting.Overrides{MaxSamples: common.GetPointer(5), HardFailureCooldownSeconds: common.GetPointer(10), CooldownSeconds: common.GetPointer(0), ProbeFraction: common.GetPointer(0.4)}}
+				require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+				for range 2 {
+					require.NoError(t, db.AutoMigrate(&model.ModelRoutingPool{}))
+				}
+				loaded, err := model.GetModelRoutingPool("default", name)
+				require.NoError(t, err)
+				require.NotNil(t, loaded.Tuning)
+				assert.Equal(t, pool.Tuning, loaded.Tuning)
+				assert.Contains(t, loaded.TuningJSON, `"cooldown_seconds":0`)
+				assert.NotContains(t, loaded.TuningJSON, "recovery_observation_seconds", "inherited defaults must not be persisted")
+				for _, enabled := range []bool{false, true} {
+					loaded.Tuning.ChatPrefixEnabled = common.GetPointer(enabled)
+					previousRevision := loaded.Revision
+					require.NoError(t, model.SaveModelRoutingPool(loaded, previousRevision))
+					assert.NotEqual(t, previousRevision, loaded.Revision)
+					loaded, err = model.GetModelRoutingPool("default", name)
+					require.NoError(t, err)
+					require.NotNil(t, loaded.Tuning.ChatPrefixEnabled)
+					assert.Equal(t, enabled, *loaded.Tuning.ChatPrefixEnabled)
+					assert.Contains(t, loaded.TuningJSON, fmt.Sprintf(`"chat_prefix_enabled":%t`, enabled))
+				}
+				loaded.Tuning.ChatPrefixEnabled = nil
+				require.NoError(t, model.SaveModelRoutingPool(loaded, loaded.Revision))
+				loaded, err = model.GetModelRoutingPool("default", name)
+				require.NoError(t, err)
+				assert.NotContains(t, loaded.TuningJSON, "chat_prefix_enabled", "inheritance omits the override while preserving numeric tuning")
+				invalid := *loaded
+				invalid.Tuning = &dynamic_routing_setting.Overrides{HardFailureCooldownSeconds: common.GetPointer(100), HardFailureMaxCooldownSeconds: common.GetPointer(50)}
+				assert.ErrorIs(t, model.SaveModelRoutingPool(&invalid, loaded.Revision), model.ErrInvalidRoutingPool)
+				global := originalSetting
+				global.MinSamples = 6
+				before := dynamic_routing_setting.GetSnapshot()
+				assert.ErrorContains(t, model.UpdateDynamicRoutingOptions(global), "invalid tuning for pool")
+				assert.Equal(t, before, dynamic_routing_setting.GetSnapshot(), "incompatible global changes must not be published")
+				// An old membership editor must preserve newly configured tuning.
+				body, err := common.Marshal(loaded)
+				require.NoError(t, err)
+				var request map[string]any
+				require.NoError(t, common.Unmarshal(body, &request))
+				delete(request, "tuning")
+				body, err = common.Marshal(request)
+				require.NoError(t, err)
+				response := httptest.NewRecorder()
+				ctx, _ := gin.CreateTestContext(response)
+				ctx.Request = httptest.NewRequest(http.MethodPut, "/api/channel/routing-pool", strings.NewReader(string(body)))
+				ctx.Request.Header.Set("Content-Type", "application/json")
+				SaveModelRoutingPool(ctx)
+				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+				assert.Contains(t, response.Body.String(), `"hard_failure_cooldown_seconds":10`)
+				control := model.ModelRoutingPool{RoutingGroup: "control", Model: name, Mode: model.RoutingModeSmart, Channels: pool.Channels}
+				require.NoError(t, model.SaveModelRoutingPool(&control, ""))
+				now := time.Now()
+				for _, age := range []int{20, 19, 18} {
+					for _, id := range []int{9701, 9702} {
+						service.ObserveDynamicRoutingSample(dynamicrouting.ObservationKey{ChannelID: id, Model: name}, dynamicrouting.Sample{ObservedAt: now.Add(-time.Duration(age) * time.Second), Success: true, HasTTFT: true, TTFT: 100 * time.Millisecond}, true)
+					}
+				}
+				service.ObserveDynamicRoutingSample(dynamicrouting.ObservationKey{ChannelID: 9701, Model: name}, dynamicrouting.Sample{ObservedAt: now.Add(-15 * time.Second), HardFailure: true}, true)
+				probed := false
+				for range 4 {
+					for _, group := range []string{"default", "control"} {
+						ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+						channel, _, err := service.CacheGetRandomSatisfiedChannel(&service.RetryParam{Ctx: ctx, TokenGroup: group, ModelName: name, DynamicRoutingEligible: true})
+						require.NoError(t, err)
+						require.NotNil(t, channel)
+						if group == "default" {
+							probed = probed || channel.Id == 9701
+						} else {
+							assert.Equal(t, 9702, channel.Id, "the other pool keeps the global 30-second cooldown")
+						}
+					}
+				}
+				assert.True(t, probed, "the configured 10-second pool must already allow recovery probes")
+				loaded.Tuning = &dynamic_routing_setting.Overrides{}
+				require.NoError(t, model.SaveModelRoutingPool(loaded, loaded.Revision))
+				cleared, err := model.GetModelRoutingPool("default", name)
+				require.NoError(t, err)
+				assert.Nil(t, cleared.Tuning)
+				assert.Empty(t, cleared.TuningJSON)
+				response = httptest.NewRecorder()
+				ctx, _ = gin.CreateTestContext(response)
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/routing-pools", nil)
+				ListModelRoutingPools(ctx)
+				require.Equal(t, http.StatusOK, response.Code)
+				assert.Contains(t, response.Body.String(), `"tuning_defaults"`)
+			})
+		}
+	}
+}
 
 func TestDiscountRoutingPoolDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
@@ -450,6 +598,171 @@ func TestModelRoutingPoolDatabaseMatrix(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, selected)
 			assert.Equal(t, 9701, selected.Id)
+		})
+	}
+}
+
+func TestRoutingPoolUserOverviewDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+				t.Skip("isolated database DSN not configured")
+			}
+			t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+			db := setupManageUserTestDB(t)
+			previousGroups, previousRatios := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString()
+			previousCache := common.MemoryCacheEnabled
+			t.Cleanup(func() {
+				common.MemoryCacheEnabled = previousCache
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousGroups))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+			})
+			common.MemoryCacheEnabled = false
+			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Standard","vip":"Fast"}`))
+			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1}`))
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserGroupChannelRoutingOverride{}))
+			for _, id := range []int{9801, 9802} {
+				priority := int64(100)
+				if id == 9801 {
+					priority = 200
+				}
+				channel := model.Channel{Id: id, Name: fmt.Sprint(id), Key: "secret-channel-key", Type: 1, Models: "overview-model,other-model", Group: "default,vip", Status: common.ChannelStatusEnabled, Priority: &priority}
+				require.NoError(t, db.Create(&channel).Error)
+				require.NoError(t, channel.AddAbilities(nil))
+			}
+			for _, pool := range []model.ModelRoutingPool{
+				{Model: "overview-model", RoutingGroup: "default", Mode: model.RoutingModePriority, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 9801, Enabled: true}}},
+				{Model: "other-model", RoutingGroup: "vip", Mode: model.RoutingModePriority, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 9802, Enabled: true}}},
+			} {
+				require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+			}
+			users := []model.User{
+				{Username: "overview-alpha", Role: common.RoleCommonUser, Group: "default", AffCode: "ov1"},
+				{Username: "overview-beta", Role: common.RoleCommonUser, Group: "default", AffCode: "ov2"},
+				{Username: "overview-strategy", Role: common.RoleCommonUser, Group: "default", AffCode: "ov3"},
+				{Username: "overview-inherited", Role: common.RoleCommonUser, Group: "default", AffCode: "ov4"},
+				{Username: "overview-deleted", Role: common.RoleCommonUser, Group: "default", AffCode: "ov5"},
+			}
+			require.NoError(t, db.Create(&users).Error)
+			for _, row := range []model.UserGroupChannelRoutingOverride{
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[0].Id, Model: "overview-model", ChannelId: 9801, Disabled: true}, RoutingGroup: "default"},
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[1].Id, Model: "overview-model", ChannelId: 9802}, RoutingGroup: "default"},
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[4].Id, Model: "overview-model", ChannelId: 9801}, RoutingGroup: "default"},
+			} {
+				require.NoError(t, db.Create(&row).Error)
+			}
+			require.NoError(t, db.Delete(&users[4]).Error)
+			for _, userID := range []int{users[0].Id, users[2].Id} {
+				require.NoError(t, model.SaveUserRoutingStrategy(&model.UserRoutingStrategy{UserId: userID, Model: "overview-model", RoutingGroup: "default", Mode: model.RoutingModeSmart}, ""))
+			}
+			for _, tc := range []struct {
+				name, query string
+				total, size int
+				userIDs     []int
+			}{
+				{"default_only", "", 2, 2, []int{0, 0}},
+				{"all_explicit_pools", "?scope=all", 5, 5, []int{0, 0, users[0].Id, users[1].Id, users[2].Id}},
+				{"model_channel_group", "?scope=all&model=overview&channel_id=9801&routing_group=default", 3, 3, []int{0, users[0].Id, users[2].Id}},
+				{"strategy_only", "?scope=all&mode=smart", 2, 2, []int{users[0].Id, users[2].Id}},
+				{"user_membership_replaces_defaults", "?scope=all&model=overview&channel_id=9802", 1, 1, []int{users[1].Id}},
+				{"pagination_after_filtering", "?scope=all&model=overview&channel_id=9801&page_size=2&page=2", 3, 1, []int{users[2].Id}},
+				{"no_match", "?scope=all&channel_id=9999", 0, 0, []int{}},
+				{"primary_channel", "?scope=all&model=overview&channel_id=9801&channel_role=primary", 2, 2, []int{0, users[2].Id}},
+				{"disabled_member_is_not_primary", "?scope=all&model=overview&channel_id=9801&channel_role=non_primary", 1, 1, []int{users[0].Id}},
+				{"member_absent_is_not_non_primary", "?scope=all&model=overview&channel_id=9802&channel_role=non_primary", 0, 0, []int{}},
+				{"primary_pagination", "?scope=all&model=overview&channel_id=9801&channel_role=primary&page_size=1&page=2", 2, 1, []int{users[2].Id}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					response := userRoutingRequestAtURL(t, 1, http.MethodGet, "/api/channel/routing-pools"+tc.query, "", ListModelRoutingPools)
+					require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+					var body struct {
+						Success bool `json:"success"`
+						Data    struct {
+							Items []modelRoutingPoolView `json:"items"`
+							Total int                    `json:"total"`
+						} `json:"data"`
+					}
+					require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+					require.True(t, body.Success, response.Body.String())
+					assert.Equal(t, tc.total, body.Data.Total)
+					require.Len(t, body.Data.Items, tc.size)
+					ids := make([]int, 0, len(body.Data.Items))
+					for _, item := range body.Data.Items {
+						ids = append(ids, item.UserID)
+					}
+					assert.Equal(t, tc.userIDs, ids)
+					assert.NotContains(t, response.Body.String(), "secret-channel-key")
+					assert.NotContains(t, response.Body.String(), "overview-inherited")
+					assert.NotContains(t, response.Body.String(), "overview-deleted")
+				})
+			}
+			require.NoError(t, model.SaveUserRoutingStrategy(&model.UserRoutingStrategy{UserId: users[3].Id, Model: "overview-model@effort:high", RoutingGroup: "default", Mode: model.RoutingModeSmart}, ""))
+			for _, tc := range []struct{ channelID, total int }{{9801, 1}, {9802, 0}} {
+				response := userRoutingRequestAtURL(t, 1, http.MethodGet, fmt.Sprintf("/api/channel/routing-pools?scope=all&model=overview-model%%40effort%%3Ahigh&channel_id=%d", tc.channelID), "", ListModelRoutingPools)
+				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+				var body struct {
+					Data struct {
+						Total int `json:"total"`
+					} `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+				assert.Equal(t, tc.total, body.Data.Total, "model modifiers inherit the base model's pool membership")
+			}
+			pool, err := model.GetModelRoutingPool("default", "overview-model")
+			require.NoError(t, err)
+			require.NotNil(t, pool)
+			pool.Channels = []model.ModelRoutingPoolChannel{{ChannelID: 9801, Priority: 500, Enabled: false}, {ChannelID: 9802, Enabled: true}}
+			require.NoError(t, model.SaveModelRoutingPool(pool, pool.Revision))
+			for _, row := range []model.UserGroupChannelRoutingOverride{
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[0].Id, Model: "overview-model", ChannelId: 9802, Priority: common.GetPointer(int64(0))}, RoutingGroup: "default"},
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[1].Id, Model: "overview-model", ChannelId: 9801, Priority: common.GetPointer(int64(0))}, RoutingGroup: "default"},
+			} {
+				require.NoError(t, db.Create(&row).Error)
+			}
+			for _, query := range []string{"channel_id=9802&channel_role=primary", "channel_id=9801&channel_role=non_primary"} {
+				response := userRoutingRequestAtURL(t, 1, http.MethodGet, "/api/channel/routing-pools?scope=all&model=overview&"+query, "", ListModelRoutingPools)
+				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+				var body struct {
+					Data struct {
+						Total int `json:"total"`
+					} `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+				assert.Equal(t, 5, body.Data.Total, "skip disabled members, preserve explicit zero and inherit nil priorities")
+			}
+			require.NoError(t, db.Model(&model.UserGroupChannelRoutingOverride{}).Where("user_id = ? AND model = ? AND channel_id = ?", users[1].Id, "overview-model", 9801).Update("priority", 100).Error)
+			response := userRoutingRequestAtURL(t, 1, http.MethodGet, "/api/channel/routing-pools?scope=all&model=overview&channel_id=9801&channel_role=primary", "", ListModelRoutingPools)
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			var primaryBody struct {
+				Data struct {
+					Items []modelRoutingPoolView `json:"items"`
+				} `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &primaryBody))
+			require.Len(t, primaryBody.Data.Items, 1, "equal user priorities follow channel ID order")
+			assert.Equal(t, users[1].Id, primaryBody.Data.Items[0].UserID)
+			for _, query := range []string{"?channel_role=primary", "?channel_id=9801&channel_role=invalid"} {
+				response := userRoutingRequestAtURL(t, 1, http.MethodGet, "/api/channel/routing-pools"+query, "", ListModelRoutingPools)
+				assert.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
+			}
+			require.NoError(t, authz.Init(db))
+			administrator := model.User{Username: "overview-admin", Role: common.RoleAdminUser, Group: "default", AffCode: "ov6"}
+			require.NoError(t, db.Create(&administrator).Error)
+			response = userRoutingRequestAtURL(t, administrator.Id, http.MethodGet, "/api/channel/routing-pools?scope=all", "", func(c *gin.Context) {
+				c.Set("id", administrator.Id)
+				c.Set("role", administrator.Role)
+				ListModelRoutingPools(c)
+			})
+			assert.Equal(t, http.StatusForbidden, response.Code)
+			require.NoError(t, authz.SetUserPermissions(administrator.Id, authz.PermissionsMap{authz.ResourceUserGroupConfig: {authz.ActionRead: true}}))
+			require.NoError(t, db.Create(&model.UserGroupChannelRoutingOverride{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: administrator.Id, Model: "overview-model", ChannelId: 9801}, RoutingGroup: "default"}).Error)
+			response = userRoutingRequestAtURL(t, administrator.Id, http.MethodGet, "/api/channel/routing-pools?scope=all", "", func(c *gin.Context) {
+				c.Set("id", administrator.Id)
+				c.Set("role", administrator.Role)
+				ListModelRoutingPools(c)
+			})
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			assert.NotContains(t, response.Body.String(), "overview-admin", "same-role administrators cannot inspect each other's configuration")
 		})
 	}
 }

@@ -153,12 +153,93 @@ function mockPool(config = fixture()) {
           configured_key_groups: state.config.configured
             ? { 'kimi-k3': ['vip'] }
             : {},
-          model_groups: { 'kimi-k3': ['vip'] },
+          model_groups: state.config.model_groups ?? { 'kimi-k3': ['vip'] },
         }
     return { data: { success: true, data } }
   })
   return state
 }
+
+test('channel retry overrides preserve zero, custom counts and explicit inheritance without changing global settings', async () => {
+  const config = fixture()
+  config.configured = true
+  config.source = 'user'
+  config.channels[0].retry_times_override = 3
+  mockPool(config)
+  const patch = vi
+    .spyOn(api, 'patch')
+    .mockResolvedValue({ data: { success: true } })
+  const { card } = await mountWorkspace()
+  const retries = await within(card).findByRole('spinbutton', {
+    name: 'Retries for Primary',
+  })
+  expect(retries).toHaveValue(3)
+  expect(retries).toBeDisabled()
+  fireEvent.click(
+    within(card).getByRole('button', { name: 'Edit user override' })
+  )
+  fireEvent.change(retries, { target: { value: '0' } })
+  fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      expect.objectContaining({
+        overrides: expect.arrayContaining([
+          expect.objectContaining({ channel_id: 1, retry_times_override: 0 }),
+        ]),
+      })
+    )
+  )
+  await waitFor(() =>
+    expect(
+      within(card).getByRole('button', { name: 'Edit user override' })
+    ).toBeEnabled()
+  )
+  fireEvent.click(
+    within(card).getByRole('button', { name: 'Edit user override' })
+  )
+  fireEvent.change(retries, { target: { value: '' } })
+  fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenLastCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      expect.objectContaining({
+        overrides: expect.arrayContaining([
+          expect.objectContaining({
+            channel_id: 1,
+            retry_times_override: null,
+          }),
+        ]),
+      })
+    )
+  )
+})
+
+test.each(['-1', '1.5', '100'])(
+  'rejects invalid channel retry count %s without saving',
+  async (value) => {
+    mockPool()
+    const patch = vi
+      .spyOn(api, 'patch')
+      .mockResolvedValue({ data: { success: true } })
+    const { card } = await mountWorkspace()
+    fireEvent.click(
+      await within(card).findByRole('button', { name: 'Create user override' })
+    )
+    const retries = within(card).getByRole('spinbutton', {
+      name: 'Retries for Primary',
+    })
+    fireEvent.change(retries, { target: { value } })
+    expect(retries).toHaveAttribute('aria-invalid', 'true')
+    fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+    expect(
+      await within(card).findByText(
+        'Retry count must be an integer from 0 to 99.'
+      )
+    ).toBeVisible()
+    expect(patch).not.toHaveBeenCalled()
+  }
+)
 
 test.each([
   ['priority', 'Priority routing'],
@@ -327,7 +408,7 @@ test('user monitoring retains the same unsaved override and returns focus withou
   )
 })
 
-async function mountWorkspace() {
+function renderWorkspace() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
@@ -348,9 +429,81 @@ async function mountWorkspace() {
   return {
     client,
     dirty,
+  }
+}
+
+async function mountWorkspace() {
+  const workspace = renderWorkspace()
+  await userEvent.click(
+    await screen.findByRole('combobox', { name: 'Configuration source' })
+  )
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'All configurations' })
+  )
+  return {
+    ...workspace,
     card: await screen.findByRole('region', { name: 'kimi-k3 · vip' }),
   }
 }
+
+test('defaults to user overrides and lets operators switch to all or inherited pools', async () => {
+  mockPool({
+    ...fixture(),
+    configured: true,
+    source: 'user',
+    model_groups: { 'kimi-k3': ['vip', 'default'] },
+  })
+  renderWorkspace()
+  await screen.findByRole('region', { name: 'kimi-k3 · vip' })
+  const source = screen.getByRole('combobox', {
+    name: 'Configuration source',
+  })
+  expect(source).toHaveValue('User override')
+  expect(
+    screen.queryByRole('region', { name: 'kimi-k3 · default' })
+  ).not.toBeInTheDocument()
+  expect(screen.getByText('Routing pools: 1')).toBeVisible()
+
+  await userEvent.click(source)
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'All configurations' })
+  )
+  expect(
+    await screen.findByRole('region', { name: 'kimi-k3 · default' })
+  ).toBeVisible()
+  expect(screen.getByRole('region', { name: 'kimi-k3 · vip' })).toBeVisible()
+  expect(screen.getByText('Routing pools: 2')).toBeVisible()
+
+  await userEvent.click(source)
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'Inherited' })
+  )
+  expect(
+    screen.getByRole('region', { name: 'kimi-k3 · default' })
+  ).toBeVisible()
+  expect(
+    screen.queryByRole('region', { name: 'kimi-k3 · vip' })
+  ).not.toBeInTheDocument()
+  expect(screen.getByText('Routing pools: 1')).toBeVisible()
+})
+
+test('no user overrides shows an empty view until all configurations are selected', async () => {
+  mockPool()
+  renderWorkspace()
+  expect(await screen.findByText('No available routing pools')).toBeVisible()
+  expect(screen.getByText('Routing pools: 0')).toBeVisible()
+  expect(screen.queryByRole('region')).not.toBeInTheDocument()
+
+  await userEvent.click(
+    screen.getByRole('combobox', { name: 'Configuration source' })
+  )
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'All configurations' })
+  )
+  expect(
+    await screen.findByRole('button', { name: 'Create user override' })
+  ).toBeEnabled()
+})
 
 test('shows the user identity and effective inherited priorities and weights without writing overrides', async () => {
   mockPool()
@@ -400,14 +553,16 @@ test('user pool cards fill each responsive column without a fixed maximum width 
   const list = screen.getByRole('list', { name: 'User routing pools' })
   expect(list).toHaveClass('columns-[24rem]', 'gap-4')
   expect(list).not.toHaveClass('grid')
-  const item = within(list).getByRole('listitem')
+  const item = within(list)
+    .getAllByRole('listitem')
+    .find((entry) => entry.contains(card))
   expect(item).toHaveClass(
     'inline-block',
     'w-full',
     'break-inside-avoid',
     'mb-4'
   )
-  expect(item.className).not.toMatch(/max-w-/)
+  expect(item?.className).not.toMatch(/max-w-/)
   expect(item).toContainElement(card)
 })
 
@@ -708,9 +863,32 @@ test('scope search selects an authorized user and disabled scope controls cannot
       <RoutingScopeSelect disabled={false} onChange={changed} />
     </QueryClientProvider>
   )
+  expect(
+    screen.getByRole('combobox', { name: 'Select routing user' })
+  ).toHaveValue('Default resource pool')
   await operator.click(
     screen.getByRole('combobox', { name: 'Select routing user' })
   )
+  await operator.click(await screen.findByRole('option', { name: 'All' }))
+  expect(changed).toHaveBeenCalledWith(undefined, true)
+  view.rerender(
+    <QueryClientProvider client={client}>
+      <RoutingScopeSelect allUsers disabled={false} onChange={changed} />
+    </QueryClientProvider>
+  )
+  await operator.click(
+    screen.getByRole('combobox', { name: 'Select routing user' })
+  )
+  await operator.click(
+    screen.getByRole('option', { name: 'Default resource pool' })
+  )
+  expect(changed).toHaveBeenLastCalledWith()
+  await operator.click(
+    screen.getByRole('combobox', { name: 'Select routing user' })
+  )
+  expect(
+    screen.queryByRole('option', { name: 'deleted · #43' })
+  ).not.toBeInTheDocument()
   await operator.click(
     await screen.findByRole('option', { name: 'acme · #42' })
   )
@@ -724,8 +902,8 @@ test('scope search selects an authorized user and disabled scope controls cannot
     screen.getByRole('combobox', { name: 'Select routing user' })
   ).toBeDisabled()
   expect(
-    screen.getByRole('button', { name: 'Default configuration' })
-  ).toBeDisabled()
+    screen.getByRole('combobox', { name: 'Select routing user' })
+  ).toHaveValue('acme · #42')
 })
 
 test('a user can add an enabled channel outside the default pool and save the complete membership', async () => {

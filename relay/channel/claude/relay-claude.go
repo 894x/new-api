@@ -432,7 +432,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 	}
 
-	responseData, err = helper.SanitizeResponseBody(responseData, info.RelayFormat)
+	responseData, err = helper.SanitizeResponseBody(responseData, info.RelayFormat, c)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponseBody)
 	}

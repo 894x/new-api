@@ -286,6 +286,13 @@ export function UserChannelRoutingEditor(props: {
           ...row,
           weight_override:
             originalById.get(row.channel_id)?.weight_override ?? null,
+          ...(originalById.get(row.channel_id)?.retry_times_override !==
+          undefined
+            ? {
+                retry_times_override: originalById.get(row.channel_id)
+                  ?.retry_times_override,
+              }
+            : {}),
         })),
       })
     },

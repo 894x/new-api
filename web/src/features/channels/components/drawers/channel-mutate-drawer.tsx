@@ -237,6 +237,7 @@ import {
 import { ModelRedirectPanel } from '../model-redirect-panel'
 import { ModelRoutingOverridesEditor } from '../model-routing-overrides-editor'
 import { ResponsesWebSocketSetting } from '../responses-websocket-setting'
+import { CacheWriteSimulationSetting } from '../cache-write-simulation-setting'
 import { StreamResponseHeaderSetting } from '../stream-response-header-setting'
 import { UpstreamModelSelection } from '../upstream-model-selection'
 import {
@@ -317,6 +318,10 @@ const SENSITIVE_FORM_FIELDS = [
   'http1_large_body_threshold_kib',
   'pass_through_body_enabled',
   'responses_websocket_enabled',
+  'cache_write_simulation_enabled',
+  'cache_write_simulation_threshold',
+  'cache_write_simulation_percentage',
+  'cache_write_simulation_ttl',
   'system_prompt',
   'system_prompt_override',
   'allow_service_tier',
@@ -2287,6 +2292,39 @@ export function ChannelMutateDrawer({
               <FormDescription>
                 {t(
                   'Upstream cost multiplier: 0.3 means 30% of the reference price. Leave empty if unknown; model overrides take precedence.'
+                )}
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name='invoice_vat_rate'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('Deductible invoice VAT rate (%)')}</FormLabel>
+              <FormControl>
+                <Input
+                  type='number'
+                  min={0}
+                  max={100}
+                  step='any'
+                  {...field}
+                  value={field.value ?? ''}
+                  placeholder={t('Unknown')}
+                  onChange={(event) =>
+                    field.onChange(
+                      event.target.value === ''
+                        ? null
+                        : Number(event.target.value)
+                    )
+                  }
+                />
+              </FormControl>
+              <FormDescription>
+                {t(
+                  'Enter the VAT rate on the deductible special invoice, e.g. 6 for 6%. Leave empty if unknown. Changes apply to future calls only.'
                 )}
               </FormDescription>
               <FormMessage />
@@ -4992,6 +5030,7 @@ export function ChannelMutateDrawer({
                   channelType={currentType}
                   disabled={sensitiveLocked || isSubmitting}
                 />
+                <CacheWriteSimulationSetting disabled={sensitiveLocked || isSubmitting} />
                 {formatFields}
                 <OllamaProtocolFields control={form.control} />
                 {ollamaOpenAIChatFields}

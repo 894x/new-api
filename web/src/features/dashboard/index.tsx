@@ -119,6 +119,12 @@ const LazyPerformanceAnalytics = lazy(() =>
   }))
 )
 
+const LazyGrossProfitAnalysis = lazy(() =>
+  import('@/features/gross-profit').then((m) => ({
+    default: m.GrossProfitAnalysis,
+  }))
+)
+
 function LogStatCardsFallback() {
   return (
     <div className='overflow-hidden rounded-lg border'>
@@ -183,6 +189,7 @@ function PerformanceOverviewFallback() {
 }
 
 const SECTION_META: Record<DashboardSectionId, { titleKey: string }> = {
+  'gross-profit': { titleKey: 'Gross Profit Analysis' },
   overview: {
     titleKey: 'Overview',
   },
@@ -254,12 +261,16 @@ export function Dashboard() {
 
   const meta = SECTION_META[activeSection] ?? SECTION_META.overview
   const isAdmin = Boolean(userRole && userRole >= ROLE.ADMIN)
+  const isRoot = userRole === ROLE.SUPER_ADMIN
   const visibleSections = useMemo(
     () =>
       DASHBOARD_SECTION_IDS.filter(
-        (section) => section !== 'overview' && (section !== 'users' || isAdmin)
+        (section) =>
+          section !== 'overview' &&
+          (section !== 'users' || isAdmin) &&
+          (section !== 'gross-profit' || isRoot)
       ),
-    [isAdmin]
+    [isAdmin, isRoot]
   )
   const handleSectionChange = useCallback(
     (section: string) => {
@@ -426,6 +437,11 @@ export function Dashboard() {
                 />
               </Suspense>
             </FadeIn>
+          )}
+          {activeSection === 'gross-profit' && isRoot && (
+            <Suspense fallback={<ModelChartsFallback />}>
+              <LazyGrossProfitAnalysis />
+            </Suspense>
           )}
         </div>
       </SectionPageLayout.Content>

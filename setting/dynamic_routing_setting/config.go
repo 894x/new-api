@@ -113,6 +113,11 @@ func Validate(setting DynamicRoutingSetting) error {
 	return validateSetting(setting)
 }
 
+// RuntimeConfig validates global or resolved pool settings and converts durations.
+func RuntimeConfig(setting DynamicRoutingSetting) (dynamicrouting.Config, error) {
+	return validatedRuntimeConfig(setting)
+}
+
 func publishSettingLocked(setting DynamicRoutingSetting) error {
 	runtimeConfig, err := validatedRuntimeConfig(setting)
 	if err != nil {
@@ -173,7 +178,7 @@ func validatedRuntimeConfig(setting DynamicRoutingSetting) (dynamicrouting.Confi
 	if err != nil {
 		return dynamicrouting.Config{}, err
 	}
-	if _, err := dynamicrouting.NewController(runtimeConfig); err != nil {
+	if err := dynamicrouting.ValidateConfig(runtimeConfig); err != nil {
 		return dynamicrouting.Config{}, err
 	}
 	return runtimeConfig, nil

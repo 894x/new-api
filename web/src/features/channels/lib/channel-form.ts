@@ -261,6 +261,7 @@ export const channelFormSchema = z
     tpm: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
     priority: z.number().optional(),
     cost_discount: z.number().min(0).max(1).nullable().optional(),
+    invoice_vat_rate: z.number().min(0).max(100).nullable().optional(),
     weight: z.number().int().min(0).max(2_147_483_637).optional(),
     test_model: z.string().optional(),
     monitor_config: z.string().optional(),
@@ -319,6 +320,15 @@ export const channelFormSchema = z
     http1_large_body_threshold_kib: z.number().optional(),
     pass_through_body_enabled: z.boolean().optional(),
     responses_websocket_enabled: z.boolean().optional(),
+    cache_write_simulation_enabled: z.boolean().optional(),
+    cache_write_simulation_threshold: z
+      .number()
+      .int()
+      .min(0)
+      .max(2147483647)
+      .optional(),
+    cache_write_simulation_percentage: z.number().min(0).max(100).optional(),
+    cache_write_simulation_ttl: z.enum(['5m', '1h']).optional(),
     stream_response_headers: z
       .string()
       .optional()
@@ -363,6 +373,22 @@ export const channelFormSchema = z
     upstream_model_update_ignored_models: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    if (data.cache_write_simulation_enabled) {
+      if (data.cache_write_simulation_threshold === undefined) {
+        addRequiredIssue(
+          ctx,
+          'cache_write_simulation_threshold',
+          'Cache write input threshold is required'
+        )
+      }
+      if (data.cache_write_simulation_percentage === undefined) {
+        addRequiredIssue(
+          ctx,
+          'cache_write_simulation_percentage',
+          'Cache write percentage is required'
+        )
+      }
+    }
     if (
       [
         3,
@@ -552,6 +578,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   tpm: 0,
   priority: 0,
   cost_discount: null,
+  invoice_vat_rate: null,
   weight: 0,
   test_model: '',
   monitor_config: '',
@@ -581,6 +608,10 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   http1_large_body_threshold_kib: 1024,
   pass_through_body_enabled: false,
   responses_websocket_enabled: false,
+  cache_write_simulation_enabled: false,
+  cache_write_simulation_threshold: 1024,
+  cache_write_simulation_percentage: 100,
+  cache_write_simulation_ttl: '5m',
   stream_response_headers: '',
   system_prompt: '',
   system_prompt_override: false,
@@ -701,10 +732,25 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
   let parameterCapabilities = ''
+  let cacheWriteSimulation = {
+    cache_write_simulation_enabled: false,
+    cache_write_simulation_threshold: 1024,
+    cache_write_simulation_percentage: 100,
+    cache_write_simulation_ttl: '5m' as '5m' | '1h',
+  }
 
   if (channel.settings) {
     try {
       const parsed = JSON.parse(channel.settings)
+      if (parsed.cache_write_simulation) {
+        const policy = parsed.cache_write_simulation
+        cacheWriteSimulation = {
+          cache_write_simulation_enabled: policy.enabled === true,
+          cache_write_simulation_threshold: policy.min_input_tokens ?? 1024,
+          cache_write_simulation_percentage: policy.percentage ?? 100,
+          cache_write_simulation_ttl: policy.ttl === '1h' ? '1h' : '5m',
+        }
+      }
       vertexKeyType = parsed.vertex_key_type || 'json'
       azureResponsesVersion = parsed.azure_responses_version || ''
       isEnterpriseAccount = parsed.openrouter_enterprise === true
@@ -766,6 +812,8 @@ export function transformChannelToFormDefaults(
     tpm: channel.tpm ?? 0,
     priority: channel.priority || 0,
     cost_discount: channel.cost_discount ?? null,
+    invoice_vat_rate:
+      channel.invoice_vat_rate == null ? null : channel.invoice_vat_rate * 100,
     weight: channel.weight || 0,
     test_model: channel.test_model || '',
     monitor_config: channel.monitor_config || '',
@@ -777,6 +825,7 @@ export function transformChannelToFormDefaults(
     setting: channel.setting || '',
     param_override: channel.param_override || '',
     parameter_capabilities: parameterCapabilities,
+    ...cacheWriteSimulation,
     header_override: channel.header_override || '',
     settings: channel.settings || '{}',
     other: channel.other || '',
@@ -1051,6 +1100,17 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   }
   delete settingsObj.video_capabilities
 
+  if (formData.cache_write_simulation_enabled) {
+    settingsObj.cache_write_simulation = {
+      enabled: true,
+      min_input_tokens: formData.cache_write_simulation_threshold ?? 1024,
+      percentage: formData.cache_write_simulation_percentage ?? 100,
+      ttl: formData.cache_write_simulation_ttl ?? '5m',
+    }
+  } else {
+    delete settingsObj.cache_write_simulation
+  }
+
   return JSON.stringify(settingsObj)
 }
 
@@ -1084,6 +1144,10 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     tpm: formData.tpm ?? 0,
     priority: formData.priority ?? null,
     cost_discount: formData.cost_discount ?? null,
+    invoice_vat_rate:
+      formData.invoice_vat_rate == null
+        ? null
+        : formData.invoice_vat_rate / 100,
     weight: formData.weight ?? null,
     test_model: formData.test_model || null,
     monitor_config: formData.monitor_config || '{}',
@@ -1136,6 +1200,10 @@ export function transformFormDataToUpdatePayload(
     tpm: formData.tpm ?? 0,
     priority: formData.priority ?? 0,
     cost_discount: formData.cost_discount ?? null,
+    invoice_vat_rate:
+      formData.invoice_vat_rate == null
+        ? null
+        : formData.invoice_vat_rate / 100,
     weight: formData.weight ?? 0,
     test_model: formData.test_model || null,
     monitor_config: formData.monitor_config || '{}',

@@ -30,6 +30,8 @@ import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { afterEach, expect, test, vi } from 'vitest'
 
+import { buildDynamicRoutingFormValues } from '@/features/system-settings/models/lib/dynamic-routing-schema'
+import { DYNAMIC_ROUTING_FLAT_DEFAULTS } from '@/features/system-settings/types'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -48,6 +50,9 @@ function fixture(): RoutingPoolView {
     model: 'kimi-k3',
     mode: 'priority',
     revision: 'original',
+    tuning_defaults: buildDynamicRoutingFormValues(
+      DYNAMIC_ROUTING_FLAT_DEFAULTS
+    ).dynamic_routing_setting,
     channels: [
       { channel_id: 1, priority: 100, weight: 10, enabled: true },
       { channel_id: 2, priority: 80, weight: 0, enabled: true },
@@ -70,6 +75,239 @@ function fixture(): RoutingPoolView {
     ],
   }
 }
+
+test.each([
+  ['Enabled', true, false],
+  ['Disabled', false, true],
+  ['Inherit global', undefined, true],
+] as const)(
+  'prefix routing choice %s saves in a priority pool without scheduling defaults',
+  async (label, expected, initial) => {
+    const pool = fixture()
+    pool.tuning = { chat_prefix_enabled: initial }
+    delete pool.tuning_defaults
+    const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+      data: { success: true, data: { ...(body as object), revision: 'saved' } },
+    }))
+    mountCard(pool)
+    const selector = screen.getByRole('combobox', {
+      name: 'Prefix cache routing',
+    })
+    await userEvent.click(selector)
+    await userEvent.click(screen.getByRole('option', { name: label }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(put).toHaveBeenLastCalledWith(
+        '/api/channel/routing-pool',
+        expect.objectContaining({
+          tuning: expect.objectContaining(
+            expected === undefined ? {} : { chat_prefix_enabled: expected }
+          ),
+        })
+      )
+    )
+    const body = put.mock.calls.at(-1)?.[1] as {
+      tuning: { chat_prefix_enabled?: boolean }
+    }
+    expect(body.tuning.chat_prefix_enabled).toBe(expected)
+  }
+)
+
+test('prefix routing override is disabled for read-only pools', () => {
+  mountCard(fixture(), false)
+  expect(
+    screen.getByRole('combobox', { name: 'Prefix cache routing' })
+  ).toBeDisabled()
+})
+
+test('pool parameters open beside the return action and save only explicit overrides while preserving the channel draft', async () => {
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
+  const pool = fixture()
+  pool.mode = 'smart'
+  mockMonitorReads(pool)
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+    data: { success: true, data: { ...(body as object), revision: 'saved' } },
+  }))
+  mountCard(pool)
+  fireEvent.change(
+    screen.getByRole('spinbutton', { name: 'Priority for Alpha' }),
+    { target: { value: '7' } }
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Monitoring view' }))
+  const monitor = screen.getByRole('dialog', {
+    name: 'kimi-k3 · standard · Default configuration',
+  })
+  const trigger = within(monitor).getByRole('button', {
+    name: 'Scheduling parameters',
+  })
+  const back = within(monitor).getByRole('button', {
+    name: 'Back to card view',
+  })
+  expect(
+    trigger.compareDocumentPosition(back) & Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy()
+  await userEvent.click(trigger)
+  const panel = screen.getByRole('dialog', { name: 'Scheduling parameters' })
+  expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  const cooldown = within(panel).getByRole('spinbutton', {
+    name: 'Hard failure cooldown (seconds)',
+  })
+  expect(cooldown).toHaveValue(null)
+  expect(cooldown).toHaveAttribute('placeholder', '30')
+  fireEvent.change(cooldown, { target: { value: '120' } })
+  fireEvent.change(
+    within(panel).getByRole('spinbutton', {
+      name: 'Recovery observation time (seconds)',
+    }),
+    { target: { value: '90' } }
+  )
+  await userEvent.click(within(panel).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        tuning: {
+          hard_failure_cooldown_seconds: 120,
+          recovery_observation_seconds: 90,
+        },
+        channels: [
+          { channel_id: 1, priority: 7, weight: 10, enabled: true },
+          { channel_id: 2, priority: 80, weight: 0, enabled: true },
+        ],
+      })
+    )
+  )
+  await userEvent.keyboard('{Escape}')
+  expect(monitor).toBeVisible()
+  expect(trigger).toHaveFocus()
+})
+
+test('pool tuning rejects conflicting values and restores inheritance without changing other pool settings', async () => {
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
+  const pool = fixture()
+  pool.mode = 'smart'
+  pool.tuning = {
+    hard_failure_cooldown_seconds: 120,
+    chat_prefix_enabled: false,
+  }
+  mockMonitorReads(pool)
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+    data: { success: true, data: { ...(body as object), revision: 'saved' } },
+  }))
+  mountCard(pool)
+  await userEvent.click(screen.getByRole('button', { name: 'Monitoring view' }))
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Scheduling parameters' })
+  )
+  const panel = screen.getByRole('dialog', { name: 'Scheduling parameters' })
+  fireEvent.change(
+    within(panel).getByRole('spinbutton', {
+      name: 'Maximum hard failure cooldown (seconds)',
+    }),
+    { target: { value: '60' } }
+  )
+  await userEvent.click(within(panel).getByRole('button', { name: 'Save' }))
+  expect(
+    await within(panel).findByText(
+      'Maximum hard failure cooldown cannot be below the base cooldown'
+    )
+  ).toBeVisible()
+  expect(put).not.toHaveBeenCalled()
+  await userEvent.click(
+    within(panel).getByRole('button', { name: 'Use global defaults' })
+  )
+  await userEvent.click(within(panel).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        tuning: { chat_prefix_enabled: false },
+        channels: pool.channels,
+      })
+    )
+  )
+})
+
+test('saving with an invalid parameter in a closed panel reopens the parameter editor', async () => {
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
+  const pool = fixture()
+  pool.mode = 'smart'
+  mockMonitorReads(pool)
+  const put = vi.spyOn(api, 'put')
+  mountCard(pool)
+  await userEvent.click(screen.getByRole('button', { name: 'Monitoring view' }))
+  const monitor = screen.getByRole('dialog', {
+    name: 'kimi-k3 · standard · Default configuration',
+  })
+  await userEvent.click(
+    within(monitor).getByRole('button', { name: 'Scheduling parameters' })
+  )
+  const panel = screen.getByRole('dialog', { name: 'Scheduling parameters' })
+  fireEvent.change(
+    within(panel).getByRole('spinbutton', {
+      name: 'Hard failure cooldown (seconds)',
+    }),
+    { target: { value: '0' } }
+  )
+  await userEvent.keyboard('{Escape}')
+  await userEvent.click(within(monitor).getByRole('button', { name: 'Save' }))
+  const reopened = await screen.findByRole('dialog', {
+    name: 'Scheduling parameters',
+  })
+  expect(
+    within(reopened).getByRole('spinbutton', {
+      name: 'Hard failure cooldown (seconds)',
+    })
+  ).toHaveAttribute('aria-invalid', 'true')
+  expect(put).not.toHaveBeenCalled()
+})
+
+test('inherited probe precision survives interface language changes and invalid locale fallback', async () => {
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
+  const pool = fixture()
+  pool.mode = 'smart'
+  mockMonitorReads(pool)
+  const instance = createInstance()
+  await instance.use(initReactI18next).init({
+    lng: 'en',
+    fallbackLng: 'en',
+    resources: { en: { translation: {} } },
+  })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  clients.push(client)
+  render(
+    <I18nextProvider i18n={instance}>
+      <QueryClientProvider client={client}>
+        <PoolCard pool={pool} canWrite onDirtyChange={() => {}} />
+      </QueryClientProvider>
+    </I18nextProvider>
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Monitoring view' }))
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Scheduling parameters' })
+  )
+  const panel = screen.getByRole('dialog', { name: 'Scheduling parameters' })
+  for (const [language, value] of [
+    ['zhCN', '0.015'],
+    ['zhTW', '0.015'],
+    ['en', '0.015'],
+    ['fr', '0,015'],
+    ['ru', '0,015'],
+    ['ja', '0.015'],
+    ['vi', '0,015'],
+    [
+      'invalid_locale!',
+      new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(
+        0.015
+      ),
+    ],
+  ]) {
+    await act(() => instance.changeLanguage(language))
+    expect(within(panel).getByText(`Global default: ${value}`)).toBeVisible()
+  }
+})
 
 function mountCard(pool = fixture(), canWrite = true) {
   const client = new QueryClient({

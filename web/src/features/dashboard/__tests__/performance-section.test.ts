@@ -43,4 +43,20 @@ describe('dashboard performance analytics navigation', () => {
     assert.ok(items.some((item) => item.title === 'Performance Analytics'))
     assert.ok(items.some((item) => item.title === 'User Analytics'))
   })
+
+  test('shows gross profit only to super administrators', () => {
+    for (const options of [{ isAdmin: false }, { isAdmin: true }]) {
+      assert.ok(
+        !getDashboardSectionNavItems(translate, options).some(
+          (item) => item.title === 'Gross Profit Analysis'
+        )
+      )
+    }
+    assert.ok(
+      getDashboardSectionNavItems(translate, {
+        isAdmin: true,
+        isRoot: true,
+      }).some((item) => item.title === 'Gross Profit Analysis')
+    )
+  })
 })

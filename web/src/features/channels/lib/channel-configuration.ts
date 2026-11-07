@@ -54,6 +54,7 @@ const CONFIGURATION_BLOCKS = {
       'rpm',
       'tpm',
       'cost_discount',
+      'invoice_vat_rate',
       'test_model',
       'auto_ban',
       'monitor_config',
@@ -77,6 +78,10 @@ const CONFIGURATION_BLOCKS = {
       'thinking_to_content',
       'pass_through_body_enabled',
       'responses_websocket_enabled',
+      'cache_write_simulation_enabled',
+      'cache_write_simulation_threshold',
+      'cache_write_simulation_percentage',
+      'cache_write_simulation_ttl',
       'ollama_openai_chat',
       'system_prompt',
       'system_prompt_override',
@@ -163,6 +168,7 @@ export function getChannelConfigurationState(
       values.rpm ||
       values.tpm ||
       values.cost_discount != null ||
+      values.invoice_vat_rate != null ||
       values.test_model?.trim() ||
       (values.auto_ban ?? 1) !== 1
     ),
@@ -173,6 +179,7 @@ export function getChannelConfigurationState(
       hasConfiguredJson(values.header_override) ||
       Boolean(values.stream_response_headers?.trim()),
     requestProcessing: Boolean(
+      values.cache_write_simulation_enabled ||
       (values.type === 1 && values.force_format) ||
       (values.type === 4 && values.ollama_native_claude) ||
       values.thinking_to_content ||

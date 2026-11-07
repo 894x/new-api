@@ -20,7 +20,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func setupChannelSelectAutoGroupsTest(t *testing.T) *gorm.DB {
+func setupChannelSelectAutoGroupsTest(t testing.TB) *gorm.DB {
 	t.Helper()
 
 	originalDB := model.DB
@@ -79,7 +79,7 @@ func setChannelSelectResolutionParameters(t *testing.T, db *gorm.DB, channelID i
 	require.NoError(t, db.Model(&channel).Update("settings", channel.OtherSettings).Error)
 }
 
-func createChannelSelectAutoGroupsChannel(t *testing.T, db *gorm.DB, id int, group, modelName string) {
+func createChannelSelectAutoGroupsChannel(t testing.TB, db *gorm.DB, id int, group, modelName string) {
 	t.Helper()
 	priority := int64(0)
 	weight := uint(100)
