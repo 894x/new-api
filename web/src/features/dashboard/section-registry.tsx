@@ -50,6 +50,11 @@ const DASHBOARD_SECTIONS = [
     adminOnly: true,
     build: () => null,
   },
+  {
+    id: 'gross-profit',
+    titleKey: 'Gross Profit Analysis',
+    build: () => null,
+  },
 ] as const
 
 export type DashboardSectionId = (typeof DASHBOARD_SECTIONS)[number]['id']
@@ -72,11 +77,12 @@ export const DASHBOARD_DEFAULT_SECTION = dashboardRegistry.defaultSection
 
 export function getDashboardSectionNavItems(
   t: TFunction,
-  options?: { isAdmin?: boolean }
+  options?: { isAdmin?: boolean; isRoot?: boolean }
 ) {
   const all = dashboardRegistry.getSectionNavItems(t)
-  if (options?.isAdmin) return all
-  return all.filter(
-    (_, idx) => !ADMIN_ONLY_SECTIONS.has(DASHBOARD_SECTIONS[idx].id)
-  )
+  return all.filter((_, idx) => {
+    const id = DASHBOARD_SECTIONS[idx].id
+    if (id === 'gross-profit') return options?.isRoot === true
+    return options?.isAdmin || !ADMIN_ONLY_SECTIONS.has(id)
+  })
 }

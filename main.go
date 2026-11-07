@@ -131,6 +131,7 @@ func main() {
 	// Recover stale, durably staged billing refunds and admission top-ups. Only
 	// the master scans; per-operation CAS claims keep multi-instance actions safe.
 	service.StartBillingReconciliationWorker()
+	service.StartGrossProfitRollupWorker()
 	service.StartAssetStorageMaintenance()
 
 	// Report this process as a system instance so the System Info page can show

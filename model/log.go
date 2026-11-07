@@ -376,6 +376,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if _, exists := params.Other.public["quota_per_unit"]; !exists {
 		params.Other.SetPublic("quota_per_unit", common.QuotaPerUnit)
 	}
+	recordConsumeGrossProfit(params)
 	otherStr := params.Other.JSONString()
 	// 判断是否需要记录 IP
 	needRecordIp := false
@@ -410,9 +411,25 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
+	// The outbox is persisted before the separate log write. A crash or failed
+	// daily update leaves a durable pending event for the recovery worker.
+	ensureLogRequestId(log)
+	profitCtx, profitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	profitKeys, profitErr := QueueGrossProfitLogs(profitCtx, []Log{*log})
+	profitCancel()
+	if profitErr != nil {
+		logger.LogError(c, "failed to queue gross profit; background log repair will retry: "+profitErr.Error())
+	}
 	err := createLog(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
+	}
+	for _, key := range profitKeys {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := ApplyGrossProfitEvent(ctx, key); err != nil {
+			logger.LogError(c, "gross profit update pending retry: "+err.Error())
+		}
+		cancel()
 	}
 	if common.DataExportEnabled {
 		LogQuotaData(QuotaDataLogParams{
