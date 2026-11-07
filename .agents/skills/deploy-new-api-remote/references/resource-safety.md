@@ -55,6 +55,35 @@ reduce job concurrency, or wait. Do not stop healthy applications, database,
 Redis, proxy, workers, or scheduler to make room. Do not start a temporary clone
 unless its overlap fits the budget without forcing existing requests to end.
 
+## Calibrate I/O warnings and stop conditions
+
+PSI `io full avg10` measures the percentage of time all non-idle tasks were
+simultaneously stalled on I/O over a recent ten-second window. It is not disk
+bandwidth utilization. Interpret it with the host's baseline, disk latency and
+queue depth when available, request latency/errors, and the current phase. See
+the [Linux PSI reference](https://docs.kernel.org/accounting/psi.html).
+
+Do not turn a single `full avg10 > 5%` sample into an automatic job cancellation.
+Separate a warning, which records and observes a short spike, from a sustained
+stop condition. For a host with a low baseline, an initial example is a warning
+above 10% for 30 seconds; a stop above 25% for 60 seconds, or above 10% for 30
+seconds together with a meaningful request-latency or error regression. Treat
+severe sustained pressure, for example above 50% for 30 seconds, as a stop even
+if the lightweight health endpoint stays fast. These are starting examples,
+not universal thresholds; record host-specific choices before starting work.
+
+During warnings, observe the trend and reduce concurrency or throughput when
+needed without restarting completed work or blocking unrelated cheap checks.
+Cancel the responsible auxiliary producer at a stop condition. New OOMs,
+exhausted disk/memory reserves, unexpected service restarts, and actual
+availability failures retain their immediate stop/recovery handling.
+
+Choose backup/transfer throughput from measured headroom. Do not default every
+job to 4 MiB/s, or infer that this rate is unsafe from an earlier unlimited job's
+PSI alert. Start with a reasonable bounded rate, observe both data and output
+hosts, and adjust it to the measured effect. Client-side backpressure limits
+streaming output, but does not replace database-side memory/query limits.
+
 ## Supervise the entire operation
 
 Start a low-overhead monitor before auxiliary work and verify its first sample.
@@ -70,6 +99,12 @@ asset checks, every temporary slot, route/role changes, draining, retirement,
 startup/shutdown log reads, and the final audit. Route acceptance is not the end
 of monitoring.
 
+Follow the accepted serving route with availability probes before retiring an
+old slot. Keep version-specific probes separate: an intentionally retired slot
+must not create a false outage alert while the serving route is healthy. Verify
+the replacement collector's first sample before stopping an old collector, and
+preserve cumulative metrics, alerts, and any overlap or gap in the receipt.
+
 If monitoring exits, stalls, or SSH disconnects, stop advancing the rollout.
 Keep independent remote supervision active when possible. Rediscover jobs,
 routes, slots, and resource state through a fresh connection or authorized peer
@@ -77,10 +112,10 @@ before retrying. Do not launch a duplicate dump/build after losing its SSH clien
 
 Treat new OOM events, unexpected protected-service restarts, exhausted reserves,
 sustained pressure or rapid memory decline, disk exhaustion, and health/latency
-failures as stop conditions under the recorded policy. A warning should trigger
-early reduction or cancellation before the emergency threshold is reached.
+failures as stop conditions under the recorded policy. Use the warning/stop
+distinction above; do not promote every warning to a rollout failure.
 
-On an alert:
+On a stop-level alert:
 
 1. Block new phases and cancel the responsible owned auxiliary work. A marker
    file or monitor exit alone is insufficient. Record exact job/process-group
@@ -98,7 +133,11 @@ On an alert:
 4. Preserve the alert and readings. Inspect service health, roles, OOM/restart
    deltas, and all affected hosts. Require a stable observation interval and a
    revised capacity budget before explicitly resuming; never erase a failure
-   marker or overwrite the baseline to turn the run into a pass.
+   marker or overwrite the baseline to turn the run into a pass. A successful
+   gate must actually precede dependent mutations; a failed check cannot fall
+   through to starting the next job. Resume within the existing authorization
+   when the cause is understood and the revised method is healthy; routine
+   retries do not require a new user approval.
 
 ## Bound every auxiliary producer and reader
 
