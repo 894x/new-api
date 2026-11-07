@@ -410,9 +410,8 @@ test('updates upstream body statistics and curves when the channel or time range
   await waitFor(() => {
     const option = chartSetOption.mock.calls
       .map(([value]) => value)
-      .findLast(
-        (value) => value.aria?.description === 'Upstream request body size'
-      )
+      .reverse()
+      .find((value) => value.aria?.description === 'Upstream request body size')
     expect(option?.series[0].data).toEqual([[100_000, 4096]])
   })
 })
