@@ -16,12 +16,13 @@ import (
 // UserChannelRoutingOverride stores one member of a user's routing pool.
 // Disabled retains the priority so re-enabling restores the user's ordering.
 type UserChannelRoutingOverride struct {
-	UserId    int    `json:"-" gorm:"primaryKey;autoIncrement:false"`
-	Model     string `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
-	ChannelId int    `json:"channel_id" gorm:"primaryKey;autoIncrement:false"`
-	Priority  *int64 `json:"priority_override" gorm:"bigint"`
-	Weight    *uint  `json:"weight_override" gorm:"bigint"`
-	Disabled  bool   `json:"disabled"`
+	UserId     int    `json:"-" gorm:"primaryKey;autoIncrement:false"`
+	Model      string `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
+	ChannelId  int    `json:"channel_id" gorm:"primaryKey;autoIncrement:false"`
+	Priority   *int64 `json:"priority_override" gorm:"bigint"`
+	Weight     *uint  `json:"weight_override" gorm:"bigint"`
+	Disabled   bool   `json:"disabled"`
+	RetryTimes *int   `json:"retry_times_override,omitempty"`
 }
 
 // Each public group has an independent, complete user routing pool.
@@ -112,10 +113,11 @@ func ListUserGroupChannelRoutingOverrides(userID int, modelName string) ([]UserG
 }
 
 type UserChannelRoutingPatch struct {
-	ChannelId int    `json:"channel_id"`
-	Priority  *int64 `json:"priority_override"`
-	Weight    *uint  `json:"weight_override"`
-	Enabled   *bool  `json:"enabled"`
+	ChannelId  int    `json:"channel_id"`
+	Priority   *int64 `json:"priority_override"`
+	Weight     *uint  `json:"weight_override"`
+	Enabled    *bool  `json:"enabled"`
+	RetryTimes *int   `json:"retry_times_override"`
 }
 
 var ErrUserChannelRoutingConflict = errors.New("user channel routing changed; reload the configuration")
@@ -159,7 +161,7 @@ func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revisi
 	seen := make(map[int]struct{}, len(patches))
 	for _, patch := range patches {
 		_, duplicate := seen[patch.ChannelId]
-		if patch.ChannelId <= 0 || duplicate || patch.Enabled == nil || (patch.Priority != nil && (*patch.Priority < 0 || *patch.Priority > 2147483647)) || (patch.Weight != nil && *patch.Weight > MaxChannelWeight) {
+		if patch.ChannelId <= 0 || duplicate || patch.Enabled == nil || (patch.Priority != nil && (*patch.Priority < 0 || *patch.Priority > 2147483647)) || (patch.Weight != nil && *patch.Weight > MaxChannelWeight) || (patch.RetryTimes != nil && (*patch.RetryTimes < 0 || *patch.RetryTimes > 99)) {
 			return ErrInvalidUserChannelRouting
 		}
 		seen[patch.ChannelId] = struct{}{}
@@ -200,7 +202,7 @@ func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revisi
 			if routingGroup != "" && !slices.Contains(channel.GetGroups(), routingGroup) {
 				return fmt.Errorf("%w: channel %d does not belong to group %s", ErrInvalidUserChannelRouting, patch.ChannelId, routingGroup)
 			}
-			row := UserChannelRoutingOverride{UserId: userID, Model: modelName, ChannelId: patch.ChannelId, Priority: patch.Priority, Weight: patch.Weight, Disabled: !*patch.Enabled}
+			row := UserChannelRoutingOverride{UserId: userID, Model: modelName, ChannelId: patch.ChannelId, Priority: patch.Priority, Weight: patch.Weight, Disabled: !*patch.Enabled, RetryTimes: patch.RetryTimes}
 			columns := []clause.Column{{Name: "user_id"}, {Name: "model"}, {Name: "channel_id"}}
 			var record any = &row
 			if routingGroup != "" {
@@ -209,7 +211,7 @@ func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revisi
 			}
 			if err := tx.Clauses(clause.OnConflict{
 				Columns:   columns,
-				DoUpdates: clause.AssignmentColumns([]string{"priority", "weight", "disabled"}),
+				DoUpdates: clause.AssignmentColumns([]string{"priority", "weight", "disabled", "retry_times"}),
 			}).Create(record).Error; err != nil {
 				return err
 			}

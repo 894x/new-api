@@ -96,6 +96,36 @@ describe('user channel routing', () => {
     vi.mocked(api.patch).mockResolvedValue({ data: { success: true } })
   })
 
+  it('preserves disabled and custom retry limits when editing channel priority in the existing editor', async () => {
+    renderEditor({
+      ...config,
+      channels: config.channels.map((row, index) => ({
+        ...row,
+        retry_times_override: index === 0 ? 0 : 3,
+      })),
+    })
+    fireEvent.change(
+      screen.getByRole('spinbutton', { name: 'Priority for Alpha #1' }),
+      { target: { value: '7' } }
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith(
+        '/api/user/42/channel-routing-overrides',
+        expect.objectContaining({
+          overrides: [
+            expect.objectContaining({
+              channel_id: 1,
+              priority_override: 7,
+              retry_times_override: 0,
+            }),
+            expect.objectContaining({ channel_id: 2, retry_times_override: 3 }),
+          ],
+        })
+      )
+    )
+  })
+
   it('disables a dirty routing draft and rejects reordering after write permission is revoked', () => {
     const actor = {
       id: 1,

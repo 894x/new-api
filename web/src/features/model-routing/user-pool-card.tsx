@@ -66,6 +66,13 @@ const schema = z.object({
         priority: z.number().int().min(0).max(2147483647).nullable(),
         weight: z.number().int().min(0).max(2147483637).nullable(),
         enabled: z.boolean(),
+        retry_times_override: z
+          .number()
+          .int()
+          .min(0)
+          .max(99)
+          .nullable()
+          .optional(),
       })
     )
     .max(1000),
@@ -180,23 +187,25 @@ function UserPoolEditor(props: {
   const canWrite = canAccessUserGroupConfig(actor, config.user_role, 'write')
   const [restoreRevision, setRestoreRevision] = useState<string | null>(null)
   const [channelToAdd, setChannelToAdd] = useState<string | null>(null)
+  const configuredChannels = new Map(
+    config.channels.map((row) => [row.channel_id, row])
+  )
   const initial: Values = {
     channels: (config.pool_channels ?? []).map((entry) => {
-      const row = config.channels.find(
-        (candidate) => candidate.channel_id === entry.channel_id
-      )
+      const row = configuredChannels.get(entry.channel_id)
       if (
         !config.configured ||
         config.source === 'default_pool' ||
         config.source === 'channel_defaults'
       ) {
-        return entry
+        return { ...entry, retry_times_override: row?.retry_times_override }
       }
       return {
         ...entry,
         priority: row?.priority_override ?? null,
         weight: row?.weight_override ?? null,
         enabled: entry.enabled,
+        retry_times_override: row?.retry_times_override,
       }
     }),
   }
@@ -206,6 +215,9 @@ function UserPoolEditor(props: {
   })
   const values = form.watch()
   const dirty = editing && (form.formState.isDirty || !config.configured)
+  const hasRetryError = form.formState.errors.channels?.some?.(
+    (row) => row?.retry_times_override
+  )
   const notifyDirty = useEffectEvent(props.onDirtyChange)
   useEffect(() => {
     notifyDirty(dirty)
@@ -236,6 +248,9 @@ function UserPoolEditor(props: {
             priority_override: row.priority,
             weight_override: row.weight,
             enabled: row.enabled,
+            ...(row.retry_times_override !== undefined
+              ? { retry_times_override: row.retry_times_override }
+              : {}),
           })) ?? [],
       })
     },
@@ -274,7 +289,13 @@ function UserPoolEditor(props: {
     weight: row.inherited_weight ?? 0,
     available: row.available,
   }))
-  const displayed = editing ? values.channels : (config.pool_channels ?? [])
+  const displayed = editing
+    ? values.channels
+    : (config.pool_channels ?? []).map((entry) => ({
+        ...entry,
+        retry_times_override: configuredChannels.get(entry.channel_id)
+          ?.retry_times_override,
+      }))
   const unused = candidates.filter(
     (candidate) =>
       candidate.available &&
@@ -301,6 +322,13 @@ function UserPoolEditor(props: {
           <p className='text-muted-foreground text-xs'>
             {t(
               'Only channels in this user pool can be selected. Empty priority or weight inherits the channel value. Clearing the pool restores the default routing pool.'
+            )}
+          </p>
+        )}
+        {editing && (
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'Leave retries empty to inherit the global limit; 0 disables retries. Failed requests switch channels as usual.'
             )}
           </p>
         )}
@@ -390,11 +418,16 @@ function UserPoolEditor(props: {
             </Button>
           </div>
         )}
-        {form.formState.errors.channels && (
+        {form.formState.errors.channels && !hasRetryError && (
           <p role='alert' className='text-destructive text-sm'>
             {t(
               'Priority and weight must be whole numbers within the allowed range.'
             )}
+          </p>
+        )}
+        {hasRetryError && (
+          <p role='alert' className='text-destructive text-sm'>
+            {t('Retry count must be an integer from 0 to 99.')}
           </p>
         )}
         {save.isError && (

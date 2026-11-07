@@ -274,7 +274,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+	for ; retryParam.GetRetry() <= retryParam.MaxRetries(); retryParam.IncreaseRetry() {
 		relayInfo.OriginModelName = retryParam.ModelName
 		relayInfo.StreamStatus = nil
 		relayInfo.PerformanceBusinessRejection = false
@@ -381,7 +381,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 
-		decision := service.DecideRelayRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry())
+		decision := service.DecideRelayRetry(c, newAPIError, retryParam.MaxRetries()-retryParam.GetRetry())
 		service.RecordPolicyFailure(c, channel.Id, newAPIError, decision)
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
 
@@ -486,6 +486,7 @@ var upgrader = websocket.Upgrader{
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
+	retryParam.Ctx = c
 	// Provider-specific billing aliases may mutate OriginModelName during an
 	// attempt. Every retry must start from the immutable client-facing model so
 	// channel setup and the next adaptor do not inherit the previous attempt's
@@ -518,6 +519,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			AutoBan:       &autoBanInt,
 			MonitorConfig: c.GetString("channel_monitor_config"),
 			Models:        c.GetString("channel_monitor_models"),
+		}
+		if err := retryParam.ApplyChannelRetryPolicy(group, channelId); err != nil {
+			return nil, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 		}
 		service.RequestPolicy(c).BeginAttempt(channel, info.UsingGroup)
 		return channel, nil
@@ -783,7 +787,7 @@ func executeTaskSubmissionWith(
 		Retry:             common.GetPointer(0),
 	}
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+	for ; retryParam.GetRetry() <= retryParam.MaxRetries(); retryParam.IncreaseRetry() {
 		service.ResetUpstreamResponseMetadata(c)
 		stage = "select_channel"
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
@@ -805,6 +809,10 @@ func executeTaskSubmissionWith(
 				}
 			}
 			channel = lockedCh
+			if err := retryParam.ApplyChannelRetryPolicy(relayInfo.UsingGroup, channel.Id); err != nil {
+				taskErr = service.TaskErrorWrapperLocal(err, "user_channel_routing_unavailable", http.StatusServiceUnavailable)
+				break
+			}
 			policy.BeginAttempt(channel, relayInfo.UsingGroup)
 			if retryParam.GetRetry() > 0 {
 				if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
@@ -851,7 +859,7 @@ func executeTaskSubmissionWith(
 
 		taskAPIError := taskSubmissionAPIError(taskErr)
 		relayInfo.LastError = taskAPIError
-		decision := decideTaskRetry(c, taskErr, common.RetryTimes-retryParam.GetRetry())
+		decision := decideTaskRetry(c, taskErr, retryParam.MaxRetries()-retryParam.GetRetry())
 		service.RecordPolicyFailure(c, channel.Id, taskAPIError, decision)
 		if !taskErr.LocalError {
 			processChannelError(c,
@@ -1284,6 +1292,11 @@ func taskSubmissionAPIError(taskErr *taskdto.TaskError) *types.NewAPIError {
 func decideTaskRetry(c *gin.Context, taskErr *taskdto.TaskError, retryTimes int) service.PolicyDecision {
 	stop := service.PolicyDecision{Action: "stop", Source: "system"}
 	retry := service.PolicyDecision{Action: "retry", Reason: "retry_status_matched", Source: "system"}
+	limit, overridden := service.ChannelRetryOverride(c)
+	budgetSource := "global"
+	if overridden {
+		budgetSource, retry.Source = "user_channel", "user_channel"
+	}
 	switch {
 	case taskErr == nil:
 		stop.Reason = "request_completed"
@@ -1294,8 +1307,10 @@ func decideTaskRetry(c *gin.Context, taskErr *taskdto.TaskError, retryTimes int)
 		if source := service.RequestPolicy(c).SessionModeSource; source != "" {
 			stop.Source = source
 		}
+	case overridden && limit == 0:
+		stop.Reason, stop.Source = "retry_disabled", budgetSource
 	case retryTimes <= 0:
-		stop.Reason, stop.Source = "attempt_budget_exhausted", "global"
+		stop.Reason, stop.Source = "attempt_budget_exhausted", budgetSource
 	case service.GetChannelConstraints(c).SuppressesRetry():
 		stop.Reason, stop.Source = "pinned_channel", "channel_constraint"
 	case taskErr.StatusCode == http.StatusTooManyRequests, taskErr.StatusCode == 307:

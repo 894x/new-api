@@ -46,6 +46,7 @@ type RetryParam struct {
 	userGroupRouting       []model.UserGroupChannelRoutingOverride
 	routingPools           map[string]*model.ModelRoutingPool
 	routingStrategies      map[string]*model.UserRoutingStrategy
+	retryTimesOverride     *int
 	Ctx                    *gin.Context
 	TokenGroup             string
 	ModelName              string
@@ -200,15 +201,18 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			logger.LogDebug(param.Ctx, "Auto selected group: %s", autoGroup)
 
 			param.RecordCapacitySelection(autoGroup, priorityRetry)
+			if err := param.ApplyChannelRetryPolicy(autoGroup, channel.Id); err != nil {
+				return nil, autoGroup, err
+			}
 
 			// Prepare state for next retry
 			// 为下一次重试准备状态
-			if crossGroupRetry && priorityRetry >= common.RetryTimes {
+			if crossGroupRetry && priorityRetry >= param.MaxRetries() {
 				// Current group has exhausted all retries, prepare to switch to next group
 				// This request still uses current group, but next retry will use next group
 				// 当前分组已用完所有重试次数，准备切换到下一个分组
 				// 本次请求仍使用当前分组，但下次重试将使用下一个分组
-				logger.LogDebug(param.Ctx, "Current group %s retries exhausted (priorityRetry=%d >= RetryTimes=%d), preparing switch to next group for next retry", autoGroup, priorityRetry, common.RetryTimes)
+				logger.LogDebug(param.Ctx, "Current group %s retries exhausted (priorityRetry=%d >= RetryTimes=%d), preparing switch to next group for next retry", autoGroup, priorityRetry, param.MaxRetries())
 				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i+1)
 				// Reset retry counter so outer loop can continue for next group
 				// 重置重试计数器，以便外层循环可以为下一个分组继续
@@ -242,6 +246,11 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	}
 	if param.TokenGroup != "auto" {
 		param.RecordCapacitySelection(param.TokenGroup, param.GetRetry())
+		if channel != nil {
+			if err := param.ApplyChannelRetryPolicy(param.TokenGroup, channel.Id); err != nil {
+				return nil, selectGroup, err
+			}
+		}
 	}
 	return channel, selectGroup, nil
 }
@@ -369,6 +378,9 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 		if err := ValidateSelectedChannelGroupPolicy(c, channel.Id, modelName); err != nil {
 			return nil, "", &ChannelSelectError{StatusCode: http.StatusForbidden, Message: "channel_excluded_by_routing_policy"}
 		}
+		if err := retry.ApplyChannelRetryPolicy(common.GetContextKeyString(c, constant.ContextKeyUsingGroup), channel.Id); err != nil {
+			return nil, "", &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: "user_channel_routing_unavailable"}
+		}
 		return channel, "", nil
 	}
 
@@ -480,6 +492,9 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			Params:     map[string]any{"Group": common.GetContextKeyString(c, constant.ContextKeyUsingGroup), "Model": modelName},
 			FilterKind: kind, Channel: channel, NoAvailableChannel: true,
 		}
+	}
+	if err := retry.ApplyChannelRetryPolicy(selectGroup, channel.Id); err != nil {
+		return nil, selectGroup, &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: "user_channel_routing_unavailable"}
 	}
 	return channel, selectGroup, nil
 }

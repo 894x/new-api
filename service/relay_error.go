@@ -42,6 +42,16 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 	if GetChannelConstraints(c).SuppressesRetry() {
 		return PolicyDecision{Action: "stop", Reason: "pinned_channel", Source: "channel_constraint"}
 	}
+	budgetSource := "global"
+	if limit, overridden := ChannelRetryOverride(c); overridden {
+		budgetSource = "user_channel"
+		if limit == 0 {
+			return PolicyDecision{Action: "stop", Reason: "retry_disabled", Source: budgetSource}
+		}
+		if retryTimes <= 0 {
+			return PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: budgetSource}
+		}
+	}
 	if types.IsChannelError(err) {
 		return PolicyDecision{Action: "retry", Reason: "channel_error", Source: "system"}
 	}
@@ -49,7 +59,7 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 		return PolicyDecision{Action: "stop", Reason: "non_retryable_error", Source: "system"}
 	}
 	if retryTimes <= 0 {
-		return PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: "global"}
+		return PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: budgetSource}
 	}
 	code := err.StatusCode
 	if code >= 200 && code < 300 {
@@ -62,7 +72,7 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 		return PolicyDecision{Action: "stop", Reason: "system_retry_exclusion", Source: "system"}
 	}
 	if operation_setting.ShouldRetryByStatusCode(code) {
-		return PolicyDecision{Action: "retry", Reason: "retry_status_matched", Source: "global"}
+		return PolicyDecision{Action: "retry", Reason: "retry_status_matched", Source: budgetSource}
 	}
 	return PolicyDecision{Action: "stop", Reason: "status_not_retryable", Source: "global"}
 }

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,11 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -571,6 +576,7 @@ func TestUserRoutingPoolEditorDatabaseMatrix(t *testing.T) {
 						Model     string `gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
 						ChannelId int    `gorm:"primaryKey;autoIncrement:false"`
 						Priority  *int64 `gorm:"bigint"`
+						Weight    *uint  `gorm:"bigint"`
 						Disabled  bool
 					}
 					type previousScopedOverride struct {
@@ -590,11 +596,13 @@ func TestUserRoutingPoolEditorDatabaseMatrix(t *testing.T) {
 					require.NoError(t, err)
 					require.Len(t, rows, 1)
 					assert.Nil(t, rows[0].Weight)
+					assert.Nil(t, rows[0].RetryTimes)
 					assert.EqualValues(t, 25, *rows[0].Priority)
 					scoped, err := model.ListUserGroupChannelRoutingOverrides(user.Id, "gpt-5")
 					require.NoError(t, err)
 					require.Len(t, scoped, 1)
 					assert.Nil(t, scoped[0].Weight)
+					assert.Nil(t, scoped[0].RetryTimes)
 					assert.EqualValues(t, 30, *scoped[0].Priority)
 					revision, err := model.UserChannelRoutingRevision(rows)
 					require.NoError(t, err)
@@ -619,13 +627,15 @@ func TestUserRoutingPoolEditorDatabaseMatrix(t *testing.T) {
 				require.Len(t, inherited.PoolChannels, 1)
 				assert.EqualValues(t, 100, inherited.PoolChannels[0].Priority)
 				assert.EqualValues(t, 7, inherited.PoolChannels[0].Weight)
-				payload := fmt.Sprintf(`{"model":"gpt-5","routing_group":"default","revision":%q,"overrides":[{"channel_id":9801,"priority_override":0,"weight_override":0,"enabled":true}]}`, inherited.Revision)
+				payload := fmt.Sprintf(`{"model":"gpt-5","routing_group":"default","revision":%q,"overrides":[{"channel_id":9801,"priority_override":0,"weight_override":0,"retry_times_override":3,"enabled":true}]}`, inherited.Revision)
 				require.Equal(t, http.StatusOK, userRoutingRequest(t, user.Id, http.MethodPatch, payload, PatchUserChannelRouting).Code)
 				configured := read("default")
 				assert.Equal(t, "user", configured.Source)
 				require.Len(t, configured.Channels, 1)
 				require.NotNil(t, configured.Channels[0].WeightOverride)
 				assert.Zero(t, *configured.Channels[0].WeightOverride)
+				require.NotNil(t, configured.Channels[0].RetryTimesOverride)
+				assert.Equal(t, 3, *configured.Channels[0].RetryTimesOverride)
 				for _, cached := range []bool{false, true} {
 					common.MemoryCacheEnabled = cached
 					if cached {
@@ -652,6 +662,7 @@ func TestUserRoutingPoolEditorDatabaseMatrix(t *testing.T) {
 				require.Equal(t, http.StatusOK, userRoutingRequest(t, user.Id, http.MethodPatch, body, PatchUserChannelRouting).Code)
 				current := read("default")
 				assert.Nil(t, current.Channels[0].WeightOverride)
+				assert.Nil(t, current.Channels[0].RetryTimesOverride)
 				assert.EqualValues(t, 20, current.Channels[0].EffectiveWeight)
 				assert.ErrorIs(t, model.ResetUserChannelRoutingForGroup(user.Id, "gpt-5", "default", configured.Revision), model.ErrUserChannelRoutingConflict)
 				body = fmt.Sprintf(`{"model":"gpt-5","routing_group":"default","revision":%q,"overrides":[{"channel_id":9801,"priority_override":null,"weight_override":null,"inherit_weight":true,"enabled":true}]}`, current.Revision)
@@ -667,6 +678,24 @@ func TestUserRoutingPoolEditorDatabaseMatrix(t *testing.T) {
 					body = fmt.Sprintf(`{"model":"gpt-5","routing_group":"default","revision":%q,"overrides":[{"channel_id":9801,"weight_override":%s,"enabled":true}]}`, inherited.Revision, weight)
 					assert.Equal(t, http.StatusBadRequest, userRoutingRequest(t, user.Id, http.MethodPatch, body, PatchUserChannelRouting).Code)
 				}
+				for _, retries := range []string{"0", "99", "null"} {
+					current := read("default")
+					body = fmt.Sprintf(`{"model":"gpt-5","routing_group":"default","revision":%q,"overrides":[{"channel_id":9801,"retry_times_override":%s,"enabled":true}]}`, current.Revision, retries)
+					require.Equal(t, http.StatusOK, userRoutingRequest(t, user.Id, http.MethodPatch, body, PatchUserChannelRouting).Code)
+					persisted := read("default").Channels[0].RetryTimesOverride
+					if retries == "null" {
+						assert.Nil(t, persisted)
+					} else {
+						require.NotNil(t, persisted)
+						assert.Equal(t, retries, strconv.Itoa(*persisted))
+					}
+				}
+				for _, retries := range []string{"-1", "1.5", "100", "2147483648"} {
+					current := read("default")
+					body = fmt.Sprintf(`{"model":"gpt-5","routing_group":"default","revision":%q,"overrides":[{"channel_id":9801,"retry_times_override":%s,"enabled":true}]}`, current.Revision, retries)
+					assert.Equal(t, http.StatusBadRequest, userRoutingRequest(t, user.Id, http.MethodPatch, body, PatchUserChannelRouting).Code)
+					assert.Equal(t, current.Revision, read("default").Revision)
+				}
 				for range 2 {
 					require.NoError(t, db.AutoMigrate(&model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
 				}
@@ -674,6 +703,103 @@ func TestUserRoutingPoolEditorDatabaseMatrix(t *testing.T) {
 				assert.Contains(t, catalog.Body.String(), `"model_groups":{"gpt-5":["default","vip"]}`)
 			})
 		}
+	}
+}
+
+func TestUserChannelRetryOverridesSwitchChannelsDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+				t.Skip("isolated database DSN not configured")
+			}
+			t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+			db := setupManageUserTestDB(t)
+			previousCache, previousRetries, previousErrorLog := common.MemoryCacheEnabled, common.RetryTimes, constant.ErrorLogEnabled
+			previousGroups, previousRatios := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString()
+			t.Cleanup(func() {
+				common.MemoryCacheEnabled, common.RetryTimes, constant.ErrorLogEnabled = previousCache, previousRetries, previousErrorLog
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousGroups))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+			})
+			common.MemoryCacheEnabled, constant.ErrorLogEnabled = false, false
+			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP"}`))
+			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1}`))
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+			user := model.User{Username: "retry-overlay", Group: "default", AffCode: "retryoverlay"}
+			require.NoError(t, db.Create(&user).Error)
+			for i := range 4 {
+				channel := model.Channel{Id: 9901 + i, Name: fmt.Sprintf("Retry-%d", i), Type: 1, Key: "test-key", Models: "gpt-5,other-model", Group: "default,vip", Status: common.ChannelStatusEnabled, Priority: common.GetPointer(int64(4 - i))}
+				require.NoError(t, db.Create(&channel).Error)
+				require.NoError(t, channel.AddAbilities(nil))
+			}
+			for _, tc := range []struct {
+				name   string
+				global int
+				limits []*int
+				want   []int
+			}{
+				{name: "inherit", global: 1, limits: []*int{nil, nil, nil, nil}, want: []int{9901, 9902}},
+				{name: "disable", global: 3, limits: []*int{common.GetPointer(0), nil, nil, nil}, want: []int{9901}},
+				{name: "increase beyond global zero", global: 0, limits: []*int{common.GetPointer(3), common.GetPointer(3), common.GetPointer(3), common.GetPointer(3)}, want: []int{9901, 9902, 9903, 9904}},
+				{name: "reduce global budget", global: 3, limits: []*int{common.GetPointer(1), common.GetPointer(1), nil, nil}, want: []int{9901, 9902}},
+				{name: "next channel disables", global: 0, limits: []*int{common.GetPointer(3), common.GetPointer(0), nil, nil}, want: []int{9901, 9902}},
+				{name: "next channel inherits", global: 0, limits: []*int{common.GetPointer(3), nil, nil, nil}, want: []int{9901, 9902}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					common.RetryTimes = tc.global
+					rows, err := model.ListUserGroupChannelRoutingOverrides(user.Id, "gpt-5")
+					require.NoError(t, err)
+					plain := make([]model.UserChannelRoutingOverride, 0, len(rows))
+					for _, row := range rows {
+						plain = append(plain, row.UserChannelRoutingOverride)
+					}
+					revision, err := model.UserChannelRoutingRevision(plain)
+					require.NoError(t, err)
+					patches := make([]model.UserChannelRoutingPatch, 0, 4)
+					for i, limit := range tc.limits {
+						patches = append(patches, model.UserChannelRoutingPatch{ChannelId: 9901 + i, Enabled: common.GetPointer(true), RetryTimes: limit})
+					}
+					require.NoError(t, model.PatchUserChannelRoutingForGroup(user.Id, "gpt-5", "default", revision, patches))
+					c, _ := gin.CreateTestContext(httptest.NewRecorder())
+					c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5"}`))
+					common.SetContextKey(c, constant.ContextKeyUserId, user.Id)
+					common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+					common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+					param := &service.RetryParam{Ctx: c, ModelName: "gpt-5", TokenGroup: "default"}
+					channel, _, selectErr := service.SelectChannelForRequest(c, "gpt-5", param)
+					require.Nil(t, selectErr)
+					require.Nil(t, middleware.SetupContextForSelectedChannel(c, channel, "gpt-5"))
+					attempts := []int{}
+					info := &relaycommon.RelayInfo{OriginModelName: "gpt-5", TokenGroup: "default", UsingGroup: "default", TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+					_, taskErr := executeTaskSubmissionWith(c, info, func(c *gin.Context, info *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+						info.InitChannelMeta(c)
+						attempts = append(attempts, c.GetInt("channel_id"))
+						// HTTP and task decisions consume the same selected-channel override.
+						apiErr := types.NewOpenAIError(errors.New("upstream busy"), types.ErrorCodeBadResponseStatusCode, http.StatusServiceUnavailable)
+						remaining := tc.global - (len(attempts) - 1)
+						if limit, overridden := service.ChannelRetryOverride(c); overridden {
+							remaining = limit - (len(attempts) - 1)
+						}
+						assert.Equal(t, len(attempts) < len(tc.want), service.ShouldRetryRelayError(c, apiErr, remaining))
+						return nil, &dto.TaskError{StatusCode: http.StatusServiceUnavailable, LocalError: true}
+					})
+					require.NotNil(t, taskErr)
+					assert.Equal(t, tc.want, attempts)
+					assert.Equal(t, tc.global, common.RetryTimes)
+					// The overlay does not leak to another group, model or customer.
+					for _, scope := range []struct {
+						user         int
+						group, model string
+					}{{user.Id, "vip", "gpt-5"}, {user.Id, "default", "other-model"}, {user.Id + 1, "default", "gpt-5"}} {
+						other, _ := gin.CreateTestContext(httptest.NewRecorder())
+						common.SetContextKey(other, constant.ContextKeyUserId, scope.user)
+						otherParam := &service.RetryParam{Ctx: other, ModelName: scope.model}
+						require.NoError(t, otherParam.ApplyChannelRetryPolicy(scope.group, 9901))
+						assert.Equal(t, tc.global, otherParam.MaxRetries())
+					}
+				})
+			}
+		})
 	}
 }
 

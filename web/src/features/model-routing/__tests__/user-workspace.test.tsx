@@ -160,6 +160,87 @@ function mockPool(config = fixture()) {
   return state
 }
 
+test('channel retry overrides preserve zero, custom counts and explicit inheritance without changing global settings', async () => {
+  const config = fixture()
+  config.configured = true
+  config.source = 'user'
+  config.channels[0].retry_times_override = 3
+  mockPool(config)
+  const patch = vi
+    .spyOn(api, 'patch')
+    .mockResolvedValue({ data: { success: true } })
+  const { card } = await mountWorkspace()
+  const retries = await within(card).findByRole('spinbutton', {
+    name: 'Retries for Primary',
+  })
+  expect(retries).toHaveValue(3)
+  expect(retries).toBeDisabled()
+  fireEvent.click(
+    within(card).getByRole('button', { name: 'Edit user override' })
+  )
+  fireEvent.change(retries, { target: { value: '0' } })
+  fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      expect.objectContaining({
+        overrides: expect.arrayContaining([
+          expect.objectContaining({ channel_id: 1, retry_times_override: 0 }),
+        ]),
+      })
+    )
+  )
+  await waitFor(() =>
+    expect(
+      within(card).getByRole('button', { name: 'Edit user override' })
+    ).toBeEnabled()
+  )
+  fireEvent.click(
+    within(card).getByRole('button', { name: 'Edit user override' })
+  )
+  fireEvent.change(retries, { target: { value: '' } })
+  fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenLastCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      expect.objectContaining({
+        overrides: expect.arrayContaining([
+          expect.objectContaining({
+            channel_id: 1,
+            retry_times_override: null,
+          }),
+        ]),
+      })
+    )
+  )
+})
+
+test.each(['-1', '1.5', '100'])(
+  'rejects invalid channel retry count %s without saving',
+  async (value) => {
+    mockPool()
+    const patch = vi
+      .spyOn(api, 'patch')
+      .mockResolvedValue({ data: { success: true } })
+    const { card } = await mountWorkspace()
+    fireEvent.click(
+      await within(card).findByRole('button', { name: 'Create user override' })
+    )
+    const retries = within(card).getByRole('spinbutton', {
+      name: 'Retries for Primary',
+    })
+    fireEvent.change(retries, { target: { value } })
+    expect(retries).toHaveAttribute('aria-invalid', 'true')
+    fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+    expect(
+      await within(card).findByText(
+        'Retry count must be an integer from 0 to 99.'
+      )
+    ).toBeVisible()
+    expect(patch).not.toHaveBeenCalled()
+  }
+)
+
 test.each([
   ['priority', 'Priority routing'],
   ['smart', 'Smart routing'],
