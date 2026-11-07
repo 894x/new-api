@@ -72,7 +72,7 @@ it.each([200, 400])(
     const adapter: AxiosAdapter = async (config) => {
       if (
         config.method === 'get' &&
-        ['/api/status', '/api/pricing'].includes(config.url ?? '')
+        ['/api/status', '/api/user/self/pricing'].includes(config.url ?? '')
       ) {
         const data =
           config.url === '/api/status'

@@ -260,7 +260,7 @@ export const ModelPricingEditorPanel = forwardRef<
   const initialBillingExpr =
     editData?.billingExpr ||
     (initialPricingMode === 'tiered_expr' ? DEFAULT_TOKEN_BILLING_EXPR : '')
-  const { models: pricingModels } = usePricingData()
+  const { models: pricingModels } = usePricingData(true, 'account')
 
   const form = useForm<ModelPricingFormValues>({
     resolver: zodResolver(createModelPricingSchema(t)),
