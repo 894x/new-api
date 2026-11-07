@@ -119,11 +119,16 @@ export interface RoutingPool {
 }
 
 export interface RoutingPoolView extends RoutingPool {
+  user_id?: number
+  username?: string
   candidates: PoolCandidate[]
   tuning_defaults?: DynamicRoutingSettings
 }
 
 export interface PoolFilters {
+  scope?: 'all'
+  channel_id?: number
+  channel_role?: 'primary' | 'non_primary'
   model: string
   routing_group: string
   mode: RoutingMode | ''
@@ -156,7 +161,11 @@ export async function getRoutingCatalog(group = '') {
   const response = await api.get<{
     success: boolean
     message?: string
-    data: { groups: Record<string, string>; models: string[] }
+    data: {
+      groups: Record<string, string>
+      models: string[]
+      channels?: { id: number; name: string }[]
+    }
   }>('/api/channel/routing-pools/catalog', { params: { routing_group: group } })
   return requireServerSuccess(response.data).data
 }

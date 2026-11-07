@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -581,6 +582,171 @@ func TestModelRoutingPoolDatabaseMatrix(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, selected)
 			assert.Equal(t, 9701, selected.Id)
+		})
+	}
+}
+
+func TestRoutingPoolUserOverviewDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+				t.Skip("isolated database DSN not configured")
+			}
+			t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+			db := setupManageUserTestDB(t)
+			previousGroups, previousRatios := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString()
+			previousCache := common.MemoryCacheEnabled
+			t.Cleanup(func() {
+				common.MemoryCacheEnabled = previousCache
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousGroups))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+			})
+			common.MemoryCacheEnabled = false
+			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Standard","vip":"Fast"}`))
+			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1}`))
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserGroupChannelRoutingOverride{}))
+			for _, id := range []int{9801, 9802} {
+				priority := int64(100)
+				if id == 9801 {
+					priority = 200
+				}
+				channel := model.Channel{Id: id, Name: fmt.Sprint(id), Key: "secret-channel-key", Type: 1, Models: "overview-model,other-model", Group: "default,vip", Status: common.ChannelStatusEnabled, Priority: &priority}
+				require.NoError(t, db.Create(&channel).Error)
+				require.NoError(t, channel.AddAbilities(nil))
+			}
+			for _, pool := range []model.ModelRoutingPool{
+				{Model: "overview-model", RoutingGroup: "default", Mode: model.RoutingModePriority, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 9801, Enabled: true}}},
+				{Model: "other-model", RoutingGroup: "vip", Mode: model.RoutingModePriority, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 9802, Enabled: true}}},
+			} {
+				require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+			}
+			users := []model.User{
+				{Username: "overview-alpha", Role: common.RoleCommonUser, Group: "default", AffCode: "ov1"},
+				{Username: "overview-beta", Role: common.RoleCommonUser, Group: "default", AffCode: "ov2"},
+				{Username: "overview-strategy", Role: common.RoleCommonUser, Group: "default", AffCode: "ov3"},
+				{Username: "overview-inherited", Role: common.RoleCommonUser, Group: "default", AffCode: "ov4"},
+				{Username: "overview-deleted", Role: common.RoleCommonUser, Group: "default", AffCode: "ov5"},
+			}
+			require.NoError(t, db.Create(&users).Error)
+			for _, row := range []model.UserGroupChannelRoutingOverride{
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[0].Id, Model: "overview-model", ChannelId: 9801, Disabled: true}, RoutingGroup: "default"},
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[1].Id, Model: "overview-model", ChannelId: 9802}, RoutingGroup: "default"},
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[4].Id, Model: "overview-model", ChannelId: 9801}, RoutingGroup: "default"},
+			} {
+				require.NoError(t, db.Create(&row).Error)
+			}
+			require.NoError(t, db.Delete(&users[4]).Error)
+			for _, userID := range []int{users[0].Id, users[2].Id} {
+				require.NoError(t, model.SaveUserRoutingStrategy(&model.UserRoutingStrategy{UserId: userID, Model: "overview-model", RoutingGroup: "default", Mode: model.RoutingModeSmart}, ""))
+			}
+			for _, tc := range []struct {
+				name, query string
+				total, size int
+				userIDs     []int
+			}{
+				{"default_only", "", 2, 2, []int{0, 0}},
+				{"all_explicit_pools", "?scope=all", 5, 5, []int{0, 0, users[0].Id, users[1].Id, users[2].Id}},
+				{"model_channel_group", "?scope=all&model=overview&channel_id=9801&routing_group=default", 3, 3, []int{0, users[0].Id, users[2].Id}},
+				{"strategy_only", "?scope=all&mode=smart", 2, 2, []int{users[0].Id, users[2].Id}},
+				{"user_membership_replaces_defaults", "?scope=all&model=overview&channel_id=9802", 1, 1, []int{users[1].Id}},
+				{"pagination_after_filtering", "?scope=all&model=overview&channel_id=9801&page_size=2&page=2", 3, 1, []int{users[2].Id}},
+				{"no_match", "?scope=all&channel_id=9999", 0, 0, []int{}},
+				{"primary_channel", "?scope=all&model=overview&channel_id=9801&channel_role=primary", 2, 2, []int{0, users[2].Id}},
+				{"disabled_member_is_not_primary", "?scope=all&model=overview&channel_id=9801&channel_role=non_primary", 1, 1, []int{users[0].Id}},
+				{"member_absent_is_not_non_primary", "?scope=all&model=overview&channel_id=9802&channel_role=non_primary", 0, 0, []int{}},
+				{"primary_pagination", "?scope=all&model=overview&channel_id=9801&channel_role=primary&page_size=1&page=2", 2, 1, []int{users[2].Id}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					response := userRoutingRequestAtURL(t, 1, http.MethodGet, "/api/channel/routing-pools"+tc.query, "", ListModelRoutingPools)
+					require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+					var body struct {
+						Success bool `json:"success"`
+						Data    struct {
+							Items []modelRoutingPoolView `json:"items"`
+							Total int                    `json:"total"`
+						} `json:"data"`
+					}
+					require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+					require.True(t, body.Success, response.Body.String())
+					assert.Equal(t, tc.total, body.Data.Total)
+					require.Len(t, body.Data.Items, tc.size)
+					ids := make([]int, 0, len(body.Data.Items))
+					for _, item := range body.Data.Items {
+						ids = append(ids, item.UserID)
+					}
+					assert.Equal(t, tc.userIDs, ids)
+					assert.NotContains(t, response.Body.String(), "secret-channel-key")
+					assert.NotContains(t, response.Body.String(), "overview-inherited")
+					assert.NotContains(t, response.Body.String(), "overview-deleted")
+				})
+			}
+			require.NoError(t, model.SaveUserRoutingStrategy(&model.UserRoutingStrategy{UserId: users[3].Id, Model: "overview-model@effort:high", RoutingGroup: "default", Mode: model.RoutingModeSmart}, ""))
+			for _, tc := range []struct{ channelID, total int }{{9801, 1}, {9802, 0}} {
+				response := userRoutingRequestAtURL(t, 1, http.MethodGet, fmt.Sprintf("/api/channel/routing-pools?scope=all&model=overview-model%%40effort%%3Ahigh&channel_id=%d", tc.channelID), "", ListModelRoutingPools)
+				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+				var body struct {
+					Data struct {
+						Total int `json:"total"`
+					} `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+				assert.Equal(t, tc.total, body.Data.Total, "model modifiers inherit the base model's pool membership")
+			}
+			pool, err := model.GetModelRoutingPool("default", "overview-model")
+			require.NoError(t, err)
+			require.NotNil(t, pool)
+			pool.Channels = []model.ModelRoutingPoolChannel{{ChannelID: 9801, Priority: 500, Enabled: false}, {ChannelID: 9802, Enabled: true}}
+			require.NoError(t, model.SaveModelRoutingPool(pool, pool.Revision))
+			for _, row := range []model.UserGroupChannelRoutingOverride{
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[0].Id, Model: "overview-model", ChannelId: 9802, Priority: common.GetPointer(int64(0))}, RoutingGroup: "default"},
+				{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[1].Id, Model: "overview-model", ChannelId: 9801, Priority: common.GetPointer(int64(0))}, RoutingGroup: "default"},
+			} {
+				require.NoError(t, db.Create(&row).Error)
+			}
+			for _, query := range []string{"channel_id=9802&channel_role=primary", "channel_id=9801&channel_role=non_primary"} {
+				response := userRoutingRequestAtURL(t, 1, http.MethodGet, "/api/channel/routing-pools?scope=all&model=overview&"+query, "", ListModelRoutingPools)
+				require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+				var body struct {
+					Data struct {
+						Total int `json:"total"`
+					} `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+				assert.Equal(t, 5, body.Data.Total, "skip disabled members, preserve explicit zero and inherit nil priorities")
+			}
+			require.NoError(t, db.Model(&model.UserGroupChannelRoutingOverride{}).Where("user_id = ? AND model = ? AND channel_id = ?", users[1].Id, "overview-model", 9801).Update("priority", 100).Error)
+			response := userRoutingRequestAtURL(t, 1, http.MethodGet, "/api/channel/routing-pools?scope=all&model=overview&channel_id=9801&channel_role=primary", "", ListModelRoutingPools)
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			var primaryBody struct {
+				Data struct {
+					Items []modelRoutingPoolView `json:"items"`
+				} `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &primaryBody))
+			require.Len(t, primaryBody.Data.Items, 1, "equal user priorities follow channel ID order")
+			assert.Equal(t, users[1].Id, primaryBody.Data.Items[0].UserID)
+			for _, query := range []string{"?channel_role=primary", "?channel_id=9801&channel_role=invalid"} {
+				response := userRoutingRequestAtURL(t, 1, http.MethodGet, "/api/channel/routing-pools"+query, "", ListModelRoutingPools)
+				assert.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
+			}
+			require.NoError(t, authz.Init(db))
+			administrator := model.User{Username: "overview-admin", Role: common.RoleAdminUser, Group: "default", AffCode: "ov6"}
+			require.NoError(t, db.Create(&administrator).Error)
+			response = userRoutingRequestAtURL(t, administrator.Id, http.MethodGet, "/api/channel/routing-pools?scope=all", "", func(c *gin.Context) {
+				c.Set("id", administrator.Id)
+				c.Set("role", administrator.Role)
+				ListModelRoutingPools(c)
+			})
+			assert.Equal(t, http.StatusForbidden, response.Code)
+			require.NoError(t, authz.SetUserPermissions(administrator.Id, authz.PermissionsMap{authz.ResourceUserGroupConfig: {authz.ActionRead: true}}))
+			require.NoError(t, db.Create(&model.UserGroupChannelRoutingOverride{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: administrator.Id, Model: "overview-model", ChannelId: 9801}, RoutingGroup: "default"}).Error)
+			response = userRoutingRequestAtURL(t, administrator.Id, http.MethodGet, "/api/channel/routing-pools?scope=all", "", func(c *gin.Context) {
+				c.Set("id", administrator.Id)
+				c.Set("role", administrator.Role)
+				ListModelRoutingPools(c)
+			})
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			assert.NotContains(t, response.Body.String(), "overview-admin", "same-role administrators cannot inspect each other's configuration")
 		})
 	}
 }

@@ -21,6 +21,7 @@ import { z } from 'zod'
 import type { ModelRoutingOverride } from '@/features/channels/types'
 
 export const matrixSearchSchema = z.object({
+  pool_scope: z.enum(['all']).optional().catch(undefined),
   user_id: z.coerce.number().int().positive().optional().catch(undefined),
   model: z.string().max(255).catch('').default(''),
   channel: z.string().max(255).catch('').default(''),

@@ -51,6 +51,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getUserRoutingPool,
+  routingPoolKeys,
   userRoutingPoolKeys,
   type UserRoutingPoolConfig,
 } from './api'
@@ -81,6 +82,8 @@ type Values = z.infer<typeof schema>
 
 export function UserPoolCard(props: {
   userId: number
+  username?: string
+  readOnly?: boolean
   model: string
   group: string
   groupLabel: string
@@ -123,11 +126,16 @@ export function UserPoolCard(props: {
           monitorOpen && canMonitor && 'xl:h-full xl:min-h-0'
         )}
         role='region'
-        aria-label={`${props.model} · ${props.groupLabel}`}
+        aria-label={`${props.username ? `${props.username} · ` : ''}${props.model} · ${props.groupLabel}`}
       >
         <CardHeader className='flex shrink-0 flex-wrap items-start justify-between gap-2 px-3'>
           <CardTitle className='min-w-0 text-base break-all'>
             {props.model}
+            {props.username && (
+              <span className='text-muted-foreground block text-xs font-normal'>
+                {props.username} · #{props.userId}
+              </span>
+            )}
           </CardTitle>
           <div className='flex max-w-full flex-wrap items-center justify-end gap-2'>
             <Badge variant='secondary' className='max-w-full'>
@@ -163,6 +171,7 @@ export function UserPoolCard(props: {
             group={props.group}
             expanded={monitorOpen && canMonitor}
             onDirtyChange={props.onDirtyChange}
+            readOnly={props.readOnly}
           />
         )}
       </Card>
@@ -174,6 +183,7 @@ function UserPoolEditor(props: {
   config: UserRoutingPoolConfig
   group: string
   expanded?: boolean
+  readOnly?: boolean
   onDirtyChange: (dirty: boolean) => void
 }) {
   const { t } = useTranslation()
@@ -184,7 +194,9 @@ function UserPoolEditor(props: {
   )
   const config = editingBase ?? props.config
   const editing = editingBase !== null
-  const canWrite = canAccessUserGroupConfig(actor, config.user_role, 'write')
+  const canWrite =
+    !props.readOnly &&
+    canAccessUserGroupConfig(actor, config.user_role, 'write')
   const [restoreRevision, setRestoreRevision] = useState<string | null>(null)
   const [channelToAdd, setChannelToAdd] = useState<string | null>(null)
   const configuredChannels = new Map(
@@ -261,6 +273,7 @@ function UserPoolEditor(props: {
       props.onDirtyChange(false)
       toast.success(t('Saved successfully'))
       await Promise.all([
+        client.invalidateQueries({ queryKey: routingPoolKeys.all }),
         client.invalidateQueries({
           queryKey: userRoutingPoolKeys.all(config.user_id),
         }),
@@ -315,7 +328,7 @@ function UserPoolEditor(props: {
           </Badge>
           <UserPoolStrategy
             config={config}
-            disabled={editing || save.isPending}
+            disabled={props.readOnly || editing || save.isPending}
           />
         </div>
         {editing && (

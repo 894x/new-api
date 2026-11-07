@@ -863,9 +863,32 @@ test('scope search selects an authorized user and disabled scope controls cannot
       <RoutingScopeSelect disabled={false} onChange={changed} />
     </QueryClientProvider>
   )
+  expect(
+    screen.getByRole('combobox', { name: 'Select routing user' })
+  ).toHaveValue('Default resource pool')
   await operator.click(
     screen.getByRole('combobox', { name: 'Select routing user' })
   )
+  await operator.click(await screen.findByRole('option', { name: 'All' }))
+  expect(changed).toHaveBeenCalledWith(undefined, true)
+  view.rerender(
+    <QueryClientProvider client={client}>
+      <RoutingScopeSelect allUsers disabled={false} onChange={changed} />
+    </QueryClientProvider>
+  )
+  await operator.click(
+    screen.getByRole('combobox', { name: 'Select routing user' })
+  )
+  await operator.click(
+    screen.getByRole('option', { name: 'Default resource pool' })
+  )
+  expect(changed).toHaveBeenLastCalledWith()
+  await operator.click(
+    screen.getByRole('combobox', { name: 'Select routing user' })
+  )
+  expect(
+    screen.queryByRole('option', { name: 'deleted · #43' })
+  ).not.toBeInTheDocument()
   await operator.click(
     await screen.findByRole('option', { name: 'acme · #42' })
   )
@@ -879,8 +902,8 @@ test('scope search selects an authorized user and disabled scope controls cannot
     screen.getByRole('combobox', { name: 'Select routing user' })
   ).toBeDisabled()
   expect(
-    screen.getByRole('button', { name: 'Default configuration' })
-  ).toBeDisabled()
+    screen.getByRole('combobox', { name: 'Select routing user' })
+  ).toHaveValue('acme · #42')
 })
 
 test('a user can add an enabled channel outside the default pool and save the complete membership', async () => {

@@ -33,6 +33,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import {
   DEFAULT_DISCOUNT_LIMITS,
   ROUTING_MODE_LABELS,
+  routingPoolKeys,
   saveUserRoutingStrategy,
   userRoutingPoolKeys,
   type UserRoutingPoolConfig,
@@ -132,6 +133,7 @@ function UserStrategyEditor(props: {
     onSuccess: async () => {
       toast.success(t('Saved successfully'))
       await Promise.all([
+        client.invalidateQueries({ queryKey: routingPoolKeys.all }),
         client.invalidateQueries({
           queryKey: userRoutingPoolKeys.all(base.user_id),
         }),

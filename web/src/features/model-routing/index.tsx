@@ -16,8 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { useDeferredValue, useEffect, useEffectEvent, useState } from 'react'
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
+import {
+  useDeferredValue,
+  useEffect,
+  useEffectEvent,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { EmptyState } from '@/components/empty-state'
@@ -52,11 +62,15 @@ import {
 import { CreatePoolDialog } from './create-pool-dialog'
 import { PoolCard } from './pool-card'
 import { RoutingWorkspaceDisplay } from './routing-workspace-display'
+import { UserPoolCard } from './user-pool-card'
 
 export function ModelRoutingWorkspace(props: {
   onDirtyChange: (dirty: boolean) => void
+  scopeSelect?: ReactNode
+  allUsers?: boolean
 }) {
   const { t, i18n } = useTranslation()
+  const client = useQueryClient()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const user = useAuthStore((state) => state.auth.user)
   const canRead =
@@ -81,6 +95,9 @@ export function ModelRoutingWorkspace(props: {
   })
   const [dirtyPools, setDirtyPools] = useState<Record<string, boolean>>({})
   const [creating, setCreating] = useState(false)
+  useEffect(() => {
+    setFilters((previous) => ({ ...previous, page: 1 }))
+  }, [props.allUsers])
   const dirty = Object.values(dirtyPools).some(Boolean)
   const notifyDirty = useEffectEvent(props.onDirtyChange)
   useEffect(() => {
@@ -88,12 +105,21 @@ export function ModelRoutingWorkspace(props: {
   }, [dirty])
   useEffect(() => () => notifyDirty(false), [])
   const deferredModel = useDeferredValue(filters.model)
-  const effectiveFilters = { ...filters, model: deferredModel }
+  const effectiveFilters: PoolFilters = {
+    ...filters,
+    model: deferredModel,
+    scope: props.allUsers ? 'all' : undefined,
+  }
   const strategyLabels = {
     '': t('All strategies'),
     priority: t('Priority routing'),
     smart: t('Smart routing'),
     discount: t('Discount-first routing'),
+  }
+  const channelRoleLabels = {
+    all: t('All channel roles'),
+    primary: t('Primary channel'),
+    non_primary: t('Non-primary channel'),
   }
   const catalog = useQuery({
     queryKey: routingPoolKeys.catalog(''),
@@ -141,6 +167,7 @@ export function ModelRoutingWorkspace(props: {
       <RoutingWorkspaceDisplay
         toolbar={
           <>
+            {props.scopeSelect}
             <Combobox
               options={[
                 { value: '', label: t('All models') },
@@ -156,6 +183,55 @@ export function ModelRoutingWorkspace(props: {
               aria-label={t('Search models')}
               className='h-8 min-w-40 flex-1 sm:max-w-72'
             />
+            <Combobox
+              options={[
+                { value: '__all', label: t('All channels') },
+                ...(catalog.data?.channels ?? []).map((channel) => ({
+                  value: String(channel.id),
+                  label: `${channel.name} #${channel.id}`,
+                })),
+              ]}
+              value={filters.channel_id ? String(filters.channel_id) : '__all'}
+              disabled={dirty}
+              onValueChange={(value) => {
+                const channelID =
+                  value && value !== '__all' ? Number(value) : undefined
+                updateFilters({
+                  channel_id: channelID,
+                  channel_role: channelID ? filters.channel_role : undefined,
+                })
+              }}
+              aria-label={t('Search channels')}
+              className='h-8 min-w-40 flex-1 sm:max-w-64'
+            />
+            <Select
+              value={filters.channel_role || 'all'}
+              onValueChange={(value) =>
+                updateFilters({
+                  channel_role:
+                    value === 'primary' || value === 'non_primary'
+                      ? value
+                      : undefined,
+                })
+              }
+              disabled={dirty || !filters.channel_id}
+            >
+              <SelectTrigger
+                aria-label={t('Filter primary channel')}
+                className='w-full sm:w-40'
+              >
+                <SelectValue>
+                  {channelRoleLabels[filters.channel_role || 'all']}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value='all'>{t('All channel roles')}</SelectItem>
+                <SelectItem value='primary'>{t('Primary channel')}</SelectItem>
+                <SelectItem value='non_primary'>
+                  {t('Non-primary channel')}
+                </SelectItem>
+              </SelectContent>
+            </Select>
             <Combobox
               options={[
                 { value: '__all', label: t('All groups') },
@@ -225,6 +301,9 @@ export function ModelRoutingWorkspace(props: {
             onClick={() => {
               void pools.refetch()
               void catalog.refetch()
+              void client.invalidateQueries({
+                queryKey: ['user-routing-pools'],
+              })
             }}
           >
             {t('Refresh')}
@@ -282,20 +361,41 @@ export function ModelRoutingWorkspace(props: {
             ) : (
               <div className='grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,21rem),1fr))] items-start gap-4'>
                 {pools.data.items.map((pool) => {
-                  const key = `${pool.routing_group}\u0000${pool.model}`
+                  const key = `${pool.user_id ?? 0}\u0000${pool.routing_group}\u0000${pool.model}`
+                  const onDirtyChange = (value: boolean) => {
+                    setDirtyPools((previous) =>
+                      previous[key] === value
+                        ? previous
+                        : { ...previous, [key]: value }
+                    )
+                  }
+                  if (pool.user_id) {
+                    return (
+                      <UserPoolCard
+                        key={key}
+                        userId={pool.user_id}
+                        username={pool.username}
+                        model={pool.model}
+                        group={pool.routing_group}
+                        groupLabel={
+                          catalog.data?.groups[pool.routing_group] ??
+                          pool.routing_group
+                        }
+                        onDirtyChange={onDirtyChange}
+                        readOnly={pools.isPlaceholderData}
+                      />
+                    )
+                  }
                   return (
                     <PoolCard
                       key={key}
                       pool={pool}
                       canWrite={canWrite && !pools.isPlaceholderData}
                       groupLabel={catalog.data?.groups[pool.routing_group]}
-                      onDirtyChange={(value) => {
-                        setDirtyPools((previous) => {
-                          if (!!previous[key] === value) return previous
-                          const next = { ...previous, [key]: value }
-                          return next
-                        })
-                      }}
+                      targetLabel={
+                        props.allUsers ? t('Default resource pool') : undefined
+                      }
+                      onDirtyChange={onDirtyChange}
                     />
                   )
                 })}

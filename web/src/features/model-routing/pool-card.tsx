@@ -87,6 +87,7 @@ export function PoolCard(props: {
   pool: RoutingPoolView
   canWrite: boolean
   groupLabel?: string
+  targetLabel?: string
   onDirtyChange: (dirty: boolean) => void
 }) {
   const { t } = useTranslation()
@@ -177,6 +178,7 @@ export function PoolCard(props: {
       toast.success(t('Saved successfully'))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: routingPoolKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ['user-routing-pools'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor-pool'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor'] }),
       ])
@@ -195,6 +197,7 @@ export function PoolCard(props: {
       setRestoring(false)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: routingPoolKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ['user-routing-pools'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor-pool'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor'] }),
       ])
@@ -283,6 +286,11 @@ export function PoolCard(props: {
           <div className='flex min-w-0 flex-wrap items-start justify-between gap-2'>
             <CardTitle className='min-w-0 text-base break-all'>
               {props.pool.model}
+              {props.targetLabel && (
+                <span className='text-muted-foreground block text-xs font-normal'>
+                  {props.targetLabel}
+                </span>
+              )}
             </CardTitle>
             <div className='flex max-w-full flex-wrap items-center justify-end gap-2'>
               <Badge

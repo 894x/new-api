@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useEffectEvent, useState } from 'react'
+import { useEffect, useEffectEvent, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { EmptyState } from '@/components/empty-state'
@@ -36,6 +36,7 @@ import { UserPoolCard } from './user-pool-card'
 export function UserRoutingWorkspace(props: {
   userId: number
   onDirtyChange: (dirty: boolean) => void
+  scopeSelect?: ReactNode
 }) {
   const { t, i18n } = useTranslation()
   const client = useQueryClient()
@@ -98,6 +99,7 @@ export function UserRoutingWorkspace(props: {
         </span>
       </div>
       <div className='flex shrink-0 flex-wrap items-center gap-2'>
+        {props.scopeSelect}
         <Combobox
           className='h-8 min-w-40 flex-1 sm:max-w-72'
           aria-label={t('Search models')}
