@@ -76,6 +76,50 @@ function fixture(): RoutingPoolView {
   }
 }
 
+test.each([
+  ['Enabled', true, false],
+  ['Disabled', false, true],
+  ['Inherit global', undefined, true],
+] as const)(
+  'prefix routing choice %s saves in a priority pool without scheduling defaults',
+  async (label, expected, initial) => {
+    const pool = fixture()
+    pool.tuning = { chat_prefix_enabled: initial }
+    delete pool.tuning_defaults
+    const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+      data: { success: true, data: { ...(body as object), revision: 'saved' } },
+    }))
+    mountCard(pool)
+    const selector = screen.getByRole('combobox', {
+      name: 'Prefix cache routing',
+    })
+    await userEvent.click(selector)
+    await userEvent.click(screen.getByRole('option', { name: label }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(put).toHaveBeenLastCalledWith(
+        '/api/channel/routing-pool',
+        expect.objectContaining({
+          tuning: expect.objectContaining(
+            expected === undefined ? {} : { chat_prefix_enabled: expected }
+          ),
+        })
+      )
+    )
+    const body = put.mock.calls.at(-1)?.[1] as {
+      tuning: { chat_prefix_enabled?: boolean }
+    }
+    expect(body.tuning.chat_prefix_enabled).toBe(expected)
+  }
+)
+
+test('prefix routing override is disabled for read-only pools', () => {
+  mountCard(fixture(), false)
+  expect(
+    screen.getByRole('combobox', { name: 'Prefix cache routing' })
+  ).toBeDisabled()
+})
+
 test('pool parameters open beside the return action and save only explicit overrides while preserving the channel draft', async () => {
   useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
   const pool = fixture()
@@ -142,7 +186,10 @@ test('pool tuning rejects conflicting values and restores inheritance without ch
   useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
   const pool = fixture()
   pool.mode = 'smart'
-  pool.tuning = { hard_failure_cooldown_seconds: 120 }
+  pool.tuning = {
+    hard_failure_cooldown_seconds: 120,
+    chat_prefix_enabled: false,
+  }
   mockMonitorReads(pool)
   const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
     data: { success: true, data: { ...(body as object), revision: 'saved' } },
@@ -173,7 +220,10 @@ test('pool tuning rejects conflicting values and restores inheritance without ch
   await waitFor(() =>
     expect(put).toHaveBeenCalledWith(
       '/api/channel/routing-pool',
-      expect.objectContaining({ tuning: {}, channels: pool.channels })
+      expect.objectContaining({
+        tuning: { chat_prefix_enabled: false },
+        channels: pool.channels,
+      })
     )
   )
 })

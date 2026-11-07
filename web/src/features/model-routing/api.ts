@@ -115,7 +115,11 @@ export interface RoutingPool {
   channels: PoolChannel[]
   max_ttft_ms?: number
   max_tpot_ms?: number
-  tuning?: Partial<Omit<DynamicRoutingSettings, 'enabled'>> | null
+  tuning?:
+    | (Partial<Omit<DynamicRoutingSettings, 'enabled'>> & {
+        chat_prefix_enabled?: boolean
+      })
+    | null
 }
 
 export interface RoutingPoolView extends RoutingPool {

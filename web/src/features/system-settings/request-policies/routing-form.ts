@@ -13,6 +13,7 @@ export function createRoutingPolicySchema(t: TFunction) {
         t('Invalid status code rules')
       ),
     chat_prefix_routing_setting: z.object({
+      enabled: z.boolean(),
       max_entries: z.number().int().min(0).max(1000000),
       ttl_seconds: z.number().int().min(1).max(86400),
     }),
@@ -54,6 +55,7 @@ export function routingPolicyFormValues(
     RetryTimes: Number(options.RetryTimes),
     AutomaticRetryStatusCodes: options.AutomaticRetryStatusCodes,
     chat_prefix_routing_setting: {
+      enabled: options['chat_prefix_routing_setting.enabled'] !== 'false',
       max_entries: Number(
         options['chat_prefix_routing_setting.max_entries'] ?? 40960
       ),
@@ -84,6 +86,9 @@ export function routingPolicyOptions(
   return {
     RetryTimes: String(values.RetryTimes),
     AutomaticRetryStatusCodes: values.AutomaticRetryStatusCodes,
+    'chat_prefix_routing_setting.enabled': String(
+      values.chat_prefix_routing_setting.enabled
+    ),
     'chat_prefix_routing_setting.max_entries': String(
       values.chat_prefix_routing_setting.max_entries
     ),

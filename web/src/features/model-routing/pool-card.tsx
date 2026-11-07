@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useEffectEvent, useState } from 'react'
+import { useEffect, useEffectEvent, useId, useState } from 'react'
 import { useForm, type FieldErrors } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -37,6 +37,14 @@ import {
 } from '@/components/ui/card'
 import { Combobox } from '@/components/ui/combobox'
 import { Form } from '@/components/ui/form'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { dynamicRoutingSettingsSchema } from '@/features/system-settings/models/lib/dynamic-routing-schema'
 import {
   ADMIN_PERMISSION_ACTIONS,
@@ -67,7 +75,8 @@ const poolFormSchema = z.object({
   tuning: z
     .object(dynamicRoutingSettingsSchema.shape)
     .omit({ enabled: true })
-    .partial(),
+    .partial()
+    .extend({ chat_prefix_enabled: z.boolean().optional() }),
   max_ttft_ms: z.number().int().min(1).max(3600000),
   max_tpot_ms: z.number().int().min(1).max(60000),
   channels: z
@@ -91,6 +100,7 @@ export function PoolCard(props: {
   onDirtyChange: (dirty: boolean) => void
 }) {
   const { t } = useTranslation()
+  const prefixControlId = useId()
   const queryClient = useQueryClient()
   const actor = useAuthStore((state) => state.auth.user)
   const canMonitor = hasPermission(
@@ -117,6 +127,14 @@ export function PoolCard(props: {
     },
   })
   const values = form.watch()
+  let prefixValue = 'inherit'
+  let prefixLabel = t('Inherit global')
+  if (values.tuning.chat_prefix_enabled !== undefined) {
+    prefixValue = String(values.tuning.chat_prefix_enabled)
+    prefixLabel = values.tuning.chat_prefix_enabled
+      ? t('Enabled')
+      : t('Disabled')
+  }
   const dirty = form.formState.isDirty
   const notifyDirty = useEffectEvent(props.onDirtyChange)
   useEffect(() => {
@@ -225,7 +243,10 @@ export function PoolCard(props: {
   }
   const validateAndSave = (data: PoolFormValues) => {
     form.clearErrors()
-    if (Object.values(data.tuning).some((value) => value !== undefined)) {
+    const numericTuning = Object.entries(data.tuning).filter(
+      ([key, value]) => key !== 'chat_prefix_enabled' && value !== undefined
+    )
+    if (numericTuning.length > 0) {
       if (!tuningDefaults) {
         form.setError('root.tuning', {
           message: t('Scheduling defaults are unavailable'),
@@ -236,9 +257,7 @@ export function PoolCard(props: {
       const result = dynamicRoutingSettingsSchema.safeParse({
         ...tuningDefaults,
         enabled: true,
-        ...Object.fromEntries(
-          Object.entries(data.tuning).filter(([, value]) => value !== undefined)
-        ),
+        ...Object.fromEntries(numericTuning),
       })
       if (!result.success) {
         for (const issue of result.error.issues) {
@@ -331,6 +350,34 @@ export function PoolCard(props: {
             >
               {t('Edit strategy')}
             </Button>
+          </div>
+          <div className='space-y-1.5'>
+            <Label htmlFor={prefixControlId}>{t('Prefix cache routing')}</Label>
+            <Select
+              value={prefixValue}
+              onValueChange={(value) =>
+                form.setValue(
+                  'tuning.chat_prefix_enabled',
+                  value === 'inherit' ? undefined : value === 'true',
+                  { shouldDirty: true }
+                )
+              }
+              disabled={disabled}
+            >
+              <SelectTrigger id={prefixControlId} className='w-full'>
+                <SelectValue>{prefixLabel}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value='inherit'>{t('Inherit global')}</SelectItem>
+                <SelectItem value='true'>{t('Enabled')}</SelectItem>
+                <SelectItem value='false'>{t('Disabled')}</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Override prefix cache routing for this pool. Capacity and lifetime use the global settings.'
+              )}
+            </p>
           </div>
         </CardHeader>
         <form

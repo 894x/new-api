@@ -3,6 +3,8 @@ package dynamic_routing_setting
 // Overrides contains only pool-adjustable tuning. Nil fields inherit the
 // current system default; explicit zero remains a value and is validated.
 type Overrides struct {
+	// ChatPrefixEnabled is resolved by the gateway, independently of scheduling mode.
+	ChatPrefixEnabled             *bool    `json:"chat_prefix_enabled,omitempty"`
 	MaxSamples                    *int     `json:"max_samples,omitempty"`
 	MaxAgeSeconds                 *int     `json:"max_age_seconds,omitempty"`
 	MinSamples                    *int     `json:"min_samples,omitempty"`

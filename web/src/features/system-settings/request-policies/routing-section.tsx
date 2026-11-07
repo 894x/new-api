@@ -179,6 +179,21 @@ function ChatPrefixCacheSettings() {
       )}
       className='shadow-none'
     >
+      <FormField
+        control={form.control}
+        name='chat_prefix_routing_setting.enabled'
+        render={({ field }) => (
+          <SettingsSwitchField
+            controlId='chat_prefix_routing_setting.enabled'
+            checked={field.value}
+            onCheckedChange={field.onChange}
+            label={t('Enable prefix cache routing by default')}
+            description={t(
+              'Individual channel pools can override this default for staged rollout.'
+            )}
+          />
+        )}
+      />
       <SettingsFormGrid>
         {(
           [

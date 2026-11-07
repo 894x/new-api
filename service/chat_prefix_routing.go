@@ -299,10 +299,23 @@ func (cache *chatPrefixCache) record(scope chatPrefixScope, channel chatPrefixCh
 	}
 }
 
+// Pool overrides apply to both learning and preference, independently of pool mode.
+func (p *RetryParam) chatPrefixRoutingEnabled(group string) bool {
+	pool, err := p.ModelRoutingPool(group)
+	if err != nil {
+		common.SysError("chat prefix pool configuration failed: " + err.Error())
+		return false
+	}
+	if pool != nil && pool.Tuning != nil && pool.Tuning.ChatPrefixEnabled != nil {
+		return *pool.Tuning.ChatPrefixEnabled
+	}
+	return model.CurrentRequestPolicy().ChatPrefixEnabled
+}
+
 // ChatPrefixMatches only scores candidates already admitted by routing policy.
 func (p *RetryParam) ChatPrefixMatches(group string, candidates []model.Ability) map[int]ChatPrefixMatch {
 	request := p.chatPrefixRequest()
-	if request == nil {
+	if request == nil || !p.chatPrefixRoutingEnabled(group) {
 		return nil
 	}
 	scope := chatPrefixScope{UserID: common.GetContextKeyInt(p.Ctx, constant.ContextKeyUserId), Group: group, Model: p.ModelName}
@@ -373,7 +386,7 @@ func RecordChatPrefixSuccess(param *RetryParam, channelID int) {
 	if group == "auto" {
 		group = common.GetContextKeyString(param.Ctx, constant.ContextKeyAutoGroup)
 	}
-	if group == "" || group == "auto" {
+	if group == "" || group == "auto" || !param.chatPrefixRoutingEnabled(group) {
 		return
 	}
 	// Use the immutable identity captured when middleware bound this attempt,

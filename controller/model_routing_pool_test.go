@@ -104,6 +104,22 @@ func TestRoutingPoolTuningDatabaseMatrix(t *testing.T) {
 				assert.Equal(t, pool.Tuning, loaded.Tuning)
 				assert.Contains(t, loaded.TuningJSON, `"cooldown_seconds":0`)
 				assert.NotContains(t, loaded.TuningJSON, "recovery_observation_seconds", "inherited defaults must not be persisted")
+				for _, enabled := range []bool{false, true} {
+					loaded.Tuning.ChatPrefixEnabled = common.GetPointer(enabled)
+					previousRevision := loaded.Revision
+					require.NoError(t, model.SaveModelRoutingPool(loaded, previousRevision))
+					assert.NotEqual(t, previousRevision, loaded.Revision)
+					loaded, err = model.GetModelRoutingPool("default", name)
+					require.NoError(t, err)
+					require.NotNil(t, loaded.Tuning.ChatPrefixEnabled)
+					assert.Equal(t, enabled, *loaded.Tuning.ChatPrefixEnabled)
+					assert.Contains(t, loaded.TuningJSON, fmt.Sprintf(`"chat_prefix_enabled":%t`, enabled))
+				}
+				loaded.Tuning.ChatPrefixEnabled = nil
+				require.NoError(t, model.SaveModelRoutingPool(loaded, loaded.Revision))
+				loaded, err = model.GetModelRoutingPool("default", name)
+				require.NoError(t, err)
+				assert.NotContains(t, loaded.TuningJSON, "chat_prefix_enabled", "inheritance omits the override while preserving numeric tuning")
 				invalid := *loaded
 				invalid.Tuning = &dynamic_routing_setting.Overrides{HardFailureCooldownSeconds: common.GetPointer(100), HardFailureMaxCooldownSeconds: common.GetPointer(50)}
 				assert.ErrorIs(t, model.SaveModelRoutingPool(&invalid, loaded.Revision), model.ErrInvalidRoutingPool)

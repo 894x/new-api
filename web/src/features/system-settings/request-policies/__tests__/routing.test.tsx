@@ -26,6 +26,7 @@ import { RoutingPolicySection } from '../routing-section'
 
 const options = {
   RetryTimes: '2',
+  'chat_prefix_routing_setting.enabled': 'true',
   'chat_prefix_routing_setting.max_entries': '4096',
   'chat_prefix_routing_setting.ttl_seconds': '300',
   'channel_affinity_setting.enabled': 'true',
@@ -120,6 +121,21 @@ function show() {
     </QueryClientProvider>
   )
 }
+it('saves the global prefix routing default without changing cache capacity', async () => {
+  show()
+  const toggle = await screen.findByRole('switch', {
+    name: 'Enable prefix cache routing by default',
+  })
+  expect(toggle).toBeChecked()
+  await userEvent.click(toggle)
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(api.patch).toHaveBeenCalledWith('/api/option/request_policy', {
+      options: { 'chat_prefix_routing_setting.enabled': 'false' },
+    })
+  )
+})
+
 it('shows 40960 records and 300 seconds when prefix cache limits have no overrides', async () => {
   delete currentOptions['chat_prefix_routing_setting.max_entries']
   delete currentOptions['chat_prefix_routing_setting.ttl_seconds']

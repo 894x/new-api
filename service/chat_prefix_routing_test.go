@@ -53,7 +53,8 @@ func chatPrefixTestParam(body []byte) *RetryParam {
 	common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 	common.SetContextKey(c, constant.ContextKeyDynamicRoutingEligible, true)
-	return &RetryParam{Ctx: c, TokenGroup: "default", ModelName: "prefix-model", RequestPath: c.Request.URL.Path, RequestBody: body, DynamicRoutingEligible: true}
+	return &RetryParam{Ctx: c, TokenGroup: "default", ModelName: "prefix-model", RequestPath: c.Request.URL.Path, RequestBody: body, DynamicRoutingEligible: true,
+		routingPools: map[string]*model.ModelRoutingPool{"default": nil}}
 }
 
 func isolateChatPrefixCache(t *testing.T) {
@@ -212,6 +213,55 @@ func TestChatPrefixRequestUsesSavedSystemLimits(t *testing.T) {
 	param.ChatPrefixMatches("default", nil)
 	assert.Equal(t, 2, chatPrefixRoutingCache.capacity)
 	assert.Equal(t, time.Minute, chatPrefixRoutingCache.ttl)
+}
+
+func TestChatPrefixPoolEnableOverrides(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	require.NoError(t, db.AutoMigrate(&model.Option{}))
+	createChannelSelectAutoGroupsChannel(t, db, 1, "default", "prefix-model")
+	model.InitChannelCache()
+	channel, err := model.CacheGetChannel(1)
+	require.NoError(t, err)
+	isolateChatPrefixCache(t)
+	before := model.CurrentRequestPolicy().Options
+	common.OptionMapRWMutex.Lock()
+	previousOptions := common.OptionMap
+	common.OptionMap = maps.Clone(before)
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		err := model.UpdateRequestPolicyOptions(before)
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previousOptions
+		common.OptionMapRWMutex.Unlock()
+		require.NoError(t, err)
+	})
+	for _, tc := range []struct {
+		name     string
+		global   bool
+		override *bool
+		want     bool
+	}{
+		{"inherit_on", true, nil, true}, {"inherit_off", false, nil, false},
+		{"force_on", false, common.GetPointer(true), true}, {"force_off", true, common.GetPointer(false), false},
+	} {
+		for _, mode := range []string{model.RoutingModePriority, model.RoutingModeSmart, model.RoutingModeDiscount} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{"chat_prefix_routing_setting.enabled": fmt.Sprint(tc.global)}))
+				param := chatPrefixTestParam(chatPrefixTestBody(t, 4, nil, nil))
+				param.routingPools["default"] = &model.ModelRoutingPool{Mode: mode, Tuning: &dynamic_routing_setting.Overrides{ChatPrefixEnabled: tc.override}}
+				request := buildChatPrefixRequest(param.RequestBody)
+				chatPrefixRoutingCache = newChatPrefixCache(32, time.Minute)
+				chatPrefixRoutingCache.record(chatPrefixScope{UserID: 42, Group: "default", Model: "prefix-model"}, chatPrefixChannelIdentity(channel), request, time.Now())
+				assert.Equal(t, tc.want, len(param.ChatPrefixMatches("default", []model.Ability{{ChannelId: 1}})) > 0)
+				chatPrefixRoutingCache = newChatPrefixCache(32, time.Minute)
+				BindChatPrefixChannel(param.Ctx, channel)
+				RequestPolicy(param.Ctx).Successful = true
+				RecordChatPrefixSuccess(param, 1)
+				assert.Equal(t, tc.want, chatPrefixRoutingCache.entries.Len() > 0, "a disabled pool must not learn history")
+			})
+		}
+	}
+	assert.Error(t, model.UpdateRequestPolicyOptions(map[string]string{"chat_prefix_routing_setting.enabled": "invalid"}))
 }
 
 func TestChatPrefixRedisSharesAtomicContinuationAndLimits(t *testing.T) {

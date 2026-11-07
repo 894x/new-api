@@ -137,7 +137,7 @@ func selectChannelWithCapacity(param *RetryParam, group string, retry int) (*mod
 	if err != nil {
 		return nil, err
 	}
-	if param.Capacity == nil && param.chatPrefixRequest() == nil {
+	if param.Capacity == nil && (!param.chatPrefixRoutingEnabled(group) || param.chatPrefixRequest() == nil) {
 		return model.GetRandomSatisfiedChannelWithSelectionFilters(group, param.ModelName, retry, filters)
 	}
 	candidates, err := model.ListChannelSelectionCandidates(group, param.ModelName, filters)

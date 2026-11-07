@@ -23,6 +23,7 @@ import (
 // the runtime globals updated by the same write never disagree with it.
 type RequestPolicySnapshot struct {
 	Affinity             operation_setting.ChannelAffinitySetting
+	ChatPrefixEnabled    bool
 	ChatPrefixMaxEntries int
 	ChatPrefixTTLSeconds int
 	RetryTimes           int
@@ -55,6 +56,7 @@ func requestPolicyDefaultOptions() map[string]string {
 	}
 	defaults["RetryTimes"] = strconv.Itoa(common.RetryTimes)
 	defaults["chat_prefix_routing_setting.max_entries"] = "40960"
+	defaults["chat_prefix_routing_setting.enabled"] = "true"
 	defaults["chat_prefix_routing_setting.ttl_seconds"] = "300"
 	defaults["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
 	defaults["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
@@ -79,7 +81,7 @@ func IsRequestPolicyOption(key string) bool {
 		return true
 	}
 	switch key {
-	case "chat_prefix_routing_setting.max_entries", "chat_prefix_routing_setting.ttl_seconds":
+	case "chat_prefix_routing_setting.enabled", "chat_prefix_routing_setting.max_entries", "chat_prefix_routing_setting.ttl_seconds":
 		return true
 	case "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "SensitiveWords", "AutomaticEnableChannelEnabled", "ChannelDisableThreshold", "monitor_setting.auto_test_channel_enabled", "monitor_setting.auto_test_channel_minutes", "monitor_setting.channel_test_concurrency", "monitor_setting.channel_test_mode", "RetryTimes", "AutomaticRetryStatusCodes", "AutomaticDisableChannelEnabled", "AutomaticDisableStatusCodes", "AutomaticDisableKeywords":
 		return true
@@ -110,6 +112,11 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 	}
 	maps.Copy(raw, options)
 	snapshot := &RequestPolicySnapshot{Options: raw}
+	prefixEnabled, err := strconv.ParseBool(raw["chat_prefix_routing_setting.enabled"])
+	if err != nil {
+		return nil, fmt.Errorf("invalid prefix routing enabled value")
+	}
+	snapshot.ChatPrefixEnabled = prefixEnabled
 	maxEntries, err := strconv.Atoi(raw["chat_prefix_routing_setting.max_entries"])
 	if err != nil || maxEntries < 0 || maxEntries > 1_000_000 {
 		return nil, fmt.Errorf("prefix cache capacity must be an integer between 0 and 1000000")
