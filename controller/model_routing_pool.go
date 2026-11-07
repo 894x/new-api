@@ -83,8 +83,13 @@ func ListModelRoutingPools(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	allowedPairs, err := model.GetAllowedGroupModelPairs()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	rows = slices.DeleteFunc(rows, func(row model.ModelRoutingPool) bool {
-		return !model.IsGroupModelAllowed(row.RoutingGroup, row.Model)
+		return !allowedPairs[row.RoutingGroup][ratio_setting.RoutingMatchModelName(row.Model)]
 	})
 	total := len(rows)
 	start := min((filter.Page-1)*filter.PageSize, total)

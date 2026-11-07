@@ -106,7 +106,19 @@ func GetUserChannelRouting(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
+		poolView := c.Query("view") == "pool"
+		var allowedPairs map[string]map[string]bool
+		if poolView {
+			allowedPairs, err = model.GetAllowedGroupModelPairs()
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+		}
 		for _, override := range groupOverrides {
+			if poolView && !allowedPairs[override.RoutingGroup][ratio_setting.RoutingMatchModelName(override.Model)] {
+				continue
+			}
 			models = append(models, override.Model)
 			if _, public := response.KeyGroups[override.RoutingGroup]; public {
 				response.ConfiguredModels = append(response.ConfiguredModels, override.Model)
@@ -114,6 +126,9 @@ func GetUserChannelRouting(c *gin.Context) {
 			}
 		}
 		for _, strategy := range strategies {
+			if poolView && !allowedPairs[strategy.RoutingGroup][ratio_setting.RoutingMatchModelName(strategy.Model)] {
+				continue
+			}
 			models = append(models, strategy.Model)
 			if _, public := response.KeyGroups[strategy.RoutingGroup]; public {
 				response.ConfiguredModels = append(response.ConfiguredModels, strategy.Model)
@@ -128,7 +143,7 @@ func GetUserChannelRouting(c *gin.Context) {
 		response.ConfiguredModels = slices.Compact(response.ConfiguredModels)
 		slices.Sort(models)
 		response.Models = slices.Compact(models)
-		if c.Query("view") == "pool" {
+		if poolView {
 			response.ModelGroups = make(map[string][]string)
 			for group := range response.KeyGroups {
 				for _, name := range model.GetGroupEnabledModels(group) {

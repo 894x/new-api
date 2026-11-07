@@ -546,6 +546,132 @@ func TestUserChannelRoutingCatalogSeparatesPublicKeyGroupsFromResourcePools(t *t
 	assert.Equal(t, map[string][]string{"gpt-5": {"standard", "vip"}}, response.Data.ConfiguredKeyGroups)
 }
 
+func TestRoutingPoolCatalogsRespectGroupModelMatrixDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+				t.Skip("isolated database DSN not configured")
+			}
+			t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+			db := setupManageUserTestDB(t)
+			require.NoError(t, db.AutoMigrate(&model.Option{}, &model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+			previousGroups, previousRatios := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString()
+			common.OptionMapRWMutex.Lock()
+			previousOptions := common.OptionMap
+			common.OptionMap = make(map[string]string)
+			common.OptionMapRWMutex.Unlock()
+			t.Cleanup(func() {
+				_, revision, err := model.GetGroupModelAccess()
+				require.NoError(t, err)
+				_, err = model.SaveGroupModelAccess(model.GroupModelAccess{}, revision)
+				require.NoError(t, err)
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousGroups))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+				common.OptionMapRWMutex.Lock()
+				common.OptionMap = previousOptions
+				common.OptionMapRWMutex.Unlock()
+			})
+			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP"}`))
+			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1}`))
+			user := model.User{Username: "matrix-pools", Group: "default", AffCode: "matrixpools"}
+			require.NoError(t, db.Create(&user).Error)
+			channel := model.Channel{Id: 9351, Name: "Matrix candidate", Type: 1, Status: common.ChannelStatusEnabled, Models: "allowed,blocked,strategy-only,removed,removed-strategy,disabled,alias@effort:high", Group: "default,vip"}
+			require.NoError(t, db.Create(&channel).Error)
+			require.NoError(t, channel.AddAbilities(nil))
+			for _, pair := range []struct{ group, model string }{
+				{"default", "allowed"}, {"default", "blocked"}, {"vip", "blocked"},
+				{"default", "removed"}, {"default", "disabled"}, {"default", "alias@effort:high"},
+			} {
+				require.NoError(t, db.Create(&model.UserGroupChannelRoutingOverride{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: user.Id, Model: pair.model, ChannelId: channel.Id}, RoutingGroup: pair.group}).Error)
+				pool := model.ModelRoutingPool{RoutingGroup: pair.group, Model: pair.model, Mode: model.RoutingModePriority, Channels: []model.ModelRoutingPoolChannel{{ChannelID: channel.Id, Enabled: true}}}
+				require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+			}
+			for _, name := range []string{"strategy-only", "removed-strategy"} {
+				strategy := model.UserRoutingStrategy{UserId: user.Id, Model: name, RoutingGroup: "default", Mode: model.RoutingModePriority}
+				require.NoError(t, model.SaveUserRoutingStrategy(&strategy, ""))
+				pool := model.ModelRoutingPool{RoutingGroup: "default", Model: name, Mode: model.RoutingModePriority, Channels: []model.ModelRoutingPoolChannel{{ChannelID: channel.Id, Enabled: true}}}
+				require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+			}
+			require.NoError(t, db.Where("model IN ?", []string{"removed", "removed-strategy"}).Delete(&model.Ability{}).Error)
+			require.NoError(t, db.Model(&model.Ability{}).Where("model = ?", "disabled").Update("enabled", false).Error)
+			_, revision, err := model.GetGroupModelAccess()
+			require.NoError(t, err)
+			revision, err = model.SaveGroupModelAccess(model.GroupModelAccess{"default": {"allowed", "removed", "removed-strategy", "disabled", "alias"}}, revision)
+			require.NoError(t, err)
+			read := func(view string) userChannelRoutingResponse {
+				t.Helper()
+				recorder := userRoutingRequestAtURL(t, user.Id, http.MethodGet, "/api/user/1/channel-routing-overrides?view="+view, "", GetUserChannelRouting)
+				require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+				var response struct {
+					Success bool
+					Data    userChannelRoutingResponse
+				}
+				require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+				require.True(t, response.Success)
+				return response.Data
+			}
+			catalog := read("pool")
+			assert.Equal(t, map[string][]string{
+				"allowed": {"default", "vip"}, "blocked": {"vip"}, "strategy-only": {"vip"},
+				"disabled": {"default"}, "alias@effort:high": {"default", "vip"},
+			}, catalog.ModelGroups)
+			assert.Equal(t, map[string][]string{
+				"allowed": {"default"}, "blocked": {"vip"}, "disabled": {"default"}, "alias@effort:high": {"default"},
+			}, catalog.ConfiguredKeyGroups)
+			assert.ElementsMatch(t, []string{"allowed", "blocked", "disabled", "alias@effort:high"}, catalog.ConfiguredModels)
+			assert.NotContains(t, catalog.Models, "removed")
+			assert.NotContains(t, catalog.Models, "removed-strategy")
+			assert.Contains(t, read("").ConfiguredKeyGroups, "removed", "the legacy editor retains stale overrides for cleanup")
+			readDefaults := func(query string) ([]modelRoutingPoolView, int) {
+				t.Helper()
+				recorder := userRoutingRequestAtURL(t, user.Id, http.MethodGet, "/api/channel/routing-pools"+query, "", ListModelRoutingPools)
+				require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+				var response struct {
+					Success bool
+					Data    struct {
+						Items []modelRoutingPoolView
+						Total int
+					}
+				}
+				require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+				require.True(t, response.Success)
+				return response.Data.Items, response.Data.Total
+			}
+			defaults, total := readDefaults("")
+			assert.Equal(t, 4, total)
+			pairs := make(map[string]string)
+			for _, pool := range defaults {
+				pairs[pool.Model] = pool.RoutingGroup
+			}
+			assert.Equal(t, map[string]string{"allowed": "default", "blocked": "vip", "disabled": "default", "alias@effort:high": "default"}, pairs)
+			page, total := readDefaults("?page_size=1&page=2")
+			assert.Equal(t, 4, total, "pagination counts only combinations present in the matrix")
+			require.Len(t, page, 1)
+			assert.Equal(t, "allowed", page[0].Model)
+
+			_, err = model.SaveGroupModelAccess(model.GroupModelAccess{}, revision)
+			require.NoError(t, err)
+			reopened := read("pool")
+			assert.Equal(t, []string{"default", "vip"}, reopened.ConfiguredKeyGroups["blocked"])
+			assert.Equal(t, []string{"default"}, reopened.ConfiguredKeyGroups["strategy-only"])
+			assert.NotContains(t, reopened.ModelGroups, "removed")
+			assert.NotContains(t, reopened.ModelGroups, "removed-strategy")
+			_, total = readDefaults("")
+			assert.Equal(t, 6, total, "reopening the matrix restores valid default pools")
+			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{}`))
+			assert.Empty(t, read("pool").ModelGroups, "removed public groups have no user pools")
+			_, total = readDefaults("")
+			assert.Zero(t, total, "removed public groups have no default pools")
+			overrides, err := model.ListUserGroupChannelRoutingOverrides(user.Id, "")
+			require.NoError(t, err)
+			assert.Len(t, overrides, 6, "catalog filtering preserves saved channel membership")
+			strategies, err := model.ListUserRoutingStrategies(user.Id, "")
+			require.NoError(t, err)
+			assert.Len(t, strategies, 2, "catalog filtering preserves saved scheduling strategies")
+		})
+	}
+}
+
 func TestUserRoutingPoolEditorDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		for _, upgrade := range []bool{false, true} {
