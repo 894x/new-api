@@ -133,12 +133,20 @@ func TestGroupModelMatrixDatabaseMatrix(t *testing.T) {
 			require.Equal(t, http.StatusOK, recorder.Code)
 			assert.Contains(t, recorder.Body.String(), "model-b", "denied models remain editable")
 			assert.NotContains(t, recorder.Body.String(), channel.Key)
-			t.Run("only_public_groups", func(t *testing.T) {
+			t.Run("only_public_groups_and_models", func(t *testing.T) {
 				publicGroups := setting.UserUsableGroups2JSONString()
 				groupRatios := ratio_setting.GroupRatio2JSONString()
 				originalConfig, _, err := model.GetGroupModelAccess()
 				require.NoError(t, err)
+				internalChannel := model.Channel{Id: 9902, Type: 1, Name: "Internal", Models: "upstream-only", Group: "internal", Status: common.ChannelStatusEnabled}
+				require.NoError(t, db.Create(&internalChannel).Error)
+				require.NoError(t, internalChannel.AddAbilities(nil))
+				mapping := `{"model-a":"upstream-only","model-b":"model-a"}`
+				require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("model_mapping", mapping).Error)
 				t.Cleanup(func() {
+					require.NoError(t, db.Where("channel_id = ?", internalChannel.Id).Delete(&model.Ability{}).Error)
+					require.NoError(t, db.Delete(&internalChannel).Error)
+					require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("model_mapping", channel.ModelMapping).Error)
 					require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(publicGroups))
 					require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(groupRatios))
 					_, currentRevision, err := model.GetGroupModelAccess()
@@ -148,7 +156,11 @@ func TestGroupModelMatrixDatabaseMatrix(t *testing.T) {
 				})
 				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"vip":"Premium","empty":"No channels","stale":"No ratio","auto":"Automatic"}`))
 				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":2,"empty":1,"ratio-only":1,"auto":1}`))
-				hiddenConfig := model.GroupModelAccess{"default": {"model-a"}, "config-only": {"model-a"}}
+				hiddenConfig := model.GroupModelAccess{
+					"default":     {"model-a"},
+					"vip":         {"model-a", "stale-model", "upstream-only"},
+					"config-only": {"stale-model", "upstream-only"},
+				}
 				_, err = model.SaveGroupModelAccess(hiddenConfig, newRevision)
 				require.NoError(t, err)
 
@@ -163,16 +175,23 @@ func TestGroupModelMatrixDatabaseMatrix(t *testing.T) {
 					var response struct {
 						Success bool
 						Data    struct {
-							Groups []string
-							Config model.GroupModelAccess
+							Groups    []string
+							Models    []string
+							Available map[string][]string
+							Config    model.GroupModelAccess
 						}
 					}
 					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 					require.True(t, response.Success)
 					if public {
 						assert.Equal(t, []string{"empty", "vip"}, response.Data.Groups)
+						assert.Equal(t, []string{"model-a", "model-b"}, response.Data.Models, "public aliases remain visible, including IDs also used as mapping targets")
+						assert.ElementsMatch(t, []string{"model-a", "model-b"}, response.Data.Available["vip"])
+						assert.Len(t, response.Data.Available, 1, "internal groups must not expose converted model IDs")
 					} else {
 						assert.Empty(t, response.Data.Groups, "no public groups must not fall back to internal groups")
+						assert.Empty(t, response.Data.Models, "internal abilities and saved policies must not restore model columns")
+						assert.Empty(t, response.Data.Available)
 					}
 					assert.Equal(t, hiddenConfig, response.Data.Config, "hidden policies must survive matrix saves")
 				}
