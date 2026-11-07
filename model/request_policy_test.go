@@ -84,6 +84,30 @@ func TestRequestPolicyDatabaseMatrix(t *testing.T) {
 			}
 			assert.Error(t, UpdateRequestPolicyOptions(map[string]string{exclusionKey: "99,600,500-400"}))
 			assert.Empty(t, CurrentRequestPolicy().Options[exclusionKey], "invalid exclusions do not replace a saved empty rule")
+			const prefixCapacity = "chat_prefix_routing_setting.max_entries"
+			const prefixTTL = "chat_prefix_routing_setting.ttl_seconds"
+			assert.Equal(t, 40960, CurrentRequestPolicy().ChatPrefixMaxEntries)
+			assert.Equal(t, 300, CurrentRequestPolicy().ChatPrefixTTLSeconds)
+			require.NoError(t, UpdateRequestPolicyOptions(map[string]string{prefixCapacity: "16384", prefixTTL: "300"}))
+			loadOptionsFromDatabase()
+			loadOptionsFromDatabase()
+			assert.Equal(t, 16384, CurrentRequestPolicy().ChatPrefixMaxEntries)
+			assert.Equal(t, 300, CurrentRequestPolicy().ChatPrefixTTLSeconds)
+			for _, invalid := range []map[string]string{
+				{prefixCapacity: "-1"}, {prefixCapacity: "1.5"}, {prefixCapacity: "1000001"},
+				{prefixTTL: "0"}, {prefixTTL: "1.5"}, {prefixTTL: "86401"},
+				{prefixCapacity: "10", prefixTTL: "invalid"},
+			} {
+				before := CurrentRequestPolicy()
+				assert.Error(t, UpdateRequestPolicyOptions(invalid))
+				assert.Same(t, before, CurrentRequestPolicy(), "invalid limits must not publish partial settings")
+			}
+			var prefixOption Option
+			require.NoError(t, db.Where(map[string]any{"key": prefixCapacity}).First(&prefixOption).Error)
+			assert.Equal(t, "16384", prefixOption.Value, "invalid limits must not change persisted capacity")
+			require.NoError(t, UpdateOption(prefixCapacity, "0"))
+			loadOptionsFromDatabase()
+			assert.Zero(t, CurrentRequestPolicy().ChatPrefixMaxEntries, "zero disables the cache and survives reload")
 			rules := `[{"name":"session","model_regex":[".*"],"key_sources":[{"type":"request_header","key":"X-Session"}],"ttl_seconds":0,"skip_retry_on_failure":false,"include_using_group":false,"param_override_template":{"temperature":0},"future_field":{"enabled":false}}]`
 			require.NoError(t, UpdateRequestPolicyOptions(map[string]string{"RetryTimes": "2", "channel_affinity_setting.rules": rules}))
 			assert.Equal(t, 2, CurrentRequestPolicy().RetryTimes)

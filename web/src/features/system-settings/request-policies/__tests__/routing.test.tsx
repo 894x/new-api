@@ -26,6 +26,8 @@ import { RoutingPolicySection } from '../routing-section'
 
 const options = {
   RetryTimes: '2',
+  'chat_prefix_routing_setting.max_entries': '4096',
+  'chat_prefix_routing_setting.ttl_seconds': '300',
   'channel_affinity_setting.enabled': 'true',
   'channel_affinity_setting.session_mode': '',
   'channel_affinity_setting.switch_on_success': 'false',
@@ -118,6 +120,62 @@ function show() {
     </QueryClientProvider>
   )
 }
+it('shows 40960 records and 300 seconds when prefix cache limits have no overrides', async () => {
+  delete currentOptions['chat_prefix_routing_setting.max_entries']
+  delete currentOptions['chat_prefix_routing_setting.ttl_seconds']
+  show()
+  expect(
+    await screen.findByRole('spinbutton', {
+      name: 'Maximum prefix cache records',
+    })
+  ).toHaveValue(40960)
+  expect(
+    screen.getByRole('spinbutton', { name: 'Prefix cache lifetime (seconds)' })
+  ).toHaveValue(300)
+})
+
+it('saves prefix cache capacity and lifetime with the routing policy', async () => {
+  show()
+  const capacity = await screen.findByRole('spinbutton', {
+    name: 'Maximum prefix cache records',
+  })
+  const lifetime = screen.getByRole('spinbutton', {
+    name: 'Prefix cache lifetime (seconds)',
+  })
+  expect(capacity).toHaveValue(4096)
+  expect(lifetime).toHaveValue(300)
+  fireEvent.change(capacity, { target: { value: '16384' } })
+  fireEvent.change(lifetime, { target: { value: '120' } })
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(api.patch).toHaveBeenCalledTimes(1))
+  expect(api.patch).toHaveBeenCalledWith('/api/option/request_policy', {
+    options: {
+      'chat_prefix_routing_setting.max_entries': '16384',
+      'chat_prefix_routing_setting.ttl_seconds': '120',
+    },
+  })
+  fireEvent.change(capacity, { target: { value: '0' } })
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(api.patch).toHaveBeenCalledTimes(2))
+  expect(currentOptions['chat_prefix_routing_setting.max_entries']).toBe('0')
+})
+
+it('rejects invalid prefix cache limits before saving', async () => {
+  show()
+  const capacity = await screen.findByRole('spinbutton', {
+    name: 'Maximum prefix cache records',
+  })
+  const lifetime = screen.getByRole('spinbutton', {
+    name: 'Prefix cache lifetime (seconds)',
+  })
+  fireEvent.change(capacity, { target: { value: '-1' } })
+  fireEvent.change(lifetime, { target: { value: '0' } })
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(capacity).toHaveAttribute('aria-invalid', 'true'))
+  expect(lifetime).toHaveAttribute('aria-invalid', 'true')
+  expect(api.patch).not.toHaveBeenCalled()
+})
+
 it('opens global affinity settings and the complete rules table without switching views', async () => {
   show()
   expect(await screen.findByRole('table')).toBeVisible()

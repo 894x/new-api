@@ -360,6 +360,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if newAPIError == nil {
 			service.MarkRequestPolicySuccess(c, relayInfo.StreamStatus)
+			if !relayInfo.PerformanceBusinessRejection {
+				service.RecordChatPrefixSuccess(retryParam, channel.Id)
+			}
 			relayInfo.LastError = nil
 			return
 		}

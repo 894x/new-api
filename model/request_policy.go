@@ -22,15 +22,17 @@ import (
 // settings API. It is rebuilt from the option map on every option write, so
 // the runtime globals updated by the same write never disagree with it.
 type RequestPolicySnapshot struct {
-	Affinity        operation_setting.ChannelAffinitySetting
-	RetryTimes      int
-	RetryCodes      []operation_setting.StatusCodeRange
-	DisableCodes    []operation_setting.StatusCodeRange
-	DisableKeywords []string
-	CheckText       bool
-	TextKeywords    []string
-	AutoDisable     bool
-	Options         map[string]string
+	Affinity             operation_setting.ChannelAffinitySetting
+	ChatPrefixMaxEntries int
+	ChatPrefixTTLSeconds int
+	RetryTimes           int
+	RetryCodes           []operation_setting.StatusCodeRange
+	DisableCodes         []operation_setting.StatusCodeRange
+	DisableKeywords      []string
+	CheckText            bool
+	TextKeywords         []string
+	AutoDisable          bool
+	Options              map[string]string
 }
 
 var requestPolicySnapshot atomic.Pointer[RequestPolicySnapshot]
@@ -52,6 +54,8 @@ func requestPolicyDefaultOptions() map[string]string {
 		}
 	}
 	defaults["RetryTimes"] = strconv.Itoa(common.RetryTimes)
+	defaults["chat_prefix_routing_setting.max_entries"] = "40960"
+	defaults["chat_prefix_routing_setting.ttl_seconds"] = "300"
 	defaults["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
 	defaults["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	defaults["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
@@ -75,6 +79,8 @@ func IsRequestPolicyOption(key string) bool {
 		return true
 	}
 	switch key {
+	case "chat_prefix_routing_setting.max_entries", "chat_prefix_routing_setting.ttl_seconds":
+		return true
 	case "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "SensitiveWords", "AutomaticEnableChannelEnabled", "ChannelDisableThreshold", "monitor_setting.auto_test_channel_enabled", "monitor_setting.auto_test_channel_minutes", "monitor_setting.channel_test_concurrency", "monitor_setting.channel_test_mode", "RetryTimes", "AutomaticRetryStatusCodes", "AutomaticDisableChannelEnabled", "AutomaticDisableStatusCodes", "AutomaticDisableKeywords":
 		return true
 	}
@@ -104,6 +110,15 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 	}
 	maps.Copy(raw, options)
 	snapshot := &RequestPolicySnapshot{Options: raw}
+	maxEntries, err := strconv.Atoi(raw["chat_prefix_routing_setting.max_entries"])
+	if err != nil || maxEntries < 0 || maxEntries > 1_000_000 {
+		return nil, fmt.Errorf("prefix cache capacity must be an integer between 0 and 1000000")
+	}
+	ttlSeconds, err := strconv.Atoi(raw["chat_prefix_routing_setting.ttl_seconds"])
+	if err != nil || ttlSeconds < 1 || ttlSeconds > 86400 {
+		return nil, fmt.Errorf("prefix cache lifetime must be an integer between 1 and 86400 seconds")
+	}
+	snapshot.ChatPrefixMaxEntries, snapshot.ChatPrefixTTLSeconds = maxEntries, ttlSeconds
 	affinityFields := map[string]string{}
 	for key, value := range raw {
 		if field, ok := strings.CutPrefix(key, "channel_affinity_setting."); ok {

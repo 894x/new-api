@@ -51,6 +51,9 @@ type Candidate struct {
 	Priority     int64
 	Weight       uint
 	CostDiscount *float64
+	// PrefixMatchedBytes is request-local and does not change route shares or
+	// the candidate fingerprint. It prefers warm peers within a healthy tier.
+	PrefixMatchedBytes int
 }
 
 type Allocation struct {
@@ -703,7 +706,7 @@ func (c *Controller) selectAvoiding(
 	}
 	if !emergency && !ejectionTransition && !state.lastChanged.IsZero() && now.Sub(state.lastChanged) < config.Cooldown {
 		decision.Allocations = allocationsFromState(ordered, state)
-		return c.completeDecisionLocked(key, decision, excludedChannelIDs, now)
+		return c.completeDecisionLocked(key, decision, excludedChannelIDs, now, ordered)
 	}
 
 	changed := ejectionProbeChanged
@@ -821,7 +824,7 @@ func (c *Controller) selectAvoiding(
 		}
 	}
 	decision.Allocations = allocationsFromState(ordered, state)
-	return c.completeDecisionLocked(key, decision, excludedChannelIDs, now)
+	return c.completeDecisionLocked(key, decision, excludedChannelIDs, now, ordered)
 }
 
 func (c *Controller) cleanupExpiredLocked(now time.Time, configs ...Config) {
@@ -891,6 +894,7 @@ func (c *Controller) completeDecisionLocked(
 	decision Decision,
 	excludedChannelIDs map[int]struct{},
 	now time.Time,
+	candidates []Candidate,
 ) Decision {
 	config := c.config
 	if state := c.routes[key]; state != nil {
@@ -986,6 +990,42 @@ func (c *Controller) completeDecisionLocked(
 				ejection.probeIssuedAt = append([]time.Time(nil), ejection.probeIssuedAt[len(ejection.probeIssuedAt)-config.MaxSamples:]...)
 			}
 			route.ejections[selected] = ejection
+		}
+	}
+	// Keep accounting against the original weighted choice, so request-local
+	// prefix affinity cannot accumulate scheduling debt or starve probes.
+	// Only healthy, non-probe peers in that choice's priority/cost tier compete.
+	hasPrefixPreference := false
+	for _, candidate := range candidates {
+		if candidate.PrefixMatchedBytes > 0 {
+			hasPrefixPreference = true
+			break
+		}
+	}
+	if hasSelection && !hasForcedProbe && hasPrefixPreference {
+		warmEligible := make(map[int]bool, len(decision.Allocations))
+		for _, allocation := range decision.Allocations {
+			_, excluded := excludedChannelIDs[allocation.ChannelID]
+			warmEligible[allocation.ChannelID] = allocation.Share > 0 && !allocation.Probe && !excluded
+		}
+		for _, id := range decision.DegradedCandidates {
+			warmEligible[id] = false
+		}
+		if warmEligible[selected] {
+			var selectedCandidate Candidate
+			for _, candidate := range candidates {
+				if candidate.ChannelID == selected {
+					selectedCandidate = candidate
+					break
+				}
+			}
+			bestPrefix := selectedCandidate.PrefixMatchedBytes
+			for _, candidate := range candidates {
+				if warmEligible[candidate.ChannelID] && sameCandidateTier(candidate, selectedCandidate, key.discountFirst) &&
+					candidate.PrefixMatchedBytes > bestPrefix {
+					selected, bestPrefix = candidate.ChannelID, candidate.PrefixMatchedBytes
+				}
+			}
 		}
 	}
 	decision.SelectedChannelID = selected
