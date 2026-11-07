@@ -46,23 +46,31 @@ beforeEach(() => {
     aggregation: { backfill_complete: true, pending_events: 0, updated_at: 0 },
     summary: {
       known_requests: 2,
-      known_revenue_usd: 8,
-      cost_usd: 3,
+      known_revenue_usd: 10.6,
+      cost_usd: 5.15,
+      net_revenue_usd: 10,
+      net_cost_usd: 5,
+      output_vat_usd: 0.6,
+      input_vat_usd: 0.15,
       profit_usd: 5,
-      profit_margin: 0.625,
+      profit_margin: 0.5,
       revenue_coverage: 0.8,
       unknown_requests: 1,
-      unknown_revenue_usd: 2,
+      unknown_revenue_usd: 2.65,
     },
     channels: [
       {
         channel_id: 1,
         channel_name: 'Known channel',
         known_requests: 2,
-        known_revenue_usd: 8,
-        cost_usd: 3,
+        known_revenue_usd: 10.6,
+        cost_usd: 5.15,
+        net_revenue_usd: 10,
+        net_cost_usd: 5,
+        output_vat_usd: 0.6,
+        input_vat_usd: 0.15,
         profit_usd: 5,
-        profit_margin: 0.625,
+        profit_margin: 0.5,
         revenue_coverage: 1,
         unknown_requests: 0,
         unknown_revenue_usd: 0,
@@ -119,6 +127,51 @@ test('ordinary administrators neither fetch nor render financial data', async ()
   expect(view.container).toBeEmptyDOMElement()
 })
 
+test('missing invoice rates and historical tax snapshots are shown outside the VAT-exclusive profit table', async () => {
+  report.unknown = [
+    {
+      channel_id: 2,
+      channel_name: 'No invoice rate',
+      reason: 'tax_rate_unconfigured',
+      requests: 1,
+      revenue_usd: 1,
+    },
+    {
+      channel_id: 3,
+      channel_name: 'Old snapshot',
+      reason: 'tax_snapshot_missing',
+      requests: 1,
+      revenue_usd: 1.65,
+    },
+  ]
+  renderAnalysis()
+  await screen.findByText('Known channel')
+  const tables = screen.getAllByRole('table')
+  expect(
+    within(tables[0]).getByRole('columnheader', {
+      name: 'Revenue including VAT',
+    })
+  ).toBeVisible()
+  expect(
+    within(tables[0]).getByRole('columnheader', { name: 'Output VAT' })
+  ).toBeVisible()
+  expect(
+    within(tables[0]).getByRole('columnheader', {
+      name: 'Deductible input VAT',
+    })
+  ).toBeVisible()
+  expect(within(tables[0]).queryByText('No invoice rate')).toBeNull()
+  expect(
+    within(tables[1]).getByText('Channel invoice VAT rate not configured')
+  ).toBeVisible()
+  expect(
+    within(tables[1]).getByText('Historical VAT snapshot unavailable')
+  ).toBeVisible()
+  expect(screen.getByText('Revenue excluding VAT')).toBeVisible()
+  expect(screen.getByText('Cost excluding VAT')).toBeVisible()
+  expect(screen.getByText('80%')).toBeVisible()
+})
+
 test('changing to thirty days requests and displays the selected period', async () => {
   renderAnalysis()
   await screen.findByText('Known channel')
@@ -159,6 +212,10 @@ test('empty period keeps unknown margins unset and shows both empty states', asy
       known_requests: 0,
       known_revenue_usd: 0,
       cost_usd: 0,
+      net_revenue_usd: 0,
+      net_cost_usd: 0,
+      output_vat_usd: 0,
+      input_vat_usd: 0,
       profit_usd: 0,
       profit_margin: null,
       revenue_coverage: null,
@@ -171,9 +228,11 @@ test('empty period keeps unknown margins unset and shows both empty states', asy
   }
   renderAnalysis()
   expect(
-    await screen.findByText('No calls with a known cost in this period')
+    await screen.findByText('No calls with known cost and VAT in this period')
   ).toBeVisible()
-  expect(screen.getByText('No unknown-cost calls in this period')).toBeVisible()
+  expect(
+    screen.getByText('No calls excluded from gross profit in this period')
+  ).toBeVisible()
   expect(screen.queryByText('NaN')).toBeNull()
 })
 

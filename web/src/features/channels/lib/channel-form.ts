@@ -261,6 +261,7 @@ export const channelFormSchema = z
     tpm: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
     priority: z.number().optional(),
     cost_discount: z.number().min(0).max(1).nullable().optional(),
+    invoice_vat_rate: z.number().min(0).max(100).nullable().optional(),
     weight: z.number().int().min(0).max(2_147_483_637).optional(),
     test_model: z.string().optional(),
     monitor_config: z.string().optional(),
@@ -552,6 +553,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   tpm: 0,
   priority: 0,
   cost_discount: null,
+  invoice_vat_rate: null,
   weight: 0,
   test_model: '',
   monitor_config: '',
@@ -766,6 +768,8 @@ export function transformChannelToFormDefaults(
     tpm: channel.tpm ?? 0,
     priority: channel.priority || 0,
     cost_discount: channel.cost_discount ?? null,
+    invoice_vat_rate:
+      channel.invoice_vat_rate == null ? null : channel.invoice_vat_rate * 100,
     weight: channel.weight || 0,
     test_model: channel.test_model || '',
     monitor_config: channel.monitor_config || '',
@@ -1084,6 +1088,10 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     tpm: formData.tpm ?? 0,
     priority: formData.priority ?? null,
     cost_discount: formData.cost_discount ?? null,
+    invoice_vat_rate:
+      formData.invoice_vat_rate == null
+        ? null
+        : formData.invoice_vat_rate / 100,
     weight: formData.weight ?? null,
     test_model: formData.test_model || null,
     monitor_config: formData.monitor_config || '{}',
@@ -1136,6 +1144,10 @@ export function transformFormDataToUpdatePayload(
     tpm: formData.tpm ?? 0,
     priority: formData.priority ?? 0,
     cost_discount: formData.cost_discount ?? null,
+    invoice_vat_rate:
+      formData.invoice_vat_rate == null
+        ? null
+        : formData.invoice_vat_rate / 100,
     weight: formData.weight ?? 0,
     test_model: formData.test_model || null,
     monitor_config: formData.monitor_config || '{}',

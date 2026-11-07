@@ -54,6 +54,7 @@ const CONFIGURATION_BLOCKS = {
       'rpm',
       'tpm',
       'cost_discount',
+      'invoice_vat_rate',
       'test_model',
       'auto_ban',
       'monitor_config',
@@ -163,6 +164,7 @@ export function getChannelConfigurationState(
       values.rpm ||
       values.tpm ||
       values.cost_discount != null ||
+      values.invoice_vat_rate != null ||
       values.test_model?.trim() ||
       (values.auto_ban ?? 1) !== 1
     ),

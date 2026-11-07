@@ -19,40 +19,54 @@ import (
 // GrossProfitEvent is a durable outbox and deduplication ledger in the primary
 // database. Keep applied events: removing them would allow a replay to double count.
 type GrossProfitEvent struct {
-	EventKey   string `gorm:"type:varchar(64);primaryKey"`
-	Day        string `gorm:"type:varchar(10);not null"`
-	ChannelID  int    `gorm:"not null"`
-	Reason     string `gorm:"type:varchar(64);not null"`
-	RevenueUSD string `gorm:"type:text;not null"`
-	CostUSD    string `gorm:"type:text;not null"`
-	AppliedAt  int64  `gorm:"bigint;not null;index:idx_gross_profit_pending,priority:1"`
-	CreatedAt  int64  `gorm:"bigint;not null;index:idx_gross_profit_pending,priority:2"`
+	EventKey      string `gorm:"type:varchar(64);primaryKey"`
+	Day           string `gorm:"type:varchar(10);not null"`
+	ChannelID     int    `gorm:"not null"`
+	Reason        string `gorm:"type:varchar(64);not null"`
+	RevenueUSD    string `gorm:"type:text;not null"`
+	CostUSD       string `gorm:"type:text;not null"`
+	NetRevenueUSD string `gorm:"type:text;not null"`
+	NetCostUSD    string `gorm:"type:text;not null"`
+	AppliedAt     int64  `gorm:"bigint;not null;index:idx_gross_profit_vat_pending,priority:1"`
+	CreatedAt     int64  `gorm:"bigint;not null;index:idx_gross_profit_vat_pending,priority:2"`
 }
+
+// Separate accounting generations prevent tax-inclusive totals or an old
+// worker from being mixed into VAT-exclusive profit. Legacy tables are retained.
+func (GrossProfitEvent) TableName() string { return "gross_profit_vat_events" }
 
 // Text decimal amounts preserve the same precision on SQLite, MySQL and
 // PostgreSQL. Updates take a row lock and add with decimal, rather than floats.
 type GrossProfitDaily struct {
-	Day        string `gorm:"type:varchar(10);primaryKey"`
-	ChannelID  int    `gorm:"primaryKey;autoIncrement:false"`
-	Reason     string `gorm:"type:varchar(64);primaryKey"` // empty means known cost
-	Requests   int64  `gorm:"bigint;not null"`
-	RevenueUSD string `gorm:"type:text;not null"`
-	CostUSD    string `gorm:"type:text;not null"`
+	Day           string `gorm:"type:varchar(10);primaryKey"`
+	ChannelID     int    `gorm:"primaryKey;autoIncrement:false"`
+	Reason        string `gorm:"type:varchar(64);primaryKey"` // empty means known cost and VAT
+	Requests      int64  `gorm:"bigint;not null"`
+	RevenueUSD    string `gorm:"type:text;not null"`
+	CostUSD       string `gorm:"type:text;not null"`
+	NetRevenueUSD string `gorm:"type:text;not null"`
+	NetCostUSD    string `gorm:"type:text;not null"`
 }
+
+func (GrossProfitDaily) TableName() string { return "gross_profit_vat_dailies" }
+
+const GrossProfitRollupName = "consume_vat_v2"
 
 // The timezone is frozen once so nodes with different host timezones agree on
 // day boundaries. Explicit TZ is respected; an unset TZ defaults to UTC.
 type GrossProfitRollupState struct {
-	Name              string `gorm:"type:varchar(32);primaryKey"`
-	Timezone          string `gorm:"type:varchar(64);not null"`
-	CursorAt          int64  `gorm:"bigint;not null"`
-	CursorID          int    `gorm:"bigint;not null"`
-	CursorOffset      int    `gorm:"bigint;not null"`
-	CursorRequestID   string `gorm:"type:varchar(64);not null"`
-	FullScanStartedAt int64  `gorm:"bigint;not null"`
-	BackfillComplete  bool
-	Revision          int64 `gorm:"bigint;not null"`
-	UpdatedAt         int64 `gorm:"bigint;not null"`
+	Name                   string `gorm:"type:varchar(32);primaryKey"`
+	Timezone               string `gorm:"type:varchar(64);not null"`
+	CursorAt               int64  `gorm:"bigint;not null"`
+	CursorID               int    `gorm:"bigint;not null"`
+	CursorOffset           int    `gorm:"bigint;not null"`
+	CursorRequestID        string `gorm:"type:varchar(64);not null"`
+	FullScanStartedAt      int64  `gorm:"bigint;not null"`
+	BackfillComplete       bool
+	LegacyCursor           string `gorm:"type:varchar(64);not null;default:''"`
+	LegacyBackfillComplete bool
+	Revision               int64 `gorm:"bigint;not null"`
+	UpdatedAt              int64 `gorm:"bigint;not null"`
 }
 
 var grossProfitSQLiteWriter sync.Mutex
@@ -65,11 +79,18 @@ func MigrateGrossProfit(db *gorm.DB) error {
 	if timezone == "" {
 		timezone = "UTC"
 	}
+	var previous GrossProfitRollupState
+	if err := db.First(&previous, "name = ?", "consume").Error; err == nil {
+		timezone = previous.Timezone
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
 	if _, err := time.LoadLocation(timezone); err != nil {
 		return fmt.Errorf("gross profit timezone: %w", err)
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&GrossProfitRollupState{
-		Name: "consume", Timezone: timezone, CursorAt: -1, FullScanStartedAt: common.GetTimestamp(),
+		Name: GrossProfitRollupName, Timezone: timezone, CursorAt: -1, FullScanStartedAt: common.GetTimestamp(),
+		LegacyBackfillComplete: !db.Migrator().HasTable("gross_profit_events"),
 	}).Error
 }
 
@@ -81,7 +102,7 @@ func QueueGrossProfitLogs(ctx context.Context, logs []Log) ([]string, error) {
 		return nil, nil
 	}
 	var state GrossProfitRollupState
-	if err := DB.WithContext(ctx).First(&state, "name = ?", "consume").Error; err != nil {
+	if err := DB.WithContext(ctx).First(&state, "name = ?", GrossProfitRollupName).Error; err != nil {
 		return nil, err
 	}
 	location, err := time.LoadLocation(state.Timezone)
@@ -109,20 +130,44 @@ func QueueGrossProfitLogs(ctx context.Context, logs []Log) ([]string, error) {
 			Day:       time.Unix(entry.CreatedAt, 0).In(location).Format(time.DateOnly),
 			ChannelID: entry.ChannelId, Reason: "snapshot_missing", CostUSD: "0",
 			RevenueUSD: decimal.NewFromInt(int64(entry.Quota)).Div(unit).String(), CreatedAt: common.GetTimestamp(),
+			NetRevenueUSD: "0", NetCostUSD: "0",
 		}
 		var snapshot consumeGrossProfit
-		if raw := metadata.Get("root_info.gross_profit"); raw.Exists() && common.UnmarshalJsonStr(raw.Raw, &snapshot) == nil && snapshot.Version == 1 {
+		raw := metadata.Get("root_info.gross_profit")
+		snapshotKnown := raw.Exists() && common.UnmarshalJsonStr(raw.Raw, &snapshot) == nil && (snapshot.Version == 1 || snapshot.Version == 2)
+		cost := decimal.Zero
+		var costErr error
+		if snapshot.CostUSD != nil {
+			cost, costErr = decimal.NewFromString(*snapshot.CostUSD)
+		}
+		if snapshotKnown && snapshot.CostUSD != nil && costErr == nil && !cost.IsNegative() {
+			event.CostUSD = cost.String()
+		}
+		switch {
+		case !snapshotKnown:
+			event.Reason = "snapshot_missing"
+		case snapshot.CostUSD == nil:
 			event.Reason = snapshot.Reason
-			if snapshot.CostUSD != nil {
-				cost, err := decimal.NewFromString(*snapshot.CostUSD)
-				if err == nil && !cost.IsNegative() {
-					event.Reason, event.CostUSD = "", cost.String()
-				} else {
-					event.Reason = "billing_metadata_missing"
-				}
-			} else if event.Reason == "" {
+			if event.Reason == "" {
 				event.Reason = "billing_metadata_missing"
 			}
+		case costErr != nil || cost.IsNegative():
+			event.Reason = "billing_metadata_missing"
+		case snapshot.Version != 2 || snapshot.OutputVATRate == nil:
+			event.Reason = "tax_snapshot_missing"
+		case ValidateChannelInvoiceVATRate(snapshot.OutputVATRate) != nil || ValidateChannelInvoiceVATRate(snapshot.InputVATRate) != nil:
+			event.Reason = "billing_metadata_missing"
+		case snapshot.InputVATRate == nil && !cost.IsZero():
+			event.Reason = "tax_rate_unconfigured"
+		default:
+			revenue := decimal.NewFromInt(int64(entry.Quota)).Div(unit)
+			event.NetRevenueUSD = revenue.Div(decimal.NewFromInt(1).Add(decimal.NewFromFloat(*snapshot.OutputVATRate))).String()
+			inputRate := decimal.Zero
+			if snapshot.InputVATRate != nil {
+				inputRate = decimal.NewFromFloat(*snapshot.InputVATRate)
+			}
+			event.NetCostUSD = cost.Div(decimal.NewFromInt(1).Add(inputRate)).String()
+			event.Reason = ""
 		}
 		identity := snapshot.EventID
 		if identity == "" {
@@ -163,35 +208,31 @@ func ApplyGrossProfitEvent(ctx context.Context, key string) error {
 		if event.AppliedAt != 0 {
 			return nil
 		}
-		bucket := GrossProfitDaily{Day: event.Day, ChannelID: event.ChannelID, Reason: event.Reason, RevenueUSD: "0", CostUSD: "0"}
+		bucket := GrossProfitDaily{Day: event.Day, ChannelID: event.ChannelID, Reason: event.Reason, RevenueUSD: "0", CostUSD: "0", NetRevenueUSD: "0", NetCostUSD: "0"}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&bucket).Error; err != nil {
 			return err
 		}
 		if err := lockForUpdate(tx).First(&bucket, "day = ? AND channel_id = ? AND reason = ?", event.Day, event.ChannelID, event.Reason).Error; err != nil {
 			return err
 		}
-		revenue, err := decimal.NewFromString(bucket.RevenueUSD)
-		if err != nil {
-			return err
-		}
-		cost, err := decimal.NewFromString(bucket.CostUSD)
-		if err != nil {
-			return err
-		}
-		eventRevenue, err := decimal.NewFromString(event.RevenueUSD)
-		if err != nil {
-			return err
-		}
-		eventCost, err := decimal.NewFromString(event.CostUSD)
-		if err != nil {
-			return err
+		updates := map[string]any{"requests": bucket.Requests + 1}
+		for _, amount := range []struct{ column, bucket, event string }{
+			{"revenue_usd", bucket.RevenueUSD, event.RevenueUSD}, {"cost_usd", bucket.CostUSD, event.CostUSD},
+			{"net_revenue_usd", bucket.NetRevenueUSD, event.NetRevenueUSD}, {"net_cost_usd", bucket.NetCostUSD, event.NetCostUSD},
+		} {
+			current, err := decimal.NewFromString(amount.bucket)
+			if err != nil {
+				return err
+			}
+			increment, err := decimal.NewFromString(amount.event)
+			if err != nil {
+				return err
+			}
+			updates[amount.column] = current.Add(increment).String()
 		}
 		// Reason is an empty string for known costs. Explicitly bind every key:
 		// GORM omits zero-valued composite primary keys from Model updates.
-		if err := tx.Model(&GrossProfitDaily{}).Where("day = ? AND channel_id = ? AND reason = ?", event.Day, event.ChannelID, event.Reason).Updates(map[string]any{
-			"requests":    bucket.Requests + 1,
-			"revenue_usd": revenue.Add(eventRevenue).String(), "cost_usd": cost.Add(eventCost).String(),
-		}).Error; err != nil {
+		if err := tx.Model(&GrossProfitDaily{}).Where("day = ? AND channel_id = ? AND reason = ?", event.Day, event.ChannelID, event.Reason).Updates(updates).Error; err != nil {
 			return err
 		}
 		return tx.Model(&event).Update("applied_at", common.GetTimestamp()).Error
@@ -217,7 +258,35 @@ func ReconcileGrossProfit(ctx context.Context, batchSize int, now time.Time) err
 		}
 	}
 	var state GrossProfitRollupState
-	if err := DB.WithContext(ctx).First(&state, "name = ?", "consume").Error; err != nil {
+	if err := DB.WithContext(ctx).First(&state, "name = ?", GrossProfitRollupName).Error; err != nil {
+		return errors.Join(failures, err)
+	}
+	if !state.LegacyBackfillComplete {
+		// Import the old durable ledger before retained logs. Its original keys
+		// deduplicate against log replay, including when raw logs were purged.
+		var legacy []GrossProfitEvent
+		if err := DB.WithContext(ctx).Table("gross_profit_events").Select("event_key", "day", "channel_id", "reason", "revenue_usd", "cost_usd", "created_at").
+			Where("event_key > ?", state.LegacyCursor).Order("event_key ASC").Limit(batchSize).Find(&legacy).Error; err != nil {
+			return errors.Join(failures, err)
+		}
+		for i := range legacy {
+			if legacy[i].Reason == "" {
+				legacy[i].Reason = "tax_snapshot_missing"
+			}
+			legacy[i].NetRevenueUSD, legacy[i].NetCostUSD = "0", "0"
+		}
+		err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if len(legacy) > 0 {
+				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&legacy, 100).Error; err != nil {
+					return err
+				}
+				state.LegacyCursor = legacy[len(legacy)-1].EventKey
+			}
+			return tx.Model(&GrossProfitRollupState{}).Where("name = ? AND revision = ?", state.Name, state.Revision).Updates(map[string]any{
+				"legacy_cursor": state.LegacyCursor, "legacy_backfill_complete": len(legacy) < batchSize,
+				"revision": state.Revision + 1, "updated_at": now.Unix(),
+			}).Error
+		})
 		return errors.Join(failures, err)
 	}
 	if state.BackfillComplete && now.Unix()-state.FullScanStartedAt >= 86400 {

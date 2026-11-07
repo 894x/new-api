@@ -313,7 +313,10 @@ test.each([
     if (savedUrl) await user.type(address, savedUrl)
     await user.click(screen.getByRole('button', { name: 'Update Channel' }))
     await waitFor(() => expect(put).toHaveBeenCalled())
-    expect(put.mock.calls[0]?.[1]).toMatchObject({ id: 42, base_url: savedUrl })
+    expect(put.mock.calls[0]?.[1]).toMatchObject({
+      id: 42,
+      base_url: savedUrl,
+    })
   }
 )
 
@@ -340,6 +343,42 @@ test('clearing the channel cost discount submits an explicit null and keeps it e
   await waitFor(() => expect(put).toHaveBeenCalled())
   expect(put.mock.calls[0]?.[1]).toMatchObject({ id: 42, cost_discount: null })
 })
+
+test.each([
+  ['', null],
+  ['0', 0],
+  ['3', 0.03],
+] as const)(
+  'editing invoice VAT to %s submits %s and retains the value across tabs',
+  async (inputValue, savedRate) => {
+    editingChannel.invoice_vat_rate = 0.06
+    const put = vi
+      .spyOn(api, 'put')
+      .mockResolvedValue({ data: { success: true } })
+    const user = userEvent.setup()
+    render(<ConfigurationHarness currentRow={editingChannel} />)
+    await screen.findByDisplayValue('Existing channel')
+    await user.click(screen.getByRole('tab', { name: /Routing & Mapping/ }))
+    const input = screen.getByRole('spinbutton', {
+      name: 'Deductible invoice VAT rate (%)',
+    })
+    expect(input).toHaveValue(6)
+    fireEvent.change(input, { target: { value: inputValue } })
+    await user.click(screen.getByRole('tab', { name: /Connection & Models/ }))
+    await user.click(screen.getByRole('tab', { name: /Routing & Mapping/ }))
+    expect(
+      screen.getByRole('spinbutton', {
+        name: 'Deductible invoice VAT rate (%)',
+      })
+    ).toHaveValue(inputValue === '' ? null : Number(inputValue))
+    await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+    await waitFor(() => expect(put).toHaveBeenCalled())
+    expect(put.mock.calls[0]?.[1]).toMatchObject({
+      id: 42,
+      invoice_vat_rate: savedRate,
+    })
+  }
+)
 
 test('an unavailable default URL endpoint keeps the fallback placeholder and allows saving a custom address', async () => {
   const onInternalServerError = vi.fn()
@@ -676,7 +715,9 @@ test('creating a migrated provider uses its plugin binding instead of the legacy
     .mockResolvedValue({ data: { success: true } })
   const user = userEvent.setup()
   render(<ConfigurationHarness />)
-  const plugin = await screen.findByRole('option', { name: 'Sora Plugin sora' })
+  const plugin = await screen.findByRole('option', {
+    name: 'Sora Plugin sora',
+  })
   expect(
     screen.queryByRole('option', { name: 'Sora Built-in #55' })
   ).not.toBeInTheDocument()
@@ -914,7 +955,9 @@ test('plugin model shortcuts truncate long names and omit plugins without model 
   const row = screen.getByRole('group', { name: 'Plugin extensions' })
   expect(row).toHaveClass('flex-wrap')
   expect(screen.getByText(name)).toHaveClass('truncate', 'max-w-36')
-  const trigger = screen.getByRole('button', { name: `${name} Selected 0 / 1` })
+  const trigger = screen.getByRole('button', {
+    name: `${name} Selected 0 / 1`,
+  })
   expect(trigger).toHaveAttribute('title', name)
   expect(trigger).toHaveClass('min-w-0', 'max-w-full')
   expect(screen.getAllByRole('button')).toHaveLength(1)
@@ -2043,7 +2086,9 @@ test('an operator without sensitive write permission can discover saved models a
     target: { value: '8' },
   })
   fireEvent.change(screen.getByLabelText('RPM'), { target: { value: '60' } })
-  fireEvent.change(screen.getByLabelText('TPM'), { target: { value: '12000' } })
+  fireEvent.change(screen.getByLabelText('TPM'), {
+    target: { value: '12000' },
+  })
   await user.click(screen.getByRole('button', { name: 'Update Channel' }))
   await waitFor(() => expect(put).toHaveBeenCalled())
   expect(put.mock.calls[0]?.[1]).toMatchObject({

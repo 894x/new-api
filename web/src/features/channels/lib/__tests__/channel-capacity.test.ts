@@ -33,6 +33,43 @@ import {
 } from '../model-routing-overrides'
 
 describe('channel capacity configuration', () => {
+  it.each([null, 0, 1, 3, 6, 13])(
+    'round-trips invoice VAT percentage %s and preserves unknown versus zero',
+    (vatPercent) => {
+      const form = {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'Invoice channel',
+        key: 'fixture',
+        models: 'gpt-test',
+        group: ['default'],
+        invoice_vat_rate: vatPercent,
+      }
+      expect(channelFormSchema.safeParse(form).success).toBe(true)
+      const expectedRate = vatPercent == null ? null : vatPercent / 100
+      const channel = transformFormDataToCreatePayload(form).channel
+      expect(channel.invoice_vat_rate).toBe(expectedRate)
+      expect(transformFormDataToUpdatePayload(form, 1).invoice_vat_rate).toBe(
+        expectedRate
+      )
+      expect(
+        transformChannelToFormDefaults({
+          ...channel,
+          channel_info: {
+            is_multi_key: false,
+            multi_key_size: 1,
+            multi_key_mode: 'random',
+          },
+        } as Parameters<typeof transformChannelToFormDefaults>[0])
+          .invoice_vat_rate
+      ).toBe(vatPercent)
+      expect(
+        channelFormSchema.safeParse({ ...form, invoice_vat_rate: -1 }).success
+      ).toBe(false)
+      expect(
+        channelFormSchema.safeParse({ ...form, invoice_vat_rate: 101 }).success
+      ).toBe(false)
+    }
+  )
   it.each([null, 0, 0.003125, 1])(
     'round-trips upstream cost discount %s without defaulting unknown values',
     (costDiscount) => {

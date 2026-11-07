@@ -133,6 +133,9 @@ func ValidateChannelRoutingLimits(channel *Channel) error {
 	if err := ValidateChannelCostDiscount(channel.CostDiscount); err != nil {
 		return err
 	}
+	if err := ValidateChannelInvoiceVATRate(channel.InvoiceVATRate); err != nil {
+		return err
+	}
 	if err := ValidateChannelWeight(channel.Weight); err != nil {
 		return err
 	}

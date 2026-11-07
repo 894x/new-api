@@ -20,6 +20,10 @@ export interface GrossProfitTotals {
   known_requests: number
   known_revenue_usd: number
   cost_usd: number
+  net_revenue_usd: number
+  net_cost_usd: number
+  output_vat_usd: number
+  input_vat_usd: number
   profit_usd: number
   profit_margin: number | null
   revenue_coverage: number | null

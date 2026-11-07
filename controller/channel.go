@@ -1412,6 +1412,9 @@ func UpdateChannel(c *gin.Context) {
 	if _, provided := requestData["cost_discount"]; provided {
 		explicitFields = append(explicitFields, "cost_discount")
 	}
+	if _, provided := requestData["invoice_vat_rate"]; provided {
+		explicitFields = append(explicitFields, "invoice_vat_rate")
+	}
 	err = channel.Update(explicitFields...)
 	if err != nil {
 		common.ApiError(c, err)
@@ -1426,6 +1429,10 @@ func UpdateChannel(c *gin.Context) {
 	if (channel.CostDiscount == nil) != (originChannel.CostDiscount == nil) ||
 		(channel.CostDiscount != nil && originChannel.CostDiscount != nil && *channel.CostDiscount != *originChannel.CostDiscount) {
 		changedFields = append(changedFields, "cost_discount")
+	}
+	if (channel.InvoiceVATRate == nil) != (originChannel.InvoiceVATRate == nil) ||
+		(channel.InvoiceVATRate != nil && originChannel.InvoiceVATRate != nil && *channel.InvoiceVATRate != *originChannel.InvoiceVATRate) {
+		changedFields = append(changedFields, "invoice_vat_rate")
 	}
 	if channel.Models != originChannel.Models {
 		changedFields = append(changedFields, "models")

@@ -52,10 +52,10 @@ export function GrossProfitResults(props: { report: GrossProfitReport }) {
     value == null ? '—' : `${formatNumber(value * 100, locale)}%`
   const summary = props.report.summary
   const cards = [
-    [t('Known-cost revenue'), money(summary.known_revenue_usd)],
-    [t('Upstream cost'), money(summary.cost_usd)],
+    [t('Revenue excluding VAT'), money(summary.net_revenue_usd)],
+    [t('Cost excluding VAT'), money(summary.net_cost_usd)],
     [
-      t('Known-cost gross profit'),
+      t('Gross profit excluding VAT'),
       summary.known_requests > 0 ? money(summary.profit_usd) : '—',
     ],
     [t('Gross margin'), percent(summary.profit_margin)],
@@ -70,17 +70,27 @@ export function GrossProfitResults(props: { report: GrossProfitReport }) {
     },
     {
       id: 'revenue',
-      header: t('Known-cost revenue'),
+      header: t('Revenue including VAT'),
       cell: (row) => money(row.known_revenue_usd),
     },
     {
       id: 'cost',
-      header: t('Upstream cost'),
+      header: t('Cost including VAT'),
       cell: (row) => money(row.cost_usd),
     },
     {
+      id: 'output_vat',
+      header: t('Output VAT'),
+      cell: (row) => money(row.output_vat_usd),
+    },
+    {
+      id: 'input_vat',
+      header: t('Deductible input VAT'),
+      cell: (row) => money(row.input_vat_usd),
+    },
+    {
       id: 'profit',
-      header: t('Gross profit'),
+      header: t('Gross profit excluding VAT'),
       cell: (row) => money(row.profit_usd),
     },
     {
@@ -98,7 +108,7 @@ export function GrossProfitResults(props: { report: GrossProfitReport }) {
     },
     {
       id: 'revenue',
-      header: t('Revenue'),
+      header: t('Revenue including VAT'),
       cell: (row) => money(row.revenue_usd),
     },
     {
@@ -114,10 +124,20 @@ export function GrossProfitResults(props: { report: GrossProfitReport }) {
         if (row.reason === 'discount_unavailable') {
           return t('Channel discount unavailable')
         }
+        if (row.reason === 'tax_rate_unconfigured') {
+          return t('Channel invoice VAT rate not configured')
+        }
+        if (row.reason === 'tax_snapshot_missing') {
+          return t('Historical VAT snapshot unavailable')
+        }
         return t('Billing information unavailable')
       },
     },
-    { id: 'profit', header: t('Gross profit'), cell: () => t('Unknown') },
+    {
+      id: 'profit',
+      header: t('Gross profit excluding VAT'),
+      cell: () => t('Unknown'),
+    },
   ]
   return (
     <div className='space-y-4'>
@@ -137,7 +157,7 @@ export function GrossProfitResults(props: { report: GrossProfitReport }) {
       </div>
       <p className='text-muted-foreground text-sm'>
         {t(
-          'Gross profit covers only calls with a known cost. Revenue coverage is their share of total call revenue.'
+          'Gross profit = revenue including VAT / 1.06 − cost including VAT / (1 + channel invoice VAT rate). Only calls with known cost and VAT are included; revenue coverage uses VAT-inclusive amounts.'
         )}
       </p>
       <Card>
@@ -148,9 +168,12 @@ export function GrossProfitResults(props: { report: GrossProfitReport }) {
           <ChartContainer
             className='h-64 w-full'
             config={{
-              profit_usd: { label: t('Gross profit'), color: 'var(--chart-1)' },
-              known_revenue_usd: {
-                label: t('Known-cost revenue'),
+              profit_usd: {
+                label: t('Gross profit excluding VAT'),
+                color: 'var(--chart-1)',
+              },
+              net_revenue_usd: {
+                label: t('Revenue excluding VAT'),
                 color: 'var(--chart-2)',
               },
             }}
@@ -178,8 +201,8 @@ export function GrossProfitResults(props: { report: GrossProfitReport }) {
                     formatter={(value, name) => (
                       <span>
                         {name === 'profit_usd'
-                          ? t('Gross profit')
-                          : t('Known-cost revenue')}
+                          ? t('Gross profit excluding VAT')
+                          : t('Revenue excluding VAT')}
                         : {money(Number(value))}
                       </span>
                     )}
@@ -188,8 +211,8 @@ export function GrossProfitResults(props: { report: GrossProfitReport }) {
               />
               <Line
                 type='monotone'
-                dataKey='known_revenue_usd'
-                stroke='var(--color-known_revenue_usd)'
+                dataKey='net_revenue_usd'
+                stroke='var(--color-net_revenue_usd)'
                 dot={false}
                 isAnimationActive={false}
               />
@@ -214,15 +237,15 @@ export function GrossProfitResults(props: { report: GrossProfitReport }) {
             columns={columns}
             data={props.report.channels}
             getRowKey={(row) => row.channel_id}
-            emptyContent={t('No calls with a known cost in this period')}
+            emptyContent={t('No calls with known cost and VAT in this period')}
           />
         </CardContent>
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle>{t('Unknown-cost calls')}</CardTitle>
+          <CardTitle>{t('Calls excluded from gross profit')}</CardTitle>
           <p className='text-muted-foreground text-sm'>
-            {t('Revenue')}: {money(summary.unknown_revenue_usd)} ·{' '}
+            {t('Revenue including VAT')}: {money(summary.unknown_revenue_usd)} ·{' '}
             {t('Requests')}: {formatNumber(summary.unknown_requests, locale)}
           </p>
         </CardHeader>
@@ -231,7 +254,9 @@ export function GrossProfitResults(props: { report: GrossProfitReport }) {
             columns={unknownColumns}
             data={props.report.unknown}
             getRowKey={(row) => `${row.channel_id}:${row.reason}`}
-            emptyContent={t('No unknown-cost calls in this period')}
+            emptyContent={t(
+              'No calls excluded from gross profit in this period'
+            )}
           />
         </CardContent>
       </Card>

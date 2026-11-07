@@ -2293,6 +2293,39 @@ export function ChannelMutateDrawer({
             </FormItem>
           )}
         />
+        <FormField
+          control={form.control}
+          name='invoice_vat_rate'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('Deductible invoice VAT rate (%)')}</FormLabel>
+              <FormControl>
+                <Input
+                  type='number'
+                  min={0}
+                  max={100}
+                  step='any'
+                  {...field}
+                  value={field.value ?? ''}
+                  placeholder={t('Unknown')}
+                  onChange={(event) =>
+                    field.onChange(
+                      event.target.value === ''
+                        ? null
+                        : Number(event.target.value)
+                    )
+                  }
+                />
+              </FormControl>
+              <FormDescription>
+                {t(
+                  'Enter the VAT rate on the deductible special invoice, e.g. 6 for 6%. Leave empty if unknown. Changes apply to future calls only.'
+                )}
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
         {(['rpm', 'tpm'] as const).map((name) => (
           <FormField
             key={name}

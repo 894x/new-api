@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -50,6 +52,44 @@ type releasedGrossProfitLog struct {
 }
 
 func (releasedGrossProfitLog) TableName() string { return "logs" }
+
+// The previous local accounting schema had no VAT or net amounts.
+type previousGrossProfitEvent struct {
+	EventKey   string `gorm:"type:varchar(64);primaryKey"`
+	Day        string `gorm:"type:varchar(10);not null"`
+	ChannelID  int    `gorm:"not null"`
+	Reason     string `gorm:"type:varchar(64);not null"`
+	RevenueUSD string `gorm:"type:text;not null"`
+	CostUSD    string `gorm:"type:text;not null"`
+	AppliedAt  int64  `gorm:"bigint;not null"`
+	CreatedAt  int64  `gorm:"bigint;not null"`
+}
+
+func (previousGrossProfitEvent) TableName() string { return "gross_profit_events" }
+
+type previousGrossProfitState struct {
+	Name              string `gorm:"type:varchar(32);primaryKey"`
+	Timezone          string `gorm:"type:varchar(64);not null"`
+	CursorAt          int64  `gorm:"bigint;not null"`
+	CursorID          int    `gorm:"bigint;not null"`
+	CursorOffset      int    `gorm:"bigint;not null"`
+	CursorRequestID   string `gorm:"type:varchar(64);not null"`
+	FullScanStartedAt int64  `gorm:"bigint;not null"`
+	BackfillComplete  bool
+	Revision          int64 `gorm:"bigint;not null"`
+	UpdatedAt         int64 `gorm:"bigint;not null"`
+}
+
+func (previousGrossProfitState) TableName() string { return "gross_profit_rollup_states" }
+
+func TestGrossProfitVATRateValidation(t *testing.T) {
+	for _, rate := range []*float64{nil, common.GetPointer(0.0), common.GetPointer(0.06), common.GetPointer(1.0)} {
+		require.NoError(t, model.ValidateChannelRoutingLimits(&model.Channel{Group: "default", InvoiceVATRate: rate}))
+	}
+	for _, rate := range []float64{-0.01, 1.01, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		assert.ErrorContains(t, model.ValidateChannelRoutingLimits(&model.Channel{Group: "default", InvoiceVATRate: &rate}), "invoice VAT rate")
+	}
+}
 
 func TestGrossProfitRejectsNonRootBeforeReadingData(t *testing.T) {
 	for _, role := range []int{0, common.RoleCommonUser, common.RoleAdminUser} {
@@ -126,13 +166,43 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			require.NoError(t, model.MigrateGrossProfit(db))
 			require.NoError(t, model.MigrateGrossProfit(db))
 			require.NoError(t, db.Migrator().DropTable(&model.GrossProfitDaily{}, &model.GrossProfitEvent{}, &model.GrossProfitRollupState{}))
+			// Preserve the old durable ledger even if its original logs were purged.
+			require.NoError(t, db.AutoMigrate(&previousGrossProfitEvent{}, &previousGrossProfitState{}))
+			legacyTime := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -30)
+			legacyDay := legacyTime.Format(time.DateOnly)
+			legacy := []previousGrossProfitEvent{
+				{EventKey: fmt.Sprintf("%x", sha256.Sum256([]byte("legacy-replayed"))), Day: legacyDay, ChannelID: 1, RevenueUSD: "1.06", CostUSD: "0.53", AppliedAt: 1},
+				{EventKey: fmt.Sprintf("%x", sha256.Sum256([]byte("legacy-purged"))), Day: legacyDay, ChannelID: 1, RevenueUSD: "2.12", CostUSD: "1.03", AppliedAt: 1},
+			}
+			require.NoError(t, db.Create(&legacy).Error)
+			require.NoError(t, db.Create(&previousGrossProfitState{Name: "consume", Timezone: "UTC", BackfillComplete: true}).Error)
 			// Upgrade the latest released schema with a retained consume log.
 			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.ChannelModelOverride{}, &model.User{}))
 			require.NoError(t, logDB.AutoMigrate(&releasedGrossProfitLog{}))
+			require.NoError(t, logDB.Create(&model.Log{Type: model.LogTypeConsume, CreatedAt: legacyTime.Unix(), ChannelId: 1, Quota: 530000,
+				Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":1,"event_id":"legacy-replayed","cost_usd":"0.53"}}}`}).Error)
 			// A representative released log row predates all rollup tables/snapshots.
 			require.NoError(t, logDB.Create(&releasedGrossProfitLog{CreatedAt: time.Now().Unix(), Type: model.LogTypeConsume, ChannelId: 2, Quota: 100000, Other: `{"quota_per_unit":500000}`}).Error)
 			require.NoError(t, model.MigrateGrossProfit(db))
 			require.NoError(t, model.MigrateGrossProfit(db))
+			var oldState previousGrossProfitState
+			require.NoError(t, db.First(&oldState, "name = ?", "consume").Error)
+			assert.True(t, oldState.BackfillComplete)
+			t.Run("failed legacy ledger import does not advance migration progress", func(t *testing.T) {
+				var before model.GrossProfitRollupState
+				require.NoError(t, db.First(&before, "name = ?", model.GrossProfitRollupName).Error)
+				require.NoError(t, db.Callback().Create().Before("gorm:create").Register("gross-profit-legacy-import-failure", func(tx *gorm.DB) {
+					if tx.Statement.Table == (model.GrossProfitEvent{}).TableName() {
+						tx.AddError(errors.New("legacy ledger import unavailable"))
+					}
+				}))
+				err := model.ReconcileGrossProfit(context.Background(), 1, time.Now())
+				require.NoError(t, db.Callback().Create().Remove("gross-profit-legacy-import-failure"))
+				require.ErrorContains(t, err, "legacy ledger import unavailable")
+				var after model.GrossProfitRollupState
+				require.NoError(t, db.First(&after, "name = ?", model.GrossProfitRollupName).Error)
+				assert.Equal(t, before, after)
+			})
 			var version string
 			versionQuery := "SELECT VERSION()"
 			if engine == "sqlite" {
@@ -140,8 +210,18 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			}
 			require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
 			t.Logf("%s version: %s; separate main/log connections", engine, version)
-			channel := model.Channel{Id: 1, Name: "Discount channel", Models: "model-a,gpt-4o-gizmo-*", CostDiscount: common.GetPointer(0.3)}
+			channel := model.Channel{Id: 1, Name: "Discount channel", Models: "model-a,gpt-4o-gizmo-*", CostDiscount: common.GetPointer(0.3), InvoiceVATRate: common.GetPointer(0.03)}
 			require.NoError(t, db.Create(&channel).Error)
+			// Upgrade a populated pre-VAT channel schema twice, preserving costs.
+			require.NoError(t, db.Migrator().DropColumn(&model.Channel{}, "invoice_vat_rate"))
+			require.NoError(t, db.AutoMigrate(&model.Channel{}))
+			require.NoError(t, db.AutoMigrate(&model.Channel{}))
+			var upgraded model.Channel
+			require.NoError(t, db.First(&upgraded, 1).Error)
+			assert.Nil(t, upgraded.InvoiceVATRate)
+			require.NotNil(t, upgraded.CostDiscount)
+			assert.Equal(t, 0.3, *upgraded.CostDiscount)
+			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 1).Update("invoice_vat_rate", 0.03).Error)
 			require.NoError(t, db.Create(&model.Channel{Id: 2, Name: "Unconfigured", Models: "model-a"}).Error)
 			require.NoError(t, db.Create(&[]model.ChannelModelOverride{
 				{ChannelId: 1, Model: "model-free", CostDiscount: common.GetPointer(0.0)},
@@ -178,6 +258,10 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 					require.NoError(t, logDB.Order("id DESC").First(&entry).Error)
 					assert.Equal(t, tc.cost, gjson.Get(entry.Other, "root_info.gross_profit.cost_usd").String())
 					assert.Equal(t, tc.reason, gjson.Get(entry.Other, "root_info.gross_profit.reason").String())
+					assert.Equal(t, 0.06, gjson.Get(entry.Other, "root_info.gross_profit.output_vat_rate").Float())
+					if tc.channel == 1 {
+						assert.Equal(t, 0.03, gjson.Get(entry.Other, "root_info.gross_profit.input_vat_rate").Float())
+					}
 					adminEntry := entry
 					model.FormatAdminLogs([]*model.Log{&adminEntry})
 					assert.False(t, gjson.Get(adminEntry.Other, "root_info").Exists())
@@ -188,7 +272,7 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			start := time.Now().UTC().Truncate(24 * time.Hour).Unix()
 
 			// Editing/deleting routing metadata must not reprice recorded calls.
-			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 1).Update("cost_discount", 0.9).Error)
+			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 1).Updates(map[string]any{"cost_discount": 0.9, "invoice_vat_rate": 0.13}).Error)
 			require.NoError(t, db.Where("channel_id = ?", 1).Delete(&model.ChannelModelOverride{}).Error)
 			require.NoError(t, logDB.Create(&[]model.Log{
 
@@ -200,6 +284,7 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			ctx, _ := gin.CreateTestContext(recorder)
 			ctx.Set("role", common.RoleRootUser)
 			ctx.Request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/gross-profit?start_date=%s&end_date=%s", time.Unix(start, 0).UTC().Format(time.DateOnly), time.Unix(start+86400, 0).UTC().Format(time.DateOnly)), nil)
+			require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now()))
 			require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now()))
 			require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now()))
 			GetGrossProfit(ctx)
@@ -215,7 +300,11 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			assert.EqualValues(t, 6, response.Data.Summary.KnownRequests)
 			assert.InDelta(t, 2.9, response.Data.Summary.KnownRevenueUSD, 1e-12)
 			assert.InDelta(t, 1.2, response.Data.Summary.CostUSD, 1e-12)
-			assert.InDelta(t, 1.7, response.Data.Summary.ProfitUSD, 1e-12)
+			assert.InDelta(t, 2.9/1.06, response.Data.Summary.NetRevenueUSD, 1e-12)
+			assert.InDelta(t, 1.2/1.03, response.Data.Summary.NetCostUSD, 1e-12)
+			assert.InDelta(t, 2.9/1.06-1.2/1.03, response.Data.Summary.ProfitUSD, 1e-12)
+			assert.InDelta(t, 2.9-2.9/1.06, response.Data.Summary.OutputVATUSD, 1e-12)
+			assert.InDelta(t, 1.2-1.2/1.03, response.Data.Summary.InputVATUSD, 1e-12)
 			assert.EqualValues(t, 4, response.Data.Summary.UnknownRequests)
 			assert.InDelta(t, 0.6, response.Data.Summary.UnknownRevenueUSD, 1e-12)
 			require.NotNil(t, response.Data.Summary.RevenueCoverage)
@@ -223,6 +312,16 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			require.Len(t, response.Data.Channels, 1)
 			assert.Len(t, response.Data.Unknown, 3)
 			assert.Len(t, response.Data.Series, 1)
+			historical, err := model.GetGrossProfitReport(context.Background(), legacyDay, legacyTime.AddDate(0, 0, 1).Format(time.DateOnly))
+			require.NoError(t, err)
+			assert.EqualValues(t, 2, historical.Summary.UnknownRequests, "ledger and retained log must deduplicate; purged log must remain accounted for")
+			assert.InDelta(t, 3.18, historical.Summary.UnknownRevenueUSD, 1e-12)
+			assert.Zero(t, historical.Summary.KnownRequests)
+			require.Len(t, historical.Unknown, 1)
+			assert.Equal(t, "tax_snapshot_missing", historical.Unknown[0].Reason)
+			var retainedLegacy []previousGrossProfitEvent
+			require.NoError(t, db.Order("event_key ASC").Find(&retainedLegacy).Error)
+			assert.ElementsMatch(t, legacy, retainedLegacy)
 
 			// Replaying every retained source row does not change the totals.
 			var storedLogs []model.Log
@@ -236,10 +335,10 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, response.Data.Summary, repeated.Summary)
 
-			for index, stage := range []string{"gross_profit_dailies", "gross_profit_events"} {
+			for index, stage := range []string{(model.GrossProfitDaily{}).TableName(), (model.GrossProfitEvent{}).TableName()} {
 				t.Run("rollback and recover "+stage, func(t *testing.T) {
 					entry := model.Log{Type: model.LogTypeConsume, CreatedAt: start + int64(10+index)*86400, ChannelId: 1, Quota: 400000, RequestId: "rollback-" + stage,
-						Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":1,"event_id":"rollback-` + stage + `","cost_usd":"0.3"}}}`}
+						Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":2,"output_vat_rate":0.06,"input_vat_rate":0.03,"event_id":"rollback-` + stage + `","cost_usd":"0.3"}}}`}
 					keys, err := model.QueueGrossProfitLogs(context.Background(), []model.Log{entry})
 					require.NoError(t, err)
 					hook := "gross-profit-fail-" + stage
@@ -269,9 +368,9 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 
 			t.Run("known and unknown buckets for the same channel remain isolated", func(t *testing.T) {
 				entries := []model.Log{
-					{Type: model.LogTypeConsume, CreatedAt: start + 21*86400, ChannelId: 1, Quota: 100000, Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":1,"event_id":"isolated-unknown-a","reason":"discount_unconfigured"}}}`},
-					{Type: model.LogTypeConsume, CreatedAt: start + 21*86400, ChannelId: 1, Quota: 100000, Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":1,"event_id":"isolated-unknown-b","reason":"billing_metadata_missing"}}}`},
-					{Type: model.LogTypeConsume, CreatedAt: start + 21*86400, ChannelId: 1, Quota: 400000, Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":1,"event_id":"isolated-known","cost_usd":"0.3"}}}`},
+					{Type: model.LogTypeConsume, CreatedAt: start + 21*86400, ChannelId: 1, Quota: 100000, Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":2,"output_vat_rate":0.06,"input_vat_rate":0.03,"event_id":"isolated-unknown-a","reason":"discount_unconfigured"}}}`},
+					{Type: model.LogTypeConsume, CreatedAt: start + 21*86400, ChannelId: 1, Quota: 100000, Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":2,"output_vat_rate":0.06,"input_vat_rate":0.03,"event_id":"isolated-unknown-b","reason":"billing_metadata_missing"}}}`},
+					{Type: model.LogTypeConsume, CreatedAt: start + 21*86400, ChannelId: 1, Quota: 400000, Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":2,"output_vat_rate":0.06,"input_vat_rate":0.03,"event_id":"isolated-known","cost_usd":"0.3"}}}`},
 				}
 				keys, err := model.QueueGrossProfitLogs(context.Background(), entries)
 				require.NoError(t, err)
@@ -290,8 +389,8 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			})
 			t.Run("concurrent events in the same bucket and duplicate replay", func(t *testing.T) {
 				entries := []model.Log{
-					{Type: model.LogTypeConsume, CreatedAt: start + 20*86400, ChannelId: 1, Quota: 400000, Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":1,"event_id":"parallel-a","cost_usd":"0.1"}}}`},
-					{Type: model.LogTypeConsume, CreatedAt: start + 20*86400, ChannelId: 1, Quota: 400000, Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":1,"event_id":"parallel-b","cost_usd":"0.2"}}}`},
+					{Type: model.LogTypeConsume, CreatedAt: start + 20*86400, ChannelId: 1, Quota: 400000, Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":2,"output_vat_rate":0.06,"input_vat_rate":0.03,"event_id":"parallel-a","cost_usd":"0.1"}}}`},
+					{Type: model.LogTypeConsume, CreatedAt: start + 20*86400, ChannelId: 1, Quota: 400000, Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":2,"output_vat_rate":0.06,"input_vat_rate":0.03,"event_id":"parallel-b","cost_usd":"0.2"}}}`},
 				}
 				keys, err := model.QueueGrossProfitLogs(context.Background(), entries)
 				require.NoError(t, err)
@@ -318,11 +417,11 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			})
 			t.Run("failed source import preserves cursor and late historical logs are repaired", func(t *testing.T) {
 				var before model.GrossProfitRollupState
-				require.NoError(t, db.First(&before, "name = ?", "consume").Error)
-				entry := model.Log{Type: model.LogTypeConsume, CreatedAt: start - 10*86400, ChannelId: 1, Quota: 400000, RequestId: "late-committed-log", Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":1,"event_id":"late-historical","cost_usd":"0.1"}}}`}
+				require.NoError(t, db.First(&before, "name = ?", model.GrossProfitRollupName).Error)
+				entry := model.Log{Type: model.LogTypeConsume, CreatedAt: start - 10*86400, ChannelId: 1, Quota: 400000, RequestId: "late-committed-log", Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":2,"output_vat_rate":0.06,"input_vat_rate":0.03,"event_id":"late-historical","cost_usd":"0.1"}}}`}
 				require.NoError(t, logDB.Create(&entry).Error)
 				require.NoError(t, db.Callback().Create().Before("gorm:create").Register("gross-profit-import-failure", func(tx *gorm.DB) {
-					if tx.Statement.Table == "gross_profit_events" {
+					if tx.Statement.Table == (model.GrossProfitEvent{}).TableName() {
 						tx.AddError(errors.New("outbox unavailable"))
 					}
 				}))
@@ -330,7 +429,7 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 				require.ErrorContains(t, err, "outbox unavailable")
 				require.NoError(t, db.Callback().Create().Remove("gross-profit-import-failure"))
 				var after model.GrossProfitRollupState
-				require.NoError(t, db.First(&after, "name = ?", "consume").Error)
+				require.NoError(t, db.First(&after, "name = ?", model.GrossProfitRollupName).Error)
 				assert.Equal(t, before.Revision, after.Revision)
 				assert.Equal(t, before.CursorAt, after.CursorAt)
 				require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now().Add(25*time.Hour)))
@@ -342,17 +441,17 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			})
 
 			t.Run("small pages and deleted cursor boundary do not skip new logs", func(t *testing.T) {
-				require.NoError(t, db.Model(&model.GrossProfitRollupState{}).Where("name = ?", "consume").Updates(map[string]any{"cursor_at": -1, "cursor_id": 0, "cursor_request_id": "", "cursor_offset": 0, "backfill_complete": false}).Error)
+				require.NoError(t, db.Model(&model.GrossProfitRollupState{}).Where("name = ?", model.GrossProfitRollupName).Updates(map[string]any{"cursor_at": -1, "cursor_id": 0, "cursor_request_id": "", "cursor_offset": 0, "backfill_complete": false}).Error)
 				var count int64
 				require.NoError(t, logDB.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&count).Error)
 				for range count + 2 {
 					require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1, time.Now().Add(25*time.Hour)))
 				}
 				var cursor model.GrossProfitRollupState
-				require.NoError(t, db.First(&cursor, "name = ?", "consume").Error)
+				require.NoError(t, db.First(&cursor, "name = ?", model.GrossProfitRollupName).Error)
 				assert.True(t, cursor.BackfillComplete)
 				require.NoError(t, logDB.Where("created_at = ? AND id = ? AND request_id = ?", cursor.CursorAt, cursor.CursorID, cursor.CursorRequestID).Delete(&model.Log{}).Error)
-				entry := model.Log{Type: model.LogTypeConsume, CreatedAt: cursor.CursorAt + 1, ChannelId: 1, Quota: 400000, RequestId: "after-log-retention", Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":1,"event_id":"after-log-retention","cost_usd":"0.1"}}}`}
+				entry := model.Log{Type: model.LogTypeConsume, CreatedAt: cursor.CursorAt + 1, ChannelId: 1, Quota: 400000, RequestId: "after-log-retention", Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":2,"output_vat_rate":0.06,"input_vat_rate":0.03,"event_id":"after-log-retention","cost_usd":"0.1"}}}`}
 				require.NoError(t, logDB.Create(&entry).Error)
 				require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1, time.Now().Add(25*time.Hour)))
 				require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1, time.Now().Add(25*time.Hour)))
@@ -361,6 +460,64 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 				var event model.GrossProfitEvent
 				require.NoError(t, db.First(&event, "event_key = ?", keys[0]).Error)
 				assert.NotZero(t, event.AppliedAt)
+			})
+			t.Run("VAT-inclusive amounts split using frozen deductible invoice rates", func(t *testing.T) {
+				for index, tc := range []struct {
+					rate         *float64
+					costDiscount float64
+					netCost      float64
+					reason       string
+				}{
+					{rate: common.GetPointer(0.06), costDiscount: 0.5, netCost: 0.5},
+					{rate: common.GetPointer(0.03), costDiscount: 0.5, netCost: 0.53 / 1.03},
+					{rate: common.GetPointer(0.01), costDiscount: 0.5, netCost: 0.53 / 1.01},
+					{rate: common.GetPointer(0.0), costDiscount: 0.5, netCost: 0.53},
+					{costDiscount: 0.5, reason: "tax_rate_unconfigured"},
+					{costDiscount: 0, netCost: 0},
+				} {
+					require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 1).Updates(map[string]any{"cost_discount": tc.costDiscount, "invoice_vat_rate": tc.rate}).Error)
+					other := model.NewLogOther()
+					other.SetPublic("group_ratio", 1)
+					ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+					ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+					model.RecordConsumeLog(ctx, 1, model.RecordConsumeLogParams{ChannelId: 1, ModelName: "model-a", Quota: 530000, Other: other})
+					var entry model.Log
+					require.NoError(t, logDB.Order("id DESC").First(&entry).Error)
+					// Give the immutable snapshot its own business day to inspect exact totals.
+					entry.CreatedAt = start + int64(30+index)*86400
+					var parsed map[string]any
+					require.NoError(t, common.UnmarshalJsonStr(entry.Other, &parsed))
+					parsed["root_info"].(map[string]any)["gross_profit"].(map[string]any)["event_id"] = fmt.Sprintf("vat-case-%d", index)
+					encoded, err := common.Marshal(parsed)
+					require.NoError(t, err)
+					entry.Other = string(encoded)
+					keys, err := model.QueueGrossProfitLogs(context.Background(), []model.Log{entry})
+					require.NoError(t, err)
+					require.NoError(t, model.ApplyGrossProfitEvent(context.Background(), keys[0]))
+					require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 1).Update("invoice_vat_rate", 0.13).Error)
+					keys, err = model.QueueGrossProfitLogs(context.Background(), []model.Log{entry})
+					require.NoError(t, err)
+					require.NoError(t, model.ApplyGrossProfitEvent(context.Background(), keys[0]))
+					report, err := model.GetGrossProfitReport(context.Background(), time.Unix(entry.CreatedAt, 0).UTC().Format(time.DateOnly), time.Unix(entry.CreatedAt+86400, 0).UTC().Format(time.DateOnly))
+					require.NoError(t, err)
+					if tc.reason != "" {
+						assert.Zero(t, report.Summary.KnownRequests)
+						assert.EqualValues(t, 1, report.Summary.UnknownRequests)
+						require.Len(t, report.Unknown, 1)
+						assert.Equal(t, tc.reason, report.Unknown[0].Reason)
+						assert.InDelta(t, 1.06, report.Summary.UnknownRevenueUSD, 1e-12)
+						continue
+					}
+					assert.EqualValues(t, 1, report.Summary.KnownRequests)
+					assert.InDelta(t, 1.06, report.Summary.KnownRevenueUSD, 1e-12)
+					assert.InDelta(t, 1, report.Summary.NetRevenueUSD, 1e-12)
+					assert.InDelta(t, 0.06, report.Summary.OutputVATUSD, 1e-12)
+					assert.InDelta(t, tc.netCost, report.Summary.NetCostUSD, 1e-12)
+					assert.InDelta(t, 1-tc.netCost, report.Summary.ProfitUSD, 1e-12)
+					assert.InDelta(t, report.Summary.CostUSD-tc.netCost, report.Summary.InputVATUSD, 1e-12)
+					require.NotNil(t, report.Summary.ProfitMargin)
+					assert.InDelta(t, 1-tc.netCost, *report.Summary.ProfitMargin, 1e-12)
+				}
 			})
 			require.NoError(t, model.MigrateGrossProfit(db))
 			require.NoError(t, model.MigrateGrossProfit(db))

@@ -51,6 +51,7 @@ type Channel struct {
 	TPM               *int64   `json:"tpm" gorm:"bigint"`
 	Priority          *int64   `json:"priority" gorm:"bigint;default:0"`
 	CostDiscount      *float64 `json:"cost_discount"`
+	InvoiceVATRate    *float64 `json:"invoice_vat_rate"`
 	AutoBan           *int     `json:"auto_ban" gorm:"default:1"`
 	OtherInfo         string   `json:"other_info"`
 	Tag               *string  `json:"tag" gorm:"index"`

@@ -18,23 +18,37 @@ import (
 
 // Gross-profit reporting observes settled charges; it never changes billing.
 // The snapshot lives in root_info so ordinary administrators cannot read costs.
+const grossProfitOutputVATRate = 0.06
+
 type consumeGrossProfit struct {
 	EventID          string   `json:"event_id,omitempty"`
 	Version          int      `json:"version"`
 	ChannelDiscount  *float64 `json:"channel_discount,omitempty"`
 	CustomerDiscount string   `json:"customer_discount,omitempty"`
 	CostUSD          *string  `json:"cost_usd,omitempty"`
+	OutputVATRate    *float64 `json:"output_vat_rate,omitempty"`
+	InputVATRate     *float64 `json:"input_vat_rate,omitempty"`
 	Reason           string   `json:"reason,omitempty"`
 }
 
+// Rates are fractions of the tax-exclusive amount. Nil means unknown; zero
+// is an explicitly configured zero-rate invoice. Input invoices are deductible.
+func ValidateChannelInvoiceVATRate(rate *float64) error {
+	if rate != nil && (math.IsNaN(*rate) || math.IsInf(*rate, 0) || *rate < 0 || *rate > 1) {
+		return errors.New("channel invoice VAT rate must be between 0 and 1")
+	}
+	return nil
+}
+
 func recordConsumeGrossProfit(params RecordConsumeLogParams) {
-	snapshot := consumeGrossProfit{Version: 1, Reason: "discount_unconfigured", EventID: common.NewRequestId()}
+	snapshot := consumeGrossProfit{Version: 2, Reason: "discount_unconfigured", EventID: common.NewRequestId(), OutputVATRate: common.GetPointer(grossProfitOutputVATRate)}
 	defer func() { params.Other.SetRoot("gross_profit", snapshot) }()
 	var channel Channel
-	if err := DB.Select("id", "models", "cost_discount").First(&channel, params.ChannelId).Error; err != nil {
+	if err := DB.Select("id", "models", "cost_discount", "invoice_vat_rate").First(&channel, params.ChannelId).Error; err != nil {
 		snapshot.Reason = "discount_unavailable"
 		return
 	}
+	snapshot.InputVATRate = channel.InvoiceVATRate
 	modelName := params.ModelName
 	if !slices.Contains(strings.Split(channel.Models, ","), modelName) {
 		modelName = ratio_setting.RoutingMatchModelName(modelName)
@@ -104,6 +118,10 @@ type GrossProfitTotals struct {
 	KnownRequests     int64    `json:"known_requests"`
 	KnownRevenueUSD   float64  `json:"known_revenue_usd"`
 	CostUSD           float64  `json:"cost_usd"`
+	NetRevenueUSD     float64  `json:"net_revenue_usd"`
+	NetCostUSD        float64  `json:"net_cost_usd"`
+	OutputVATUSD      float64  `json:"output_vat_usd"`
+	InputVATUSD       float64  `json:"input_vat_usd"`
 	ProfitUSD         float64  `json:"profit_usd"`
 	ProfitMargin      *float64 `json:"profit_margin"`
 	RevenueCoverage   *float64 `json:"revenue_coverage"`
@@ -149,27 +167,31 @@ type GrossProfitAggregation struct {
 type grossProfitAccumulator struct {
 	knownRequests, unknownRequests int64
 	revenue, cost, unknownRevenue  decimal.Decimal
+	netRevenue, netCost            decimal.Decimal
 }
 
-func (a *grossProfitAccumulator) add(revenue decimal.Decimal, cost *decimal.Decimal, requests int64) {
-	if cost == nil {
-		a.unknownRequests += requests
-		a.unknownRevenue = a.unknownRevenue.Add(revenue)
-		return
-	}
-	a.knownRequests += requests
-	a.revenue = a.revenue.Add(revenue)
-	a.cost = a.cost.Add(*cost)
+func (a *grossProfitAccumulator) add(values grossProfitAccumulator) {
+	a.knownRequests += values.knownRequests
+	a.unknownRequests += values.unknownRequests
+	a.revenue = a.revenue.Add(values.revenue)
+	a.cost = a.cost.Add(values.cost)
+	a.netRevenue = a.netRevenue.Add(values.netRevenue)
+	a.netCost = a.netCost.Add(values.netCost)
+	a.unknownRevenue = a.unknownRevenue.Add(values.unknownRevenue)
 }
 
 func (a *grossProfitAccumulator) totals() GrossProfitTotals {
 	result := GrossProfitTotals{KnownRequests: a.knownRequests, UnknownRequests: a.unknownRequests}
 	result.KnownRevenueUSD, _ = a.revenue.Float64()
 	result.CostUSD, _ = a.cost.Float64()
-	result.ProfitUSD, _ = a.revenue.Sub(a.cost).Float64()
+	result.NetRevenueUSD, _ = a.netRevenue.Float64()
+	result.NetCostUSD, _ = a.netCost.Float64()
+	result.OutputVATUSD, _ = a.revenue.Sub(a.netRevenue).Float64()
+	result.InputVATUSD, _ = a.cost.Sub(a.netCost).Float64()
+	result.ProfitUSD, _ = a.netRevenue.Sub(a.netCost).Float64()
 	result.UnknownRevenueUSD, _ = a.unknownRevenue.Float64()
-	if a.revenue.IsPositive() {
-		value, _ := a.revenue.Sub(a.cost).Div(a.revenue).Float64()
+	if a.netRevenue.IsPositive() {
+		value, _ := a.netRevenue.Sub(a.netCost).Div(a.netRevenue).Float64()
 		result.ProfitMargin = &value
 	}
 	if total := a.revenue.Add(a.unknownRevenue); total.IsPositive() {
@@ -192,7 +214,7 @@ func GetGrossProfitReport(ctx context.Context, startDay, endDay string) (*GrossP
 		return nil, errors.New("invalid end_date")
 	}
 	var state GrossProfitRollupState
-	if err := DB.WithContext(ctx).First(&state, "name = ?", "consume").Error; err != nil {
+	if err := DB.WithContext(ctx).First(&state, "name = ?", GrossProfitRollupName).Error; err != nil {
 		return nil, err
 	}
 	location, err := time.LoadLocation(state.Timezone)
@@ -221,29 +243,37 @@ func GetGrossProfitReport(ctx context.Context, startDay, endDay string) (*GrossP
 		if err != nil {
 			return nil, err
 		}
-		var cost *decimal.Decimal
+		values := grossProfitAccumulator{}
 		if bucket.Reason == "" {
-			value, err := decimal.NewFromString(bucket.CostUSD)
-			if err != nil {
-				return nil, err
+			values.knownRequests, values.revenue = bucket.Requests, revenue
+			for _, amount := range []struct {
+				raw    string
+				target *decimal.Decimal
+			}{{bucket.CostUSD, &values.cost}, {bucket.NetRevenueUSD, &values.netRevenue}, {bucket.NetCostUSD, &values.netCost}} {
+				parsed, err := decimal.NewFromString(amount.raw)
+				if err != nil {
+					return nil, err
+				}
+				*amount.target = parsed
 			}
-			cost = &value
+		} else {
+			values.unknownRequests, values.unknownRevenue = bucket.Requests, revenue
 		}
-		total.add(revenue, cost, bucket.Requests)
+		total.add(values)
 		if channels[bucket.ChannelID] == nil {
 			channels[bucket.ChannelID] = &grossProfitAccumulator{}
 		}
-		channels[bucket.ChannelID].add(revenue, cost, bucket.Requests)
+		channels[bucket.ChannelID].add(values)
 		if days[bucket.Day] == nil {
 			days[bucket.Day] = &grossProfitAccumulator{}
 		}
-		days[bucket.Day].add(revenue, cost, bucket.Requests)
-		if cost == nil {
+		days[bucket.Day].add(values)
+		if bucket.Reason != "" {
 			key := unknownKey{bucket.ChannelID, bucket.Reason}
 			if unknown[key] == nil {
 				unknown[key] = &grossProfitAccumulator{}
 			}
-			unknown[key].add(revenue, nil, bucket.Requests)
+			unknown[key].add(values)
 		}
 	}
 	ids := make([]int, 0, len(channels))
