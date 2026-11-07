@@ -159,7 +159,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
   const isCnyPricing = quotaDisplayType === 'CNY'
   const priceSummaryCurrencySymbol = isCnyPricing ? '¥' : '$'
   const priceSummaryExchangeRate = isCnyPricing ? configuredUsdExchangeRate : 1
-  const { models: pricingModels } = usePricingData()
+  const { models: pricingModels } = usePricingData(true, 'account')
   const isMobile = useMediaQuery('(max-width: 767px)')
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)

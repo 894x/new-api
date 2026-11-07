@@ -801,7 +801,8 @@ export function useCommonLogsColumns(
           const pricingData = usePricingData(
             log.type === 2 &&
               other?.is_task === true &&
-              other.billing_mode === 'tiered_expr'
+              other.billing_mode === 'tiered_expr',
+            'account'
           )
           const usageSchema = pluginUsageSchema(
             pricingData.models.find(
