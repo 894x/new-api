@@ -48,6 +48,11 @@ type ChannelAnalyticsConcurrency struct {
 	Maximum int64   `json:"maximum"`
 }
 
+type ChannelAnalyticsBodySize struct {
+	AnalyticsValuePercentiles
+	Avg *float64 `json:"avg"`
+}
+
 type ChannelAnalyticsPoint struct {
 	Ts                int64                       `json:"ts"`
 	RequestCount      int64                       `json:"request_count"`
@@ -55,6 +60,7 @@ type ChannelAnalyticsPoint struct {
 	SuccessRate       float64                     `json:"success_rate"`
 	ActiveConcurrency ChannelAnalyticsConcurrency `json:"active_concurrency"`
 	Latency           ChannelAnalyticsLatency     `json:"latency"`
+	RequestBodyBytes  ChannelAnalyticsBodySize    `json:"request_body_bytes"`
 }
 
 type ChannelAnalyticsResult struct {
@@ -210,6 +216,38 @@ type channelBucket struct {
 	errorCount   int64
 	latency      channelLatencyAccumulator
 	concurrency  concurrencyAccumulator
+	bodySize     channelBodySizeAccumulator
+}
+
+// Body-size distributions use byte buckets, independently of latency bounds.
+type channelBodySizeAccumulator struct {
+	histogram map[int64]histogramObservation
+	sum       float64
+}
+
+func (a *channelBodySizeAccumulator) add(size int64) {
+	if size < 0 {
+		return
+	}
+	if a.histogram == nil {
+		a.histogram = make(map[int64]histogramObservation)
+	}
+	bound := distributionUpperBound(size)
+	observation := a.histogram[bound]
+	observation.count++
+	observation.maxSamples++
+	observation.maxValue = max(observation.maxValue, size)
+	a.histogram[bound] = observation
+	a.sum += float64(size)
+}
+
+func (a channelBodySizeAccumulator) percentiles() ChannelAnalyticsBodySize {
+	result := ChannelAnalyticsBodySize{AnalyticsValuePercentiles: valuePercentiles(a.histogram, 1)}
+	if result.SampleCount > 0 {
+		average := a.sum / float64(result.SampleCount)
+		result.Avg = &average
+	}
+	return result
 }
 
 type histogram struct {
@@ -279,6 +317,10 @@ func QueryChannelAnalytics(params ChannelAnalyticsQueryParams) (ChannelAnalytics
 		addConcurrencySpan(summary, sample.startMs, sample.endMs, params.StartTs, params.EndTs-params.StartTs)
 		for _, attempt := range sample.attempts {
 			accumulateChannelTransport(groups, attempt)
+			if attempt.ChannelID > 0 && attempt.ChannelID == row.ChannelId {
+				bucket.bodySize.add(attempt.BodyBytes)
+				summary.bodySize.add(attempt.BodyBytes)
+			}
 		}
 		summary.requestCount++
 		if sample.success {
@@ -391,8 +433,11 @@ func decodeChannelTiming(row model.PerfChannelLog) (channelTimingSample, bool) {
 	completedMs := row.CreatedAt * 1000
 	var other struct {
 		AdminInfo struct {
-			RequestTiming common.RequestTimingSnapshot       `json:"request_timing"`
-			Transport     []common.UpstreamTransportSnapshot `json:"upstream_transport"`
+			RequestTiming common.RequestTimingSnapshot `json:"request_timing"`
+			Transport     []struct {
+				common.UpstreamTransportSnapshot
+				BodyBytes *int64 `json:"body_bytes"`
+			} `json:"upstream_transport"`
 		} `json:"admin_info"`
 	}
 	if row.Other != "" {
@@ -411,15 +456,21 @@ func decodeChannelTiming(row model.PerfChannelLog) (channelTimingSample, bool) {
 	}
 
 	sample := channelTimingSample{
-		attempts: other.AdminInfo.Transport,
-		startMs:  startMs,
-		endMs:    completedMs,
-		success:  row.Type == model.LogTypeConsume,
+		startMs: startMs,
+		endMs:   completedMs,
+		success: row.Type == model.LogTypeConsume,
 	}
 	// Error and consume logs represent individual relay attempts; earlier snapshots
 	// remain available in request details but must not be counted again here.
-	if len(sample.attempts) > 1 {
-		sample.attempts = sample.attempts[len(sample.attempts)-1:]
+	if transport := other.AdminInfo.Transport; len(transport) > 0 {
+		last := transport[len(transport)-1]
+		attempt := last.UpstreamTransportSnapshot
+		// Missing historical measurements must not become empty-body samples.
+		attempt.BodyBytes = -1
+		if last.BodyBytes != nil {
+			attempt.BodyBytes = *last.BodyBytes
+		}
+		sample.attempts = []common.UpstreamTransportSnapshot{attempt}
 	}
 	for _, attempt := range sample.attempts {
 		if attempt.AcquireMs != nil {
@@ -561,6 +612,7 @@ func buildChannelPoint(ts int64, bucket *channelBucket, bucketSeconds int64) Cha
 		SuccessRate:       channelSuccessRate(bucket),
 		ActiveConcurrency: ChannelAnalyticsConcurrency{Average: average, Maximum: maximum},
 		Latency:           channelLatencyResult(bucket.latency),
+		RequestBodyBytes:  bucket.bodySize.percentiles(),
 	}
 }
 

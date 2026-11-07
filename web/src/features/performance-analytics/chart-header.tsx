@@ -23,16 +23,20 @@ export function PerformanceChartHeader(props: {
   description?: string
   formatValue: (value: number) => string
   statistics?: Array<{ label: string; value?: number }>
+  layout?: 'inline' | 'stacked'
 }) {
+  const stacked = props.layout === 'stacked'
   return (
     <CardHeader
       className={
-        props.statistics
+        props.statistics && !stacked
           ? 'flex min-h-11 flex-nowrap items-start justify-between gap-2'
           : 'min-h-11'
       }
     >
-      <div className='min-w-0 shrink-0 space-y-1'>
+      <div
+        className={stacked ? 'min-w-0 space-y-1' : 'min-w-0 shrink-0 space-y-1'}
+      >
         <CardTitle>{props.title}</CardTitle>
         {props.description && (
           <CardDescription className='text-xs'>
@@ -41,7 +45,13 @@ export function PerformanceChartHeader(props: {
         )}
       </div>
       {props.statistics && (
-        <dl className='ml-auto flex min-w-0 flex-nowrap justify-end gap-1 text-right'>
+        <dl
+          className={
+            stacked
+              ? 'mt-2 grid min-w-0 grid-cols-3 gap-2 text-right sm:grid-cols-6'
+              : 'ml-auto flex min-w-0 flex-nowrap justify-end gap-1 text-right'
+          }
+        >
           {props.statistics.map(({ label, value }) => {
             const displayValue =
               value === undefined ? '—' : props.formatValue(value)

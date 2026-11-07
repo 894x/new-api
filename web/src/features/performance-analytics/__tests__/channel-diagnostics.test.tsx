@@ -17,11 +17,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { ComponentProps } from 'react'
 import { beforeEach, expect, test, vi } from 'vitest'
 
 import { ChannelPerformanceDiagnostics } from '../channel-diagnostics'
+import { buildPerformanceChartOption } from '../chart-options'
+import type { PerformanceChart } from '../performance-chart'
 import type { ChannelAnalyticsData } from '../types'
 
 vi.mock('react-i18next', () => ({
@@ -30,26 +40,32 @@ vi.mock('react-i18next', () => ({
     i18n: { language: 'en', resolvedLanguage: 'en' },
   }),
 }))
-const { getChannelPerformanceAnalytics, getHTTPTransportMetrics } = vi.hoisted(
-  () => ({
-    getChannelPerformanceAnalytics: vi.fn(),
-    getHTTPTransportMetrics: vi.fn(),
-  })
-)
+const {
+  getChannelPerformanceAnalytics,
+  getHTTPTransportMetrics,
+  chartSetOption,
+} = vi.hoisted(() => ({
+  getChannelPerformanceAnalytics: vi.fn(),
+  getHTTPTransportMetrics: vi.fn(),
+  chartSetOption: vi.fn(),
+}))
 vi.mock('../api', () => ({
   getChannelPerformanceAnalytics,
   getHTTPTransportMetrics,
 }))
-// jsdom has no canvas; exercise the real chart adapter separately in series.test.
-vi.mock('../echarts-runtime', () => ({
-  init: () => ({
-    setOption: vi.fn(),
-    on: vi.fn(),
-    resize: vi.fn(),
-    dispatchAction: vi.fn(),
-    dispose: vi.fn(),
-  }),
-  joinChartGroup: () => vi.fn(),
+// Exercise the real chart adapter without starting a canvas renderer in jsdom.
+vi.mock('../performance-chart', () => ({
+  PerformanceChart: (props: ComponentProps<typeof PerformanceChart>) => {
+    chartSetOption(
+      buildPerformanceChartOption({
+        ...props,
+        start: 0,
+        end: 1000,
+        dark: false,
+      })
+    )
+    return <div role='img' aria-label={props.title} />
+  },
 }))
 
 const latency = {
@@ -98,6 +114,14 @@ function renderDiagnostics() {
       <ChannelPerformanceDiagnostics />
     </QueryClientProvider>
   )
+}
+
+function upstreamBodySizeCard() {
+  const card = screen
+    .getByText('Upstream request body size')
+    .closest<HTMLElement>('[data-slot=card]')
+  if (!card) throw new Error('Upstream body size chart card is missing')
+  return card
 }
 beforeEach(() => {
   getChannelPerformanceAnalytics.mockResolvedValue({ success: true, data })
@@ -242,4 +266,153 @@ test('shows all nine stage summaries with fractional averages and measured maxim
   expect(
     screen.getByRole('group', { name: 'Concurrency and live transport' })
   ).toHaveClass('xl:grid-cols-3')
+})
+
+test('shows six upstream body size statistics and curves with gaps for missing buckets and real zeroes', async () => {
+  const stats = {
+    avg: 1536,
+    p50: 1024,
+    p90: 2048,
+    p95: 3072,
+    p99: 4096,
+    max: 8192,
+    sample_count: 2,
+  }
+  getChannelPerformanceAnalytics.mockResolvedValue({
+    success: true,
+    data: {
+      ...data,
+      summary: { ...data.summary, request_body_bytes: stats },
+      series: [
+        { ...data.summary, ts: 100 },
+        {
+          ...data.summary,
+          ts: 160,
+          request_body_bytes: { ...stats, sample_count: 0 },
+        },
+        {
+          ...data.summary,
+          ts: 220,
+          request_body_bytes: {
+            avg: 0,
+            p50: 0,
+            p90: 0,
+            p95: 0,
+            p99: 0,
+            max: 0,
+            sample_count: 1,
+          },
+        },
+        { ...data.summary, ts: 280, request_body_bytes: stats },
+      ],
+    },
+  })
+  renderDiagnostics()
+  await screen.findByText('Upstream request body size')
+  const card = upstreamBodySizeCard()
+  const expected = ['1.5 KiB', '1 KiB', '2 KiB', '3 KiB', '4 KiB', '8 KiB']
+  expect(
+    [...card.querySelectorAll('dt')].map((element) => element.textContent)
+  ).toEqual(['AVG', 'P50', 'P90', 'P95', 'P99', 'MAX'])
+  expect(
+    [...card.querySelectorAll('dd')].map((element) => element.textContent)
+  ).toEqual(expected)
+  expect(card.querySelector('dl')).toHaveClass('grid-cols-3', 'sm:grid-cols-6')
+  expect(
+    within(card).getByRole('img', { name: 'Upstream request body size' })
+  ).toBeVisible()
+  await waitFor(() => {
+    const options = chartSetOption.mock.calls
+      .map(([option]) => option)
+      .filter(
+        (option) => option.aria?.description === 'Upstream request body size'
+      )
+    const option = options.at(-1)
+    expect(
+      option?.series.map((series: { name: string; data: number[][] }) => ({
+        name: series.name,
+        data: series.data,
+      }))
+    ).toEqual(
+      ['AVG', 'P50', 'P90', 'P95', 'P99', 'MAX'].map((name) => ({
+        name,
+        data: [
+          [100_000, null],
+          [160_000, null],
+          [220_000, 0],
+          [
+            280_000,
+            stats[
+              name.toLowerCase() as
+                | 'avg'
+                | 'p50'
+                | 'p90'
+                | 'p95'
+                | 'p99'
+                | 'max'
+            ],
+          ],
+        ],
+      }))
+    )
+    expect(option.tooltip.valueFormatter(1536)).toBe('1.5 KiB (1,536 B)')
+  })
+})
+
+test('shows unknown upstream body size statistics and an empty chart for historical data without measurements', async () => {
+  renderDiagnostics()
+  await screen.findByText('Upstream request body size')
+  const card = upstreamBodySizeCard()
+  expect(
+    [...card.querySelectorAll('dd')].map((element) => element.textContent)
+  ).toEqual(Array(6).fill('—'))
+  expect(within(card).getByText('No performance data available')).toBeVisible()
+  expect(within(card).queryByRole('img')).not.toBeInTheDocument()
+})
+
+test('updates upstream body statistics and curves when the channel or time range changes', async () => {
+  getChannelPerformanceAnalytics.mockImplementation(async (params) => {
+    let size = 1024
+    if (params.channel_id === 7) {
+      size = params.end_timestamp - params.start_timestamp > 3600 ? 4096 : 2048
+    }
+    const stats = {
+      avg: size,
+      p50: size,
+      p90: size,
+      p95: size,
+      p99: size,
+      max: size,
+      sample_count: 1,
+    }
+    const point = { ...data.summary, request_body_bytes: stats }
+    return { success: true, data: { ...data, summary: point, series: [point] } }
+  })
+  const user = userEvent.setup()
+  renderDiagnostics()
+  await screen.findByText('Upstream request body size')
+  const card = upstreamBodySizeCard()
+  expect(within(card).getAllByText('1 KiB')).toHaveLength(6)
+  fireEvent.change(screen.getByRole('textbox', { name: 'Channel ID' }), {
+    target: { value: '7' },
+  })
+  await waitFor(() =>
+    expect(within(upstreamBodySizeCard()).getAllByText('2 KiB')).toHaveLength(6)
+  )
+  await user.click(screen.getByRole('tab', { name: '3 Hours' }))
+  await waitFor(() =>
+    expect(within(upstreamBodySizeCard()).getAllByText('4 KiB')).toHaveLength(6)
+  )
+  expect(getChannelPerformanceAnalytics).toHaveBeenLastCalledWith(
+    expect.objectContaining({ channel_id: 7 }),
+    expect.any(AbortSignal)
+  )
+  await waitFor(() => {
+    const option = chartSetOption.mock.calls
+      .map(([value]) => value)
+      .findLast(
+        (value) => value.aria?.description === 'Upstream request body size'
+      )
+    expect(option?.series[0].data).toEqual([[100_000, 4096]])
+  })
 })

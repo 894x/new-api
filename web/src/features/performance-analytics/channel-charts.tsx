@@ -29,12 +29,14 @@ import {
   PERFORMANCE_CURVE_LABELS,
   buildLatencyChartSeries,
   formatPerformanceLatency,
+  formatRequestBodySize,
 } from './lib'
 import { PerformanceChart } from './performance-chart'
 import type {
   ChannelAnalyticsData,
   ChannelAnalyticsPoint,
   ChannelAnalyticsPercentiles,
+  ChannelAnalyticsBodySize,
   PerformanceMetricChartDatum,
 } from './types'
 
@@ -42,6 +44,69 @@ export type TransportHistoryPoint = {
   ts: number
   connections: number
   activeRequests: number
+}
+
+export function ChannelBodySizeChart(props: {
+  points: ChannelAnalyticsPoint[]
+  summary?: ChannelAnalyticsBodySize
+  formatTime: (ts: number) => string
+}) {
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  const formatTime = props.formatTime
+  const values = useMemo(
+    () =>
+      props.points.flatMap((point) => {
+        const stats = point.request_body_bytes
+        if (!stats || stats.sample_count <= 0) return []
+        return PERFORMANCE_CURVE_LABELS.flatMap((percentile) => {
+          const value =
+            stats[percentile.toLowerCase() as Lowercase<typeof percentile>]
+          if (typeof value !== 'number' || !Number.isFinite(value)) return []
+          return [
+            {
+              ts: point.ts,
+              time: point.ts,
+              label: formatTime(point.ts),
+              percentile,
+              value,
+            },
+          ]
+        })
+      }),
+    [props.points, formatTime]
+  )
+  const statistics = PERFORMANCE_CURVE_LABELS.map((label) => {
+    const value =
+      props.summary?.[label.toLowerCase() as Lowercase<typeof label>]
+    return {
+      label,
+      value:
+        props.summary &&
+        props.summary.sample_count > 0 &&
+        typeof value === 'number' &&
+        Number.isFinite(value)
+          ? value
+          : undefined,
+    }
+  })
+  return (
+    <ChannelTrendChart
+      title={t('Upstream request body size')}
+      description={t(
+        'Body size after request conversion and parameter overrides, per relay attempt. Unknown lengths are omitted; percentiles are approximate, while AVG and MAX use measured lengths.'
+      )}
+      values={values}
+      timestamps={props.points.map((point) => point.ts)}
+      formatTime={props.formatTime}
+      formatValue={(value) => formatRequestBodySize(value, locale)}
+      formatTooltipValue={(value) =>
+        `${formatRequestBodySize(value, locale)} (${formatNumber(value, locale)} B)`
+      }
+      statistics={statistics}
+      headerLayout='stacked'
+    />
+  )
 }
 
 export function ChannelLatencyChart(props: {
@@ -199,7 +264,9 @@ function ChannelTrendChart(props: {
   timestamps: number[]
   formatTime: (ts: number) => string
   formatValue: (value: number) => string
+  formatTooltipValue?: (value: number) => string
   statistics?: Array<{ label: string; value?: number }>
+  headerLayout?: 'inline' | 'stacked'
 }) {
   const { t } = useTranslation()
   return (
@@ -209,6 +276,7 @@ function ChannelTrendChart(props: {
         description={props.description}
         formatValue={props.formatValue}
         statistics={props.statistics}
+        layout={props.headerLayout}
       />
       <CardContent>
         {props.values.length ? (

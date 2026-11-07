@@ -38,6 +38,7 @@ import { formatNumber } from '@/lib/format'
 
 import {
   ChannelLatencyChart,
+  ChannelBodySizeChart,
   ChannelActivityCharts,
   type TransportHistoryPoint,
 } from './channel-charts'
@@ -129,6 +130,11 @@ export function ChannelDiagnosticsContent(props: {
           </Card>
         ))}
       </div>
+      <ChannelBodySizeChart
+        points={props.data.series}
+        summary={summary.request_body_bytes}
+        formatTime={props.formatTime}
+      />
       <div
         role='group'
         aria-label={t('Request-stage latency')}
