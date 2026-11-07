@@ -42,7 +42,7 @@ export function UserRoutingWorkspace(props: {
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const [model, setModel] = useState('')
   const [group, setGroup] = useState('__all')
-  const [source, setSource] = useState('__all')
+  const [source, setSource] = useState('user')
   const [page, setPage] = useState(1)
   const [dirtyCards, setDirtyCards] = useState<Record<string, boolean>>({})
   const dirty = Object.values(dirtyCards).some(Boolean)

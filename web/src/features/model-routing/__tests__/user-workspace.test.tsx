@@ -153,7 +153,7 @@ function mockPool(config = fixture()) {
           configured_key_groups: state.config.configured
             ? { 'kimi-k3': ['vip'] }
             : {},
-          model_groups: { 'kimi-k3': ['vip'] },
+          model_groups: state.config.model_groups ?? { 'kimi-k3': ['vip'] },
         }
     return { data: { success: true, data } }
   })
@@ -408,7 +408,7 @@ test('user monitoring retains the same unsaved override and returns focus withou
   )
 })
 
-async function mountWorkspace() {
+function renderWorkspace() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
@@ -429,9 +429,81 @@ async function mountWorkspace() {
   return {
     client,
     dirty,
+  }
+}
+
+async function mountWorkspace() {
+  const workspace = renderWorkspace()
+  await userEvent.click(
+    await screen.findByRole('combobox', { name: 'Configuration source' })
+  )
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'All configurations' })
+  )
+  return {
+    ...workspace,
     card: await screen.findByRole('region', { name: 'kimi-k3 · vip' }),
   }
 }
+
+test('defaults to user overrides and lets operators switch to all or inherited pools', async () => {
+  mockPool({
+    ...fixture(),
+    configured: true,
+    source: 'user',
+    model_groups: { 'kimi-k3': ['vip', 'default'] },
+  })
+  renderWorkspace()
+  await screen.findByRole('region', { name: 'kimi-k3 · vip' })
+  const source = screen.getByRole('combobox', {
+    name: 'Configuration source',
+  })
+  expect(source).toHaveValue('User override')
+  expect(
+    screen.queryByRole('region', { name: 'kimi-k3 · default' })
+  ).not.toBeInTheDocument()
+  expect(screen.getByText('Routing pools: 1')).toBeVisible()
+
+  await userEvent.click(source)
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'All configurations' })
+  )
+  expect(
+    await screen.findByRole('region', { name: 'kimi-k3 · default' })
+  ).toBeVisible()
+  expect(screen.getByRole('region', { name: 'kimi-k3 · vip' })).toBeVisible()
+  expect(screen.getByText('Routing pools: 2')).toBeVisible()
+
+  await userEvent.click(source)
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'Inherited' })
+  )
+  expect(
+    screen.getByRole('region', { name: 'kimi-k3 · default' })
+  ).toBeVisible()
+  expect(
+    screen.queryByRole('region', { name: 'kimi-k3 · vip' })
+  ).not.toBeInTheDocument()
+  expect(screen.getByText('Routing pools: 1')).toBeVisible()
+})
+
+test('no user overrides shows an empty view until all configurations are selected', async () => {
+  mockPool()
+  renderWorkspace()
+  expect(await screen.findByText('No available routing pools')).toBeVisible()
+  expect(screen.getByText('Routing pools: 0')).toBeVisible()
+  expect(screen.queryByRole('region')).not.toBeInTheDocument()
+
+  await userEvent.click(
+    screen.getByRole('combobox', { name: 'Configuration source' })
+  )
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'All configurations' })
+  )
+  expect(
+    await screen.findByRole('button', { name: 'Create user override' })
+  ).toBeEnabled()
+})
 
 test('shows the user identity and effective inherited priorities and weights without writing overrides', async () => {
   mockPool()
@@ -481,14 +553,16 @@ test('user pool cards fill each responsive column without a fixed maximum width 
   const list = screen.getByRole('list', { name: 'User routing pools' })
   expect(list).toHaveClass('columns-[24rem]', 'gap-4')
   expect(list).not.toHaveClass('grid')
-  const item = within(list).getByRole('listitem')
+  const item = within(list)
+    .getAllByRole('listitem')
+    .find((entry) => entry.contains(card))
   expect(item).toHaveClass(
     'inline-block',
     'w-full',
     'break-inside-avoid',
     'mb-4'
   )
-  expect(item.className).not.toMatch(/max-w-/)
+  expect(item?.className).not.toMatch(/max-w-/)
   expect(item).toContainElement(card)
 })
 
