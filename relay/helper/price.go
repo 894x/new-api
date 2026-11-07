@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -165,6 +166,17 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		cacheCreationRatio5m = cacheCreationRatio
 		// 固定1h和5min缓存写入价格的比例
 		cacheCreationRatio1h = cacheCreationRatio * claudeCacheCreation1hMultiplier
+		if common.CacheWriteSimulationApplies(c) && info.ChannelMeta != nil {
+			policy := info.ChannelOtherSettings.CacheWriteSimulation
+			_, simulated := common.ApplyCacheWriteSimulation(&dto.Usage{PromptTokens: promptTokens}, policy, false)
+			if simulated > 0 {
+				writeRatio := cacheCreationRatio5m
+				if policy.TTL == "1h" {
+					writeRatio = cacheCreationRatio1h
+				}
+				preConsumedTokens += float64(simulated) * max(writeRatio-1, 0) * preConsumeMultiplier
+			}
+		}
 		imageRatio, _ = ratio_setting.GetImageRatio(billingModelName)
 		audioRatio = ratio_setting.GetAudioRatio(billingModelName)
 		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(billingModelName)
@@ -458,6 +470,19 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 	rawCost, trace, err := billingexpr.RunExprWithRequest(exprStr, estimatedParams, requestInput)
 	if err != nil {
 		return hosttypes.PriceData{}, fmt.Errorf("model %s tiered expr run failed: %w", billingModelName, err)
+	}
+	if common.CacheWriteSimulationApplies(c) && info.ChannelMeta != nil {
+		usage, simulated := common.ApplyCacheWriteSimulation(&dto.Usage{PromptTokens: promptTokens}, info.ChannelOtherSettings.CacheWriteSimulation, false)
+		if simulated > 0 {
+			params := service.BuildTieredTokenParams(usage, false, billingexpr.UsedVarsByHash(exprStr, exprHash))
+			cost, simulatedTrace, err := billingexpr.RunExprWithRequest(exprStr, params, requestInput)
+			if err != nil {
+				return hosttypes.PriceData{}, fmt.Errorf("model %s cache-write reservation failed: %w", billingModelName, err)
+			}
+			if cost > rawCost {
+				rawCost, trace = cost, simulatedTrace
+			}
+		}
 	}
 
 	// Expression coefficients are $/1M tokens prices; convert to quota the same way per-call billing does.

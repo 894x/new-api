@@ -139,6 +139,12 @@ export interface ChannelSettings {
 }
 
 export interface ChannelOtherSettings {
+  cache_write_simulation?: {
+    enabled: boolean
+    min_input_tokens: number
+    percentage: number
+    ttl?: '5m' | '1h'
+  }
   azure_responses_version?: string
   vertex_key_type?: 'json' | 'api_key'
   doubao_video_api_mode?: 'v3' | 'video_generations' | 'custom'

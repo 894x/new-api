@@ -473,7 +473,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		break
 	}
 
-	responseBody, err = helper.SanitizeResponseBody(responseBody, info.RelayFormat)
+	responseBody, err = helper.SanitizeResponseBody(responseBody, info.RelayFormat, c)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}

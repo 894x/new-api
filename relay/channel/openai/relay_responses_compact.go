@@ -29,7 +29,7 @@ func OaiResponsesCompactionHandler(c *gin.Context, resp *http.Response) (*dto.Us
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
-	responseBody, err = helper.SanitizeResponseBody(responseBody, types.RelayFormatOpenAIResponses)
+	responseBody, err = helper.SanitizeResponseBody(responseBody, types.RelayFormatOpenAIResponses, c)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}

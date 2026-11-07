@@ -44,6 +44,10 @@ func writeSSESegment(c *gin.Context, data string) error {
 		if err != nil {
 			return fmt.Errorf("error normalizing response model: %w", err)
 		}
+		normalized, err = common.RewriteResponseCacheWrite(c, normalized)
+		if err != nil {
+			return fmt.Errorf("error applying cache-write policy: %w", err)
+		}
 		data = "data: " + string(normalized)
 	}
 	common.CustomEvent{}.WriteContentType(c.Writer)
@@ -110,7 +114,7 @@ func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	if err != nil {
 		return fmt.Errorf("error marshalling stream response: %w", err)
 	}
-	jsonData, err = SanitizeResponseBody(jsonData, types.RelayFormatClaude)
+	jsonData, err = SanitizeResponseBody(jsonData, types.RelayFormatClaude, c)
 	if err != nil {
 		return fmt.Errorf("error sanitizing stream response: %w", err)
 	}
@@ -128,7 +132,7 @@ func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) error
 		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
 
-	jsonData, err := SanitizeResponseBody(common.StringToByteSlice(data), types.RelayFormatClaude)
+	jsonData, err := SanitizeResponseBody(common.StringToByteSlice(data), types.RelayFormatClaude, c)
 	if err != nil {
 		return fmt.Errorf("error sanitizing stream response: %w", err)
 	}
@@ -146,7 +150,7 @@ func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data st
 		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
 
-	jsonData, err := SanitizeResponseBody(common.StringToByteSlice(data), types.RelayFormatOpenAIResponses)
+	jsonData, err := SanitizeResponseBody(common.StringToByteSlice(data), types.RelayFormatOpenAIResponses, c)
 	if err != nil {
 		return fmt.Errorf("error sanitizing stream response: %w", err)
 	}
@@ -218,7 +222,7 @@ func ObjectData(c *gin.Context, object any) error {
 	default:
 		return StringData(c, string(jsonData))
 	}
-	jsonData, err = SanitizeResponseBody(jsonData, relayFormat)
+	jsonData, err = SanitizeResponseBody(jsonData, relayFormat, c)
 	if err != nil {
 		return fmt.Errorf("error sanitizing object: %w", err)
 	}
@@ -236,6 +240,10 @@ func WriteJSON(c *gin.Context, data []byte) (int, error) {
 	normalized, err = common.RewriteResponseModel(c, normalized)
 	if err != nil {
 		return 0, fmt.Errorf("error normalizing response model: %w", err)
+	}
+	normalized, err = common.RewriteResponseCacheWrite(c, normalized)
+	if err != nil {
+		return 0, fmt.Errorf("error applying cache-write policy: %w", err)
 	}
 	return c.Writer.Write(normalized)
 }

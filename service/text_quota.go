@@ -420,6 +420,17 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if originUsage != nil {
 		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, billingUsage, relayInfo.GetFinalRequestRelayFormat())
 	}
+	var simulatedCacheWriteTokens int
+	if common.CacheWriteSimulationApplies(ctx) && relayInfo.ChannelMeta != nil {
+		anthropic := usageSemanticFromUsage(relayInfo, billingUsage) == dto.BillingUsageSemanticAnthropic
+		// Historical OpenRouter usage still includes cache in prompt_tokens,
+		// even when the final request format supplied the Anthropic fallback.
+		if relayInfo.ChannelType == constant.ChannelTypeOpenRouter && billingUsage != nil && billingUsage.UsageSource == "" {
+			anthropic = false
+		}
+		billingUsage, simulatedCacheWriteTokens = common.ApplyCacheWriteSimulation(billingUsage,
+			relayInfo.ChannelOtherSettings.CacheWriteSimulation, anthropic)
+	}
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
@@ -547,6 +558,12 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
+	if simulatedCacheWriteTokens > 0 {
+		other.SetAdmin("cache_write_simulation", map[string]any{
+			"tokens": simulatedCacheWriteTokens,
+			"policy": relayInfo.ChannelOtherSettings.CacheWriteSimulation,
+		})
+	}
 	if adminRejectReason != "" {
 		other.SetAdmin("reject_reason", adminRejectReason)
 	}

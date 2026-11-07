@@ -237,6 +237,7 @@ import {
 import { ModelRedirectPanel } from '../model-redirect-panel'
 import { ModelRoutingOverridesEditor } from '../model-routing-overrides-editor'
 import { ResponsesWebSocketSetting } from '../responses-websocket-setting'
+import { CacheWriteSimulationSetting } from '../cache-write-simulation-setting'
 import { StreamResponseHeaderSetting } from '../stream-response-header-setting'
 import { UpstreamModelSelection } from '../upstream-model-selection'
 import {
@@ -317,6 +318,10 @@ const SENSITIVE_FORM_FIELDS = [
   'http1_large_body_threshold_kib',
   'pass_through_body_enabled',
   'responses_websocket_enabled',
+  'cache_write_simulation_enabled',
+  'cache_write_simulation_threshold',
+  'cache_write_simulation_percentage',
+  'cache_write_simulation_ttl',
   'system_prompt',
   'system_prompt_override',
   'allow_service_tier',
@@ -5025,6 +5030,7 @@ export function ChannelMutateDrawer({
                   channelType={currentType}
                   disabled={sensitiveLocked || isSubmitting}
                 />
+                <CacheWriteSimulationSetting disabled={sensitiveLocked || isSubmitting} />
                 {formatFields}
                 <OllamaProtocolFields control={form.control} />
                 {ollamaOpenAIChatFields}

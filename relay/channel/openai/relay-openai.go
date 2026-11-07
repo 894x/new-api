@@ -24,7 +24,7 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 		return nil
 	}
 
-	jsonData, err := helper.SanitizeResponseBody(common.StringToByteSlice(data), types.RelayFormatOpenAI)
+	jsonData, err := helper.SanitizeResponseBody(common.StringToByteSlice(data), types.RelayFormatOpenAI, c)
 	if err != nil {
 		return err
 	}
@@ -545,7 +545,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		responseBody = geminiRespStr
 	}
 
-	responseBody, err = helper.SanitizeResponseBody(responseBody, info.RelayFormat)
+	responseBody, err = helper.SanitizeResponseBody(responseBody, info.RelayFormat, c)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}

@@ -690,6 +690,11 @@ func responsesWSDataForClient(c *gin.Context, body []byte) []byte {
 		logger.LogError(c, fmt.Sprintf("failed to normalize response model: %s", err.Error()))
 		return body
 	}
+	normalized, err = common.RewriteResponseCacheWrite(c, normalized)
+	if err != nil {
+		logger.LogError(c, fmt.Sprintf("failed to apply cache-write policy: %s", err.Error()))
+		return body
+	}
 	body = normalized
 	public, _ := service.StreamErrorDataForClient(c, string(body))
 	if public == string(body) {
