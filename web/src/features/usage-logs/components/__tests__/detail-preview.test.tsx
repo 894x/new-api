@@ -139,15 +139,20 @@ test('shows client_gone as the stream status and preserves the committed HTTP st
   expect(within(dialog).getByText('HTTP 200')).toBeVisible()
 })
 
-test.each([true, false])(
-  'early chunk observations are visible only to administrators: %s',
-  async (isAdmin) => {
+test.each([
+  { isAdmin: true, mode: 'off', label: 'Disabled' },
+  { isAdmin: true, mode: 'observe', label: 'Observe only' },
+  { isAdmin: true, mode: 'enabled', label: 'Enabled' },
+  { isAdmin: false, mode: 'observe', label: 'Observe only' },
+])(
+  'early chunk mode $mode is displayed correctly with admin access $isAdmin',
+  async ({ isAdmin, mode, label }) => {
     const trigger = renderPreview(
       {
         model_price: 0.25,
         admin_info: {
           early_chunk: {
-            mode: 'observe',
+            mode,
             matched_bytes: 9000,
             input_bytes: 10000,
             samples: 100,
@@ -167,6 +172,7 @@ test.each([true, false])(
     const dialog = await screen.findByRole('dialog')
     if (isAdmin) {
       expect(within(dialog).getByText('Early empty chunk')).toBeVisible()
+      expect(within(dialog).getByText(label)).toBeVisible()
       expect(within(dialog).getByText('97%')).toBeVisible()
       expect(within(dialog).getByText('150 ms')).toBeVisible()
     } else {

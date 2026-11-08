@@ -521,6 +521,14 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const showAdminIp =
     !!props.log.ip && (showTiming || (props.isAdmin && isTopup))
   const adminInfo = other?.admin_info
+  let earlyChunkModeLabel = t('Unknown')
+  if (adminInfo?.early_chunk?.mode === 'off') {
+    earlyChunkModeLabel = t('Disabled')
+  } else if (adminInfo?.early_chunk?.mode === 'observe') {
+    earlyChunkModeLabel = t('Observe only')
+  } else if (adminInfo?.early_chunk?.mode === 'enabled') {
+    earlyChunkModeLabel = t('Enabled')
+  }
   let dialogWidthClass = 'sm:max-w-lg'
   if (isTieredBilling) {
     dialogWidthClass = 'sm:max-w-4xl lg:max-w-5xl'
@@ -864,11 +872,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
           <DetailSection label={t('Early empty chunk')}>
             <DetailRow
               label={t('Mode')}
-              value={
-                adminInfo.early_chunk.mode === 'observe'
-                  ? t('Observe only')
-                  : t('Enabled')
-              }
+              value={earlyChunkModeLabel}
             />
             <DetailRow
               label={t('Prediction probability')}
