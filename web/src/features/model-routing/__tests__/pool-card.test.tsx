@@ -468,9 +468,13 @@ test('opening and returning from a pool monitor retains the same dirty editor an
   expect(get).toHaveBeenCalledWith('/api/channel/routing-pool', {
     params: { routing_group: 'standard', model: 'kimi-k3' },
   })
+  const editor = priority.closest('[data-slot="card"]')?.parentElement
+  expect(editor).toHaveClass('xl:row-start-2')
   await userEvent.click(
     within(monitor).getByRole('button', { name: 'TTFT prediction grid' })
   )
+  expect(editor).toHaveClass('xl:row-start-1', 'xl:row-span-2')
+  expect(editor).not.toHaveClass('xl:row-start-2')
   expect(
     await within(monitor).findByText('Prediction statistics unavailable')
   ).toBeVisible()
@@ -484,6 +488,7 @@ test('opening and returning from a pool monitor retains the same dirty editor an
   expect(
     await within(monitor).findByText('No adaptive routing observations')
   ).toBeVisible()
+  expect(editor).toHaveClass('xl:row-start-2')
   await userEvent.click(
     within(monitor).getByRole('button', { name: 'Back to card view' })
   )

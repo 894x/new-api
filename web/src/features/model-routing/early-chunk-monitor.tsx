@@ -59,7 +59,7 @@ export default function EarlyChunkMonitor(props: {
       aria-label={t('TTFT prediction grid')}
     >
       <div className='flex flex-wrap items-end gap-2'>
-        <div className='min-w-0 flex-1'>
+        <div className='max-w-full min-w-48 flex-1'>
           <Combobox
             options={props.channels.map((c) => ({
               value: String(c.channel_id),
@@ -69,7 +69,7 @@ export default function EarlyChunkMonitor(props: {
             onValueChange={setSelected}
             aria-label={t('Select channel')}
             placeholder={t('Select channel')}
-            className='w-full'
+            className='h-8 w-full'
           />
         </div>
         <form

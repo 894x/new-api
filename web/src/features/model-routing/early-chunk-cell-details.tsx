@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
 import type {
   EarlyChunkCell,
@@ -30,6 +31,7 @@ import type {
 
 export function EarlyChunkMetricsDisplay(props: {
   metrics: EarlyChunkMetrics
+  className?: string
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
@@ -82,7 +84,9 @@ export function EarlyChunkMetricsDisplay(props: {
     [t('TTFT over 300s'), formatNumber(m.overflow, locale)],
   ]
   return (
-    <dl className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+    <dl
+      className={cn('grid grid-cols-2 gap-3 sm:grid-cols-4', props.className)}
+    >
       {values.map(([label, value]) => (
         <div key={label} className='min-w-0'>
           <dt className='text-muted-foreground text-xs'>{label}</dt>

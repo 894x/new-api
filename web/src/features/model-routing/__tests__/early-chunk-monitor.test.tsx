@@ -141,7 +141,6 @@ test('populated grid cells expose quantiles, failures and conditional prediction
   const user = userEvent.setup()
   mount()
   const cell = await screen.findByRole('button', { name: '0–1k / 0–10%' })
-  expect(screen.getByText(/pool and channel mode still applies/i)).toBeVisible()
   expect(within(cell).getByText('p90 5.75s')).toBeVisible()
   expect(within(cell).getByText('Advance 1s')).toBeVisible()
   expect(within(cell).getByText('Candidate 5s')).toBeVisible()
@@ -160,6 +159,75 @@ test('populated grid cells expose quantiles, failures and conditional prediction
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   )
   expect(cell).toHaveFocus()
+})
+
+test('populated grid fills the remaining panel height and keeps both axes scrollable', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: { success: true, data: fixture() },
+  })
+  mount()
+  const grid = await screen.findByRole('region', {
+    name: 'Input tokens by prefix reuse ratio',
+  })
+  expect(grid).toHaveClass('flex-1', 'overflow-auto', 'max-xl:max-h-[55vh]')
+  expect(grid).not.toHaveClass('max-h-[55vh]')
+  expect(grid).not.toHaveClass('shrink-0')
+  expect(grid).toHaveAttribute('tabindex', '0')
+})
+
+test('channel selector and elapsed-time toolbar controls share the standard height', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: { success: true, data: fixture() },
+  })
+  mount()
+  await screen.findByRole('button', { name: '0–1k / 0–10%' })
+  const channel = screen.getByRole('combobox', { name: 'Select channel' })
+  const channelControl = channel.closest('[data-slot="input-group"]')
+  expect(channelControl?.parentElement).toHaveClass('h-8')
+  expect(screen.getByLabelText('Elapsed time (ms)')).toHaveClass('h-8')
+  expect(screen.getByRole('button', { name: 'Apply' })).toHaveClass('h-8')
+  expect(screen.getByRole('button', { name: 'Refresh' })).toHaveClass('h-8')
+})
+
+test('prediction guidance stays hidden until help is opened and closes with Escape', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: { success: true, data: fixture() },
+  })
+  const user = userEvent.setup()
+  mount()
+  await screen.findByRole('button', { name: '0–1k / 0–10%' })
+  const guidance = /Each sample is one channel attempt/
+  expect(screen.queryByText(guidance)).not.toBeInTheDocument()
+  const help = screen.getByRole('button', { name: 'Learn more' })
+  expect(help).toHaveAttribute('aria-expanded', 'false')
+  await user.click(help)
+  expect(await screen.findByText(guidance)).toBeVisible()
+  expect(screen.getByText(/pool and channel mode still applies/i)).toBeVisible()
+  expect(help).toHaveAttribute('aria-expanded', 'true')
+  await user.keyboard('{Escape}')
+  await waitFor(() =>
+    expect(screen.queryByText(guidance)).not.toBeInTheDocument()
+  )
+  expect(help).toHaveFocus()
+  await user.keyboard('{Enter}')
+  expect(await screen.findByText(guidance)).toBeVisible()
+})
+
+test('expanded overview uses a denser responsive metric grid while retaining narrow-screen columns', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: { success: true, data: fixture() },
+  })
+  mount()
+  await screen.findByRole('button', { name: '0–1k / 0–10%' })
+  await userEvent.click(screen.getByText(/^Overview ·/))
+  const average = screen.getByText('Average TTFT')
+  expect(average).toBeVisible()
+  expect(average.closest('dl')).toHaveClass(
+    'grid-cols-2',
+    'lg:grid-cols-6',
+    '2xl:grid-cols-8',
+    'gap-y-2'
+  )
 })
 
 test('empty observations hide the grid and explain collection while off', async () => {
@@ -334,6 +402,7 @@ test('candidate preview is automatic by default and allows probing long waits', 
     })
   )
   expect(screen.getByPlaceholderText('Per-bucket candidate')).toBeVisible()
+  await userEvent.click(screen.getByRole('button', { name: 'Learn more' }))
   expect(
     screen.getByText(/Each bucket is evaluated at its candidate time/)
   ).toBeVisible()

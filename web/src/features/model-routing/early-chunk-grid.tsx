@@ -20,6 +20,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
+import { LearnMore } from '@/components/learn-more'
 import { Button } from '@/components/ui/button'
 import {
   Table,
@@ -81,89 +82,120 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
     ms == null ? '—' : `${formatNumber(ms / 1000, locale)}s`
   return (
     <div className='bg-card flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-xl border p-3'>
-      <details>
-        <summary className='cursor-pointer text-sm font-medium'>
-          {t('Overview')} · {t('Samples')}:{' '}
-          {formatNumber(props.grid.summary.samples, locale)} · p50{' '}
-          {time(props.grid.summary.p50_ms)} · p90{' '}
-          {time(props.grid.summary.p90_ms)}
-        </summary>
-        <div className='mt-3 space-y-3'>
-          <EarlyChunkMetricsDisplay metrics={props.grid.summary} />
-          <p className='text-muted-foreground text-xs'>
-            {t(
-              'Storage: {{backend}} · {{active}}/{{limit}} active cells globally · {{size}} KiB table payload',
-              {
-                backend: props.grid.backend,
-                active: formatNumber(props.grid.tracked_buckets, locale),
-                limit: formatNumber(props.grid.max_buckets, locale),
-                size: formatNumber(props.grid.payload_bytes / 1024, locale),
-              }
-            )}
-          </p>
-          <p className='text-muted-foreground text-xs'>
-            {t(
-              'This node: {{reads}} read errors · {{writes}} write errors · {{evictions}} evictions',
-              {
-                reads: formatNumber(props.grid.node_read_errors, locale),
-                writes: formatNumber(props.grid.node_write_errors, locale),
-                evictions: formatNumber(props.grid.node_evictions, locale),
-              }
-            )}
-          </p>
-        </div>
-      </details>
-      <div className='text-muted-foreground space-y-1 text-xs'>
-        <p>
-          {t(
-            'Each sample is one channel attempt. First content includes text, reasoning and tool calls.'
-          )}
-        </p>
-        <p>
-          {t(
-            'Advance {{ratio}}% of the TTFT estimate, bounded to {{min}}–{{max}}s; earliest pre-emission {{earliest}}s. Gate: {{samples}} pending samples and {{probability}}%.',
-            {
-              ratio: formatNumber(props.grid.config.lead_ratio * 100, locale),
-              min: formatNumber(props.grid.config.min_lead_ms / 1000, locale),
-              max: formatNumber(props.grid.config.max_lead_ms / 1000, locale),
-              earliest: formatNumber(
-                props.grid.config.earliest_ms / 1000,
-                locale
-              ),
-              samples: formatNumber(props.grid.config.min_samples, locale),
-              probability: formatNumber(
-                props.grid.config.min_probability * 100,
-                locale
-              ),
-            }
-          )}
-        </p>
-        <p>
-          {props.grid.probe_ms < 0
-            ? t(
-                'Each bucket is evaluated at its candidate time. Enter elapsed time to inspect a request that is still waiting.'
-              )
-            : t(
-                'Evaluating after {{elapsed}}s of waiting. Forecasts and advance budgets update with elapsed time.',
-                { elapsed: formatNumber(props.grid.probe_ms / 1000, locale) }
+      <div className='flex shrink-0 items-start justify-between gap-3'>
+        <details className='min-w-0 flex-1'>
+          <summary className='cursor-pointer text-sm font-medium'>
+            {t('Overview')} · {t('Samples')}:{' '}
+            {formatNumber(props.grid.summary.samples, locale)} · p50{' '}
+            {time(props.grid.summary.p50_ms)} · p90{' '}
+            {time(props.grid.summary.p90_ms)}
+          </summary>
+          <div className='mt-3 space-y-3'>
+            <EarlyChunkMetricsDisplay
+              metrics={props.grid.summary}
+              className='gap-x-4 gap-y-2 lg:grid-cols-6 2xl:grid-cols-8'
+            />
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Storage: {{backend}} · {{active}}/{{limit}} active cells globally · {{size}} KiB table payload',
+                {
+                  backend: props.grid.backend,
+                  active: formatNumber(props.grid.tracked_buckets, locale),
+                  limit: formatNumber(props.grid.max_buckets, locale),
+                  size: formatNumber(props.grid.payload_bytes / 1024, locale),
+                }
               )}
-        </p>
-        <p>
-          {t(
-            'Cache ratio is a local prefix-byte reuse estimate, not provider-reported cache hits. Quantiles are histogram upper bounds. Finished requests only; refreshes every 10s.'
-          )}
-        </p>
-        <p>
-          {t(
-            'Three rotating time slices, up to {{seconds}}s retention. Green cells pass the prediction gate; amber cells lack samples. Click a populated cell for details.',
-            { seconds: formatNumber(props.grid.config.max_age_seconds, locale) }
-          )}
-        </p>
-        <p>
-          {t(
-            'Prediction eligibility does not mean pre-emission is enabled. The pool and channel mode still applies.'
-          )}
-        </p>
+            </p>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'This node: {{reads}} read errors · {{writes}} write errors · {{evictions}} evictions',
+                {
+                  reads: formatNumber(props.grid.node_read_errors, locale),
+                  writes: formatNumber(props.grid.node_write_errors, locale),
+                  evictions: formatNumber(props.grid.node_evictions, locale),
+                }
+              )}
+            </p>
+          </div>
+        </details>
+        <LearnMore
+          triggerProps={{ className: 'shrink-0' }}
+          contentProps={{
+            side: 'bottom',
+            align: 'end',
+            className:
+              'max-h-[70dvh] w-96 max-w-[calc(100vw-2rem)] overflow-y-auto',
+          }}
+        >
+          <div className='text-muted-foreground space-y-1 text-xs'>
+            <p>
+              {t(
+                'Each sample is one channel attempt. First content includes text, reasoning and tool calls.'
+              )}
+            </p>
+            <p>
+              {t(
+                'Advance {{ratio}}% of the TTFT estimate, bounded to {{min}}–{{max}}s; earliest pre-emission {{earliest}}s. Gate: {{samples}} pending samples and {{probability}}%.',
+                {
+                  ratio: formatNumber(
+                    props.grid.config.lead_ratio * 100,
+                    locale
+                  ),
+                  min: formatNumber(
+                    props.grid.config.min_lead_ms / 1000,
+                    locale
+                  ),
+                  max: formatNumber(
+                    props.grid.config.max_lead_ms / 1000,
+                    locale
+                  ),
+                  earliest: formatNumber(
+                    props.grid.config.earliest_ms / 1000,
+                    locale
+                  ),
+                  samples: formatNumber(props.grid.config.min_samples, locale),
+                  probability: formatNumber(
+                    props.grid.config.min_probability * 100,
+                    locale
+                  ),
+                }
+              )}
+            </p>
+            <p>
+              {props.grid.probe_ms < 0
+                ? t(
+                    'Each bucket is evaluated at its candidate time. Enter elapsed time to inspect a request that is still waiting.'
+                  )
+                : t(
+                    'Evaluating after {{elapsed}}s of waiting. Forecasts and advance budgets update with elapsed time.',
+                    {
+                      elapsed: formatNumber(props.grid.probe_ms / 1000, locale),
+                    }
+                  )}
+            </p>
+            <p>
+              {t(
+                'Cache ratio is a local prefix-byte reuse estimate, not provider-reported cache hits. Quantiles are histogram upper bounds. Finished requests only; refreshes every 10s.'
+              )}
+            </p>
+            <p>
+              {t(
+                'Three rotating time slices, up to {{seconds}}s retention. Green cells pass the prediction gate; amber cells lack samples. Click a populated cell for details.',
+                {
+                  seconds: formatNumber(
+                    props.grid.config.max_age_seconds,
+                    locale
+                  ),
+                }
+              )}
+            </p>
+            <p>
+              {t(
+                'Prediction eligibility does not mean pre-emission is enabled. The pool and channel mode still applies.'
+              )}
+            </p>
+          </div>
+        </LearnMore>
       </div>
       {visible.cells.size === 0 && (
         <p role='status' className='bg-muted rounded-lg p-3 text-sm'>
@@ -177,7 +209,7 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
           role='region'
           aria-label={t('Input tokens by prefix reuse ratio')}
           tabIndex={0}
-          className='max-h-[55vh] min-h-48 shrink-0 overflow-auto rounded-lg border'
+          className='min-h-48 flex-1 overflow-auto rounded-lg border max-xl:max-h-[55vh]'
         >
           <Table
             withContainer={false}
@@ -288,7 +320,7 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
         )}
       </Dialog>
       {!cell && visible.cells.size > 0 && (
-        <p className='text-muted-foreground text-sm'>
+        <p className='text-muted-foreground shrink-0 text-sm'>
           {t('Select a populated cell to inspect its measurements.')}
         </p>
       )}

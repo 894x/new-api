@@ -110,7 +110,11 @@ export function PoolMonitorDisplay(props: {
           className={cn(
             'contents',
             props.open &&
-              'block min-w-0 order-2 xl:col-start-1 xl:row-start-2 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden'
+              'block min-w-0 order-2 xl:col-start-1 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden',
+            props.open &&
+              (view === 'ttft'
+                ? 'xl:row-span-2 xl:row-start-1'
+                : 'xl:row-start-2')
           )}
         >
           {props.children}
