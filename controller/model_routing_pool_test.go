@@ -103,7 +103,7 @@ func TestRoutingPoolTuningDatabaseMatrix(t *testing.T) {
 				assert.Equal(t, "model_channel", gridBody.Data.Scope)
 				assert.Equal(t, 1040, gridBody.Data.RegularBuckets)
 				assert.Equal(t, "no-store", responseGrid.Header().Get("Cache-Control"))
-				for _, query := range []string{"channel_id=invalid&model=x", "channel_id=9701&model=x&probe_ms=30001"} {
+				for _, query := range []string{"channel_id=invalid&model=x", "channel_id=9701&model=x&probe_ms=300001"} {
 					responseGrid = userRoutingRequestAtURL(t, 1, http.MethodGet, "/api/channel/early-chunk-grid?"+query, "", GetChatEarlyChunkGrid)
 					assert.Equal(t, http.StatusBadRequest, responseGrid.Code)
 				}

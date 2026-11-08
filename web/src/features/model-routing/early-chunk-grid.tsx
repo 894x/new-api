@@ -121,10 +121,15 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
         </p>
         <p>
           {t(
-            'At {{elapsed}}s elapsed, predict content within the next {{gap}}s. Gate: at least {{samples}} pending samples and {{probability}}%.',
+            'Advance {{ratio}}% of the TTFT estimate, bounded to {{min}}–{{max}}s; earliest pre-emission {{earliest}}s. Gate: {{samples}} pending samples and {{probability}}%.',
             {
-              elapsed: formatNumber(props.grid.probe_ms / 1000, locale),
-              gap: formatNumber(props.grid.config.target_gap_ms / 1000, locale),
+              ratio: formatNumber(props.grid.config.lead_ratio * 100, locale),
+              min: formatNumber(props.grid.config.min_lead_ms / 1000, locale),
+              max: formatNumber(props.grid.config.max_lead_ms / 1000, locale),
+              earliest: formatNumber(
+                props.grid.config.earliest_ms / 1000,
+                locale
+              ),
               samples: formatNumber(props.grid.config.min_samples, locale),
               probability: formatNumber(
                 props.grid.config.min_probability * 100,
@@ -132,6 +137,16 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
               ),
             }
           )}
+        </p>
+        <p>
+          {props.grid.probe_ms < 0
+            ? t(
+                'Each bucket is evaluated at its candidate time. Enter elapsed time to inspect a request that is still waiting.'
+              )
+            : t(
+                'Evaluating after {{elapsed}}s of waiting. Forecasts and advance budgets update with elapsed time.',
+                { elapsed: formatNumber(props.grid.probe_ms / 1000, locale) }
+              )}
         </p>
         <p>
           {t(
@@ -230,6 +245,16 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
                           </span>
                           <span>p50 {time(entry.metrics.p50_ms)}</span>
                           <span>p90 {time(entry.metrics.p90_ms)}</span>
+                          <span>
+                            {t('Advance {{time}}', {
+                              time: time(entry.prediction.lead_ms),
+                            })}
+                          </span>
+                          <span>
+                            {t('Candidate {{time}}', {
+                              time: time(entry.prediction.candidate_ms),
+                            })}
+                          </span>
                           <span>
                             {formatNumber(
                               entry.prediction.probability * 100,

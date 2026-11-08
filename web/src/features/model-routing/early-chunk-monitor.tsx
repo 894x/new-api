@@ -52,7 +52,7 @@ export default function EarlyChunkMonitor(props: {
     meta: { errorToast: false },
   })
   const validProbe =
-    draft === '' || (/^\d+$/.test(draft) && Number(draft) <= 30000)
+    draft === '' || (/^\d+$/.test(draft) && Number(draft) <= 300000)
   return (
     <section
       className='order-3 flex min-h-0 min-w-0 flex-col gap-3 xl:col-start-2 xl:row-span-2 xl:row-start-1 xl:h-full'
@@ -84,7 +84,7 @@ export default function EarlyChunkMonitor(props: {
             <Input
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              placeholder={t('Window midpoint')}
+              placeholder={t('Per-bucket candidate')}
               inputMode='numeric'
               aria-invalid={!validProbe}
               className='w-36'

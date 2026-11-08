@@ -85,6 +85,23 @@ func TestRequestPolicyDatabaseMatrix(t *testing.T) {
 			assert.Error(t, UpdateRequestPolicyOptions(map[string]string{exclusionKey: "99,600,500-400"}))
 			assert.Empty(t, CurrentRequestPolicy().Options[exclusionKey], "invalid exclusions do not replace a saved empty rule")
 			assert.Equal(t, "off", CurrentRequestPolicy().ChatEarlyChunk.Mode)
+			legacy := Option{Key: "chat_early_chunk_setting.window_end_ms", Value: "500"}
+			require.NoError(t, db.Create(&legacy).Error)
+			loadOptionsFromDatabase()
+			assert.Equal(t, .15, CurrentRequestPolicy().ChatEarlyChunk.LeadRatio)
+			assert.Equal(t, 1000, CurrentRequestPolicy().ChatEarlyChunk.EarliestMS)
+			require.NoError(t, UpdateRequestPolicyOptions(map[string]string{"chat_early_chunk_setting.lead_ratio": "0.2", "chat_early_chunk_setting.min_lead_ms": "800", "chat_early_chunk_setting.max_lead_ms": "4000", "chat_early_chunk_setting.earliest_ms": "500"}))
+			loadOptionsFromDatabase()
+			loadOptionsFromDatabase()
+			assert.Equal(t, .2, CurrentRequestPolicy().ChatEarlyChunk.LeadRatio)
+			assert.Equal(t, 800, CurrentRequestPolicy().ChatEarlyChunk.MinLeadMS)
+			assert.Equal(t, 4000, CurrentRequestPolicy().ChatEarlyChunk.MaxLeadMS)
+			assert.Equal(t, 500, CurrentRequestPolicy().ChatEarlyChunk.EarliestMS)
+			assert.NotContains(t, CurrentRequestPolicy().Options, legacy.Key)
+			var preserved Option
+			require.NoError(t, db.Where(map[string]any{"key": legacy.Key}).First(&preserved).Error)
+			assert.Equal(t, "500", preserved.Value)
+
 			require.NoError(t, UpdateRequestPolicyOptions(map[string]string{"chat_early_chunk_setting.mode": "observe", "chat_early_chunk_setting.min_probability": "0.99"}))
 			loadOptionsFromDatabase()
 			loadOptionsFromDatabase()
@@ -92,7 +109,13 @@ func TestRequestPolicyDatabaseMatrix(t *testing.T) {
 			assert.Equal(t, 0.99, CurrentRequestPolicy().ChatEarlyChunk.MinProbability)
 			for _, invalid := range []map[string]string{
 				{"chat_early_chunk_setting.mode": "invalid"},
-				{"chat_early_chunk_setting.window_start_ms": "1200", "chat_early_chunk_setting.window_end_ms": "300"},
+				{"chat_early_chunk_setting.lead_ratio": "NaN"},
+				{"chat_early_chunk_setting.lead_ratio": "1.01"},
+				{"chat_early_chunk_setting.lead_ratio": "0"},
+				{"chat_early_chunk_setting.min_lead_ms": "0"},
+				{"chat_early_chunk_setting.max_lead_ms": "30001"},
+				{"chat_early_chunk_setting.earliest_ms": "-1"},
+				{"chat_early_chunk_setting.min_lead_ms": "3001", "chat_early_chunk_setting.max_lead_ms": "3000"},
 				{"chat_early_chunk_setting.min_samples": "0"},
 				{"chat_early_chunk_setting.min_probability": "NaN"},
 			} {

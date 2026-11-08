@@ -47,20 +47,21 @@ func (p *Pool) Resolve(base string, channelID int) string {
 
 type Config struct {
 	Mode           string  `json:"mode"`
-	WindowStartMS  int     `json:"window_start_ms"`
-	WindowEndMS    int     `json:"window_end_ms"`
-	TargetGapMS    int     `json:"target_gap_ms"`
+	LeadRatio      float64 `json:"lead_ratio"`
+	MinLeadMS      int     `json:"min_lead_ms"`
+	MaxLeadMS      int     `json:"max_lead_ms"`
+	EarliestMS     int     `json:"earliest_ms"`
 	MinSamples     int     `json:"min_samples"`
 	MinProbability float64 `json:"min_probability"`
 	MaxAgeSeconds  int     `json:"max_age_seconds"`
 }
 
 func Default() Config {
-	return Config{Mode: "off", WindowStartMS: 4500, WindowEndMS: 5500, TargetGapMS: 1000, MinSamples: 100, MinProbability: .95, MaxAgeSeconds: 900}
+	return Config{Mode: "off", LeadRatio: .15, MinLeadMS: 1000, MaxLeadMS: 3000, EarliestMS: 1000, MinSamples: 100, MinProbability: .95, MaxAgeSeconds: 900}
 }
 
 func (c Config) Validate() error {
-	if !ValidMode(c.Mode, false) || c.WindowStartMS < 0 || c.WindowEndMS <= c.WindowStartMS || c.WindowEndMS > 30000 || c.TargetGapMS < 1 || c.TargetGapMS > 10000 || c.MinSamples < 20 || c.MinSamples > 256 || math.IsNaN(c.MinProbability) || c.MinProbability < .5 || c.MinProbability > 1 || c.MaxAgeSeconds < 60 || c.MaxAgeSeconds > 86400 {
+	if !ValidMode(c.Mode, false) || math.IsNaN(c.LeadRatio) || c.LeadRatio < .01 || c.LeadRatio > 1 || c.MinLeadMS < 1 || c.MaxLeadMS < c.MinLeadMS || c.MaxLeadMS > 30000 || c.EarliestMS < 0 || c.EarliestMS > 30000 || c.MinSamples < 20 || c.MinSamples > 256 || math.IsNaN(c.MinProbability) || c.MinProbability < .5 || c.MinProbability > 1 || c.MaxAgeSeconds < 60 || c.MaxAgeSeconds > 86400 {
 		return fmt.Errorf("invalid early chunk prediction settings")
 	}
 	return nil

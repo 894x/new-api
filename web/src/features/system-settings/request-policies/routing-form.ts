@@ -9,16 +9,17 @@ export function createRoutingPolicySchema(t: TFunction) {
     chat_early_chunk_setting: z
       .object({
         mode: z.enum(['off', 'observe', 'enabled']),
-        window_start_ms: z.number().int().min(0).max(29999),
-        window_end_ms: z.number().int().min(1).max(30000),
-        target_gap_ms: z.number().int().min(1).max(10000),
+        lead_ratio: z.number().min(1).max(100),
+        min_lead_ms: z.number().int().min(1).max(30000),
+        max_lead_ms: z.number().int().min(1).max(30000),
+        earliest_ms: z.number().int().min(0).max(30000),
         min_samples: z.number().int().min(20).max(256),
         min_probability: z.number().min(0.5).max(1),
         max_age_seconds: z.number().int().min(60).max(86400),
       })
-      .refine((value) => value.window_end_ms > value.window_start_ms, {
-        message: t('The early chunk window must end after it starts.'),
-        path: ['window_end_ms'],
+      .refine((value) => value.max_lead_ms >= value.min_lead_ms, {
+        message: t('Maximum advance must be at least the minimum advance.'),
+        path: ['max_lead_ms'],
       }),
     AutomaticRetryStatusCodes: z
       .string()
@@ -72,14 +73,16 @@ export function routingPolicyFormValues(
         | 'off'
         | 'observe'
         | 'enabled',
-      window_start_ms: Number(
-        options['chat_early_chunk_setting.window_start_ms'] ?? 4500
+      lead_ratio:
+        Number(options['chat_early_chunk_setting.lead_ratio'] ?? 0.15) * 100,
+      min_lead_ms: Number(
+        options['chat_early_chunk_setting.min_lead_ms'] ?? 1000
       ),
-      window_end_ms: Number(
-        options['chat_early_chunk_setting.window_end_ms'] ?? 5500
+      max_lead_ms: Number(
+        options['chat_early_chunk_setting.max_lead_ms'] ?? 3000
       ),
-      target_gap_ms: Number(
-        options['chat_early_chunk_setting.target_gap_ms'] ?? 1000
+      earliest_ms: Number(
+        options['chat_early_chunk_setting.earliest_ms'] ?? 1000
       ),
       min_samples: Number(
         options['chat_early_chunk_setting.min_samples'] ?? 100
@@ -126,7 +129,7 @@ export function routingPolicyOptions(
     ...Object.fromEntries(
       Object.entries(values.chat_early_chunk_setting).map(([key, value]) => [
         `chat_early_chunk_setting.${key}`,
-        String(value),
+        key === 'lead_ratio' ? String(Number(value) / 100) : String(value),
       ])
     ),
     AutomaticRetryStatusCodes: values.AutomaticRetryStatusCodes,

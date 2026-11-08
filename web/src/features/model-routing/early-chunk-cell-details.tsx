@@ -61,7 +61,17 @@ export function EarlyChunkMetricsDisplay(props: {
     [t('Prediction decisions'), formatNumber(m.decisions, locale)],
     [t('Pre-emitted'), formatNumber(m.sent, locale)],
     [t('Gap target met'), formatNumber(m.met, locale)],
+    [
+      t('Prediction target rate'),
+      m.decisions
+        ? `${formatNumber((m.met / m.decisions) * 100, locale)}%`
+        : '—',
+    ],
     [t('Pre-emitted target met'), formatNumber(m.sent_met, locale)],
+    [
+      t('Pre-emitted target rate'),
+      m.sent ? `${formatNumber((m.sent_met / m.sent) * 100, locale)}%` : '—',
+    ],
     [t('Failed after pre-emission'), formatNumber(m.sent_failed, locale)],
     [
       t('Average content gap'),
@@ -91,6 +101,16 @@ export function EarlyChunkCellDetails(props: {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const p = props.cell.prediction
+  const time = (ms: number | null): string =>
+    ms == null ? '—' : `${formatNumber(ms / 1000, locale)} s`
+  const reasons: Record<string, string> = {
+    eligible: t('Prediction gate passed'),
+    insufficient_samples: t('Insufficient pending samples'),
+    no_content_estimate: t('No finite first-content estimate'),
+    before_candidate: t('Waiting for candidate time'),
+    low_probability: t('Conditional probability below threshold'),
+    unknown_estimate: t('Unknown token or prefix estimate'),
+  }
   return (
     <section
       aria-label={t('Bucket details')}
@@ -105,6 +125,24 @@ export function EarlyChunkCellDetails(props: {
         </Badge>
       </div>
       <EarlyChunkMetricsDisplay metrics={props.cell.metrics} />
+      <dl className='grid grid-cols-2 gap-3 sm:grid-cols-3'>
+        {[
+          [t('Evaluation time'), time(p.at_ms)],
+          [t('Estimated first content'), time(p.estimated_ttft_ms)],
+          [t('Suggested advance'), time(p.lead_ms)],
+          [t('Candidate pre-emission time'), time(p.candidate_ms)],
+          [t('Remaining p50'), time(p.remaining_p50_ms)],
+          [t('Remaining p90'), time(p.remaining_p90_ms)],
+        ].map(([label, value]) => (
+          <div key={label}>
+            <dt className='text-muted-foreground text-xs'>{label}</dt>
+            <dd className='font-medium tabular-nums'>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className='text-muted-foreground text-sm'>
+        {reasons[p.reason] ?? t('Unknown')}
+      </p>
       <p className='text-muted-foreground text-sm'>
         {t(
           'Conditional prediction: {{probability}}% · {{pending}} pending samples · {{cells}} merged cells',

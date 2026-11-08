@@ -83,9 +83,10 @@ function fixture(): EarlyChunkGrid {
     probe_ms: 5000,
     config: {
       mode: 'off',
-      window_start_ms: 4500,
-      window_end_ms: 5500,
-      target_gap_ms: 1000,
+      lead_ratio: 0.15,
+      min_lead_ms: 1000,
+      max_lead_ms: 3000,
+      earliest_ms: 1000,
       min_samples: 20,
       min_probability: 0.95,
       max_age_seconds: 900,
@@ -103,6 +104,13 @@ function fixture(): EarlyChunkGrid {
           probability: 0.95,
           merged_cells: 2,
           eligible: true,
+          at_ms: 5000,
+          estimated_ttft_ms: 6000,
+          remaining_p50_ms: 1000,
+          remaining_p90_ms: 1250,
+          lead_ms: 1000,
+          candidate_ms: 5000,
+          reason: 'eligible',
         },
         histogram: [0, 0, 23],
       },
@@ -135,11 +143,16 @@ test('populated grid cells expose quantiles, failures and conditional prediction
   const cell = await screen.findByRole('button', { name: '0–1k / 0–10%' })
   expect(screen.getByText(/pool and channel mode still applies/i)).toBeVisible()
   expect(within(cell).getByText('p90 5.75s')).toBeVisible()
+  expect(within(cell).getByText('Advance 1s')).toBeVisible()
+  expect(within(cell).getByText('Candidate 5s')).toBeVisible()
   cell.focus()
   await user.keyboard('{Enter}')
   expect(cell).toHaveAttribute('aria-pressed', 'true')
   const details = screen.getByRole('region', { name: 'Bucket details' })
   expect(within(details).getByText('Average TTFT')).toBeVisible()
+  expect(within(details).getByText('Estimated first content')).toBeVisible()
+  expect(within(details).getByText('Remaining p90')).toBeVisible()
+  expect(within(details).getByText('1.25 s')).toBeVisible()
   expect(within(details).getByText('Failed after pre-emission')).toBeVisible()
   expect(within(details).getByText(/20 pending samples/)).toBeVisible()
   await user.keyboard('{Escape}')
@@ -282,7 +295,7 @@ test('elapsed-time edits only request new predictions after valid apply', async 
       })
     )
   )
-  fireEvent.change(elapsed, { target: { value: '30001' } })
+  fireEvent.change(elapsed, { target: { value: '300001' } })
   expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
   expect(elapsed).toHaveAttribute('aria-invalid', 'true')
 })
@@ -304,4 +317,36 @@ test('storage failures hide stale measurements and can be retried', async () => 
     await screen.findByRole('button', { name: '0–1k / 0–10%' })
   ).toBeVisible()
   expect(get).toHaveBeenCalledTimes(2)
+})
+
+test('candidate preview is automatic by default and allows probing long waits', async () => {
+  const data = fixture()
+  data.probe_ms = -1
+  const get = vi
+    .spyOn(api, 'get')
+    .mockResolvedValue({ data: { success: true, data } })
+  mount()
+  await screen.findByRole('button', { name: '0–1k / 0–10%' })
+  expect(get).toHaveBeenCalledWith(
+    '/api/channel/early-chunk-grid',
+    expect.objectContaining({
+      params: { model: 'k3', channel_id: 49, probe_ms: -1 },
+    })
+  )
+  expect(screen.getByPlaceholderText('Per-bucket candidate')).toBeVisible()
+  expect(
+    screen.getByText(/Each bucket is evaluated at its candidate time/)
+  ).toBeVisible()
+  fireEvent.change(screen.getByLabelText('Elapsed time (ms)'), {
+    target: { value: '60000' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+  await waitFor(() =>
+    expect(get).toHaveBeenLastCalledWith(
+      '/api/channel/early-chunk-grid',
+      expect.objectContaining({
+        params: { model: 'k3', channel_id: 49, probe_ms: 60000 },
+      })
+    )
+  )
 })

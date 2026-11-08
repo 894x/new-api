@@ -57,9 +57,9 @@ func TestDoRequestPreEmitsBeforeUpstreamHeaders(t *testing.T) {
 			})
 			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.ModelRoutingPool{}, &model.UserRoutingStrategy{}, &model.UserGroupChannelRoutingOverride{}, &model.Option{}))
 			oldConfig := model.CurrentRequestPolicy().ChatEarlyChunk
-			require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{"chat_early_chunk_setting.window_start_ms": "100", "chat_early_chunk_setting.window_end_ms": "500"}))
+			require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{"chat_early_chunk_setting.earliest_ms": "100"}))
 			t.Cleanup(func() {
-				require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{"chat_early_chunk_setting.window_start_ms": fmt.Sprint(oldConfig.WindowStartMS), "chat_early_chunk_setting.window_end_ms": fmt.Sprint(oldConfig.WindowEndMS)}))
+				require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{"chat_early_chunk_setting.earliest_ms": fmt.Sprint(oldConfig.EarliestMS)}))
 			})
 			name := "early-headers-" + variant
 			channel := model.Channel{Id: 9001, Type: 1, Models: name, Group: "default"}

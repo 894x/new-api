@@ -124,6 +124,11 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 		}
 	}
 	maps.Copy(raw, options)
+	// Keep persisted fixed-window options available for rollback, but exclude
+	// them from the dynamic read model and scheduling decisions.
+	for _, field := range []string{"window_start_ms", "window_end_ms", "target_gap_ms"} {
+		delete(raw, "chat_early_chunk_setting."+field)
+	}
 	snapshot := &RequestPolicySnapshot{Options: raw}
 	prefixEnabled, err := strconv.ParseBool(raw["chat_prefix_routing_setting.enabled"])
 	if err != nil {
@@ -141,7 +146,7 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 	snapshot.ChatPrefixMaxEntries, snapshot.ChatPrefixTTLSeconds = maxEntries, ttlSeconds
 	early := map[string]json.RawMessage{}
 	for key, value := range raw {
-		if field, ok := strings.CutPrefix(key, "chat_early_chunk_setting."); ok {
+		if field, ok := strings.CutPrefix(key, "chat_early_chunk_setting."); ok && IsRequestPolicyOption(key) {
 			if field == "mode" {
 				encoded, _ := common.Marshal(value)
 				early[field] = encoded

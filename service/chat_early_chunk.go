@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -21,21 +20,22 @@ import (
 const chatEarlyChunkContextKey = "chat_early_chunk_attempt"
 
 type ChatEarlyChunkObservation struct {
-	Mode         string  `json:"mode"`
-	MatchedBytes int     `json:"matched_bytes"`
-	InputBytes   int     `json:"input_bytes"`
-	InputTokens  int     `json:"input_tokens"`
-	TokenBand    int     `json:"token_band"`
-	CacheBand    int     `json:"cache_band"`
-	MergedCells  int     `json:"merged_cells"`
-	Samples      int     `json:"samples"`
-	Probability  float64 `json:"probability"`
-	DecisionMS   *int64  `json:"decision_ms,omitempty"`
-	ContentMS    *int64  `json:"content_ms,omitempty"`
-	GapMS        *int64  `json:"gap_ms,omitempty"`
-	Sent         bool    `json:"sent"`
-	MetTarget    bool    `json:"met_target"`
-	Failed       bool    `json:"failed"`
+	Mode         string                `json:"mode"`
+	Prediction   *EarlyChunkPrediction `json:"prediction,omitempty"`
+	MatchedBytes int                   `json:"matched_bytes"`
+	InputBytes   int                   `json:"input_bytes"`
+	InputTokens  int                   `json:"input_tokens"`
+	TokenBand    int                   `json:"token_band"`
+	CacheBand    int                   `json:"cache_band"`
+	MergedCells  int                   `json:"merged_cells"`
+	Samples      int                   `json:"samples"`
+	Probability  float64               `json:"probability"`
+	DecisionMS   *int64                `json:"decision_ms,omitempty"`
+	ContentMS    *int64                `json:"content_ms,omitempty"`
+	GapMS        *int64                `json:"gap_ms,omitempty"`
+	Sent         bool                  `json:"sent"`
+	MetTarget    bool                  `json:"met_target"`
+	Failed       bool                  `json:"failed"`
 }
 
 // Each attempt captures its pool's mode. Statistics are shared by model/channel.
@@ -44,7 +44,6 @@ type ChatEarlyChunkAttempt struct {
 	config       chat_early_chunk_setting.Config
 	key          string // model + channel generation; never contains pool/user IDs
 	started      time.Time
-	notBefore    time.Time
 	created      int64
 	model        string
 	channelID    int
@@ -170,12 +169,9 @@ func BeginChatEarlyChunkAttempt(p *RetryParam, info *relaycommon.RelayInfo, chan
 			started = started.Add(-time.Duration(started.UnixMilli()-received) * time.Millisecond)
 		}
 	}
-	// Jitter spreads acknowledgments around the configured window. It only sets
-	// the earliest eligible time; prediction and upstream-arrival gates still apply.
-	delayMS := config.WindowStartMS + rand.IntN(config.WindowEndMS-config.WindowStartMS)
 	c.Set(chatEarlyChunkContextKey, &ChatEarlyChunkAttempt{
 		info: info, config: config, key: earlyChunkScopeKey(p.ModelName, channel, config.MaxAgeSeconds),
-		started: started, notBefore: started.Add(time.Duration(delayMS) * time.Millisecond),
+		started: started,
 		created: started.Unix(), model: p.ModelName, channelID: channel.Id, group: group,
 		tokenBand: tokenBand, cacheBand: cacheBand,
 		observation: ChatEarlyChunkObservation{Mode: config.Mode, MatchedBytes: match.MatchedBytes, InputBytes: inputBytes, InputTokens: inputTokens, TokenBand: tokenBand, CacheBand: cacheBand},
@@ -200,6 +196,9 @@ func (a *ChatEarlyChunkAttempt) Load(c *gin.Context, _ string, now time.Time) {
 	a.mu.Lock()
 	a.cells = cells
 	a.lookupFailed = err != nil
+	if err == nil {
+		a.refreshPrediction(now)
+	}
 	a.mu.Unlock()
 	if err != nil {
 		earlyChunkReadErrors.Add(1)
@@ -220,16 +219,30 @@ func (a *ChatEarlyChunkAttempt) UpstreamArrived() {
 	a.mu.Unlock()
 }
 
+// The caller holds a.mu; the config and cells are captured for this attempt.
+func (a *ChatEarlyChunkAttempt) refreshPrediction(now time.Time) EarlyChunkPrediction {
+	prediction := earlyChunkPredict(a.cells, a.tokenBand, a.cacheBand, now, max(int64(0), now.Sub(a.started).Milliseconds()), a.config)
+	a.observation.Prediction = &prediction
+	a.observation.Samples = int(prediction.Pending)
+	a.observation.Probability = prediction.Probability
+	a.observation.MergedCells = prediction.MergedCells
+	return prediction
+}
+
 func (a *ChatEarlyChunkAttempt) NextCheck(now time.Time) time.Duration {
-	start := a.started.Add(time.Duration(a.config.WindowStartMS) * time.Millisecond)
-	if a.notBefore.After(start) {
-		start = a.notBefore
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.finished || a.upstream || a.terminal || a.observation.DecisionMS != nil || a.lookupFailed {
+		return time.Millisecond
 	}
-	if now.Before(start) {
-		return start.Sub(now)
+	prediction := a.refreshPrediction(now)
+	if prediction.EstimatedTTFTMS == nil || prediction.Pending < uint64(a.config.MinSamples) {
+		return time.Millisecond
 	}
-	end := a.started.Add(time.Duration(a.config.WindowEndMS+1) * time.Millisecond)
-	return max(time.Millisecond, min(50*time.Millisecond, end.Sub(now)))
+	if prediction.CandidateMS != nil && *prediction.CandidateMS > prediction.AtMS {
+		return time.Duration(*prediction.CandidateMS-prediction.AtMS) * time.Millisecond
+	}
+	return 50 * time.Millisecond
 }
 
 // The caller serializes this callback with normal stream writes. Upstream
@@ -241,16 +254,13 @@ func (a *ChatEarlyChunkAttempt) Try(now time.Time, emit func() error) (bool, err
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	elapsed := now.Sub(a.started).Milliseconds()
-	if !a.ShouldPredict() || a.finished || a.upstream || a.terminal || a.observation.DecisionMS != nil || elapsed > int64(a.config.WindowEndMS) || a.lookupFailed {
+	if !a.ShouldPredict() || a.finished || a.upstream || a.terminal || a.observation.DecisionMS != nil || a.lookupFailed {
 		return true, nil
 	}
-	if elapsed < int64(a.config.WindowStartMS) || now.Before(a.notBefore) {
-		return false, nil
+	prediction := a.refreshPrediction(now)
+	if prediction.EstimatedTTFTMS == nil || prediction.Pending < uint64(a.config.MinSamples) {
+		return true, nil
 	}
-	prediction := earlyChunkPredict(a.cells, a.tokenBand, a.cacheBand, now, elapsed, a.config)
-	a.observation.Samples = int(prediction.Pending)
-	a.observation.Probability = prediction.Probability
-	a.observation.MergedCells = prediction.MergedCells
 	if !prediction.Eligible {
 		return false, nil
 	}
@@ -366,7 +376,11 @@ func FinishChatEarlyChunkAttempt(c *gin.Context, info *relaycommon.RelayInfo, ha
 	if a.observation.DecisionMS != nil && a.observation.ContentMS != nil {
 		gap := *a.observation.ContentMS - *a.observation.DecisionMS
 		a.observation.GapMS = &gap
-		a.observation.MetTarget = gap >= 0 && gap <= int64(a.config.TargetGapMS)
+		lead := int64(a.config.MinLeadMS)
+		if a.observation.Prediction != nil && a.observation.Prediction.LeadMS != nil {
+			lead = *a.observation.Prediction.LeadMS
+		}
+		a.observation.MetTarget = gap >= 0 && gap <= lead
 	}
 	observation := a.observation
 	a.mu.Unlock()
@@ -428,7 +442,11 @@ func (a *ChatEarlyChunkAttempt) Snapshot(info *relaycommon.RelayInfo) ChatEarlyC
 	if observation.DecisionMS != nil && observation.ContentMS != nil {
 		gap := *observation.ContentMS - *observation.DecisionMS
 		observation.GapMS = &gap
-		observation.MetTarget = gap >= 0 && gap <= int64(a.config.TargetGapMS)
+		lead := int64(a.config.MinLeadMS)
+		if observation.Prediction != nil && observation.Prediction.LeadMS != nil {
+			lead = *observation.Prediction.LeadMS
+		}
+		observation.MetTarget = gap >= 0 && gap <= lead
 	}
 	return observation
 }

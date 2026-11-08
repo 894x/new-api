@@ -293,30 +293,91 @@ func (total *earlyChunkAggregate) add(cell *earlyChunkCell, now time.Time, age i
 }
 
 type EarlyChunkPrediction struct {
-	Pending     uint64  `json:"pending"`
-	Soon        uint64  `json:"soon"`
-	Probability float64 `json:"probability"`
-	MergedCells int     `json:"merged_cells"`
-	Eligible    bool    `json:"eligible"`
+	Pending         uint64  `json:"pending"`
+	Soon            uint64  `json:"soon"`
+	Probability     float64 `json:"probability"`
+	MergedCells     int     `json:"merged_cells"`
+	Eligible        bool    `json:"eligible"`
+	AtMS            int64   `json:"at_ms"`
+	EstimatedTTFTMS *int64  `json:"estimated_ttft_ms"`
+	RemainingP50MS  *int64  `json:"remaining_p50_ms"`
+	RemainingP90MS  *int64  `json:"remaining_p90_ms"`
+	LeadMS          *int64  `json:"lead_ms"`
+	CandidateMS     *int64  `json:"candidate_ms"`
+	Reason          string  `json:"reason"`
 }
 
-func (total *earlyChunkAggregate) prediction(elapsed, gap int64) EarlyChunkPrediction {
-	result := EarlyChunkPrediction{}
-	minimum := int64(0)
-	for i, upper := range earlyChunkBounds {
+// Quantiles use only content observations that can still be pending at elapsed.
+// A straddling bin remains in the risk set; overflow cannot give a finite ETA.
+func (total *earlyChunkAggregate) contentQuantile(elapsed int64, percentile uint64) *int64 {
+	var samples uint64
+	for bin, upper := range earlyChunkBounds {
 		if upper > elapsed {
-			result.Pending += total.Content[i] + total.Failure[i] + total.Cancel[i]
+			samples += total.Content[bin]
 		}
-		// A straddling bin is not claimed as an imminent success. This gives a
-		// conservative probability even at a non-aligned probe time.
-		if minimum > elapsed && upper <= elapsed+gap {
-			result.Soon += total.Content[i]
+	}
+	if samples == 0 {
+		return nil
+	}
+	threshold := (samples*percentile + 99) / 100
+	var count uint64
+	for bin, upper := range earlyChunkBounds {
+		if upper <= elapsed {
+			continue
+		}
+		count += total.Content[bin]
+		if count >= threshold {
+			if bin == earlyChunkHistogramSize-1 {
+				return nil
+			}
+			return common.GetPointer(upper)
+		}
+	}
+	return nil
+}
+
+func (total *earlyChunkAggregate) prediction(elapsed int64, config chat_early_chunk_setting.Config) EarlyChunkPrediction {
+	result := EarlyChunkPrediction{AtMS: elapsed, Reason: "insufficient_samples"}
+	result.EstimatedTTFTMS = total.contentQuantile(elapsed, 50)
+	if result.EstimatedTTFTMS != nil {
+		result.RemainingP50MS = common.GetPointer(*result.EstimatedTTFTMS - elapsed)
+		lead := min(int64(config.MaxLeadMS), max(int64(config.MinLeadMS), int64(math.Round(float64(*result.EstimatedTTFTMS)*config.LeadRatio))))
+		result.LeadMS = &lead
+		result.CandidateMS = common.GetPointer(max(int64(config.EarliestMS), *result.EstimatedTTFTMS-lead))
+	}
+	if p90 := total.contentQuantile(elapsed, 90); p90 != nil {
+		result.RemainingP90MS = common.GetPointer(*p90 - elapsed)
+	}
+	minimum := int64(0)
+	for bin, upper := range earlyChunkBounds {
+		if upper > elapsed {
+			result.Pending += total.Content[bin] + total.Failure[bin] + total.Cancel[bin]
+		}
+		if result.LeadMS != nil && minimum > elapsed && upper <= elapsed+*result.LeadMS {
+			result.Soon += total.Content[bin]
 		}
 		minimum = upper + 1
 	}
 	if result.Pending > 0 {
 		result.Probability = float64(result.Soon) / float64(result.Pending)
 	}
+	if result.Pending < uint64(config.MinSamples) {
+		return result
+	}
+	if result.CandidateMS == nil {
+		result.Reason = "no_content_estimate"
+		return result
+	}
+	if elapsed < *result.CandidateMS {
+		result.Reason = "before_candidate"
+		return result
+	}
+	if result.Probability < config.MinProbability {
+		result.Reason = "low_probability"
+		return result
+	}
+	result.Eligible = true
+	result.Reason = "eligible"
 	return result
 }
 
@@ -334,8 +395,20 @@ func earlyChunkNeighborIDs(token, cache int) []int {
 }
 
 func earlyChunkPredict(cells map[int]*earlyChunkCell, token, cache int, now time.Time, elapsed int64, config chat_early_chunk_setting.Config) EarlyChunkPrediction {
+	if elapsed < 0 {
+		// Preview the same candidate jumps as the runtime timer. Each jump removes
+		// elapsed histogram mass; the fixed bound also protects monitor requests.
+		result := earlyChunkPredict(cells, token, cache, now, 0, config)
+		for range earlyChunkHistogramSize {
+			if result.CandidateMS == nil || *result.CandidateMS <= result.AtMS {
+				return result
+			}
+			result = earlyChunkPredict(cells, token, cache, now, *result.CandidateMS, config)
+		}
+		return result
+	}
 	var combined earlyChunkAggregate
-	result := EarlyChunkPrediction{}
+	result := EarlyChunkPrediction{AtMS: elapsed, Reason: "insufficient_samples"}
 	included := 0
 	for _, id := range earlyChunkNeighborIDs(token, cache) {
 		cell := cells[id]
@@ -344,13 +417,16 @@ func earlyChunkPredict(cells map[int]*earlyChunkCell, token, cache int, now time
 		}
 		combined.add(cell, now, config.MaxAgeSeconds)
 		included++
-		result = combined.prediction(elapsed, int64(config.TargetGapMS))
+		result = combined.prediction(elapsed, config)
 		result.MergedCells = included
 		if result.Pending >= uint64(config.MinSamples) {
 			break
 		}
 	}
-	result.Eligible = token != earlyChunkUnknownTokens && cache != earlyChunkUnknownCache && result.Pending >= uint64(config.MinSamples) && result.Probability >= config.MinProbability
+	if token == earlyChunkUnknownTokens || cache == earlyChunkUnknownCache {
+		result.Eligible = false
+		result.Reason = "unknown_estimate"
+	}
 	return result
 }
 
@@ -641,31 +717,9 @@ func (total *earlyChunkAggregate) metrics() EarlyChunkCellMetrics {
 	if total.GapCount > 0 {
 		result.AverageGapMS = common.GetPointer(total.GapSumMS / float64(total.GapCount))
 	}
-	for i, percentile := range []uint64{50, 90, 95} {
-		if result.ContentSamples == 0 {
-			break
-		}
-		threshold := (result.ContentSamples*percentile + 99) / 100
-		var count uint64
-		for bin, n := range total.Content {
-			count += n
-			if count < threshold {
-				continue
-			}
-			if bin < earlyChunkHistogramSize-1 {
-				value := common.GetPointer(earlyChunkBounds[bin])
-				switch i {
-				case 0:
-					result.P50MS = value
-				case 1:
-					result.P90MS = value
-				case 2:
-					result.P95MS = value
-				}
-			}
-			break
-		}
-	}
+	result.P50MS = total.contentQuantile(-1, 50)
+	result.P90MS = total.contentQuantile(-1, 90)
+	result.P95MS = total.contentQuantile(-1, 95)
 	return result
 }
 
@@ -705,9 +759,6 @@ func GetChatEarlyChunkGrid(ctx context.Context, name string, channel *model.Chan
 	config := model.CurrentRequestPolicy().ChatEarlyChunk
 	if config.Validate() != nil {
 		return nil, fmt.Errorf("invalid early chunk configuration")
-	}
-	if probeMS < 0 {
-		probeMS = int64(config.WindowStartMS+config.WindowEndMS) / 2
 	}
 	now := time.Now()
 	cells, payload, tracked, err := earlyChunkReadCells(ctx, earlyChunkScopeKey(name, channel, config.MaxAgeSeconds), nil, now, config.MaxAgeSeconds)

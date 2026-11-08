@@ -255,7 +255,7 @@ function ChatEarlyChunkSettings() {
       title={t('Early empty chunk')}
       className='shadow-none'
       description={t(
-        'Predict when real content will follow soon, then send one empty Chat Completions chunk. Pools and channels can override this default. Observation results are recorded in request log details.'
+        'Estimate TTFT for each model and channel bucket, then pre-emit by a bounded proportion. Pool and pool-channel modes remain independent. Off collects samples; observe sends no empty chunks.'
       )}
     >
       <FormField
@@ -277,24 +277,31 @@ function ChatEarlyChunkSettings() {
         {(
           [
             {
-              name: 'window_start_ms',
-              label: t('Earliest empty chunk (ms)'),
-              min: 0,
-              max: 29999,
+              name: 'lead_ratio',
+              label: t('Advance ratio (%)'),
+              min: 1,
+              max: 100,
               step: 1,
             },
             {
-              name: 'window_end_ms',
-              label: t('Latest empty chunk (ms)'),
+              name: 'min_lead_ms',
+              label: t('Minimum advance (ms)'),
               min: 1,
               max: 30000,
               step: 1,
             },
             {
-              name: 'target_gap_ms',
-              label: t('Target content gap (ms)'),
+              name: 'max_lead_ms',
+              label: t('Maximum advance (ms)'),
               min: 1,
-              max: 10000,
+              max: 30000,
+              step: 1,
+            },
+            {
+              name: 'earliest_ms',
+              label: t('Earliest pre-emission (ms)'),
+              min: 0,
+              max: 30000,
               step: 1,
             },
             {
@@ -342,6 +349,11 @@ function ChatEarlyChunkSettings() {
           />
         ))}
       </SettingsFormGrid>
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'Advance = estimated TTFT × ratio, clamped to the configured limits. Candidate time = TTFT − advance. The probability gate is rechecked while waiting. Legacy fixed windows no longer apply.'
+        )}
+      </p>
       <p className='text-muted-foreground text-xs'>
         {t(
           'An early chunk commits the response. Later failures end with a stream error instead of retrying another channel. Actual first-content timing and usage remain separate.'

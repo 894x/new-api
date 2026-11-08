@@ -57,6 +57,13 @@ export interface EarlyChunkCell {
     probability: number
     merged_cells: number
     eligible: boolean
+    at_ms: number
+    estimated_ttft_ms: number | null
+    remaining_p50_ms: number | null
+    remaining_p90_ms: number | null
+    lead_ms: number | null
+    candidate_ms: number | null
+    reason: string
   }
   histogram: number[]
 }
@@ -80,9 +87,10 @@ export interface EarlyChunkGrid {
   probe_ms: number
   config: {
     mode: string
-    window_start_ms: number
-    window_end_ms: number
-    target_gap_ms: number
+    lead_ratio: number
+    min_lead_ms: number
+    max_lead_ms: number
+    earliest_ms: number
     min_samples: number
     min_probability: number
     max_age_seconds: number

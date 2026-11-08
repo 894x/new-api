@@ -61,8 +61,8 @@ func TestChatEarlyChunkConditionalPrediction(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := chat_early_chunk_setting.Default()
 			cfg.Mode = tc.mode
-			cfg.WindowStartMS = 300
-			cfg.WindowEndMS = 1200
+			cfg.EarliestMS = 500
+			cfg.MinLeadMS, cfg.MaxLeadMS = 500, 500
 			cfg.MinSamples = 20
 			times := make([]int64, 20)
 			for i := range times {
@@ -72,7 +72,7 @@ func TestChatEarlyChunkConditionalPrediction(t *testing.T) {
 			if tc.old {
 				at = now.Add(-time.Hour)
 			}
-			a := &ChatEarlyChunkAttempt{config: cfg, started: now, notBefore: now.Add(500 * time.Millisecond), cells: map[int]*earlyChunkCell{0: earlyChunkTestCell(t, at, times...)}}
+			a := &ChatEarlyChunkAttempt{config: cfg, started: now, cells: map[int]*earlyChunkCell{0: earlyChunkTestCell(t, at, times...)}}
 			if tc.unknown {
 				a.cacheBand = earlyChunkUnknownCache
 			}
@@ -99,6 +99,8 @@ func TestChatEarlyChunkSparseNeighborsAndConservativeBounds(t *testing.T) {
 	now := time.Now()
 	cfg := chat_early_chunk_setting.Default()
 	cfg.MinSamples = 20
+	cfg.EarliestMS = 0
+	cfg.MinLeadMS, cfg.MaxLeadMS = 500, 500
 	cells := map[int]*earlyChunkCell{}
 	times := make([]int64, 10)
 	for i := range times {
@@ -367,4 +369,107 @@ func TestChatEarlyChunkRedisSharedGrid(t *testing.T) {
 	require.NoError(t, second.Close())
 	_, _, _, err = earlyChunkReadCells(ctx, key, nil, time.Now(), 900)
 	assert.Error(t, err, "unavailable Redis cannot fall back to node-local predictions")
+}
+
+func TestChatEarlyChunkDynamicCandidates(t *testing.T) {
+	now := time.Now()
+	cfg := chat_early_chunk_setting.Default()
+	cfg.MinSamples = 20
+	for _, tc := range []struct{ latency, lead, candidate int64 }{{6000, 1000, 5000}, {12000, 1800, 10200}, {20000, 3000, 17000}} {
+		t.Run(fmt.Sprint(tc.latency), func(t *testing.T) {
+			times := make([]int64, 20)
+			for i := range times {
+				times[i] = tc.latency
+			}
+			cells := map[int]*earlyChunkCell{0: earlyChunkTestCell(t, now, times...)}
+			p := earlyChunkPredict(cells, 0, 0, now, 0, cfg)
+			require.NotNil(t, p.LeadMS)
+			assert.Equal(t, tc.lead, *p.LeadMS)
+			require.NotNil(t, p.CandidateMS)
+			assert.Equal(t, tc.candidate, *p.CandidateMS)
+			assert.False(t, p.Eligible)
+			p = earlyChunkPredict(cells, 0, 0, now, tc.candidate, cfg)
+			assert.True(t, p.Eligible)
+			require.NotNil(t, p.RemainingP50MS)
+			assert.Equal(t, tc.lead, *p.RemainingP50MS)
+			auto := earlyChunkPredict(cells, 0, 0, now, -1, cfg)
+			assert.Equal(t, tc.candidate, auto.AtMS)
+			assert.True(t, auto.Eligible)
+		})
+	}
+}
+
+func TestChatEarlyChunkUpdatesStalledForecastAndKeepsObserveIndependent(t *testing.T) {
+	now := time.Now()
+	cfg := chat_early_chunk_setting.Default()
+	cfg.MinSamples = 20
+	times := make([]int64, 40)
+	for i := range times {
+		times[i] = 6000
+		if i >= 20 {
+			times[i] = 20000
+		}
+	}
+	cells := map[int]*earlyChunkCell{0: earlyChunkTestCell(t, now, times...)}
+	for _, mode := range []string{"observe", "enabled"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg.Mode = mode
+			a := &ChatEarlyChunkAttempt{config: cfg, started: now, cells: cells}
+			assert.Equal(t, 5*time.Second, a.NextCheck(now))
+			sent := 0
+			emit := func() error { sent++; return nil }
+			done, err := a.Try(now.Add(5*time.Second), emit)
+			require.NoError(t, err)
+			assert.False(t, done)
+			assert.Zero(t, sent)
+			assert.Equal(t, 11*time.Second, a.NextCheck(now.Add(6*time.Second)))
+			_, err = a.Try(now.Add(17*time.Second), emit)
+			require.NoError(t, err)
+			assert.Equal(t, mode == "enabled", sent == 1, "slow requests have no fixed five-second cutoff")
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Set(chatEarlyChunkContextKey, a)
+			ObserveChatEarlyChunkData(c, `{"choices":[{"delta":{"content":"real"}}]}`, now.Add(19500*time.Millisecond))
+			snapshot := a.Snapshot(nil)
+			assert.True(t, snapshot.MetTarget, "use this decision's three-second gap budget")
+			require.NotNil(t, snapshot.Prediction)
+			require.NotNil(t, snapshot.Prediction.LeadMS)
+			assert.EqualValues(t, 3000, *snapshot.Prediction.LeadMS)
+		})
+	}
+}
+
+func TestChatEarlyChunkGridUsesTheRuntimeForecast(t *testing.T) {
+	old := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = old })
+	now := time.Now()
+	name := common.GetUUID()
+	channel := &model.Channel{Id: 49, Type: 1}
+	config := model.CurrentRequestPolicy().ChatEarlyChunk
+	times := make([]int64, config.MinSamples)
+	for i := range times {
+		times[i] = 12000
+	}
+	key := earlyChunkStoredKey{Scope: earlyChunkScopeKey(name, channel, config.MaxAgeSeconds), Cell: 0}
+	chatEarlyChunkHistory.Lock()
+	chatEarlyChunkHistory.entries[key] = earlyChunkTestCell(t, now, times...)
+	chatEarlyChunkHistory.Unlock()
+	t.Cleanup(func() {
+		chatEarlyChunkHistory.Lock()
+		delete(chatEarlyChunkHistory.entries, key)
+		chatEarlyChunkHistory.Unlock()
+	})
+	grid, err := GetChatEarlyChunkGrid(context.Background(), name, channel, -1)
+	require.NoError(t, err)
+	require.Len(t, grid.Cells, 1)
+	assert.EqualValues(t, -1, grid.ProbeMS)
+	expected := earlyChunkPredict(map[int]*earlyChunkCell{0: earlyChunkTestCell(t, now, times...)}, 0, 0, now, -1, config)
+	assert.Equal(t, expected, grid.Cells[0].Prediction)
+	require.NotNil(t, grid.Cells[0].Prediction.LeadMS)
+	assert.EqualValues(t, 1800, *grid.Cells[0].Prediction.LeadMS)
+	assert.EqualValues(t, 10200, grid.Cells[0].Prediction.AtMS)
+	grid, err = GetChatEarlyChunkGrid(context.Background(), name, channel, 13000)
+	require.NoError(t, err)
+	assert.False(t, grid.Cells[0].Prediction.Eligible)
+	assert.Nil(t, grid.Cells[0].Prediction.EstimatedTTFTMS)
 }

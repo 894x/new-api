@@ -39,7 +39,7 @@ func GetChatEarlyChunkGrid(c *gin.Context) {
 	if raw := c.Query("probe_ms"); raw != "" {
 		probe, err = strconv.ParseInt(raw, 10, 64)
 	}
-	if err != nil || id <= 0 || name == "" || len(name) > 256 || probe < -1 || probe > 30000 {
+	if err != nil || id <= 0 || name == "" || len(name) > 256 || probe < -1 || probe > 300000 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid prediction grid parameters"})
 		return
 	}
