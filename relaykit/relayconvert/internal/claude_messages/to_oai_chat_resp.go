@@ -8,7 +8,6 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/reasonmap"
-	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -339,11 +338,7 @@ func buildOpenAIStyleUsageFromClaudeUsage(usage *dto.Usage) dto.Usage {
 	}
 	clone := *usage
 	clone.BillingUsage = dto.CloneBillingUsage(usage.BillingUsage)
-	clone.ClaudeCacheCreation5mTokens, clone.ClaudeCacheCreation1hTokens = sharedclaude.NormalizeCacheCreationSplit(
-		usage.PromptTokensDetails.CachedCreationTokens,
-		usage.ClaudeCacheCreation5mTokens,
-		usage.ClaudeCacheCreation1hTokens,
-	)
+	_, clone.ClaudeCacheCreation5mTokens, clone.ClaudeCacheCreation1hTokens = usage.CacheCreationTokenCounts()
 	cacheCreationTokens := cacheCreationTokensForOpenAIUsage(usage)
 	// Expose the standard OpenAI cache-write field alongside the legacy
 	// cached_creation_tokens so OpenAI-format clients can bill cache writes.
@@ -381,26 +376,22 @@ func BuildMessageDeltaPatchUsage(claudeResponse *dto.ClaudeResponse, claudeInfo 
 	if usage.CacheCreationInputTokens == 0 && claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens > 0 {
 		usage.CacheCreationInputTokens = claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens
 	}
-	cacheCreation5m := 0
-	cacheCreation1h := 0
+	// Only carry an explicitly reported breakdown. An aggregate or an
+	// unclassified remainder does not establish a cache lifetime.
 	if usage.CacheCreation != nil {
-		cacheCreation5m = usage.CacheCreation.Ephemeral5mInputTokens
-		cacheCreation1h = usage.CacheCreation.Ephemeral1hInputTokens
-	} else {
-		cacheCreation5m = claudeInfo.Usage.ClaudeCacheCreation5mTokens
-		cacheCreation1h = claudeInfo.Usage.ClaudeCacheCreation1hTokens
+		return usage
 	}
-	cacheCreation5m, cacheCreation1h = sharedclaude.NormalizeCacheCreationSplit(
-		usage.CacheCreationInputTokens,
-		cacheCreation5m,
-		cacheCreation1h,
-	)
-	if usage.CacheCreation == nil && (cacheCreation5m > 0 || cacheCreation1h > 0) {
-		usage.CacheCreation = &dto.ClaudeCacheCreationUsage{}
+	if claudeInfo.Usage.CacheCreation != nil {
+		cacheCreation := *claudeInfo.Usage.CacheCreation
+		usage.CacheCreation = &cacheCreation
+		return usage
 	}
-	if usage.CacheCreation != nil {
-		usage.CacheCreation.Ephemeral5mInputTokens = cacheCreation5m
-		usage.CacheCreation.Ephemeral1hInputTokens = cacheCreation1h
+	_, cacheCreation5m, cacheCreation1h := claudeInfo.Usage.CacheCreationTokenCounts()
+	if cacheCreation5m > 0 || cacheCreation1h > 0 {
+		usage.CacheCreation = &dto.ClaudeCacheCreationUsage{
+			Ephemeral5mInputTokens: cacheCreation5m,
+			Ephemeral1hInputTokens: cacheCreation1h,
+		}
 	}
 	return usage
 }
@@ -409,14 +400,10 @@ func claudeBillingUsageFromSemanticUsage(usage *dto.Usage) *dto.BillingUsage {
 	if usage == nil {
 		return nil
 	}
-	cacheCreation5m, cacheCreation1h := sharedclaude.NormalizeCacheCreationSplit(
-		usage.PromptTokensDetails.CachedCreationTokens,
-		usage.ClaudeCacheCreation5mTokens,
-		usage.ClaudeCacheCreation1hTokens,
-	)
+	cacheCreationTokens, cacheCreation5m, cacheCreation1h := usage.CacheCreationTokenCounts()
 	claudeUsage := &dto.ClaudeUsage{
 		InputTokens:              usage.PromptTokens,
-		CacheCreationInputTokens: usage.PromptTokensDetails.CachedCreationTokens,
+		CacheCreationInputTokens: cacheCreationTokens,
 		CacheReadInputTokens:     usage.PromptTokensDetails.CachedTokens,
 		OutputTokens:             usage.CompletionTokens,
 	}
@@ -425,7 +412,7 @@ func claudeBillingUsageFromSemanticUsage(usage *dto.Usage) *dto.BillingUsage {
 			ThinkingTokens: usage.CompletionTokenDetails.ReasoningTokens,
 		}
 	}
-	if cacheCreation5m > 0 || cacheCreation1h > 0 {
+	if usage.CacheCreation != nil || cacheCreation5m > 0 || cacheCreation1h > 0 {
 		claudeUsage.CacheCreation = &dto.ClaudeCacheCreationUsage{
 			Ephemeral5mInputTokens: cacheCreation5m,
 			Ephemeral1hInputTokens: cacheCreation1h,
@@ -485,12 +472,18 @@ func PatchClaudeMessageDeltaUsageData(data string, usage *dto.ClaudeUsage) strin
 		data = setMessageDeltaUsageInt(data, "usage.output_tokens_details.thinking_tokens", usage.GetThinkingTokens())
 	}
 
-	if usage.CacheCreation != nil {
-		data = setMessageDeltaUsageInt(data, "usage.cache_creation.ephemeral_5m_input_tokens", usage.CacheCreation.Ephemeral5mInputTokens)
-		data = setMessageDeltaUsageInt(data, "usage.cache_creation.ephemeral_1h_input_tokens", usage.CacheCreation.Ephemeral1hInputTokens)
+	if usage.CacheCreation == nil || gjson.Get(data, "usage.cache_creation").IsObject() {
+		return data
 	}
-
-	return data
+	cacheCreation, err := kitutil.Marshal(usage.CacheCreation)
+	if err != nil {
+		return data
+	}
+	patchedData, err := sjson.SetRaw(data, "usage.cache_creation", string(cacheCreation))
+	if err != nil {
+		return data
+	}
+	return patchedData
 }
 
 func setMessageDeltaUsageInt(data string, path string, localValue int) string {
@@ -531,6 +524,10 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 			claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = messageUsage.CacheCreationInputTokens
 			claudeInfo.Usage.ClaudeCacheCreation5mTokens = messageUsage.GetCacheCreation5mTokens()
 			claudeInfo.Usage.ClaudeCacheCreation1hTokens = messageUsage.GetCacheCreation1hTokens()
+			if messageUsage.CacheCreation != nil {
+				cacheCreation := *messageUsage.CacheCreation
+				claudeInfo.Usage.CacheCreation = &cacheCreation
+			}
 			claudeInfo.Usage.CompletionTokens = messageUsage.OutputTokens
 			claudeInfo.Usage.CompletionTokenDetails.ReasoningTokens = messageUsage.GetThinkingTokens()
 			updateClaudeStreamBillingUsage(messageUsage, claudeInfo, false)
@@ -556,11 +553,11 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 			if claudeResponse.Usage.CacheCreationInputTokens > 0 {
 				claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = claudeResponse.Usage.CacheCreationInputTokens
 			}
-			if cacheCreation5m := claudeResponse.Usage.GetCacheCreation5mTokens(); cacheCreation5m > 0 {
-				claudeInfo.Usage.ClaudeCacheCreation5mTokens = cacheCreation5m
-			}
-			if cacheCreation1h := claudeResponse.Usage.GetCacheCreation1hTokens(); cacheCreation1h > 0 {
-				claudeInfo.Usage.ClaudeCacheCreation1hTokens = cacheCreation1h
+			if claudeResponse.Usage.CacheCreation != nil {
+				cacheCreation := *claudeResponse.Usage.CacheCreation
+				claudeInfo.Usage.CacheCreation = &cacheCreation
+				claudeInfo.Usage.ClaudeCacheCreation5mTokens = cacheCreation.Ephemeral5mInputTokens
+				claudeInfo.Usage.ClaudeCacheCreation1hTokens = cacheCreation.Ephemeral1hInputTokens
 			}
 			if claudeResponse.Usage.OutputTokens > 0 {
 				claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens

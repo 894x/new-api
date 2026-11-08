@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -312,7 +313,7 @@ func TestBuildOpenAIStyleUsageFromClaudeUsagePreservesCacheCreationRemainder(t *
 	}
 }
 
-func TestBuildOpenAIStyleUsageFromClaudeUsageDefaultsAggregateCacheCreationTo5m(t *testing.T) {
+func TestBuildOpenAIStyleUsageFromClaudeUsageKeepsAggregateCacheCreationTTLUnknown(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokens:     100,
 		CompletionTokens: 20,
@@ -325,8 +326,9 @@ func TestBuildOpenAIStyleUsageFromClaudeUsageDefaultsAggregateCacheCreationTo5m(
 
 	openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(usage)
 
-	require.Equal(t, 50, openAIUsage.ClaudeCacheCreation5mTokens)
-	require.Equal(t, 0, openAIUsage.ClaudeCacheCreation1hTokens)
+	assert.Zero(t, openAIUsage.ClaudeCacheCreation5mTokens)
+	assert.Zero(t, openAIUsage.ClaudeCacheCreation1hTokens)
+	assert.Equal(t, 50, openAIUsage.PromptTokensDetails.CacheWriteTokens)
 }
 
 func applyOpenAIChatReasoningThroughHandlerOrder(t *testing.T, original dto.GeneralOpenAIRequest) (*dto.GeneralOpenAIRequest, *relaycommon.RelayInfo) {
@@ -506,4 +508,171 @@ func TestClaudeResponsesOnlyExposeClientProtocolUsage(t *testing.T) {
 			assert.Equal(t, dto.BillingUsageSemanticOpenAI, claudeInfo.Usage.BillingUsage.Semantic)
 		})
 	}
+}
+
+func TestMessagesCacheUsageResponseContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name      string
+		breakdown *dto.ClaudeCacheCreationUsage
+		want      string
+	}{
+		{name: "5m", breakdown: &dto.ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 2048}, want: `{"ephemeral_5m_input_tokens":2048,"ephemeral_1h_input_tokens":0}`},
+		{name: "1h", breakdown: &dto.ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 2048}, want: `{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2048}`},
+		{name: "mixed", breakdown: &dto.ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 1024, Ephemeral1hInputTokens: 1024}, want: `{"ephemeral_5m_input_tokens":1024,"ephemeral_1h_input_tokens":1024}`},
+		{name: "partial", breakdown: &dto.ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 512, Ephemeral1hInputTokens: 256}, want: `{"ephemeral_5m_input_tokens":512,"ephemeral_1h_input_tokens":256}`},
+		{name: "explicit zeros", breakdown: &dto.ClaudeCacheCreationUsage{}, want: `{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}`},
+		{name: "aggregate only"},
+	}
+	for _, tt := range tests {
+		for _, mode := range []string{"native JSON", "native SSE", "converted JSON", "converted SSE", "round trip JSON"} {
+			t.Run(tt.name+"/"+mode, func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+				info := &relaycommon.RelayInfo{
+					RelayFormat: types.RelayFormatClaude,
+					ChannelMeta: &relaycommon.ChannelMeta{},
+				}
+				claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+				nativeUsage := &dto.ClaudeUsage{
+					InputTokens:              62,
+					CacheCreationInputTokens: 2048,
+					OutputTokens:             256,
+					CacheCreation:            tt.breakdown,
+				}
+				usageJSON, err := common.Marshal(nativeUsage)
+				require.NoError(t, err)
+				oaiUsage := &dto.Usage{
+					PromptTokens:        2110,
+					CompletionTokens:    256,
+					TotalTokens:         2366,
+					PromptTokensDetails: dto.InputTokenDetails{CacheWriteTokens: 2048},
+					CacheCreation:       tt.breakdown,
+				}
+				var payloads []string
+				switch mode {
+				case "native JSON":
+					data := []byte(`{"type":"message","content":[],"usage":` + string(usageJSON) + `,"vendor_meta":{"trace_id":"cache_trace"}}`)
+					require.Nil(t, HandleClaudeResponseData(c, info, claudeInfo, nil, data))
+					payloads = append(payloads, recorder.Body.String())
+					assert.Equal(t, "cache_trace", gjson.Get(payloads[0], "vendor_meta.trace_id").String())
+				case "native SSE":
+					start := `{"type":"message_start","message":{"id":"msg_1","model":"test-model","usage":` + string(usageJSON) + `}}`
+					require.Nil(t, HandleStreamResponseData(c, info, claudeInfo, start))
+					delta := `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":256,"claude_cache_creation_5_m_tokens":0,"claude_cache_creation_1_h_tokens":0}}`
+					require.Nil(t, HandleStreamResponseData(c, info, claudeInfo, delta))
+				case "converted JSON", "round trip JSON":
+					if mode == "round trip JSON" {
+						oaiUsage = relayconvert.UsageFromClaudeUsage(&dto.Usage{
+							PromptTokens:        62,
+							CompletionTokens:    256,
+							PromptTokensDetails: dto.InputTokenDetails{CachedCreationTokens: 2048},
+							CacheCreation:       tt.breakdown,
+							UsageSemantic:       dto.BillingUsageSemanticAnthropic,
+						})
+					}
+					response := relayconvert.ResponseOpenAI2Claude(&dto.OpenAITextResponse{Usage: *oaiUsage}, nil)
+					data, err := common.Marshal(response)
+					require.NoError(t, err)
+					data, err = helper.SanitizeResponseBody(data, types.RelayFormatClaude, c)
+					require.NoError(t, err)
+					payloads = append(payloads, string(data))
+				case "converted SSE":
+					meta := &convmeta.Values{SendResponseCount: 1}
+					start := relayconvert.StreamResponseOpenAI2Claude(&dto.ChatCompletionsStreamResponse{
+						Usage: oaiUsage,
+						Choices: []dto.ChatCompletionsStreamResponseChoice{{
+							Delta: dto.ChatCompletionsStreamResponseChoiceDelta{Content: commonPointer("hi")},
+						}},
+					}, meta)
+					meta.SendResponseCount = 2
+					finish := relayconvert.StreamResponseOpenAI2Claude(&dto.ChatCompletionsStreamResponse{
+						Usage: &dto.Usage{CompletionTokens: 256},
+					}, meta)
+					for _, response := range append(start, finish...) {
+						require.NoError(t, helper.ClaudeData(c, *response))
+					}
+				}
+				if strings.HasSuffix(mode, "SSE") {
+					for line := range strings.SplitSeq(recorder.Body.String(), "\n") {
+						if payload, ok := strings.CutPrefix(line, "data: "); ok {
+							payloads = append(payloads, payload)
+						}
+					}
+				}
+				usageCount := 0
+				for _, payload := range payloads {
+					usage := gjson.Get(payload, "usage")
+					if !usage.Exists() {
+						usage = gjson.Get(payload, "message.usage")
+					}
+					if !usage.Exists() {
+						continue
+					}
+					usageCount++
+					assert.False(t, usage.Get("claude_cache_creation_5_m_tokens").Exists())
+					assert.False(t, usage.Get("claude_cache_creation_1_h_tokens").Exists())
+					assert.EqualValues(t, 62, usage.Get("input_tokens").Int())
+					assert.EqualValues(t, 2048, usage.Get("cache_creation_input_tokens").Int())
+					assert.EqualValues(t, 256, usage.Get("output_tokens").Int())
+					if tt.want == "" {
+						assert.False(t, usage.Get("cache_creation").Exists())
+					} else {
+						assert.JSONEq(t, tt.want, usage.Get("cache_creation").Raw)
+					}
+				}
+				wantCount := 1
+				if strings.HasSuffix(mode, "SSE") {
+					wantCount = 2
+				}
+				assert.Equal(t, wantCount, usageCount)
+				if strings.HasPrefix(mode, "native") {
+					require.NotNil(t, claudeInfo.Usage.BillingUsage)
+					canonical, ok := claudeInfo.Usage.BillingUsage.CanonicalUsage()
+					require.True(t, ok)
+					total, fiveMinutes, oneHour := canonical.CacheCreationTokenCounts()
+					assert.Equal(t, 2048, total)
+					if tt.breakdown == nil {
+						assert.Zero(t, fiveMinutes)
+						assert.Zero(t, oneHour)
+					} else {
+						assert.Equal(t, tt.breakdown.Ephemeral5mInputTokens, fiveMinutes)
+						assert.Equal(t, tt.breakdown.Ephemeral1hInputTokens, oneHour)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestMessagesStreamPreservesCacheTTLZeroCorrection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude,
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	start := `{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":62,"cache_creation_input_tokens":2048,"cache_creation":{"ephemeral_5m_input_tokens":1024,"ephemeral_1h_input_tokens":1024},"output_tokens":1}}}`
+	require.Nil(t, HandleStreamResponseData(c, info, claudeInfo, start))
+	recorder.Body.Reset()
+	correction := `{"type":"message_delta","usage":{"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0,"vendor_detail":"preserved"},"output_tokens":128}}`
+	require.Nil(t, HandleStreamResponseData(c, info, claudeInfo, correction))
+	assert.Contains(t, recorder.Body.String(), `"vendor_detail":"preserved"`)
+	recorder.Body.Reset()
+	require.Nil(t, HandleStreamResponseData(c, info, claudeInfo, `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":256}}`))
+	_, payload, found := strings.Cut(recorder.Body.String(), "data: ")
+	require.True(t, found)
+	assert.JSONEq(t, `{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}`, gjson.Get(payload, "usage.cache_creation").Raw)
+	assert.EqualValues(t, 2048, gjson.Get(payload, "usage.cache_creation_input_tokens").Int())
+	require.NotNil(t, claudeInfo.Usage.BillingUsage)
+	canonical, ok := claudeInfo.Usage.BillingUsage.CanonicalUsage()
+	require.True(t, ok)
+	total, fiveMinutes, oneHour := canonical.CacheCreationTokenCounts()
+	assert.Equal(t, 2048, total)
+	assert.Zero(t, fiveMinutes)
+	assert.Zero(t, oneHour)
 }
