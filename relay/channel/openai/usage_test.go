@@ -16,11 +16,73 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestOpenAIStreamUsagePreservesNestedCacheCreationTTL(t *testing.T) {
+	for _, protocol := range []string{"chat", "responses"} {
+		for _, tc := range []struct {
+			name       string
+			breakdown  string
+			five, hour int
+		}{
+			{name: "5m", breakdown: `,"cache_creation":{"ephemeral_5m_input_tokens":3584}`, five: 3584},
+			{name: "1h", breakdown: `,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":3584}`, hour: 3584},
+			{name: "mixed", breakdown: `,"cache_creation":{"ephemeral_5m_input_tokens":1024,"ephemeral_1h_input_tokens":2560}`, five: 1024, hour: 2560},
+			{name: "unknown remainder", breakdown: `,"cache_creation":{"ephemeral_5m_input_tokens":512,"ephemeral_1h_input_tokens":2048}`, five: 512, hour: 2048},
+			{name: "explicit zero", breakdown: `,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}`},
+			{name: "aggregate only"},
+			{name: "negative split", breakdown: `,"cache_creation":{"ephemeral_5m_input_tokens":-1,"ephemeral_1h_input_tokens":3585}`},
+			{name: "split exceeds total", breakdown: `,"cache_creation":{"ephemeral_1h_input_tokens":3585}`},
+		} {
+			t.Run(protocol+"/"+tc.name, func(t *testing.T) {
+				details := `{"cached_tokens":0,"cache_write_tokens":3584,"cache_creation_input_tokens":3584` + tc.breakdown + `}`
+				body := `data: {"id":"chatcmpl-cache-ttl","model":"kimi-k3.1-pro","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3752,"completion_tokens":53,"total_tokens":3805,"prompt_tokens_details":` + details + `}}` + "\n\ndata: [DONE]\n\n"
+				if protocol == "responses" {
+					body = `data: {"type":"response.completed","response":{"id":"resp-cache-ttl","model":"kimi-k3.1-pro","status":"completed","output":[],"usage":{"input_tokens":3752,"output_tokens":53,"total_tokens":3805,"input_tokens_details":` + details + `}}}` + "\n\n"
+				}
+				c, recorder, resp, info := newChatCompletionResponseIDTestContext(t, body, true)
+				info.ChannelSetting.ForceFormat = false
+				var usage *dto.Usage
+				var apiErr *types.NewAPIError
+				if protocol == "responses" {
+					c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+					info.RelayFormat = types.RelayFormatOpenAIResponses
+					usage, apiErr = OaiResponsesStreamHandler(c, info, resp)
+				} else {
+					usage, apiErr = OaiStreamHandler(c, info, resp)
+				}
+				require.Nil(t, apiErr)
+				require.NotNil(t, usage)
+				assert.Contains(t, recorder.Body.String(), details, "forward the provider's native usage details")
+				total, five, hour := usage.CacheCreationTokenCounts()
+				assert.Equal(t, 3584, total)
+				assert.Equal(t, tc.five, five)
+				assert.Equal(t, tc.hour, hour)
+				if usage.BillingUsage != nil {
+					canonical, ok := usage.BillingUsage.CanonicalUsage()
+					require.True(t, ok)
+					usage = canonical
+				}
+				if tc.breakdown != "" {
+					c.Set(common.UpstreamResponseHeadersKey, map[string]string{
+						"Msh-Usage-Cache-Write-Tokens-5m": "0",
+						"Msh-Usage-Cache-Write-Tokens-1h": "3584",
+					})
+					usage = common.CacheCreationUsageFromHeaders(c, usage)
+				}
+				params := service.BuildTieredTokenParams(usage, false, map[string]bool{"cc": true, "cc1h": true})
+				assert.Equal(t, float64(3584-tc.hour), params.CC)
+				assert.Equal(t, float64(tc.hour), params.CC1h)
+				assert.Equal(t, float64(168), params.P)
+			})
+		}
+	}
+}
 
 func TestK3EmptyReasoningUsagePreservesSettlement(t *testing.T) {
 	for _, tc := range []struct {

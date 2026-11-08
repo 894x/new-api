@@ -18,7 +18,7 @@ import (
 // CacheCreationUsageFromHeaders fills a missing TTL breakdown only when a
 // complete, valid upstream header pair agrees with the reported write total.
 func CacheCreationUsageFromHeaders(ctx *gin.Context, usage *dto.Usage) *dto.Usage {
-	if ctx == nil || usage == nil || usage.CacheCreation != nil ||
+	if ctx == nil || usage == nil || usage.CacheCreationBreakdown() != nil ||
 		usage.ClaudeCacheCreation5mTokens != 0 || usage.ClaudeCacheCreation1hTokens != 0 {
 		return usage
 	}

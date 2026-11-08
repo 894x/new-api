@@ -78,8 +78,8 @@ func HasOpenAIUsageTokens(usage *Usage) bool {
 	if usage == nil {
 		return false
 	}
-	if usage.CacheCreation != nil &&
-		(usage.CacheCreation.Ephemeral5mInputTokens != 0 || usage.CacheCreation.Ephemeral1hInputTokens != 0) {
+	if cacheCreation := usage.CacheCreationBreakdown(); cacheCreation != nil &&
+		(cacheCreation.Ephemeral5mInputTokens != 0 || cacheCreation.Ephemeral1hInputTokens != 0) {
 		return true
 	}
 	if usage.PromptTokens != 0 ||

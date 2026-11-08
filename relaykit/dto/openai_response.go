@@ -251,6 +251,24 @@ type Usage struct {
 	Cost any `json:"cost,omitempty"`
 }
 
+// CacheCreationBreakdown returns the reported TTL buckets without inferring a
+// lifetime. Top-level native usage wins, followed by Chat and Responses details.
+func (u *Usage) CacheCreationBreakdown() *ClaudeCacheCreationUsage {
+	if u == nil {
+		return nil
+	}
+	if u.CacheCreation != nil {
+		return u.CacheCreation
+	}
+	if u.PromptTokensDetails.CacheCreation != nil {
+		return u.PromptTokensDetails.CacheCreation
+	}
+	if u.InputTokensDetails != nil {
+		return u.InputTokensDetails.CacheCreation
+	}
+	return nil
+}
+
 // CacheCreationTokenCounts returns the total and the explicitly reported TTL
 // buckets. The remainder of total has an unknown TTL. Native breakdown presence
 // takes precedence over legacy aliases, including an explicit zero correction.
@@ -263,9 +281,9 @@ func (u *Usage) CacheCreationTokenCounts() (total, fiveMinutes, oneHour int) {
 		total = u.InputTokensDetails.CacheCreationTokensTotal()
 	}
 	fiveMinutes, oneHour = u.ClaudeCacheCreation5mTokens, u.ClaudeCacheCreation1hTokens
-	if u.CacheCreation != nil {
-		fiveMinutes = u.CacheCreation.Ephemeral5mInputTokens
-		oneHour = u.CacheCreation.Ephemeral1hInputTokens
+	if cacheCreation := u.CacheCreationBreakdown(); cacheCreation != nil {
+		fiveMinutes = cacheCreation.Ephemeral5mInputTokens
+		oneHour = cacheCreation.Ephemeral1hInputTokens
 	}
 	// Invalid breakdowns must never increase the aggregate or produce credits.
 	maxInt := int(^uint(0) >> 1)
@@ -332,9 +350,10 @@ type OpenAIVideoResponse struct {
 }
 
 type InputTokenDetails struct {
-	CachedTokens         int                 `json:"cached_tokens"`
-	CachedTokensDetails  *CachedTokenDetails `json:"cached_tokens_details,omitempty"`
-	CachedCreationTokens int                 `json:"cached_creation_tokens,omitempty"`
+	CachedTokens         int                       `json:"cached_tokens"`
+	CachedTokensDetails  *CachedTokenDetails       `json:"cached_tokens_details,omitempty"`
+	CachedCreationTokens int                       `json:"cached_creation_tokens,omitempty"`
+	CacheCreation        *ClaudeCacheCreationUsage `json:"cache_creation,omitempty"`
 	// CacheWriteTokens is OpenAI's native cache-write count, reported as
 	// prompt_tokens_details.cache_write_tokens (Chat Completions) or
 	// input_tokens_details.cache_write_tokens (Responses). It is billed at the
@@ -360,6 +379,10 @@ func (d *CachedTokenDetails) HasTokens() bool {
 
 // Clone preserves presence information without sharing mutable usage fields.
 func (d InputTokenDetails) Clone() InputTokenDetails {
+	if d.CacheCreation != nil {
+		cacheCreation := *d.CacheCreation
+		d.CacheCreation = &cacheCreation
+	}
 	if d.CachedTokensDetails != nil {
 		cached := *d.CachedTokensDetails
 		if cached.TextTokens != nil {

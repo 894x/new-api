@@ -17,6 +17,11 @@ func TestCacheCreationTokenCountsPreservesNativeAndLegacySnapshots(t *testing.T)
 	}{
 		{name: "aggregate aliases counted once", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100, CachedCreationTokens: 100}}, total: 100},
 		{name: "responses aggregate", usage: Usage{InputTokensDetails: &InputTokenDetails{CacheWriteTokens: 100}, CacheCreation: &ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 100}}, total: 100, hour: 100},
+		{name: "nested chat TTL", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100, CacheCreation: &ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 100}}}, total: 100, hour: 100},
+		{name: "nested responses TTL", usage: Usage{InputTokensDetails: &InputTokenDetails{CacheWriteTokens: 100, CacheCreation: &ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 100}}}, total: 100, five: 100},
+		{name: "top-level native zero wins over nested TTL", usage: Usage{CacheCreation: &ClaudeCacheCreationUsage{}, PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100, CacheCreation: &ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 100}}}, total: 100},
+		{name: "chat details win over responses details", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100, CacheCreation: &ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 100}}, InputTokensDetails: &InputTokenDetails{CacheCreation: &ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 100}}}, total: 100, five: 100},
+		{name: "nested zero overrides aliases", usage: Usage{ClaudeCacheCreation1hTokens: 100, InputTokensDetails: &InputTokenDetails{CacheWriteTokens: 100, CacheCreation: &ClaudeCacheCreationUsage{}}}, total: 100},
 		{name: "canonical prompt details win", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100}, InputTokensDetails: &InputTokenDetails{CacheWriteTokens: 200}}, total: 100},
 		{name: "unknown remainder", usage: Usage{PromptTokensDetails: InputTokenDetails{CacheWriteTokens: 100}, CacheCreation: &ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 20, Ephemeral1hInputTokens: 30}}, total: 100, five: 20, hour: 30},
 		{name: "legacy split only", usage: Usage{ClaudeCacheCreation5mTokens: 20, ClaudeCacheCreation1hTokens: 30}, total: 50, five: 20, hour: 30},
@@ -37,27 +42,46 @@ func TestCacheCreationTokenCountsPreservesNativeAndLegacySnapshots(t *testing.T)
 
 func TestMergeOpenAICacheTTLPreservesPartialStreamAndDetachesSnapshots(t *testing.T) {
 	t.Parallel()
-	native := &Usage{CacheCreation: &ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 100}}
-	sidecar := NewOpenAIResponsesBillingUsage(native)
-	require.NotNil(t, sidecar, "a TTL-only usage frame carries accounting facts")
-	native.CacheCreation.Ephemeral1hInputTokens = 999
-	canonical, ok := sidecar.CanonicalUsage()
-	require.True(t, ok)
-	_, _, hour := canonical.CacheCreationTokenCounts()
-	assert.Equal(t, 100, hour)
-	canonical.CacheCreation.Ephemeral1hInputTokens = 500
-	assert.Equal(t, 100, sidecar.OpenAIUsage.CacheCreation.Ephemeral1hInputTokens)
-	merged := MergeUsageNonZero(nil, sidecar.OpenAIUsage)
-	merged = MergeUsageNonZero(merged, &Usage{CompletionTokens: 10})
-	_, _, hour = merged.CacheCreationTokenCounts()
-	assert.Equal(t, 100, hour, "output-only terminal must retain earlier cache usage")
-	correction := &Usage{CacheCreation: &ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 100}}
-	MergeUsageNonZero(merged, correction)
-	correction.CacheCreation.Ephemeral5mInputTokens = 900
-	total, five, hour := merged.CacheCreationTokenCounts()
-	assert.Equal(t, 100, total)
-	assert.Equal(t, 100, five)
-	assert.Zero(t, hour, "explicit native zero must clear stale 1h aliases")
+	for _, location := range []string{"top-level", "chat", "responses"} {
+		t.Run(location, func(t *testing.T) {
+			native := &Usage{CacheCreation: &ClaudeCacheCreationUsage{Ephemeral1hInputTokens: 100}}
+			correction := &Usage{CacheCreation: &ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 100}}
+			switch location {
+			case "chat":
+				native.PromptTokensDetails.CacheCreation, native.CacheCreation = native.CacheCreation, nil
+				correction.PromptTokensDetails.CacheCreation, correction.CacheCreation = correction.CacheCreation, nil
+			case "responses":
+				native.InputTokensDetails = &InputTokenDetails{CacheCreation: native.CacheCreation}
+				correction.InputTokensDetails = &InputTokenDetails{CacheCreation: correction.CacheCreation}
+				native.CacheCreation, correction.CacheCreation = nil, nil
+			}
+			sidecar := NewOpenAIResponsesBillingUsage(native)
+			require.NotNil(t, sidecar, "a TTL-only usage frame carries accounting facts")
+			native.CacheCreationBreakdown().Ephemeral1hInputTokens = 999
+			canonical, ok := sidecar.CanonicalUsage()
+			require.True(t, ok)
+			_, _, hour := canonical.CacheCreationTokenCounts()
+			assert.Equal(t, 100, hour)
+			canonical.CacheCreationBreakdown().Ephemeral1hInputTokens = 500
+			assert.Equal(t, 100, sidecar.OpenAIUsage.CacheCreationBreakdown().Ephemeral1hInputTokens)
+			merged := MergeUsageNonZero(nil, sidecar.OpenAIUsage)
+			merged = MergeUsageNonZero(merged, &Usage{CompletionTokens: 10})
+			_, _, hour = merged.CacheCreationTokenCounts()
+			assert.Equal(t, 100, hour, "output-only terminal must retain earlier cache usage")
+			MergeUsageNonZero(merged, correction)
+			correction.CacheCreationBreakdown().Ephemeral5mInputTokens = 900
+			total, five, hour := merged.CacheCreationTokenCounts()
+			assert.Equal(t, 100, total)
+			assert.Equal(t, 100, five)
+			assert.Zero(t, hour, "explicit native zero must clear stale 1h usage")
+			*correction.CacheCreationBreakdown() = ClaudeCacheCreationUsage{}
+			MergeUsageNonZero(merged, correction)
+			total, five, hour = merged.CacheCreationTokenCounts()
+			assert.Zero(t, total)
+			assert.Zero(t, five)
+			assert.Zero(t, hour)
+		})
+	}
 }
 
 func TestMergeClaudeUsageCacheCreationReplacesWholeObject(t *testing.T) {
