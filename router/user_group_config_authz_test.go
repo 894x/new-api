@@ -238,6 +238,13 @@ func TestRoutingMonitorUserAuthorizationRequiresBothReadPermissionsAndLowerTarge
 	status, response = f.request(t, http.MethodGet, "/api/channel/routing-monitor", f.managerA.Id, nil)
 	require.Equal(t, http.StatusOK, status, "%v", response)
 	assert.Equal(t, "base", response["data"].(map[string]any)["scope"])
+	// Aggregate prediction tables use channel-read permission and have no user scope.
+	require.NoError(t, authz.SetUserPermissions(f.managerA.Id, authz.PermissionsMap{authz.ResourceChannel: {authz.ActionRead: false}}))
+	status, _ = f.request(t, http.MethodGet, "/api/channel/early-chunk-grid?channel_id=1&model=x", f.managerA.Id, nil)
+	assert.Equal(t, http.StatusForbidden, status)
+	require.NoError(t, authz.SetUserPermissions(f.managerA.Id, authz.PermissionsMap{authz.ResourceChannel: {authz.ActionRead: true}}))
+	status, _ = f.request(t, http.MethodGet, "/api/channel/early-chunk-grid?channel_id=invalid&model=x", f.managerA.Id, nil)
+	assert.Equal(t, http.StatusBadRequest, status)
 }
 
 func setCustomerGroupPermissions(t *testing.T, f *managedUserE2EFixture, target model.User, read, write bool) {

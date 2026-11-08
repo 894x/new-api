@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,15 +13,179 @@ import (
 	"time"
 
 	rootcommon "github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
+
+type earlyChunkFlushRecorder struct {
+	*httptest.ResponseRecorder
+	flushed chan struct{}
+	once    sync.Once
+}
+
+func (recorder *earlyChunkFlushRecorder) Flush() {
+	recorder.ResponseRecorder.Flush()
+	recorder.once.Do(func() { close(recorder.flushed) })
+}
+
+func TestDoRequestPreEmitsBeforeUpstreamHeaders(t *testing.T) {
+	for _, variant := range []string{"success", "http_error", "connection_closed", "client_cancel"} {
+		t.Run(variant, func(t *testing.T) {
+			service.InitHttpClient()
+			db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+			require.NoError(t, err)
+			previousDB, previousRedis, previousCache := model.DB, rootcommon.RedisEnabled, rootcommon.MemoryCacheEnabled
+			previousOptions := rootcommon.OptionMap
+			model.DB, rootcommon.RedisEnabled, rootcommon.MemoryCacheEnabled = db, false, false
+			rootcommon.OptionMap = make(map[string]string)
+			t.Cleanup(func() {
+				model.DB, rootcommon.RedisEnabled, rootcommon.MemoryCacheEnabled = previousDB, previousRedis, previousCache
+				rootcommon.OptionMap = previousOptions
+				sqlDB, _ := db.DB()
+				_ = sqlDB.Close()
+			})
+			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.ModelRoutingPool{}, &model.UserRoutingStrategy{}, &model.UserGroupChannelRoutingOverride{}, &model.Option{}))
+			oldConfig := model.CurrentRequestPolicy().ChatEarlyChunk
+			require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{"chat_early_chunk_setting.window_start_ms": "100", "chat_early_chunk_setting.window_end_ms": "500"}))
+			t.Cleanup(func() {
+				require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{"chat_early_chunk_setting.window_start_ms": fmt.Sprint(oldConfig.WindowStartMS), "chat_early_chunk_setting.window_end_ms": fmt.Sprint(oldConfig.WindowEndMS)}))
+			})
+			name := "early-headers-" + variant
+			channel := model.Channel{Id: 9001, Type: 1, Models: name, Group: "default"}
+			require.NoError(t, db.Create(&channel).Error)
+			require.NoError(t, db.Create(&model.User{Id: 42, Username: name, Role: 1, AffCode: name}).Error)
+			require.NoError(t, db.Create(&model.ModelRoutingPool{RoutingGroup: "default", Model: name, Mode: "priority", ChannelsJSON: "[]", TuningJSON: `{"chat_early_chunk":{"mode":"enabled"}}`}).Error)
+			body := `{"model":"` + name + `","stream":true,"messages":[{"role":"user","content":"` + strings.Repeat("stable prefix ", 500) + `"}]}`
+			recorder := &earlyChunkFlushRecorder{ResponseRecorder: httptest.NewRecorder(), flushed: make(chan struct{})}
+			c, _ := gin.CreateTestContext(recorder)
+			requestContext, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)).WithContext(requestContext)
+			rootcommon.SetContextKey(c, constant.ContextKeyUserId, 42)
+			rootcommon.SetContextKey(c, constant.ContextKeyDynamicRoutingEligible, true)
+			rootcommon.SetContextKey(c, constant.ContextKeyResponseId, "public-id")
+			p := &service.RetryParam{Ctx: c, TokenGroup: "default", ModelName: name, RequestBody: []byte(body), DynamicRoutingEligible: true}
+			service.RequestPolicy(c).Successful = true
+			service.BindChatPrefixChannel(c, &channel)
+			service.RecordChatPrefixSuccess(p, channel.Id)
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id, UpstreamModelName: "upstream"}, IsStream: true, DisablePing: true, RelayFormat: relaytypes.RelayFormatOpenAI, UsingGroup: "default", UserId: 42, ResponseId: "public-id", StartTime: time.Now().Add(-600 * time.Millisecond)}
+			info.StreamStatus = relaycommon.NewStreamStatus()
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+			for range 100 {
+				now := time.Now()
+				info.StartTime = now.Add(-600 * time.Millisecond)
+				service.BeginChatEarlyChunkAttempt(p, info, &channel)
+				service.ChatEarlyChunk(c).Load(c, info.UpstreamModelName, now)
+				service.ObserveChatEarlyChunkData(c, `{"choices":[{"delta":{"content":"history"}}]}`, now)
+				service.FinishChatEarlyChunkAttempt(c, info, nil)
+			}
+			releaseHeaders := make(chan struct{})
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(releaseHeaders) }) }
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				select {
+				case <-releaseHeaders:
+				case <-r.Context().Done():
+					return
+				}
+				if variant == "connection_closed" {
+					connection, _, hijackErr := w.(http.Hijacker).Hijack()
+					if assert.NoError(t, hijackErr) {
+						_ = connection.Close()
+					}
+					return
+				}
+				if variant == "http_error" {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_, _ = io.WriteString(w, `{"error":{"message":"unavailable","type":"server_error"}}`)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			}))
+			t.Cleanup(server.Close)
+			t.Cleanup(release)
+			info.StartTime, info.StreamStatus = time.Now(), nil
+			info.RequestTiming = rootcommon.NewRequestTiming(info.StartTime)
+			service.BeginChatEarlyChunkAttempt(p, info, &channel)
+			req, err := http.NewRequestWithContext(requestContext, http.MethodPost, server.URL, strings.NewReader(body))
+			require.NoError(t, err)
+			type result struct {
+				response *http.Response
+				err      error
+			}
+			returned := make(chan result, 1)
+			go func() { response, requestErr := DoRequest(c, req, info); returned <- result{response, requestErr} }()
+			select {
+			case <-recorder.flushed:
+			case <-time.After(2 * time.Second):
+				t.Fatal("empty chunk was not sent while upstream headers were blocked")
+			}
+			writeMutex := helper.StreamWriteMutex(c)
+			writeMutex.Lock()
+			assert.Contains(t, recorder.Body.String(), `"content":""`)
+			assert.NotContains(t, recorder.Body.String(), `"usage"`)
+			assert.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
+			writeMutex.Unlock()
+			assert.Zero(t, info.RequestTiming.Snapshot().UpstreamResponseHeadersAtMs)
+			assert.Zero(t, info.ReceivedResponseCount)
+			select {
+			case <-returned:
+				t.Fatal("upstream headers returned before they were released")
+			default:
+			}
+			if variant == "client_cancel" {
+				cancel()
+			} else {
+				release()
+			}
+			var got result
+			select {
+			case got = <-returned:
+			case <-time.After(2 * time.Second):
+				t.Fatal("pending upstream request did not terminate")
+			}
+			if variant == "client_cancel" {
+				require.Error(t, got.err)
+				assert.Nil(t, got.response)
+				return
+			}
+			if variant == "success" {
+				require.NoError(t, got.err)
+				actual, readErr := io.ReadAll(got.response.Body)
+				require.NoError(t, readErr, "stopping the pre-header sender must not cancel the response body")
+				assert.Contains(t, string(actual), "[DONE]")
+				require.NoError(t, got.response.Body.Close())
+				return
+			}
+			var apiErr *relaytypes.NewAPIError
+			if variant == "http_error" {
+				require.NoError(t, got.err)
+				apiErr = service.RelayErrorHandler(c.Request.Context(), got.response, false)
+			} else {
+				require.Error(t, got.err)
+				apiErr = relaytypes.NewOpenAIError(got.err, relaytypes.ErrorCodeDoRequestFailed, http.StatusBadGateway)
+			}
+			assert.Equal(t, "response_committed", service.DecideRelayRetry(c, apiErr, 1).Reason)
+			require.NoError(t, helper.WriteChatEarlyChunkError(c, apiErr))
+			require.NoError(t, helper.WriteChatEarlyChunkError(c, apiErr))
+			assert.Equal(t, 1, strings.Count(recorder.Body.String(), `"error":`))
+			assert.Equal(t, 1, strings.Count(recorder.Body.String(), "[DONE]"))
+		})
+	}
+}
 
 func TestDoRequestRecordsGenericUpstreamTransportMilestones(t *testing.T) {
 	service.InitHttpClient()

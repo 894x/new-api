@@ -63,7 +63,12 @@ import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
 import { PolicyDecisionRecord } from '@/features/system-settings/request-policies/decision-record'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatTokens,
+  formatUseTime,
+  formatNumber,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { AuditDetailFields } from '../../audit/components/audit-detail-fields'
@@ -855,6 +860,52 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Quota saturation marker (admin only) */}
+        {props.isAdmin && adminInfo?.early_chunk && (
+          <DetailSection label={t('Early empty chunk')}>
+            <DetailRow
+              label={t('Mode')}
+              value={
+                adminInfo.early_chunk.mode === 'observe'
+                  ? t('Observe only')
+                  : t('Enabled')
+              }
+            />
+            <DetailRow
+              label={t('Prediction probability')}
+              value={`${formatNumber(adminInfo.early_chunk.probability * 100)}%`}
+            />
+            <DetailRow
+              label={t('Prediction samples')}
+              value={formatNumber(adminInfo.early_chunk.samples)}
+            />
+            <DetailRow
+              label={t('Prefix reuse estimate')}
+              value={`${formatNumber(adminInfo.early_chunk.matched_bytes)} / ${formatNumber(adminInfo.early_chunk.input_bytes)} B`}
+            />
+            <DetailRow
+              label={t('Early chunk decision')}
+              value={
+                adminInfo.early_chunk.decision_ms == null
+                  ? t('Not triggered')
+                  : `${formatNumber(adminInfo.early_chunk.decision_ms)} ms`
+              }
+            />
+            {adminInfo.early_chunk.gap_ms != null && (
+              <DetailRow
+                label={t('Gap to real content')}
+                value={`${formatNumber(adminInfo.early_chunk.gap_ms)} ms`}
+              />
+            )}
+            <DetailRow
+              label={t('Empty chunk sent')}
+              value={adminInfo.early_chunk.sent ? t('Yes') : t('No')}
+            />
+            <DetailRow
+              label={t('Target content gap met')}
+              value={adminInfo.early_chunk.met_target ? t('Yes') : t('No')}
+            />
+          </DetailSection>
+        )}
         {props.isAdmin && adminInfo?.request_policy?.length ? (
           <DetailSection
             label={t('Request policy decisions')}

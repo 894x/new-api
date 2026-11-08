@@ -131,6 +131,19 @@ export interface LogOtherData {
   admin_info?: {
     response_model?: LogOtherData['response_model']
     request_policy?: PolicyEvent[]
+    early_chunk?: {
+      mode: string
+      matched_bytes: number
+      input_bytes: number
+      samples: number
+      probability: number
+      decision_ms?: number
+      content_ms?: number
+      gap_ms?: number
+      sent: boolean
+      met_target: boolean
+      failed: boolean
+    }
     is_multi_key?: boolean
     multi_key_index?: number
     use_channel?: number[]

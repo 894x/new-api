@@ -929,6 +929,19 @@ func TestUserChannelRetryOverridesSwitchChannelsDatabaseMatrix(t *testing.T) {
 	}
 }
 
+// The deployed user-strategy schema, before early-chunk pool overrides.
+type preEarlyChunkUserStrategy struct {
+	UserId       int    `gorm:"primaryKey;autoIncrement:false"`
+	Model        string `gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
+	RoutingGroup string `gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+	Mode         string `gorm:"type:varchar(16);not null"`
+	Revision     string `gorm:"type:varchar(64);not null"`
+	MaxTTFTMS    int64  `gorm:"column:max_ttft_ms"`
+	MaxTPOTMS    int64  `gorm:"column:max_tpot_ms"`
+}
+
+func (preEarlyChunkUserStrategy) TableName() string { return "user_routing_strategies" }
+
 func TestUserRoutingStrategyDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		for _, upgrade := range []bool{false, true} {
@@ -955,8 +968,21 @@ func TestUserRoutingStrategyDatabaseMatrix(t *testing.T) {
 				}
 				before, err := model.ListUserGroupChannelRoutingOverrides(user.Id, "strategy-model")
 				require.NoError(t, err)
+				if upgrade {
+					require.NoError(t, db.AutoMigrate(&preEarlyChunkUserStrategy{}))
+					require.NoError(t, db.Create(&preEarlyChunkUserStrategy{UserId: user.Id, Model: "legacy-early", RoutingGroup: "default", Mode: "discount", Revision: "preserve-me", MaxTTFTMS: 1100, MaxTPOTMS: 70}).Error)
+				}
 				for range 2 {
 					require.NoError(t, db.AutoMigrate(&model.UserRoutingStrategy{}))
+				}
+				if upgrade {
+					legacy, err := model.ListUserRoutingStrategies(user.Id, "legacy-early")
+					require.NoError(t, err)
+					require.Len(t, legacy, 1)
+					assert.Equal(t, "preserve-me", legacy[0].Revision)
+					assert.EqualValues(t, 1100, legacy[0].MaxTTFTMS)
+					assert.Nil(t, legacy[0].EarlyChunk)
+					assert.Error(t, db.Create(&preEarlyChunkUserStrategy{UserId: user.Id, Model: "legacy-early", RoutingGroup: "default", Mode: "smart"}).Error, "migration preserves composite uniqueness")
 				}
 				read := func() userChannelRoutingResponse {
 					response := userRoutingRequestAtURL(t, user.Id, http.MethodGet, "/api/user/1/channel-routing-overrides?view=pool&model=strategy-model&routing_group=default", "", GetUserChannelRouting)
@@ -1016,12 +1042,42 @@ func TestUserRoutingStrategyDatabaseMatrix(t *testing.T) {
 				require.Equal(t, http.StatusOK, write("inherit", discount.StrategyRevision, 0, 0).Code)
 				assert.Equal(t, "smart", read().Mode)
 				assert.False(t, read().StrategyUserOverride)
+				writeEarly := func(group, revision, mode, override string) *httptest.ResponseRecorder {
+					body := fmt.Sprintf(`{"model":"strategy-model","routing_group":%q,"strategy":{"mode":"inherit","revision":%q,"early_chunk":{"mode":%q,"channels":{"9871":%q}}}}`, group, revision, mode, override)
+					return userRoutingRequest(t, user.Id, http.MethodPatch, body, PatchUserChannelRouting)
+				}
+				require.Equal(t, http.StatusOK, writeEarly("default", "", "observe", "enabled").Code)
+				early := read()
+				require.NotNil(t, early.EarlyChunk)
+				assert.Equal(t, "smart", early.Mode, "early-only configuration keeps inherited scheduling")
+				assert.Equal(t, "enabled", early.EarlyChunk.Resolve("off", channel.Id))
+				require.Equal(t, http.StatusOK, writeEarly("vip", "", "off", "observe").Code)
+				rows, err := model.ListUserRoutingStrategies(user.Id, "strategy-model")
+				require.NoError(t, err)
+				require.Len(t, rows, 2)
+				assert.Equal(t, "enabled", rows[0].EarlyChunk.Resolve("off", channel.Id))
+				assert.Equal(t, "observe", rows[1].EarlyChunk.Resolve("off", channel.Id), "the same channel in a different pool has its own override")
+				require.Equal(t, http.StatusOK, write("inherit", early.StrategyRevision, 0, 0).Code)
+				assert.NotNil(t, read().EarlyChunk, "legacy strategy editors preserve early-chunk configuration")
 				after, err := model.ListUserGroupChannelRoutingOverrides(user.Id, "strategy-model")
 				require.NoError(t, err)
 				assert.Equal(t, before, after, "strategy changes and reset preserve channel priority, weight and membership")
 				storedPool, err := model.GetModelRoutingPool("default", "strategy-model")
 				require.NoError(t, err)
 				assert.Equal(t, pool, *storedPool)
+				currentEarly := read()
+				writeChannelEarly := func(earlyRevision string) *httptest.ResponseRecorder {
+					body := fmt.Sprintf(`{"model":"strategy-model","routing_group":"default","revision":%q,"early_chunk_revision":%q,"early_chunk":{"mode":"observe","channels":{"9871":"off"}},"overrides":[{"channel_id":9871,"enabled":true,"priority_override":35,"weight_override":7}]}`, currentEarly.Revision, earlyRevision)
+					return userRoutingRequest(t, user.Id, http.MethodPatch, body, PatchUserChannelRouting)
+				}
+				assert.Equal(t, http.StatusConflict, writeChannelEarly("stale").Code)
+				unchanged, err := model.ListUserGroupChannelRoutingOverrides(user.Id, "strategy-model")
+				require.NoError(t, err)
+				assert.Equal(t, after, unchanged, "a stale early-chunk revision must not partially save channel membership")
+				require.Equal(t, http.StatusOK, writeChannelEarly(currentEarly.StrategyRevision).Code)
+				savedEarly := read()
+				assert.Equal(t, "off", savedEarly.EarlyChunk.Resolve("enabled", channel.Id))
+				assert.EqualValues(t, 35, *savedEarly.Channels[0].PriorityOverride)
 				for range 2 {
 					require.NoError(t, db.AutoMigrate(&model.UserRoutingStrategy{}))
 				}

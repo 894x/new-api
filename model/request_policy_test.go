@@ -84,6 +84,22 @@ func TestRequestPolicyDatabaseMatrix(t *testing.T) {
 			}
 			assert.Error(t, UpdateRequestPolicyOptions(map[string]string{exclusionKey: "99,600,500-400"}))
 			assert.Empty(t, CurrentRequestPolicy().Options[exclusionKey], "invalid exclusions do not replace a saved empty rule")
+			assert.Equal(t, "off", CurrentRequestPolicy().ChatEarlyChunk.Mode)
+			require.NoError(t, UpdateRequestPolicyOptions(map[string]string{"chat_early_chunk_setting.mode": "observe", "chat_early_chunk_setting.min_probability": "0.99"}))
+			loadOptionsFromDatabase()
+			loadOptionsFromDatabase()
+			assert.Equal(t, "observe", CurrentRequestPolicy().ChatEarlyChunk.Mode)
+			assert.Equal(t, 0.99, CurrentRequestPolicy().ChatEarlyChunk.MinProbability)
+			for _, invalid := range []map[string]string{
+				{"chat_early_chunk_setting.mode": "invalid"},
+				{"chat_early_chunk_setting.window_start_ms": "1200", "chat_early_chunk_setting.window_end_ms": "300"},
+				{"chat_early_chunk_setting.min_samples": "0"},
+				{"chat_early_chunk_setting.min_probability": "NaN"},
+			} {
+				before := CurrentRequestPolicy()
+				assert.Error(t, UpdateRequestPolicyOptions(invalid))
+				assert.Same(t, before, CurrentRequestPolicy())
+			}
 			const prefixCapacity = "chat_prefix_routing_setting.max_entries"
 			const prefixTTL = "chat_prefix_routing_setting.ttl_seconds"
 			assert.Equal(t, 40960, CurrentRequestPolicy().ChatPrefixMaxEntries)

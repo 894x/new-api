@@ -55,6 +55,34 @@ const options = {
 }
 let currentOptions: Record<string, string>
 let client: QueryClient
+
+it('saves observation mode independently and rejects an inverted early-chunk window', async () => {
+  show()
+  const mode = await screen.findByRole('combobox', {
+    name: 'Default early chunk mode',
+  })
+  expect(screen.getByLabelText('Earliest empty chunk (ms)')).toHaveValue(4500)
+  expect(screen.getByLabelText('Latest empty chunk (ms)')).toHaveValue(5500)
+  await userEvent.click(mode)
+  await userEvent.click(screen.getByRole('option', { name: 'Observe only' }))
+  fireEvent.change(screen.getByLabelText('Latest empty chunk (ms)'), {
+    target: { value: '200' },
+  })
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  expect(
+    await screen.findByText('The early chunk window must end after it starts.')
+  ).toBeVisible()
+  expect(api.patch).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByLabelText('Latest empty chunk (ms)'), {
+    target: { value: '5500' },
+  })
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(api.patch).toHaveBeenCalledWith('/api/option/request_policy', {
+      options: { 'chat_early_chunk_setting.mode': 'observe' },
+    })
+  )
+})
 beforeEach(() => {
   client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

@@ -120,6 +120,49 @@ test('prefix routing override is disabled for read-only pools', () => {
   ).toBeDisabled()
 })
 
+test('early chunks save the pool mode and only that pool channel override without scheduling defaults', async () => {
+  const pool = fixture()
+  delete pool.tuning_defaults
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+    data: { success: true, data: { ...(body as object), revision: 'saved' } },
+  }))
+  mountCard(pool)
+  await userEvent.click(
+    screen.getByRole('combobox', { name: 'Early empty chunk' })
+  )
+  await userEvent.click(screen.getByRole('option', { name: 'Observe only' }))
+  await userEvent.click(
+    screen.getByRole('combobox', { name: 'Early chunk for Alpha' })
+  )
+  await userEvent.click(screen.getByRole('option', { name: 'Enabled' }))
+  expect(
+    screen.getByRole('combobox', { name: 'Early chunk for Beta' })
+  ).toHaveTextContent('Inherit pool')
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        routing_group: 'standard',
+        model: 'kimi-k3',
+        tuning: {
+          chat_early_chunk: { mode: 'observe', channels: { 1: 'enabled' } },
+        },
+      })
+    )
+  )
+})
+
+test('read-only pools cannot change early chunk or channel modes', async () => {
+  mountCard(fixture(), false)
+  expect(
+    screen.getByRole('combobox', { name: 'Early empty chunk' })
+  ).toBeDisabled()
+  expect(
+    screen.getByRole('combobox', { name: 'Early chunk for Alpha' })
+  ).toBeDisabled()
+})
+
 test('pool parameters open beside the return action and save only explicit overrides while preserving the channel draft', async () => {
   useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
   const pool = fixture()
@@ -425,6 +468,22 @@ test('opening and returning from a pool monitor retains the same dirty editor an
   expect(get).toHaveBeenCalledWith('/api/channel/routing-pool', {
     params: { routing_group: 'standard', model: 'kimi-k3' },
   })
+  await userEvent.click(
+    within(monitor).getByRole('button', { name: 'TTFT prediction grid' })
+  )
+  expect(
+    await within(monitor).findByText('Prediction statistics unavailable')
+  ).toBeVisible()
+  expect(
+    within(monitor).getByRole('spinbutton', { name: 'Priority for Alpha' })
+  ).toBe(priority)
+  expect(priority).toHaveValue(7)
+  await userEvent.click(
+    within(monitor).getByRole('button', { name: 'Routing observations' })
+  )
+  expect(
+    await within(monitor).findByText('No adaptive routing observations')
+  ).toBeVisible()
   await userEvent.click(
     within(monitor).getByRole('button', { name: 'Back to card view' })
   )

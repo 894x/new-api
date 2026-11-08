@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import type { EarlyChunkPool } from '@/features/model-routing/early-chunk'
 import type { AdminPermissionMatrix } from '@/lib/admin-permissions'
 
 // ============================================================================
@@ -196,6 +197,8 @@ export interface UserChannelRoutingConfig {
 }
 
 export interface UserChannelRoutingPatch {
+  early_chunk?: EarlyChunkPool
+  early_chunk_revision?: string
   model: string
   routing_group?: string
   revision: string

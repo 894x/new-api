@@ -25,7 +25,7 @@ func (p *RetryParam) RoutingStrategy(group string) (*model.UserRoutingStrategy, 
 			return nil, err
 		}
 		for _, row := range rows {
-			if row.RoutingGroup == group {
+			if row.RoutingGroup == group && row.Mode != "inherit" {
 				strategy = &row
 				break
 			}

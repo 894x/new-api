@@ -21,6 +21,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { EarlyChunkModeSelect } from '@/features/model-routing/early-chunk-settings'
 import { handleServerError } from '@/lib/handle-server-error'
 import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
 
@@ -88,12 +89,13 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
 
   const save = async (submitted: RoutingPolicyFormValues) => {
     const next = routingPolicyOptions(submitted)
+    const previousOptions = routingPolicyOptions(defaults)
     next.AutomaticRetryStatusCodes = parseHttpStatusCodeRules(
       next.AutomaticRetryStatusCodes
     ).normalized
     const delta = Object.fromEntries(
       Object.entries(next).filter(([key, value]) => {
-        const previous = props.config.options[key]
+        const previous = previousOptions[key]
         if (key === 'channel_affinity_setting.rules') {
           return (
             JSON.stringify(JSON.parse(value)) !==
@@ -148,6 +150,7 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
             )}
           />
           <ChatPrefixCacheSettings />
+          <ChatEarlyChunkSettings />
           <RetrySection />
           {mutation.isError ? (
             <p role='alert' className='text-destructive text-sm'>
@@ -240,6 +243,110 @@ function ChatPrefixCacheSettings() {
           />
         ))}
       </SettingsFormGrid>
+    </SettingsCard>
+  )
+}
+
+function ChatEarlyChunkSettings() {
+  const { t } = useTranslation()
+  const form = useFormContext<RoutingPolicyFormValues>()
+  return (
+    <SettingsCard
+      title={t('Early empty chunk')}
+      className='shadow-none'
+      description={t(
+        'Predict when real content will follow soon, then send one empty Chat Completions chunk. Pools and channels can override this default. Observation results are recorded in request log details.'
+      )}
+    >
+      <FormField
+        control={form.control}
+        name='chat_early_chunk_setting.mode'
+        render={({ field }) => (
+          <FormItem>
+            <EarlyChunkModeSelect
+              label={t('Default early chunk mode')}
+              value={field.value}
+              inherit={false}
+              onChange={field.onChange}
+            />
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <SettingsFormGrid>
+        {(
+          [
+            {
+              name: 'window_start_ms',
+              label: t('Earliest empty chunk (ms)'),
+              min: 0,
+              max: 29999,
+              step: 1,
+            },
+            {
+              name: 'window_end_ms',
+              label: t('Latest empty chunk (ms)'),
+              min: 1,
+              max: 30000,
+              step: 1,
+            },
+            {
+              name: 'target_gap_ms',
+              label: t('Target content gap (ms)'),
+              min: 1,
+              max: 10000,
+              step: 1,
+            },
+            {
+              name: 'min_samples',
+              label: t('Minimum prediction samples'),
+              min: 20,
+              max: 256,
+              step: 1,
+            },
+            {
+              name: 'min_probability',
+              label: t('Minimum prediction probability (0-1)'),
+              min: 0.5,
+              max: 1,
+              step: 0.01,
+            },
+            {
+              name: 'max_age_seconds',
+              label: t('Prediction sample lifetime (seconds)'),
+              min: 60,
+              max: 86400,
+              step: 1,
+            },
+          ] as const
+        ).map((item) => (
+          <FormField
+            key={item.name}
+            control={form.control}
+            name={`chat_early_chunk_setting.${item.name}`}
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{item.label}</FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={item.min}
+                    max={item.max}
+                    step={item.step}
+                    {...safeNumberFieldProps(field)}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        ))}
+      </SettingsFormGrid>
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'An early chunk commits the response. Later failures end with a stream error instead of retrying another channel. Actual first-content timing and usage remain separate.'
+        )}
+      </p>
     </SettingsCard>
   )
 }

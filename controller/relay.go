@@ -150,6 +150,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			}
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			if types.IsResponseCommittedError(newAPIError) || c.Writer.Written() {
+				_ = helper.WriteChatEarlyChunkError(c, newAPIError)
 				return
 			}
 			switch relayFormat {
@@ -325,6 +326,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		failureStage = "relay_attempt"
+		service.BeginChatEarlyChunkAttempt(retryParam, relayInfo, channel)
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
 			newAPIError = relay.WssHelper(c, relayInfo)
@@ -335,6 +337,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		default:
 			newAPIError = relayHandler(c, relayInfo)
 		}
+		if newAPIError == nil {
+			newAPIError = service.ChatEarlyChunkStreamError(c)
+		}
+		service.FinishChatEarlyChunkAttempt(c, relayInfo, newAPIError)
 		if monitorEndpoint != "" {
 			service.ObserveChannelTraffic(c.Request.Context(), relayInfo, monitorEndpoint, newAPIError)
 		}

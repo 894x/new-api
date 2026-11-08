@@ -314,9 +314,15 @@ func (p *RetryParam) chatPrefixRoutingEnabled(group string) bool {
 
 // ChatPrefixMatches only scores candidates already admitted by routing policy.
 func (p *RetryParam) ChatPrefixMatches(group string, candidates []model.Ability) map[int]ChatPrefixMatch {
+	matches, _ := p.chatPrefixMatches(group, candidates)
+	return matches
+}
+
+// The second result distinguishes a cold cache from an unavailable estimate.
+func (p *RetryParam) chatPrefixMatches(group string, candidates []model.Ability) (map[int]ChatPrefixMatch, bool) {
 	request := p.chatPrefixRequest()
 	if request == nil || !p.chatPrefixRoutingEnabled(group) {
-		return nil
+		return nil, false
 	}
 	scope := chatPrefixScope{UserID: common.GetContextKeyInt(p.Ctx, constant.ContextKeyUserId), Group: group, Model: p.ModelName}
 	setting := model.CurrentRequestPolicy()
@@ -334,14 +340,14 @@ func (p *RetryParam) ChatPrefixMatches(group string, candidates []model.Ability)
 		stored, err = cache.lookup(ctx, scope, request, channels)
 		if err != nil {
 			common.SysError("chat prefix cache lookup failed: " + err.Error())
-			return nil
+			return nil, false
 		}
 	} else {
 		chatPrefixRoutingCache.configure(setting.ChatPrefixMaxEntries, ttl, time.Now())
 		stored = chatPrefixRoutingCache.lookup(scope, request, time.Now())
 	}
 	if len(stored) == 0 {
-		return nil
+		return nil, true
 	}
 	matches := make(map[int]ChatPrefixMatch)
 	for _, candidate := range candidates {
@@ -364,14 +370,21 @@ func (p *RetryParam) ChatPrefixMatches(group string, candidates []model.Ability)
 			matches[channel.Id] = match
 		}
 	}
-	return matches
+	return matches, true
 }
 
 func (p *RetryParam) recordChatPrefixSelection(group string, channelID int, matches map[int]ChatPrefixMatch) {
+	p.Ctx.Set("chat_prefix_selection", chatPrefixSelection{Group: group, ChannelID: channelID, Match: matches[channelID]})
 	if match := matches[channelID]; match.MatchedBytes > 0 {
 		RequestPolicy(p.Ctx).AddEvent(PolicyEvent{ChannelID: channelID, Group: group,
 			Decision: PolicyDecision{Action: "match", Reason: "chat_prefix_match", Source: "prefix_cache"}})
 	}
+}
+
+type chatPrefixSelection struct {
+	Group     string
+	ChannelID int
+	Match     ChatPrefixMatch
 }
 
 func RecordChatPrefixSuccess(param *RetryParam, channelID int) {

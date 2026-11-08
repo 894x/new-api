@@ -21,6 +21,8 @@ import type { UserChannelRoutingConfig } from '@/features/users/types'
 import { api } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
+import type { EarlyChunkPool } from './early-chunk'
+
 export type RoutingMode = 'priority' | 'smart' | 'discount'
 
 export const ROUTING_MODE_LABELS = {
@@ -48,6 +50,7 @@ export interface UserRoutingPoolConfig extends UserChannelRoutingConfig {
   max_ttft_ms?: number
   max_tpot_ms?: number
   pool_channels?: PoolChannel[]
+  early_chunk?: EarlyChunkPool | null
 }
 
 export async function saveUserRoutingStrategy(
@@ -59,6 +62,7 @@ export async function saveUserRoutingStrategy(
     revision: string
     max_ttft_ms: number
     max_tpot_ms: number
+    early_chunk?: EarlyChunkPool
   }
 ) {
   const response = await api.patch<{ success: boolean; message?: string }>(
@@ -118,6 +122,7 @@ export interface RoutingPool {
   tuning?:
     | (Partial<Omit<DynamicRoutingSettings, 'enabled'>> & {
         chat_prefix_enabled?: boolean
+        chat_early_chunk?: EarlyChunkPool
       })
     | null
 }

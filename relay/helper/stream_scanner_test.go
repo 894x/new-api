@@ -12,16 +12,22 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestChannelStreamResponseHeaders(t *testing.T) {
@@ -1006,4 +1012,121 @@ func TestNewStreamScannerCallerLimit(t *testing.T) {
 	require.True(t, scanner.Scan())
 	assert.Equal(t, "data: ok", scanner.Text())
 	require.NoError(t, scanner.Err())
+}
+
+func TestChatEarlyChunkStreamSerialization(t *testing.T) {
+	for _, variant := range []string{"enabled", "observe", "truncated", "upstream_first"} {
+		t.Run(variant, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				mode := "enabled"
+				if variant == "observe" {
+					mode = "observe"
+				}
+				db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+				require.NoError(t, err)
+				previousDB, previousRedis, previousCache := model.DB, common.RedisEnabled, common.MemoryCacheEnabled
+				model.DB, common.RedisEnabled, common.MemoryCacheEnabled = db, false, false
+				t.Cleanup(func() {
+					model.DB, common.RedisEnabled, common.MemoryCacheEnabled = previousDB, previousRedis, previousCache
+					sqlDB, _ := db.DB()
+					_ = sqlDB.Close()
+				})
+				require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.ModelRoutingPool{}, &model.UserRoutingStrategy{}, &model.UserGroupChannelRoutingOverride{}))
+				require.NoError(t, db.Create(&model.User{Id: 42, Username: "early-qa", Role: 1, AffCode: "early-qa"}).Error)
+				name := "early-stream-" + variant
+				channel := model.Channel{Id: 8001, Type: 1, Models: name, Group: "default"}
+				require.NoError(t, db.Create(&channel).Error)
+				require.NoError(t, db.Create(&model.ModelRoutingPool{RoutingGroup: "default", Model: name, Mode: "priority", ChannelsJSON: "[]", TuningJSON: fmt.Sprintf(`{"chat_early_chunk":{"mode":%q}}`, mode)}).Error)
+				body := []byte(`{"model":"` + name + `","messages":[{"role":"user","content":"` + strings.Repeat("prefix ", 500) + `"}],"stream":true}`)
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(string(body)))
+				common.SetContextKey(c, constant.ContextKeyUserId, 42)
+				common.SetContextKey(c, constant.ContextKeyDynamicRoutingEligible, true)
+				common.SetContextKey(c, constant.ContextKeyResponseId, "public-id")
+				p := &service.RetryParam{Ctx: c, TokenGroup: "default", ModelName: name, RequestBody: body, DynamicRoutingEligible: true}
+				service.RequestPolicy(c).Successful = true
+				service.BindChatPrefixChannel(c, &channel)
+				service.RecordChatPrefixSuccess(p, channel.Id)
+				now := time.Now()
+				info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "upstream"}, IsStream: true, RelayFormat: types.RelayFormatOpenAI, UsingGroup: "default", UserId: 42, StartTime: now.Add(-5750 * time.Millisecond), ResponseId: "public-id"}
+				info.StreamStatus = relaycommon.NewStreamStatus()
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+				// Deterministic successful history, using the same public recorder
+				// used by real requests rather than substituting the predictor.
+				for range 100 {
+					service.BeginChatEarlyChunkAttempt(p, info, &channel)
+					service.ChatEarlyChunk(c).Load(c, info.UpstreamModelName, now)
+					service.ObserveChatEarlyChunkData(c, `{"choices":[{"delta":{"content":"history"}}]}`, now)
+					service.FinishChatEarlyChunkAttempt(c, info, nil)
+				}
+				info.StartTime = now
+				info.FirstResponseTime = now.Add(-time.Second)
+				service.BeginChatEarlyChunkAttempt(p, info, &channel)
+				reader, writer := io.Pipe()
+				defer writer.Close()
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					StreamScannerHandler(c, &http.Response{StatusCode: 200, Header: make(http.Header), Body: reader}, info, func(data string, sr *StreamResult) {
+						if err := StringData(c, data); err != nil {
+							sr.ClientGone(err)
+						}
+					})
+				}()
+				synctest.Wait()
+				if variant == "upstream_first" {
+					_, err = io.WriteString(writer, "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n")
+					require.NoError(t, err)
+					synctest.Wait()
+				}
+				// synctest advances virtual time: no wall-clock sleeps or timing races.
+				time.Sleep(5500 * time.Millisecond)
+				synctest.Wait()
+				if mode == "enabled" && variant != "upstream_first" {
+					assert.Contains(t, recorder.Body.String(), `"content":""`)
+					assert.Contains(t, recorder.Body.String(), `"id":"public-id"`)
+					assert.Contains(t, recorder.Body.String(), `"finish_reason":null`)
+					assert.NotContains(t, recorder.Body.String(), `"usage"`)
+				} else if mode == "observe" {
+					assert.Empty(t, recorder.Body.String())
+				}
+				assert.Empty(t, c.GetString(common.UpstreamResponseIdKey), "a synthetic ID is never captured as an upstream ID")
+				if variant != "upstream_first" {
+					assert.Zero(t, info.ReceivedResponseCount, "synthetic events do not become upstream performance samples")
+				}
+				if variant == "truncated" {
+					require.NoError(t, writer.Close())
+					<-done
+					require.Error(t, Done(c), "an upstream EOF after pre-emission must not become a successful DONE")
+					apiErr := service.ChatEarlyChunkStreamError(c)
+					require.NotNil(t, apiErr)
+					require.NoError(t, WriteChatEarlyChunkError(c, apiErr))
+					require.NoError(t, WriteChatEarlyChunkError(c, apiErr))
+					assert.Equal(t, 1, strings.Count(recorder.Body.String(), `"error":`))
+					assert.Equal(t, 1, strings.Count(recorder.Body.String(), "[DONE]"))
+					assert.Equal(t, 200, recorder.Code)
+					return
+				}
+				_, err = io.WriteString(writer, "data: {\"id\":\"provider-id\",\"model\":\"internal-model\",\"created\":9,\"choices\":[{\"delta\":{\"content\":\"real\"}}]}\n\ndata: [DONE]\n\n")
+				require.NoError(t, err)
+				<-done
+				assert.Contains(t, recorder.Body.String(), `"content":"real"`)
+				assert.Equal(t, "provider-id", c.GetString(common.UpstreamResponseIdKey))
+				observation := service.ChatEarlyChunk(c).Snapshot(info)
+				if variant == "upstream_first" {
+					assert.Nil(t, observation.DecisionMS)
+					assert.False(t, observation.Sent)
+					assert.NotContains(t, recorder.Body.String(), `"content":""`)
+					return
+				}
+				require.NotNil(t, observation.DecisionMS)
+				assert.True(t, observation.MetTarget)
+				assert.Equal(t, mode == "enabled", observation.Sent)
+				if mode == "enabled" {
+					assert.Contains(t, recorder.Body.String(), `"model":"`+name+`"`)
+				}
+			})
+		})
+	}
 }

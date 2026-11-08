@@ -6,6 +6,20 @@ import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
 export function createRoutingPolicySchema(t: TFunction) {
   return z.object({
     RetryTimes: z.number().int().min(0).max(99),
+    chat_early_chunk_setting: z
+      .object({
+        mode: z.enum(['off', 'observe', 'enabled']),
+        window_start_ms: z.number().int().min(0).max(29999),
+        window_end_ms: z.number().int().min(1).max(30000),
+        target_gap_ms: z.number().int().min(1).max(10000),
+        min_samples: z.number().int().min(20).max(256),
+        min_probability: z.number().min(0.5).max(1),
+        max_age_seconds: z.number().int().min(60).max(86400),
+      })
+      .refine((value) => value.window_end_ms > value.window_start_ms, {
+        message: t('The early chunk window must end after it starts.'),
+        path: ['window_end_ms'],
+      }),
     AutomaticRetryStatusCodes: z
       .string()
       .refine(
@@ -53,6 +67,30 @@ export function routingPolicyFormValues(
 ): RoutingPolicyFormValues {
   return {
     RetryTimes: Number(options.RetryTimes),
+    chat_early_chunk_setting: {
+      mode: (options['chat_early_chunk_setting.mode'] ?? 'off') as
+        | 'off'
+        | 'observe'
+        | 'enabled',
+      window_start_ms: Number(
+        options['chat_early_chunk_setting.window_start_ms'] ?? 4500
+      ),
+      window_end_ms: Number(
+        options['chat_early_chunk_setting.window_end_ms'] ?? 5500
+      ),
+      target_gap_ms: Number(
+        options['chat_early_chunk_setting.target_gap_ms'] ?? 1000
+      ),
+      min_samples: Number(
+        options['chat_early_chunk_setting.min_samples'] ?? 100
+      ),
+      min_probability: Number(
+        options['chat_early_chunk_setting.min_probability'] ?? 0.95
+      ),
+      max_age_seconds: Number(
+        options['chat_early_chunk_setting.max_age_seconds'] ?? 900
+      ),
+    },
     AutomaticRetryStatusCodes: options.AutomaticRetryStatusCodes,
     chat_prefix_routing_setting: {
       enabled: options['chat_prefix_routing_setting.enabled'] !== 'false',
@@ -85,6 +123,12 @@ export function routingPolicyOptions(
 ): Record<string, string> {
   return {
     RetryTimes: String(values.RetryTimes),
+    ...Object.fromEntries(
+      Object.entries(values.chat_early_chunk_setting).map(([key, value]) => [
+        `chat_early_chunk_setting.${key}`,
+        String(value),
+      ])
+    ),
     AutomaticRetryStatusCodes: values.AutomaticRetryStatusCodes,
     'chat_prefix_routing_setting.enabled': String(
       values.chat_prefix_routing_setting.enabled
