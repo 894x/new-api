@@ -18,6 +18,41 @@ import (
 )
 
 const chatEarlyChunkContextKey = "chat_early_chunk_attempt"
+const chatEarlyChunkStreamContextKey = "chat_early_chunk_stream"
+
+// The public SSE belongs to the request and survives channel retries. Attempt
+// statistics still belong to the channel that actually performed each attempt.
+type chatEarlyChunkStream struct {
+	mu       sync.Mutex
+	sent     bool
+	upstream bool
+	terminal bool
+	bytes    int
+	created  int64
+	model    string
+	info     *relaycommon.RelayInfo
+}
+
+func chatEarlyChunkStreamFor(c *gin.Context) *chatEarlyChunkStream {
+	if c == nil {
+		return nil
+	}
+	value, _ := c.Get(chatEarlyChunkStreamContextKey)
+	stream, _ := value.(*chatEarlyChunkStream)
+	return stream
+}
+
+// Only gateway-owned empty bytes may cross the normal committed-response retry
+// boundary. Any upstream event, terminal, or untracked write closes this gate.
+func CanRetryChatEarlyChunk(c *gin.Context) bool {
+	stream := chatEarlyChunkStreamFor(c)
+	if stream == nil || c.Writer == nil {
+		return false
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	return stream.sent && !stream.upstream && !stream.terminal && c.Writer.Size() == stream.bytes
+}
 
 type ChatEarlyChunkObservation struct {
 	Mode         string                `json:"mode"`
@@ -56,8 +91,9 @@ type ChatEarlyChunkAttempt struct {
 	upstream     bool
 	terminal     bool
 	finished     bool
-	info         *relaycommon.RelayInfo
 	observation  ChatEarlyChunkObservation
+	stream       *chatEarlyChunkStream
+	writer       gin.ResponseWriter
 }
 
 func ChatEarlyChunk(c *gin.Context) *ChatEarlyChunkAttempt {
@@ -72,6 +108,12 @@ func ChatEarlyChunk(c *gin.Context) *ChatEarlyChunkAttempt {
 func BeginChatEarlyChunkAttempt(p *RetryParam, info *relaycommon.RelayInfo, channel *model.Channel) {
 	c := p.Ctx
 	c.Set(chatEarlyChunkContextKey, (*ChatEarlyChunkAttempt)(nil))
+	stream := chatEarlyChunkStreamFor(c)
+	if stream != nil {
+		stream.mu.Lock()
+		stream.info = info
+		stream.mu.Unlock()
+	}
 	if !info.IsStream || info.RelayFormat != types.RelayFormatOpenAI || c.Request.Method != "POST" || c.Request.URL.Path != "/v1/chat/completions" || info.IsPlayground {
 		return
 	}
@@ -169,12 +211,26 @@ func BeginChatEarlyChunkAttempt(p *RetryParam, info *relaycommon.RelayInfo, chan
 			started = started.Add(-time.Duration(started.UnixMilli()-received) * time.Millisecond)
 		}
 	}
+	if stream == nil {
+		stream = &chatEarlyChunkStream{created: started.Unix(), model: p.ModelName, info: info}
+		c.Set(chatEarlyChunkStreamContextKey, stream)
+	}
+	// The first controller attempt can carry only a channel summary. Middleware
+	// already captured the immutable full upstream generation used for dispatch.
+	generation := chatPrefixChannelIdentity(channel)
+	if value, exists := c.Get(chatPrefixChannelContextKey); exists {
+		if bound, ok := value.(chatPrefixChannel); ok && bound.ID == channel.Id {
+			generation = bound
+		}
+	}
 	c.Set(chatEarlyChunkContextKey, &ChatEarlyChunkAttempt{
-		info: info, config: config, key: earlyChunkScopeKey(p.ModelName, channel, config.MaxAgeSeconds),
+		config: config, key: earlyChunkChannelScopeKey(p.ModelName, generation, config.MaxAgeSeconds),
 		started: started,
 		created: started.Unix(), model: p.ModelName, channelID: channel.Id, group: group,
 		tokenBand: tokenBand, cacheBand: cacheBand,
 		observation: ChatEarlyChunkObservation{Mode: config.Mode, MatchedBytes: match.MatchedBytes, InputBytes: inputBytes, InputTokens: inputTokens, TokenBand: tokenBand, CacheBand: cacheBand},
+		stream:      stream,
+		writer:      c.Writer,
 	})
 }
 
@@ -207,7 +263,15 @@ func (a *ChatEarlyChunkAttempt) Load(c *gin.Context, _ string, now time.Time) {
 }
 
 func (a *ChatEarlyChunkAttempt) ShouldPredict() bool {
-	return a != nil && a.config.Mode != "off" && a.tokenBand != earlyChunkUnknownTokens && a.cacheBand != earlyChunkUnknownCache
+	if a == nil || a.config.Mode == "off" || a.tokenBand == earlyChunkUnknownTokens || a.cacheBand == earlyChunkUnknownCache {
+		return false
+	}
+	if a.stream != nil {
+		a.stream.mu.Lock()
+		defer a.stream.mu.Unlock()
+		return !a.stream.sent && !a.stream.upstream && !a.stream.terminal
+	}
+	return true
 }
 
 func (a *ChatEarlyChunkAttempt) UpstreamArrived() {
@@ -269,38 +333,60 @@ func (a *ChatEarlyChunkAttempt) Try(now time.Time, emit func() error) (bool, err
 		return true, nil
 	}
 	a.observation.Sent = true
-	return true, emit()
+	if a.stream != nil {
+		a.stream.mu.Lock()
+		a.stream.sent = true
+		a.stream.mu.Unlock()
+	}
+	err := emit()
+	if a.stream != nil {
+		a.stream.mu.Lock()
+		// The sender and ordinary writes share the stream write mutex.
+		// Capture the exact boundary after the empty event has been flushed.
+		a.stream.bytes = a.writer.Size()
+		a.stream.mu.Unlock()
+	}
+	return true, err
 }
 
-func (a *ChatEarlyChunkAttempt) Metadata() (string, int64) { return a.model, a.created }
+func (a *ChatEarlyChunkAttempt) Metadata() (string, int64) {
+	if a.stream != nil {
+		return a.stream.model, a.stream.created
+	}
+	return a.model, a.created
+}
 
 // Only the pre-emitted stream pins its public metadata. Upstream IDs are still
 // captured by the normal writer; the synthetic event bypasses that capture.
 func NormalizeChatEarlyChunkData(c *gin.Context, data string) (string, error) {
-	a := ChatEarlyChunk(c)
-	if a == nil {
+	stream := chatEarlyChunkStreamFor(c)
+	if stream == nil {
 		return data, nil
 	}
-	a.mu.Lock()
-	sent := a.observation.Sent
-	a.mu.Unlock()
+	stream.mu.Lock()
+	sent, modelName, created := stream.sent, stream.model, stream.created
+	stream.mu.Unlock()
 	if !sent || !gjson.Get(data, "choices").Exists() {
 		return data, nil
 	}
 	var err error
-	for _, field := range []struct {
-		name  string
-		value any
-	}{{"model", a.model}, {"created", a.created}} {
-		data, err = sjson.Set(data, field.name, field.value)
-		if err != nil {
-			return "", err
-		}
+	data, err = sjson.Set(data, "model", modelName)
+	if err != nil {
+		return "", err
 	}
-	return data, nil
+	return sjson.Set(data, "created", created)
 }
 
 func ObserveChatEarlyChunkData(c *gin.Context, data string, now time.Time) {
+	if stream := chatEarlyChunkStreamFor(c); stream != nil {
+		stream.mu.Lock()
+		if data == "[DONE]" || gjson.Get(data, "error").Exists() && gjson.Get(data, "error").Type != gjson.Null {
+			stream.terminal = true
+		} else {
+			stream.upstream = true
+		}
+		stream.mu.Unlock()
+	}
 	a := ChatEarlyChunk(c)
 	if a == nil {
 		return
@@ -400,16 +486,16 @@ func FinishChatEarlyChunkAttempt(c *gin.Context, info *relaycommon.RelayInfo, ha
 }
 
 func ClaimChatEarlyChunkError(c *gin.Context) bool {
-	a := ChatEarlyChunk(c)
-	if a == nil {
+	stream := chatEarlyChunkStreamFor(c)
+	if stream == nil {
 		return false
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if !a.observation.Sent || a.terminal {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if !stream.sent || stream.terminal {
 		return false
 	}
-	a.terminal = true
+	stream.terminal = true
 	return true
 }
 
@@ -417,16 +503,14 @@ func ClaimChatEarlyChunkError(c *gin.Context) bool {
 // response into a successful [DONE]. Normal, untouched streams keep their
 // existing compatibility behavior.
 func ChatEarlyChunkStreamError(c *gin.Context) *types.NewAPIError {
-	a := ChatEarlyChunk(c)
-	if a == nil {
+	stream := chatEarlyChunkStreamFor(c)
+	if stream == nil {
 		return nil
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if !a.observation.Sent || a.terminal || a.info == nil || a.info.StreamStatus == nil {
-		return nil
-	}
-	if earlyChunkStreamSucceeded(a.info) {
+	stream.mu.Lock()
+	sent, terminal, info := stream.sent, stream.terminal, stream.info
+	stream.mu.Unlock()
+	if !sent || terminal || info == nil || info.StreamStatus == nil || earlyChunkStreamSucceeded(info) {
 		return nil
 	}
 	return types.NewOpenAIError(fmt.Errorf("upstream stream ended before completing the response"), types.ErrorCodeBadResponse, 502, types.ErrOptionWithSkipRetry())

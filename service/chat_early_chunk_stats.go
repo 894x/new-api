@@ -175,7 +175,11 @@ var earlyChunkWriteErrors atomic.Uint64
 var earlyChunkEvictions atomic.Uint64
 
 func earlyChunkScopeKey(name string, channel *model.Channel, age int) string {
-	encoded, _ := common.Marshal([]any{"grid-v2", name, channel.Id, chatPrefixChannelIdentity(channel), age})
+	return earlyChunkChannelScopeKey(name, chatPrefixChannelIdentity(channel), age)
+}
+
+func earlyChunkChannelScopeKey(name string, channel chatPrefixChannel, age int) string {
+	encoded, _ := common.Marshal([]any{"grid-v2", name, channel.ID, channel, age})
 	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
 

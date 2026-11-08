@@ -356,7 +356,7 @@ function ChatEarlyChunkSettings() {
       </p>
       <p className='text-muted-foreground text-xs'>
         {t(
-          'An early chunk commits the response. Later failures end with a stream error instead of retrying another channel. Actual first-content timing and usage remain separate.'
+          'Gateway-only empty chunks still allow retryable failures within the original budget. Once an upstream event is sent, failures end with a stream error. Actual first-content timing and usage remain separate.'
         )}
       </p>
     </SettingsCard>

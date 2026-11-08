@@ -3422,6 +3422,7 @@
     "Gap target met": "本文間隔の目標達成",
     "Gap to real content": "実コンテンツまでの待ち時間",
     "Gateway Processing": "ゲートウェイ処理",
+    "Gateway-only empty chunks still allow retryable failures within the original budget. Once an upstream event is sent, failures end with a stream error. Actual first-content timing and usage remain separate.": "ゲートウェイの空チャンクのみを送信した段階では、元の回数制限内で再試行可能なエラーを再試行できます。上流イベントを送信した後の失敗はストリーム内エラーで終了します。実際の最初のコンテンツまでの時間と使用量は個別に記録します。",
     "Gateways": "ゲートウェイ",
     "GC Count": "GC 回数",
     "GC executed": "GC 実行完了",

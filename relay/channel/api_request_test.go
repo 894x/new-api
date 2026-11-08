@@ -40,7 +40,7 @@ func (recorder *earlyChunkFlushRecorder) Flush() {
 }
 
 func TestDoRequestPreEmitsBeforeUpstreamHeaders(t *testing.T) {
-	for _, variant := range []string{"success", "http_error", "connection_closed", "client_cancel"} {
+	for _, variant := range []string{"success", "http_error", "rate_limited", "connection_closed", "client_cancel"} {
 		t.Run(variant, func(t *testing.T) {
 			service.InitHttpClient()
 			db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -62,7 +62,7 @@ func TestDoRequestPreEmitsBeforeUpstreamHeaders(t *testing.T) {
 				require.NoError(t, model.UpdateRequestPolicyOptions(map[string]string{"chat_early_chunk_setting.earliest_ms": fmt.Sprint(oldConfig.EarliestMS)}))
 			})
 			name := "early-headers-" + variant
-			channel := model.Channel{Id: 9001, Type: 1, Models: name, Group: "default"}
+			channel := model.Channel{Id: 9001, Type: 1, Models: name, Group: "default", Key: "local-only", BaseURL: rootcommon.GetPointer("https://sim.invalid")}
 			require.NoError(t, db.Create(&channel).Error)
 			require.NoError(t, db.Create(&model.User{Id: 42, Username: name, Role: 1, AffCode: name}).Error)
 			require.NoError(t, db.Create(&model.ModelRoutingPool{RoutingGroup: "default", Model: name, Mode: "priority", ChannelsJSON: "[]", TuningJSON: `{"chat_early_chunk":{"mode":"enabled"}}`}).Error)
@@ -107,8 +107,12 @@ func TestDoRequestPreEmitsBeforeUpstreamHeaders(t *testing.T) {
 					}
 					return
 				}
-				if variant == "http_error" {
-					w.WriteHeader(http.StatusServiceUnavailable)
+				if variant == "http_error" || variant == "rate_limited" {
+					status := http.StatusServiceUnavailable
+					if variant == "rate_limited" {
+						status = http.StatusTooManyRequests
+					}
+					w.WriteHeader(status)
 					_, _ = io.WriteString(w, `{"error":{"message":"unavailable","type":"server_error"}}`)
 					return
 				}
@@ -117,9 +121,10 @@ func TestDoRequestPreEmitsBeforeUpstreamHeaders(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			t.Cleanup(release)
+			c.Set("chat_early_chunk_stream", nil) // Seed history and the following live request have separate SSE lifetimes.
 			info.StartTime, info.StreamStatus = time.Now(), nil
 			info.RequestTiming = rootcommon.NewRequestTiming(info.StartTime)
-			service.BeginChatEarlyChunkAttempt(p, info, &channel)
+			service.BeginChatEarlyChunkAttempt(p, info, &model.Channel{Id: channel.Id, Type: channel.Type})
 			req, err := http.NewRequestWithContext(requestContext, http.MethodPost, server.URL, strings.NewReader(body))
 			require.NoError(t, err)
 			type result struct {
@@ -171,14 +176,48 @@ func TestDoRequestPreEmitsBeforeUpstreamHeaders(t *testing.T) {
 				return
 			}
 			var apiErr *relaytypes.NewAPIError
-			if variant == "http_error" {
+			if variant == "http_error" || variant == "rate_limited" {
 				require.NoError(t, got.err)
 				apiErr = service.RelayErrorHandler(c.Request.Context(), got.response, false)
 			} else {
 				require.Error(t, got.err)
 				apiErr = relaytypes.NewOpenAIError(got.err, relaytypes.ErrorCodeDoRequestFailed, http.StatusBadGateway)
 			}
-			assert.Equal(t, "response_committed", service.DecideRelayRetry(c, apiErr, 1).Reason)
+			assert.Equal(t, "retry", service.DecideRelayRetry(c, apiErr, 1).Action, "only the gateway empty event has been sent")
+			assert.Equal(t, "attempt_budget_exhausted", service.DecideRelayRetry(c, apiErr, 0).Reason)
+			if variant == "rate_limited" {
+				service.FinishChatEarlyChunkAttempt(c, info, apiErr)
+				fallback := model.Channel{Id: 9002, Type: 1, Models: name, Group: "default"}
+				require.NoError(t, db.Create(&fallback).Error)
+				require.NoError(t, db.Model(&model.ModelRoutingPool{}).Where("model = ?", name).Update("tuning_json", `{"chat_early_chunk":{"mode":"off"}}`).Error)
+				p = &service.RetryParam{Ctx: c, TokenGroup: "default", ModelName: name, RequestBody: []byte(body), DynamicRoutingEligible: true}
+				info.ChannelId = fallback.Id
+				info.StartTime = time.Now()
+				service.BeginChatEarlyChunkAttempt(p, info, &fallback)
+				assert.False(t, service.ChatEarlyChunk(c).ShouldPredict(), "fallback channels cannot send another gateway empty event")
+				assert.True(t, service.CanRetryChatEarlyChunk(c), "request-wide empty state survives a channel with pre-emission disabled")
+				info.StreamStatus = relaycommon.NewStreamStatus()
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+				require.NoError(t, helper.StringData(c, `{"id":"fallback-id","created":9,"model":"private-fallback-model","choices":[{"delta":{"content":"recovered"}}]}`))
+				assert.Equal(t, "response_committed", service.DecideRelayRetry(c, apiErr, 1).Reason)
+				require.NoError(t, helper.Done(c))
+				require.NoError(t, helper.WriteChatEarlyChunkError(c, apiErr))
+				assert.Equal(t, 1, strings.Count(recorder.Body.String(), `"content":""`))
+				assert.Equal(t, 1, strings.Count(recorder.Body.String(), "[DONE]"))
+				assert.NotContains(t, recorder.Body.String(), `"error":`)
+				assert.NotContains(t, recorder.Body.String(), "private-fallback-model")
+				assert.Contains(t, recorder.Body.String(), `"content":"recovered"`)
+				return
+			}
+			if variant == "connection_closed" {
+				require.NoError(t, helper.StringData(c, `{"choices":[{"delta":{"role":"assistant"}}]}`))
+				assert.Equal(t, "response_committed", service.DecideRelayRetry(c, apiErr, 1).Reason, "even an upstream role event closes the empty-only retry gate")
+			}
+			if variant == "http_error" {
+				_, writeErr := c.Writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n"))
+				require.NoError(t, writeErr)
+				assert.Equal(t, "response_committed", service.DecideRelayRetry(c, apiErr, 1).Reason, "untracked response bytes must also close the retry gate")
+			}
 			require.NoError(t, helper.WriteChatEarlyChunkError(c, apiErr))
 			require.NoError(t, helper.WriteChatEarlyChunkError(c, apiErr))
 			assert.Equal(t, 1, strings.Count(recorder.Body.String(), `"error":`))

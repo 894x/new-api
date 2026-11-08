@@ -1060,6 +1060,7 @@ func TestChatEarlyChunkStreamSerialization(t *testing.T) {
 					service.ObserveChatEarlyChunkData(c, `{"choices":[{"delta":{"content":"history"}}]}`, now)
 					service.FinishChatEarlyChunkAttempt(c, info, nil)
 				}
+				c.Set("chat_early_chunk_stream", nil) // Seed history and the following live request have separate SSE lifetimes.
 				info.StartTime = now
 				info.FirstResponseTime = now.Add(-time.Second)
 				service.BeginChatEarlyChunkAttempt(p, info, &channel)

@@ -172,6 +172,7 @@ func TestChatEarlyChunkPublicFramesAndCommittedFailure(t *testing.T) {
 	start := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC)
 	a := &ChatEarlyChunkAttempt{started: start, created: start.Unix(), model: "public-model", config: chat_early_chunk_setting.Default(), observation: ChatEarlyChunkObservation{Sent: true, DecisionMS: common.GetPointer(int64(300))}}
 	c.Set(chatEarlyChunkContextKey, a)
+	c.Set(chatEarlyChunkStreamContextKey, &chatEarlyChunkStream{sent: true, model: a.model, created: a.created})
 	data, err := NormalizeChatEarlyChunkData(c, `{"id":"upstream","created":999,"model":"internal","choices":[{"delta":{"content":"hello"}}],"usage":{"completion_tokens":2}}`)
 	require.NoError(t, err)
 	assert.Contains(t, data, `"model":"public-model"`)

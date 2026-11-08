@@ -3422,6 +3422,7 @@
     "Gap target met": "Đạt mục tiêu khoảng chờ",
     "Gap to real content": "Khoảng chờ nội dung thực",
     "Gateway Processing": "Xử lý tại cổng",
+    "Gateway-only empty chunks still allow retryable failures within the original budget. Once an upstream event is sent, failures end with a stream error. Actual first-content timing and usage remain separate.": "Khi mới gửi các khối rỗng của cổng, vẫn có thể thử lại lỗi được phép trong giới hạn ban đầu. Sau khi gửi sự kiện từ bên cung cấp, lỗi sẽ kết thúc luồng bằng thông báo lỗi. Thời gian đến nội dung thực đầu tiên và mức sử dụng vẫn được ghi riêng.",
     "Gateways": "Cổng kết nối",
     "GC Count": "Số lần GC",
     "GC executed": "GC đã thực thi",

@@ -383,7 +383,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = nil
 			continue
 		}
-		if c.Writer.Written() {
+		if c.Writer.Written() && !service.CanRetryChatEarlyChunk(c) {
 			newAPIError = types.MarkResponseCommitted(newAPIError)
 		}
 
