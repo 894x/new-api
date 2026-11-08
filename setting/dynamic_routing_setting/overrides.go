@@ -1,8 +1,11 @@
 package dynamic_routing_setting
 
+import "github.com/QuantumNous/new-api/setting/chat_early_chunk_setting"
+
 // Overrides contains only pool-adjustable tuning. Nil fields inherit the
 // current system default; explicit zero remains a value and is validated.
 type Overrides struct {
+	ChatEarlyChunk *chat_early_chunk_setting.Pool `json:"chat_early_chunk,omitempty"`
 	// ChatPrefixEnabled is resolved by the gateway, independently of scheduling mode.
 	ChatPrefixEnabled             *bool    `json:"chat_prefix_enabled,omitempty"`
 	MaxSamples                    *int     `json:"max_samples,omitempty"`
@@ -27,6 +30,9 @@ type Overrides struct {
 func (overrides *Overrides) Resolve(base DynamicRoutingSetting) (DynamicRoutingSetting, error) {
 	base.Enabled = true
 	if overrides != nil {
+		if err := overrides.ChatEarlyChunk.Validate(); err != nil {
+			return base, err
+		}
 		if overrides.MaxSamples != nil {
 			base.MaxSamples = *overrides.MaxSamples
 		}

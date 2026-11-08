@@ -65,6 +65,8 @@ import {
   type RoutingPoolView,
 } from './api'
 import { DiscountRoutingFields } from './discount-routing-fields'
+import { earlyChunkPoolSchema } from './early-chunk'
+import { EarlyChunkSettings } from './early-chunk-settings'
 import { PoolChannelList } from './pool-channel-list'
 import { PoolModeSelect } from './pool-mode-select'
 import { PoolMonitorDisplay } from './pool-monitor-display'
@@ -76,7 +78,10 @@ const poolFormSchema = z.object({
     .object(dynamicRoutingSettingsSchema.shape)
     .omit({ enabled: true })
     .partial()
-    .extend({ chat_prefix_enabled: z.boolean().optional() }),
+    .extend({
+      chat_prefix_enabled: z.boolean().optional(),
+      chat_early_chunk: earlyChunkPoolSchema.optional(),
+    }),
   max_ttft_ms: z.number().int().min(1).max(3600000),
   max_tpot_ms: z.number().int().min(1).max(60000),
   channels: z
@@ -244,7 +249,10 @@ export function PoolCard(props: {
   const validateAndSave = (data: PoolFormValues) => {
     form.clearErrors()
     const numericTuning = Object.entries(data.tuning).filter(
-      ([key, value]) => key !== 'chat_prefix_enabled' && value !== undefined
+      ([key, value]) =>
+        key !== 'chat_prefix_enabled' &&
+        key !== 'chat_early_chunk' &&
+        value !== undefined
     )
     if (numericTuning.length > 0) {
       if (!tuningDefaults) {
@@ -278,6 +286,11 @@ export function PoolCard(props: {
       model={props.pool.model}
       group={props.pool.routing_group}
       groupLabel={props.groupLabel}
+      channels={available.filter((candidate) =>
+        values.channels.some(
+          (entry) => entry.channel_id === candidate.channel_id
+        )
+      )}
       toolbarActions={
         <Form {...form}>
           <PoolTuningPanel
@@ -379,6 +392,15 @@ export function PoolCard(props: {
               )}
             </p>
           </div>
+          <EarlyChunkSettings
+            value={values.tuning.chat_early_chunk}
+            disabled={disabled}
+            onChange={(value) =>
+              form.setValue('tuning.chat_early_chunk', value, {
+                shouldDirty: true,
+              })
+            }
+          />
         </CardHeader>
         <form
           className='contents'
@@ -415,6 +437,12 @@ export function PoolCard(props: {
                 channels={values.channels}
                 candidates={available}
                 disabled={disabled}
+                earlyChunk={values.tuning.chat_early_chunk}
+                onEarlyChunkChange={(value) =>
+                  form.setValue('tuning.chat_early_chunk', value, {
+                    shouldDirty: true,
+                  })
+                }
                 onChange={(channels) =>
                   form.setValue(
                     'channels',

@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -171,6 +173,11 @@ func StringData(c *gin.Context, str string) error {
 	if requestContextDone(c) {
 		return downstreamWriteError(fmt.Errorf("request context done: %w", c.Request.Context().Err()))
 	}
+	if str == "[DONE]" {
+		if err := service.ChatEarlyChunkStreamError(c); err != nil {
+			return err
+		}
+	}
 
 	responseId := common.GetContextKeyString(c, constant.ContextKeyResponseId)
 	common.CaptureUpstreamResponseID(c, common.StringToByteSlice(str), responseId)
@@ -179,11 +186,19 @@ func StringData(c *gin.Context, str string) error {
 		return fmt.Errorf("error normalizing response id: %w", err)
 	}
 	str = string(normalized)
+	str, err = service.NormalizeChatEarlyChunkData(c, str)
+	if err != nil {
+		return err
+	}
 
 	if err := writeSSESegment(c, "data: "+str); err != nil {
 		return err
 	}
-	return FlushWriter(c)
+	if err := FlushWriter(c); err != nil {
+		return err
+	}
+	service.ObserveChatEarlyChunkData(c, str, time.Now())
+	return nil
 }
 
 func PingData(c *gin.Context) error {
@@ -250,6 +265,19 @@ func WriteJSON(c *gin.Context, data []byte) (int, error) {
 
 func Done(c *gin.Context) error {
 	return StringData(c, "[DONE]")
+}
+
+// WriteChatEarlyChunkError terminates a gateway-prestarted Chat stream once.
+// It uses the normal public-error policy and cannot change committed HTTP 200.
+func WriteChatEarlyChunkError(c *gin.Context, apiErr *types.NewAPIError) error {
+	if apiErr == nil || !service.ClaimChatEarlyChunkError(c) {
+		return nil
+	}
+	ExtendWriteDeadline(c)
+	if err := ObjectData(c, gin.H{"error": service.OpenAIErrorForClient(c, apiErr)}); err != nil {
+		return err
+	}
+	return Done(c)
 }
 
 func WssString(c *gin.Context, ws *websocket.Conn, str string) error {

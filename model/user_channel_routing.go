@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/chat_early_chunk_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -34,13 +35,15 @@ type UserGroupChannelRoutingOverride struct {
 // Strategy overrides are independent of channel membership. Removing one
 // restores the model/public-group strategy without changing the user's pool.
 type UserRoutingStrategy struct {
-	UserId       int    `json:"-" gorm:"primaryKey;autoIncrement:false"`
-	Model        string `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
-	RoutingGroup string `json:"routing_group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
-	Mode         string `json:"mode" gorm:"type:varchar(16);not null"`
-	Revision     string `json:"revision" gorm:"type:varchar(64);not null"`
-	MaxTTFTMS    int64  `json:"max_ttft_ms" gorm:"column:max_ttft_ms"`
-	MaxTPOTMS    int64  `json:"max_tpot_ms" gorm:"column:max_tpot_ms"`
+	UserId         int                            `json:"-" gorm:"primaryKey;autoIncrement:false"`
+	Model          string                         `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
+	RoutingGroup   string                         `json:"routing_group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+	Mode           string                         `json:"mode" gorm:"type:varchar(16);not null"`
+	Revision       string                         `json:"revision" gorm:"type:varchar(64);not null"`
+	MaxTTFTMS      int64                          `json:"max_ttft_ms" gorm:"column:max_ttft_ms"`
+	MaxTPOTMS      int64                          `json:"max_tpot_ms" gorm:"column:max_tpot_ms"`
+	EarlyChunkJSON string                         `json:"-" gorm:"type:text"`
+	EarlyChunk     *chat_early_chunk_setting.Pool `json:"early_chunk,omitempty" gorm:"-"`
 }
 
 func (strategy *UserRoutingStrategy) UsesDynamicRouting() bool {
@@ -57,6 +60,15 @@ func ListUserRoutingStrategies(userID int, modelName string) ([]UserRoutingStrat
 		query = query.Where("model = ?", modelName)
 	}
 	err := query.Order("model, routing_group").Find(&rows).Error
+	if err == nil {
+		for i := range rows {
+			if rows[i].EarlyChunkJSON != "" {
+				if decodeErr := common.UnmarshalJsonStr(rows[i].EarlyChunkJSON, &rows[i].EarlyChunk); decodeErr != nil {
+					return nil, decodeErr
+				}
+			}
+		}
+	}
 	return rows, err
 }
 
@@ -74,6 +86,9 @@ func SaveUserRoutingStrategy(strategy *UserRoutingStrategy, expectedRevision str
 	} else {
 		strategy.MaxTTFTMS, strategy.MaxTPOTMS = 0, 0
 	}
+	if err := strategy.EarlyChunk.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidUserChannelRouting, err)
+	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var user User
 		if err := lockForUpdate(tx).Select("id").First(&user, strategy.UserId).Error; err != nil {
@@ -88,13 +103,25 @@ func SaveUserRoutingStrategy(strategy *UserRoutingStrategy, expectedRevision str
 		if current.Revision != expectedRevision {
 			return ErrUserChannelRoutingConflict
 		}
-		if strategy.Mode == "inherit" {
+		// Omission by an older scheduling editor preserves early-chunk settings.
+		strategy.EarlyChunkJSON = current.EarlyChunkJSON
+		if strategy.EarlyChunk != nil {
+			encoded, err := common.Marshal(strategy.EarlyChunk)
+			if err != nil {
+				return err
+			}
+			strategy.EarlyChunkJSON = string(encoded)
+			if strategy.EarlyChunkJSON == "{}" {
+				strategy.EarlyChunkJSON = ""
+			}
+		}
+		if strategy.Mode == "inherit" && strategy.EarlyChunkJSON == "" {
 			return query.Delete(&UserRoutingStrategy{}).Error
 		}
 		strategy.Revision = common.GetUUID()
 		return tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "user_id"}, {Name: "model"}, {Name: "routing_group"}},
-			DoUpdates: clause.AssignmentColumns([]string{"mode", "revision", "max_ttft_ms", "max_tpot_ms"}),
+			DoUpdates: clause.AssignmentColumns([]string{"mode", "revision", "max_ttft_ms", "max_tpot_ms", "early_chunk_json"}),
 		}).Create(strategy).Error
 	})
 }
@@ -151,7 +178,18 @@ func PatchUserChannelRouting(userID int, modelName, revision string, patches []U
 	return PatchUserChannelRoutingForGroup(userID, modelName, "", revision, patches)
 }
 
-func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revision string, patches []UserChannelRoutingPatch) error {
+type UserPoolEarlyChunkPatch struct {
+	Config   *chat_early_chunk_setting.Pool
+	Revision string
+}
+
+func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revision string, patches []UserChannelRoutingPatch, earlyChunk ...UserPoolEarlyChunkPatch) error {
+	if len(earlyChunk) > 1 {
+		return ErrInvalidUserChannelRouting
+	}
+	if len(earlyChunk) == 1 && (routingGroup == "" || earlyChunk[0].Config == nil || earlyChunk[0].Config.Validate() != nil) {
+		return ErrInvalidUserChannelRouting
+	}
 	if userID <= 0 || modelName == "" || strings.TrimSpace(modelName) != modelName || len(modelName) > 255 || revision == "" || len(patches) > 1000 {
 		return ErrInvalidUserChannelRouting
 	}
@@ -187,6 +225,35 @@ func PatchUserChannelRoutingForGroup(userID int, modelName, routingGroup, revisi
 		}
 		if current != revision {
 			return ErrUserChannelRoutingConflict
+		}
+		if len(earlyChunk) == 1 {
+			change := earlyChunk[0]
+			var strategy UserRoutingStrategy
+			strategyQuery := tx.Where("user_id = ? AND model = ? AND routing_group = ?", userID, modelName, routingGroup)
+			if err := strategyQuery.First(&strategy).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if strategy.Revision != change.Revision {
+				return ErrUserChannelRoutingConflict
+			}
+			encoded, err := common.Marshal(change.Config)
+			if err != nil {
+				return err
+			}
+			if strategy.Mode == "" {
+				strategy = UserRoutingStrategy{UserId: userID, Model: modelName, RoutingGroup: routingGroup, Mode: "inherit"}
+			}
+			if strategy.Mode == "inherit" && string(encoded) == "{}" {
+				if err := strategyQuery.Delete(&UserRoutingStrategy{}).Error; err != nil {
+					return err
+				}
+			} else {
+				strategy.EarlyChunkJSON = string(encoded)
+				strategy.Revision = common.GetUUID()
+				if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "model"}, {Name: "routing_group"}}, DoUpdates: clause.AssignmentColumns([]string{"early_chunk_json", "revision"})}).Create(&strategy).Error; err != nil {
+					return err
+				}
+			}
 		}
 		ids := make([]int, 0, len(patches))
 		for _, patch := range patches {

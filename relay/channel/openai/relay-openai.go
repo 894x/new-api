@@ -112,7 +112,7 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 }
 
 func markStreamErrorIfCommitted(c *gin.Context, err *types.NewAPIError) *types.NewAPIError {
-	if err != nil && c != nil && c.Writer != nil && c.Writer.Written() {
+	if err != nil && c != nil && c.Writer != nil && c.Writer.Written() && !service.CanRetryChatEarlyChunk(c) {
 		return types.MarkResponseCommitted(err)
 	}
 	return err

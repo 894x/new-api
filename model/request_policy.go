@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/chat_early_chunk_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm"
@@ -26,6 +27,7 @@ type RequestPolicySnapshot struct {
 	ChatPrefixEnabled    bool
 	ChatPrefixMaxEntries int
 	ChatPrefixTTLSeconds int
+	ChatEarlyChunk       chat_early_chunk_setting.Config
 	RetryTimes           int
 	RetryCodes           []operation_setting.StatusCodeRange
 	DisableCodes         []operation_setting.StatusCodeRange
@@ -58,6 +60,13 @@ func requestPolicyDefaultOptions() map[string]string {
 	defaults["chat_prefix_routing_setting.max_entries"] = "40960"
 	defaults["chat_prefix_routing_setting.enabled"] = "true"
 	defaults["chat_prefix_routing_setting.ttl_seconds"] = "300"
+	fields, err := config.ConfigToMap(chat_early_chunk_setting.Default())
+	if err != nil {
+		panic(err)
+	}
+	for key, value := range fields {
+		defaults["chat_early_chunk_setting."+key] = value
+	}
 	defaults["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
 	defaults["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	defaults["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
@@ -71,6 +80,10 @@ func requestPolicyDefaultOptions() map[string]string {
 }
 
 func IsRequestPolicyOption(key string) bool {
+	if strings.HasPrefix(key, "chat_early_chunk_setting.") {
+		_, exists := requestPolicyDefaults[key]
+		return exists
+	}
 	if strings.HasPrefix(key, "monitor_setting.channel_monitoring_") {
 		switch strings.TrimPrefix(key, "monitor_setting.") {
 		case "channel_monitoring_enabled", "channel_monitoring_minutes", "channel_monitoring_timeout_seconds", "channel_monitoring_prompt", "channel_monitoring_max_tokens", "channel_monitoring_stream", "channel_monitoring_slow_ms", "channel_monitoring_excluded_status_codes":
@@ -111,6 +124,11 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 		}
 	}
 	maps.Copy(raw, options)
+	// Keep persisted fixed-window options available for rollback, but exclude
+	// them from the dynamic read model and scheduling decisions.
+	for _, field := range []string{"window_start_ms", "window_end_ms", "target_gap_ms"} {
+		delete(raw, "chat_early_chunk_setting."+field)
+	}
 	snapshot := &RequestPolicySnapshot{Options: raw}
 	prefixEnabled, err := strconv.ParseBool(raw["chat_prefix_routing_setting.enabled"])
 	if err != nil {
@@ -126,6 +144,27 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 		return nil, fmt.Errorf("prefix cache lifetime must be an integer between 1 and 86400 seconds")
 	}
 	snapshot.ChatPrefixMaxEntries, snapshot.ChatPrefixTTLSeconds = maxEntries, ttlSeconds
+	early := map[string]json.RawMessage{}
+	for key, value := range raw {
+		if field, ok := strings.CutPrefix(key, "chat_early_chunk_setting."); ok && IsRequestPolicyOption(key) {
+			if field == "mode" {
+				encoded, _ := common.Marshal(value)
+				early[field] = encoded
+			} else {
+				early[field] = json.RawMessage(value)
+			}
+		}
+	}
+	earlyJSON, err := common.Marshal(early)
+	if err != nil {
+		return nil, fmt.Errorf("invalid early chunk settings: %w", err)
+	}
+	if err := common.Unmarshal(earlyJSON, &snapshot.ChatEarlyChunk); err != nil {
+		return nil, fmt.Errorf("invalid early chunk settings: %w", err)
+	}
+	if err := snapshot.ChatEarlyChunk.Validate(); err != nil {
+		return nil, err
+	}
 	affinityFields := map[string]string{}
 	for key, value := range raw {
 		if field, ok := strings.CutPrefix(key, "channel_affinity_setting."); ok {

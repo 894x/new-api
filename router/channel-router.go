@@ -51,6 +51,7 @@ var channelPermissionRoutes = []permissionRoute{
 	{method: http.MethodGet, path: "/routing-pools/catalog", permission: authz.ChannelRead, handler: controller.GetModelRoutingPoolCatalog},
 	{method: http.MethodGet, path: "/routing-pools", permission: authz.ChannelRead, handler: controller.ListModelRoutingPools},
 	{method: http.MethodGet, path: "/routing-monitor", permission: authz.ChannelRead, handler: controller.GetRoutingMonitor},
+	{method: http.MethodGet, path: "/early-chunk-grid", permission: authz.ChannelRead, handler: controller.GetChatEarlyChunkGrid},
 	{method: http.MethodGet, path: "/routing-pool", permission: authz.ChannelRead, handler: controller.GetModelRoutingPool},
 	{method: http.MethodPut, path: "/routing-pool", permission: authz.ChannelWrite, handler: controller.SaveModelRoutingPool},
 	{method: http.MethodDelete, path: "/routing-pool", permission: authz.ChannelWrite, handler: controller.DeleteModelRoutingPool},

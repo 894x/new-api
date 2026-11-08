@@ -21,11 +21,13 @@ import { useTranslation } from 'react-i18next'
 
 import { LoadingState } from '@/components/loading-state'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 import { RoutingWorkspaceDisplay } from './routing-workspace-display'
 
 const RoutingMonitorWorkspace = lazy(() => import('@/features/routing-monitor'))
+const EarlyChunkMonitor = lazy(() => import('./early-chunk-monitor'))
 
 export function PoolMonitorDisplay(props: {
   open: boolean
@@ -37,8 +39,10 @@ export function PoolMonitorDisplay(props: {
   username?: string
   children: ReactNode
   toolbarActions?: ReactNode
+  channels?: { channel_id: number; channel_name: string }[]
 }) {
   const { t } = useTranslation()
+  const [view, setView] = useState<'routing' | 'ttft'>('routing')
   const [headerContainer, setHeaderContainer] = useState<HTMLElement | null>(
     null
   )
@@ -69,6 +73,27 @@ export function PoolMonitorDisplay(props: {
             data-routing-monitor-header
             className='flex min-w-0 flex-1 flex-wrap items-center gap-2'
           />
+          <div
+            className='flex flex-wrap gap-1'
+            aria-label={t('Monitoring view')}
+          >
+            <Button
+              size='sm'
+              variant={view === 'routing' ? 'secondary' : 'ghost'}
+              aria-pressed={view === 'routing'}
+              onClick={() => setView('routing')}
+            >
+              {t('Routing observations')}
+            </Button>
+            <Button
+              size='sm'
+              variant={view === 'ttft' ? 'secondary' : 'ghost'}
+              aria-pressed={view === 'ttft'}
+              onClick={() => setView('ttft')}
+            >
+              {t('TTFT prediction grid')}
+            </Button>
+          </div>
         </div>
       }
       refreshAction={null}
@@ -98,13 +123,20 @@ export function PoolMonitorDisplay(props: {
               </div>
             }
           >
-            <RoutingMonitorWorkspace
-              userId={props.userId}
-              fixedGroup={props.group}
-              fixedModel={props.model}
-              headerContainer={headerContainer}
-              embedded
-            />
+            {view === 'ttft' ? (
+              <EarlyChunkMonitor
+                model={props.model}
+                channels={props.channels ?? []}
+              />
+            ) : (
+              <RoutingMonitorWorkspace
+                userId={props.userId}
+                fixedGroup={props.group}
+                fixedModel={props.model}
+                headerContainer={headerContainer}
+                embedded
+              />
+            )}
           </Suspense>
         )}
       </div>

@@ -113,6 +113,9 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	}
 
 	AppendChannelAffinityAdminInfo(ctx, other)
+	if attempt := ChatEarlyChunk(ctx); attempt != nil {
+		other.SetAdmin("early_chunk", attempt.Snapshot(relayInfo))
+	}
 	if events := RequestPolicy(ctx).Events(); len(events) > 0 {
 		other.SetAdmin("request_policy", events)
 	}

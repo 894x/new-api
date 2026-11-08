@@ -55,11 +55,13 @@ import {
   userRoutingPoolKeys,
   type UserRoutingPoolConfig,
 } from './api'
+import { earlyChunkPoolSchema } from './early-chunk'
 import { PoolChannelList } from './pool-channel-list'
 import { PoolMonitorDisplay } from './pool-monitor-display'
 import { UserPoolStrategy } from './user-pool-strategy'
 
 const schema = z.object({
+  early_chunk: earlyChunkPoolSchema,
   channels: z
     .array(
       z.object({
@@ -119,6 +121,11 @@ export function UserPoolCard(props: {
       groupLabel={props.groupLabel}
       userId={props.userId}
       username={query.data?.username}
+      channels={query.data?.channels.filter((channel) =>
+        (query.data?.pool_channels ?? []).some(
+          (entry) => entry.channel_id === channel.channel_id
+        )
+      )}
     >
       <Card
         className={cn(
@@ -203,6 +210,7 @@ function UserPoolEditor(props: {
     config.channels.map((row) => [row.channel_id, row])
   )
   const initial: Values = {
+    early_chunk: config.early_chunk ?? {},
     channels: (config.pool_channels ?? []).map((entry) => {
       const row = configuredChannels.get(entry.channel_id)
       if (
@@ -254,6 +262,12 @@ function UserPoolEditor(props: {
             ? (restoreRevision ?? config.revision)
             : config.revision,
         reset: data === null,
+        ...(data && form.formState.dirtyFields.early_chunk
+          ? {
+              early_chunk: data.early_chunk,
+              early_chunk_revision: config.strategy_revision ?? '',
+            }
+          : {}),
         overrides:
           data?.channels.map((row) => ({
             channel_id: row.channel_id,
@@ -379,6 +393,10 @@ function UserPoolEditor(props: {
             disabled={disabled}
             removable={editing}
             allowInheritance
+            earlyChunk={editing ? values.early_chunk : config.early_chunk}
+            onEarlyChunkChange={(value) =>
+              form.setValue('early_chunk', value, { shouldDirty: true })
+            }
             onChange={(channels) =>
               form.setValue('channels', channels, {
                 shouldDirty: true,

@@ -80,7 +80,10 @@ function PoolTuningField(props: {
   const form = useFormContext<PoolFormValues>()
   const key = props.definition.name.slice(
     'dynamic_routing_setting.'.length
-  ) as Exclude<keyof PoolFormValues['tuning'], 'chat_prefix_enabled'>
+  ) as Exclude<
+    keyof PoolFormValues['tuning'],
+    'chat_prefix_enabled' | 'chat_early_chunk'
+  >
   // The shared display formatter rounds to two places; probe fractions and
   // recovery steps require three to preserve the actual inherited value.
   const defaultValue = new Intl.NumberFormat(
@@ -160,7 +163,10 @@ export function PoolTuningPanel(props: {
   )
   const defaults = props.defaults
   const overridden = Object.entries(tuning).some(
-    ([key, value]) => key !== 'chat_prefix_enabled' && value !== undefined
+    ([key, value]) =>
+      key !== 'chat_prefix_enabled' &&
+      key !== 'chat_early_chunk' &&
+      value !== undefined
   )
   return (
     <Popover open={props.open} onOpenChange={props.onOpenChange}>
@@ -284,9 +290,10 @@ export function PoolTuningPanel(props: {
               form.clearErrors('tuning')
               form.setValue(
                 'tuning',
-                tuning.chat_prefix_enabled === undefined
-                  ? {}
-                  : { chat_prefix_enabled: tuning.chat_prefix_enabled },
+                {
+                  chat_prefix_enabled: tuning.chat_prefix_enabled,
+                  chat_early_chunk: tuning.chat_early_chunk,
+                },
                 { shouldDirty: true }
               )
             }}

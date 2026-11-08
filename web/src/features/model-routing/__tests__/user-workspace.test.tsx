@@ -305,6 +305,85 @@ test.each([
   }
 )
 
+test('user pool early chunk overrides save with the user, model and group while keeping inherited scheduling', async () => {
+  mockPool({
+    ...fixture(),
+    strategy_mode: 'inherit',
+    strategy_revision: 'strategy-original',
+  })
+  const patch = vi
+    .spyOn(api, 'patch')
+    .mockResolvedValue({ data: { success: true } })
+  const { card } = await mountWorkspace()
+  await userEvent.click(
+    await within(card).findByRole('button', {
+      name: 'Edit scheduling strategy',
+    })
+  )
+  const dialog = screen.getByRole('dialog', {
+    name: 'Edit scheduling strategy',
+  })
+  await userEvent.click(
+    within(dialog).getByRole('combobox', { name: 'Early empty chunk' })
+  )
+  await userEvent.click(screen.getByRole('option', { name: 'Observe only' }))
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      expect.objectContaining({
+        model: 'kimi-k3',
+        routing_group: 'vip',
+        strategy: expect.objectContaining({
+          mode: 'inherit',
+          early_chunk: { mode: 'observe' },
+        }),
+      })
+    )
+  )
+})
+
+test('a channel early chunk override is edited in its user-pool row and saved with membership', async () => {
+  mockPool({
+    ...fixture(),
+    configured: true,
+    source: 'user',
+    strategy_revision: 'early-original',
+    early_chunk: { mode: 'observe' },
+  })
+  const patch = vi
+    .spyOn(api, 'patch')
+    .mockResolvedValue({ data: { success: true } })
+  const { card } = await mountWorkspace()
+  const selector = await within(card).findByRole('combobox', {
+    name: 'Early chunk for Primary',
+  })
+  expect(selector).toBeDisabled()
+  await userEvent.click(
+    within(card).getByRole('button', { name: 'Edit user override' })
+  )
+  await userEvent.click(selector)
+  await userEvent.click(screen.getByRole('option', { name: 'Enabled' }))
+  expect(
+    within(card).getByRole('combobox', { name: 'Early chunk for Backup' })
+  ).toHaveTextContent('Inherit pool')
+  await userEvent.click(within(card).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      expect.objectContaining({
+        model: 'kimi-k3',
+        routing_group: 'vip',
+        early_chunk_revision: 'early-original',
+        early_chunk: { mode: 'observe', channels: { 1: 'enabled' } },
+        overrides: expect.arrayContaining([
+          expect.objectContaining({ channel_id: 1 }),
+        ]),
+      })
+    )
+  )
+})
+
 test('a rejected user strategy save keeps the dialog and selected mode for correction', async () => {
   mockPool()
   vi.spyOn(api, 'patch').mockResolvedValue({

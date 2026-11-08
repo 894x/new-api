@@ -496,6 +496,7 @@ func (p *pingKeepAlive) stopAndWait() bool {
 
 func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) *pingKeepAlive {
 	pingerCtx, stopPinger := context.WithCancel(context.Background())
+	writeMutex := helper.StreamWriteMutex(c)
 	done := make(chan struct{})
 	responseController := http.NewResponseController(c.Writer)
 	pinger := &pingKeepAlive{
@@ -530,7 +531,6 @@ func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) *pingKeepAli
 			logger.LogDebug(c, "SSE ping ticker stopped")
 		}()
 
-		var pingMutex sync.Mutex
 		logger.LogDebug(c, "SSE ping goroutine started")
 
 		// 增加超时控制，防止goroutine长时间运行
@@ -545,7 +545,7 @@ func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) *pingKeepAli
 				if !pinger.beginWrite() {
 					return
 				}
-				if err := sendPingData(c, &pingMutex); err != nil {
+				if err := sendPingData(c, writeMutex); err != nil {
 					pinger.finishWrite()
 					logger.LogDebug(c, "SSE ping error, stopping goroutine: %s", err.Error())
 					return
@@ -595,6 +595,16 @@ func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 // returning the upstream 3xx response to the relay without an extra error.
 func keepUpstreamRedirectResponse(_ *http.Request, _ []*http.Request) error {
 	return http.ErrUseLastResponse
+}
+
+type earlyChunkResponseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (body *earlyChunkResponseBody) Close() error {
+	body.cancel()
+	return body.ReadCloser.Close()
 }
 
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
@@ -658,9 +668,36 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	info.MarkAttemptUpstreamStarted()
 	req, finishTransport := service.TraceUpstreamTransport(req, info.RequestTiming, info.ChannelId, info.ChannelSetting)
 	finishCapture := service.CaptureUpstreamExchange(c, req, info.ChannelId, info.UpstreamModelName)
+	var stopEarlyChunk func() error
+	var cancelEarlyChunk context.CancelFunc
+	if service.ChatEarlyChunk(c).ShouldPredict() {
+		var upstreamContext context.Context
+		upstreamContext, cancelEarlyChunk = context.WithCancel(req.Context())
+		req = req.WithContext(upstreamContext)
+		stopEarlyChunk = helper.StartChatEarlyChunkSender(c, info, func(error) { cancelEarlyChunk() })
+		defer stopEarlyChunk()
+	}
 	resp, err := relayClient.Do(req)
 	finishTransport(resp, err)
 	finishCapture(resp, err)
+	if stopEarlyChunk != nil {
+		senderErr := stopEarlyChunk()
+		if senderErr != nil {
+			cancelEarlyChunk()
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			if helper.IsDownstreamWriteError(senderErr) {
+				return nil, types.NewClientGoneError(senderErr)
+			}
+			return nil, types.NewError(senderErr, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+		}
+		if resp == nil || resp.Body == nil || err != nil {
+			cancelEarlyChunk()
+		} else {
+			resp.Body = &earlyChunkResponseBody{ReadCloser: resp.Body, cancel: cancelEarlyChunk}
+		}
+	}
 	if err != nil {
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
 			return nil, types.NewClientGoneError(requestErr)

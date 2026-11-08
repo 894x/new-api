@@ -139,6 +139,50 @@ test('shows client_gone as the stream status and preserves the committed HTTP st
   expect(within(dialog).getByText('HTTP 200')).toBeVisible()
 })
 
+test.each([
+  { isAdmin: true, mode: 'off', label: 'Disabled' },
+  { isAdmin: true, mode: 'observe', label: 'Observe only' },
+  { isAdmin: true, mode: 'enabled', label: 'Enabled' },
+  { isAdmin: false, mode: 'observe', label: 'Observe only' },
+])(
+  'early chunk mode $mode is displayed correctly with admin access $isAdmin',
+  async ({ isAdmin, mode, label }) => {
+    const trigger = renderPreview(
+      {
+        model_price: 0.25,
+        admin_info: {
+          early_chunk: {
+            mode,
+            matched_bytes: 9000,
+            input_bytes: 10000,
+            samples: 100,
+            probability: 0.97,
+            decision_ms: 300,
+            content_ms: 450,
+            gap_ms: 150,
+            sent: false,
+            met_target: true,
+            failed: false,
+          },
+        },
+      },
+      isAdmin
+    )
+    fireEvent.click(trigger)
+    const dialog = await screen.findByRole('dialog')
+    if (isAdmin) {
+      expect(within(dialog).getByText('Early empty chunk')).toBeVisible()
+      expect(within(dialog).getByText(label)).toBeVisible()
+      expect(within(dialog).getByText('97%')).toBeVisible()
+      expect(within(dialog).getByText('150 ms')).toBeVisible()
+    } else {
+      expect(
+        within(dialog).queryByText('Early empty chunk')
+      ).not.toBeInTheDocument()
+    }
+  }
+)
+
 test('keeps log details open when the parent refreshes with unchanged data', async () => {
   const other = { model_price: 0.25 }
   const wrapper = ({ children }: { children: React.ReactNode }) => (

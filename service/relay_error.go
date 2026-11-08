@@ -26,7 +26,7 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 	if err.GetErrorCode() == types.ErrorCodeClientGone || (c.Request != nil && c.Request.Context().Err() != nil) {
 		return PolicyDecision{Action: "stop", Reason: "client_gone", Source: "client"}
 	}
-	if c.Writer.Written() || types.IsResponseCommittedError(err) {
+	if (c.Writer.Written() || types.IsResponseCommittedError(err)) && !CanRetryChatEarlyChunk(c) {
 		return PolicyDecision{Action: "stop", Reason: "response_committed", Source: "system"}
 	}
 	if _, forced := c.Get("specific_channel_id"); forced {

@@ -55,6 +55,38 @@ const options = {
 }
 let currentOptions: Record<string, string>
 let client: QueryClient
+
+it('saves observation mode independently and validates dynamic advance limits', async () => {
+  show()
+  const mode = await screen.findByRole('combobox', {
+    name: 'Default early chunk mode',
+  })
+  expect(screen.getByLabelText('Advance ratio (%)')).toHaveValue(15)
+  expect(screen.getByLabelText('Minimum advance (ms)')).toHaveValue(1000)
+  expect(screen.getByLabelText('Maximum advance (ms)')).toHaveValue(3000)
+  expect(screen.getByLabelText('Earliest pre-emission (ms)')).toHaveValue(1000)
+  await userEvent.click(mode)
+  await userEvent.click(screen.getByRole('option', { name: 'Observe only' }))
+  fireEvent.change(screen.getByLabelText('Maximum advance (ms)'), {
+    target: { value: '200' },
+  })
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  expect(
+    await screen.findByText(
+      'Maximum advance must be at least the minimum advance.'
+    )
+  ).toBeVisible()
+  expect(api.patch).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByLabelText('Maximum advance (ms)'), {
+    target: { value: '3000' },
+  })
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(api.patch).toHaveBeenCalledWith('/api/option/request_policy', {
+      options: { 'chat_early_chunk_setting.mode': 'observe' },
+    })
+  )
+})
 beforeEach(() => {
   client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -869,3 +901,39 @@ it.each([
     expect(api.patch).not.toHaveBeenCalled()
   }
 )
+
+it('persists every dynamic control and round-trips the displayed percentage without changing pool modes', async () => {
+  currentOptions['chat_early_chunk_setting.window_start_ms'] = '100'
+  currentOptions['chat_early_chunk_setting.window_end_ms'] = '200'
+  show()
+  await screen.findByRole('combobox', { name: 'Default early chunk mode' })
+  expect(
+    screen.queryByLabelText('Latest empty chunk (ms)')
+  ).not.toBeInTheDocument()
+  for (const [label, value] of [
+    ['Advance ratio (%)', '20'],
+    ['Minimum advance (ms)', '1500'],
+    ['Maximum advance (ms)', '5000'],
+    ['Earliest pre-emission (ms)', '1200'],
+    ['Minimum prediction samples', '120'],
+    ['Minimum prediction probability (0-1)', '0.9'],
+    ['Prediction sample lifetime (seconds)', '1800'],
+  ]) {
+    fireEvent.change(screen.getByLabelText(label), { target: { value } })
+  }
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(api.patch).toHaveBeenCalledWith('/api/option/request_policy', {
+      options: {
+        'chat_early_chunk_setting.lead_ratio': '0.2',
+        'chat_early_chunk_setting.min_lead_ms': '1500',
+        'chat_early_chunk_setting.max_lead_ms': '5000',
+        'chat_early_chunk_setting.earliest_ms': '1200',
+        'chat_early_chunk_setting.min_samples': '120',
+        'chat_early_chunk_setting.min_probability': '0.9',
+        'chat_early_chunk_setting.max_age_seconds': '1800',
+      },
+    })
+  )
+  expect(screen.getByLabelText('Advance ratio (%)')).toHaveValue(20)
+})

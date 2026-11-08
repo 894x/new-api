@@ -21,6 +21,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { EarlyChunkModeSelect } from '@/features/model-routing/early-chunk-settings'
 import { handleServerError } from '@/lib/handle-server-error'
 import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
 
@@ -88,12 +89,13 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
 
   const save = async (submitted: RoutingPolicyFormValues) => {
     const next = routingPolicyOptions(submitted)
+    const previousOptions = routingPolicyOptions(defaults)
     next.AutomaticRetryStatusCodes = parseHttpStatusCodeRules(
       next.AutomaticRetryStatusCodes
     ).normalized
     const delta = Object.fromEntries(
       Object.entries(next).filter(([key, value]) => {
-        const previous = props.config.options[key]
+        const previous = previousOptions[key]
         if (key === 'channel_affinity_setting.rules') {
           return (
             JSON.stringify(JSON.parse(value)) !==
@@ -148,6 +150,7 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
             )}
           />
           <ChatPrefixCacheSettings />
+          <ChatEarlyChunkSettings />
           <RetrySection />
           {mutation.isError ? (
             <p role='alert' className='text-destructive text-sm'>
@@ -240,6 +243,122 @@ function ChatPrefixCacheSettings() {
           />
         ))}
       </SettingsFormGrid>
+    </SettingsCard>
+  )
+}
+
+function ChatEarlyChunkSettings() {
+  const { t } = useTranslation()
+  const form = useFormContext<RoutingPolicyFormValues>()
+  return (
+    <SettingsCard
+      title={t('Early empty chunk')}
+      className='shadow-none'
+      description={t(
+        'Estimate TTFT for each model and channel bucket, then pre-emit by a bounded proportion. Pool and pool-channel modes remain independent. Off collects samples; observe sends no empty chunks.'
+      )}
+    >
+      <FormField
+        control={form.control}
+        name='chat_early_chunk_setting.mode'
+        render={({ field }) => (
+          <FormItem>
+            <EarlyChunkModeSelect
+              label={t('Default early chunk mode')}
+              value={field.value}
+              inherit={false}
+              onChange={field.onChange}
+            />
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <SettingsFormGrid>
+        {(
+          [
+            {
+              name: 'lead_ratio',
+              label: t('Advance ratio (%)'),
+              min: 1,
+              max: 100,
+              step: 1,
+            },
+            {
+              name: 'min_lead_ms',
+              label: t('Minimum advance (ms)'),
+              min: 1,
+              max: 30000,
+              step: 1,
+            },
+            {
+              name: 'max_lead_ms',
+              label: t('Maximum advance (ms)'),
+              min: 1,
+              max: 30000,
+              step: 1,
+            },
+            {
+              name: 'earliest_ms',
+              label: t('Earliest pre-emission (ms)'),
+              min: 0,
+              max: 30000,
+              step: 1,
+            },
+            {
+              name: 'min_samples',
+              label: t('Minimum prediction samples'),
+              min: 20,
+              max: 256,
+              step: 1,
+            },
+            {
+              name: 'min_probability',
+              label: t('Minimum prediction probability (0-1)'),
+              min: 0.5,
+              max: 1,
+              step: 0.01,
+            },
+            {
+              name: 'max_age_seconds',
+              label: t('Prediction sample lifetime (seconds)'),
+              min: 60,
+              max: 86400,
+              step: 1,
+            },
+          ] as const
+        ).map((item) => (
+          <FormField
+            key={item.name}
+            control={form.control}
+            name={`chat_early_chunk_setting.${item.name}`}
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{item.label}</FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={item.min}
+                    max={item.max}
+                    step={item.step}
+                    {...safeNumberFieldProps(field)}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        ))}
+      </SettingsFormGrid>
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'Advance = estimated TTFT × ratio, clamped to the configured limits. Candidate time = TTFT − advance. The probability gate is rechecked while waiting. Legacy fixed windows no longer apply.'
+        )}
+      </p>
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'Gateway-only empty chunks still allow retryable failures within the original budget. Once an upstream event is sent, failures end with a stream error. Actual first-content timing and usage remain separate.'
+        )}
+      </p>
     </SettingsCard>
   )
 }

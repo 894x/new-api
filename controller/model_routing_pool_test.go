@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/chat_early_chunk_setting"
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -93,6 +94,19 @@ func TestRoutingPoolTuningDatabaseMatrix(t *testing.T) {
 					require.NoError(t, db.Create(&channel).Error)
 					require.NoError(t, channel.AddAbilities(nil))
 				}
+				responseGrid := userRoutingRequestAtURL(t, 1, http.MethodGet, "/api/channel/early-chunk-grid?channel_id=9701&model="+name+"&probe_ms=5000", "", GetChatEarlyChunkGrid)
+				require.Equal(t, http.StatusOK, responseGrid.Code, responseGrid.Body.String())
+				var gridBody struct {
+					Data service.ChatEarlyChunkGrid `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(responseGrid.Body.Bytes(), &gridBody))
+				assert.Equal(t, "model_channel", gridBody.Data.Scope)
+				assert.Equal(t, 1040, gridBody.Data.RegularBuckets)
+				assert.Equal(t, "no-store", responseGrid.Header().Get("Cache-Control"))
+				for _, query := range []string{"channel_id=invalid&model=x", "channel_id=9701&model=x&probe_ms=300001"} {
+					responseGrid = userRoutingRequestAtURL(t, 1, http.MethodGet, "/api/channel/early-chunk-grid?"+query, "", GetChatEarlyChunkGrid)
+					assert.Equal(t, http.StatusBadRequest, responseGrid.Code)
+				}
 				pool := model.ModelRoutingPool{RoutingGroup: "default", Model: name, Mode: model.RoutingModeSmart, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 9701, Priority: 100, Weight: 100, Enabled: true}, {ChannelID: 9702, Weight: 100, Enabled: true}}, Tuning: &dynamic_routing_setting.Overrides{MaxSamples: common.GetPointer(5), HardFailureCooldownSeconds: common.GetPointer(10), CooldownSeconds: common.GetPointer(0), ProbeFraction: common.GetPointer(0.4)}}
 				require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
 				for range 2 {
@@ -120,6 +134,13 @@ func TestRoutingPoolTuningDatabaseMatrix(t *testing.T) {
 				loaded, err = model.GetModelRoutingPool("default", name)
 				require.NoError(t, err)
 				assert.NotContains(t, loaded.TuningJSON, "chat_prefix_enabled", "inheritance omits the override while preserving numeric tuning")
+				loaded.Tuning.ChatEarlyChunk = &chat_early_chunk_setting.Pool{Mode: "observe", Channels: map[int]string{9701: "enabled", 9702: "off"}}
+				require.NoError(t, model.SaveModelRoutingPool(loaded, loaded.Revision))
+				loaded, err = model.GetModelRoutingPool("default", name)
+				require.NoError(t, err)
+				require.NotNil(t, loaded.Tuning.ChatEarlyChunk)
+				assert.Equal(t, "enabled", loaded.Tuning.ChatEarlyChunk.Resolve("off", 9701))
+				assert.Equal(t, "off", loaded.Tuning.ChatEarlyChunk.Resolve("enabled", 9702))
 				invalid := *loaded
 				invalid.Tuning = &dynamic_routing_setting.Overrides{HardFailureCooldownSeconds: common.GetPointer(100), HardFailureMaxCooldownSeconds: common.GetPointer(50)}
 				assert.ErrorIs(t, model.SaveModelRoutingPool(&invalid, loaded.Revision), model.ErrInvalidRoutingPool)

@@ -33,6 +33,8 @@ import { toIntlLocale } from '@/i18n/languages'
 import { cn } from '@/lib/utils'
 
 import type { PoolCandidate, PoolChannel } from './api'
+import type { EarlyChunkPool } from './early-chunk'
+import { EarlyChunkModeSelect } from './early-chunk-settings'
 
 export interface PoolChannelDraft extends Omit<
   PoolChannel,
@@ -50,6 +52,8 @@ export function PoolChannelList(props: {
   disabled: boolean
   allowInheritance?: boolean
   removable?: boolean
+  earlyChunk?: EarlyChunkPool | null
+  onEarlyChunkChange?: (value: EarlyChunkPool) => void
   onChange: (channels: PoolChannelDraft[]) => void
 }) {
   const { t, i18n } = useTranslation()
@@ -153,6 +157,29 @@ export function PoolChannelList(props: {
               footer={
                 (props.allowInheritance || props.model) && (
                   <>
+                    {props.onEarlyChunkChange && (
+                      <div className='mb-2'>
+                        <EarlyChunkModeSelect
+                          label={t('Early chunk for {{channel}}', {
+                            channel: name,
+                          })}
+                          inherit='pool'
+                          value={props.earlyChunk?.channels?.[entry.channel_id]}
+                          disabled={props.disabled}
+                          onChange={(mode) => {
+                            const channels = { ...props.earlyChunk?.channels }
+                            if (mode) channels[entry.channel_id] = mode
+                            else delete channels[entry.channel_id]
+                            props.onEarlyChunkChange?.({
+                              ...props.earlyChunk,
+                              channels: Object.keys(channels).length
+                                ? channels
+                                : undefined,
+                            })
+                          }}
+                        />
+                      </div>
+                    )}
                     {props.allowInheritance && (
                       <label className='text-muted-foreground mb-1 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs'>
                         <span>{t('Maximum retries')}</span>

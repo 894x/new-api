@@ -22,6 +22,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 const (
@@ -228,6 +229,92 @@ func ExtendWriteDeadline(c *gin.Context) {
 	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 }
 
+// StreamWriteMutex serializes keepalives and gateway-owned events across the
+// pending-headers and response-body phases. Initialize it before spawning writers.
+func StreamWriteMutex(c *gin.Context) *sync.Mutex {
+	if value, exists := c.Get("stream_write_mutex"); exists {
+		if mutex, ok := value.(*sync.Mutex); ok {
+			return mutex
+		}
+	}
+	mutex := &sync.Mutex{}
+	c.Set("stream_write_mutex", mutex)
+	return mutex
+}
+
+// StartChatEarlyChunkSender can run while the upstream HTTP request is still
+// awaiting headers. Stop and join it before handing writes to the next phase.
+func StartChatEarlyChunkSender(c *gin.Context, info *relaycommon.RelayInfo, onError func(error)) func() error {
+	attempt := service.ChatEarlyChunk(c)
+	if !attempt.ShouldPredict() {
+		return func() error { return nil }
+	}
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	writeMutex := StreamWriteMutex(c)
+	done := make(chan struct{})
+	var senderErr error
+	gopool.Go(func() {
+		defer close(done)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				senderErr = fmt.Errorf("early chunk panic: %v", recovered)
+			}
+			if senderErr != nil && onError != nil {
+				onError(senderErr)
+			}
+		}()
+		attempt.Load(c, info.UpstreamModelName, time.Now())
+		timer := time.NewTimer(attempt.NextCheck(time.Now()))
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				finished, err := func() (bool, error) {
+					writeMutex.Lock()
+					defer writeMutex.Unlock()
+					if ctx.Err() != nil {
+						return true, nil
+					}
+					return attempt.Try(time.Now(), func() error {
+						modelName, created := attempt.Metadata()
+						payload, err := common.Marshal(GenerateStartEmptyResponse(info.ResponseId, created, modelName, nil))
+						if err != nil {
+							return err
+						}
+						payload, err = sjson.DeleteBytes(payload, "usage")
+						if err != nil {
+							return err
+						}
+						SetEventStreamHeaders(c)
+						ExtendWriteDeadline(c)
+						// This gateway event must not become upstream usage, an ID,
+						// or a first-content performance observation.
+						if err := writeSSESegment(c, "data: "+string(payload)); err != nil {
+							return err
+						}
+						return FlushWriter(c)
+					})
+				}()
+				if err != nil {
+					senderErr = err
+					return
+				}
+				if finished {
+					return
+				}
+				timer.Reset(attempt.NextCheck(time.Now()))
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+	return func() error {
+		cancel()
+		<-done
+		return senderErr
+	}
+}
+
 func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
 	StreamScannerHandlerWithVisibleText(c, resp, info, StreamChunkVisibleText, dataHandler)
 }
@@ -252,7 +339,7 @@ func StreamScannerHandlerWithVisibleText(c *gin.Context, resp *http.Response, in
 		stopChan    = make(chan bool, 3) // 增加缓冲区避免阻塞
 		scanner     = NewStreamScanner(resp.Body)
 		pingTicker  *time.Ticker
-		writeMutex  sync.Mutex     // Mutex to protect concurrent writes
+		writeMutex  = StreamWriteMutex(c)
 		wg          sync.WaitGroup // 用于等待所有 goroutine 退出
 		cleanupOnce sync.Once
 		stopOnce    sync.Once
@@ -305,8 +392,19 @@ func StreamScannerHandlerWithVisibleText(c *gin.Context, resp *http.Response, in
 	scanner.Split(bufio.ScanLines)
 	copyStreamResponseHeaders(c, resp, info)
 	SetEventStreamHeaders(c)
-
 	ctx = context.WithValue(ctx, "stop_chan", stopChan)
+	earlyChunk := service.ChatEarlyChunk(c)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && earlyChunk != nil {
+		stopEarlyChunk := StartChatEarlyChunkSender(c, info, func(err error) {
+			if IsDownstreamWriteError(err) {
+				info.StreamStatus.SetClientGone(err)
+			} else {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
+			}
+			stop()
+		})
+		defer stopEarlyChunk()
+	}
 
 	// Handle ping data sending with improved error handling
 	if pingEnabled && pingTicker != nil {
@@ -430,6 +528,7 @@ func StreamScannerHandlerWithVisibleText(c *gin.Context, resp *http.Response, in
 				continue
 			}
 			if !strings.HasPrefix(data, "[DONE]") {
+				earlyChunk.UpstreamArrived()
 				if IsNullJSONStreamEvent(data) {
 					scannerEnd = relaycommon.StreamEndReasonScannerErr
 					scannerErr = ErrNullJSONStreamEvent

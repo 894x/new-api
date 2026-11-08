@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/chat_early_chunk_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -52,6 +53,7 @@ type userChannelRoutingResponse struct {
 	StrategyMode         string                          `json:"strategy_mode"`
 	StrategyRevision     string                          `json:"strategy_revision"`
 	StrategyUserOverride bool                            `json:"strategy_user_override"`
+	EarlyChunk           *chat_early_chunk_setting.Pool  `json:"early_chunk,omitempty"`
 	MaxTTFTMS            int64                           `json:"max_ttft_ms"`
 	MaxTPOTMS            int64                           `json:"max_tpot_ms"`
 	Configured           bool                            `json:"configured"`
@@ -271,6 +273,7 @@ func GetUserChannelRouting(c *gin.Context) {
 		for _, strategy := range strategies {
 			if strategy.RoutingGroup == routingGroup {
 				response.StrategyMode, response.StrategyRevision = strategy.Mode, strategy.Revision
+				response.EarlyChunk = strategy.EarlyChunk
 			}
 		}
 		strategy, err := param.RoutingStrategy(routingGroup)
@@ -357,12 +360,14 @@ func GetUserChannelRouting(c *gin.Context) {
 func PatchUserChannelRouting(c *gin.Context) {
 	userID, err := strconv.Atoi(c.Param("id"))
 	var request struct {
-		Model        string                          `json:"model"`
-		RoutingGroup string                          `json:"routing_group"`
-		Revision     string                          `json:"revision"`
-		Overrides    []model.UserChannelRoutingPatch `json:"overrides"`
-		Reset        bool                            `json:"reset"`
-		Strategy     *model.UserRoutingStrategy      `json:"strategy"`
+		Model              string                          `json:"model"`
+		RoutingGroup       string                          `json:"routing_group"`
+		Revision           string                          `json:"revision"`
+		Overrides          []model.UserChannelRoutingPatch `json:"overrides"`
+		Reset              bool                            `json:"reset"`
+		Strategy           *model.UserRoutingStrategy      `json:"strategy"`
+		EarlyChunk         *chat_early_chunk_setting.Pool  `json:"early_chunk"`
+		EarlyChunkRevision string                          `json:"early_chunk_revision"`
 	}
 	if err != nil || userID <= 0 || common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10), &request) != nil || request.RoutingGroup == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid user channel routing"})
@@ -370,6 +375,10 @@ func PatchUserChannelRouting(c *gin.Context) {
 	}
 	if request.Strategy != nil && (request.Reset || request.Overrides != nil) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "strategy changes cannot include channel changes"})
+		return
+	}
+	if request.EarlyChunk != nil && (request.Strategy != nil || request.Reset) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "early chunk channel changes must be saved with the pool"})
 		return
 	}
 	if request.Reset && len(request.Overrides) > 0 {
@@ -382,7 +391,11 @@ func PatchUserChannelRouting(c *gin.Context) {
 	} else if request.Reset {
 		err = model.ResetUserChannelRoutingForGroup(userID, request.Model, request.RoutingGroup, request.Revision)
 	} else {
-		err = model.PatchUserChannelRoutingForGroup(userID, request.Model, request.RoutingGroup, request.Revision, request.Overrides)
+		var earlyChunk []model.UserPoolEarlyChunkPatch
+		if request.EarlyChunk != nil {
+			earlyChunk = append(earlyChunk, model.UserPoolEarlyChunkPatch{Config: request.EarlyChunk, Revision: request.EarlyChunkRevision})
+		}
+		err = model.PatchUserChannelRoutingForGroup(userID, request.Model, request.RoutingGroup, request.Revision, request.Overrides, earlyChunk...)
 	}
 	if err != nil {
 		status := http.StatusInternalServerError

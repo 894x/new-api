@@ -39,12 +39,15 @@ import {
   type UserRoutingPoolConfig,
 } from './api'
 import { DiscountRoutingFields } from './discount-routing-fields'
+import { earlyChunkPoolSchema } from './early-chunk'
+import { EarlyChunkSettings } from './early-chunk-settings'
 import { PoolModeSelect } from './pool-mode-select'
 
 const schema = z.object({
   mode: z.enum(['inherit', 'priority', 'smart', 'discount']),
   max_ttft_ms: z.number().int().min(1).max(3600000),
   max_tpot_ms: z.number().int().min(1).max(60000),
+  early_chunk: earlyChunkPoolSchema,
 })
 type Values = z.infer<typeof schema>
 
@@ -102,6 +105,7 @@ function UserStrategyEditor(props: {
     resolver: zodResolver(schema),
     defaultValues: {
       mode: base.strategy_mode ?? 'inherit',
+      early_chunk: base.early_chunk ?? {},
       max_ttft_ms: base.max_ttft_ms || DEFAULT_DISCOUNT_LIMITS.max_ttft_ms,
       max_tpot_ms: base.max_tpot_ms || DEFAULT_DISCOUNT_LIMITS.max_tpot_ms,
     },
@@ -118,12 +122,14 @@ function UserStrategyEditor(props: {
       ) {
         throw new Error(t('No permission to perform this action'))
       }
+      const { early_chunk, ...strategy } = data
       return saveUserRoutingStrategy(
         base.user_id,
         base.model,
         base.routing_group ?? '',
         {
-          ...data,
+          ...strategy,
+          ...(form.formState.dirtyFields.early_chunk ? { early_chunk } : {}),
           revision: base.strategy_revision ?? '',
           max_ttft_ms: data.mode === 'discount' ? data.max_ttft_ms : 0,
           max_tpot_ms: data.mode === 'discount' ? data.max_tpot_ms : 0,
@@ -185,6 +191,13 @@ function UserStrategyEditor(props: {
       }
     >
       <div className='space-y-4'>
+        <EarlyChunkSettings
+          value={values.early_chunk}
+          disabled={disabled}
+          onChange={(value) =>
+            form.setValue('early_chunk', value, { shouldDirty: true })
+          }
+        />
         <PoolModeSelect
           value={values.mode === 'inherit' ? base.mode : values.mode}
           inherited={values.mode === 'inherit'}
