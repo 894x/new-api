@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -106,21 +107,91 @@ func TestChatEarlyChunkSparseNeighborsAndConservativeBounds(t *testing.T) {
 	for i := range times {
 		times[i] = 750
 	}
-	cells[earlyChunkCellID(2, 3)] = earlyChunkTestCell(t, now, times...)
-	cells[earlyChunkCellID(1, 3)] = earlyChunkTestCell(t, now, times...)
-	prediction := earlyChunkPredict(cells, 2, 3, now, 500, cfg)
+	token := earlyChunkTokenBand(300 * 1024)
+	cells[earlyChunkCellID(token, 3)] = earlyChunkTestCell(t, now, times...)
+	cells[earlyChunkCellID(token-1, 3)] = earlyChunkTestCell(t, now, times...)
+	prediction := earlyChunkPredict(cells, token, 3, now, 500, cfg)
 	assert.True(t, prediction.Eligible)
 	assert.EqualValues(t, 20, prediction.Pending)
 	assert.Equal(t, 2, prediction.MergedCells)
-	assert.False(t, earlyChunkPredict(cells, 2, 4, now, 500, cfg).Eligible, "different cache bands are not merged")
-	assert.False(t, earlyChunkPredict(cells, 2, 3, now, 600, cfg).Eligible, "straddling bins cannot claim imminent content")
+	assert.True(t, earlyChunkPredict(cells, token, 4, now, 500, cfg).Eligible, "sparse cache bands fall back to neighboring reuse ranges")
+	assert.False(t, earlyChunkPredict(cells, token, earlyChunkUnknownCache, now, 500, cfg).Eligible, "unknown reuse is diagnostic only")
+	assert.False(t, earlyChunkPredict(cells, token, 3, now, 600, cfg).Eligible, "straddling bins cannot claim imminent content")
 	assert.Equal(t, 0, earlyChunkTokenBand(1024))
 	assert.Equal(t, 1, earlyChunkTokenBand(1025))
 	assert.Equal(t, earlyChunkOverflowTokens, earlyChunkTokenBand(524289))
 	assert.Equal(t, earlyChunkUnknownTokens, earlyChunkTokenBand(0))
-	assert.Equal(t, 19, earlyChunkCacheBand(10000, 10000, true))
-	assert.Equal(t, 18, earlyChunkCacheBand(9950, 10000, true))
-	assert.Equal(t, earlyChunkUnknownCache, earlyChunkCacheBand(0, 10000, false))
+	assert.Equal(t, 19, earlyChunkCacheBand(token, 10000, 10000, true))
+	assert.Equal(t, 18, earlyChunkCacheBand(token, 9950, 10000, true))
+	assert.Equal(t, earlyChunkUnknownCache, earlyChunkCacheBand(token, 0, 10000, false))
+}
+
+func TestChatEarlyChunkAdaptiveInputAndReuseRanges(t *testing.T) {
+	old := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = old })
+	grid, err := GetChatEarlyChunkGrid(context.Background(), common.GetUUID(), &model.Channel{Id: 86, Type: 1}, -1)
+	require.NoError(t, err)
+	assert.Equal(t, 403, grid.RegularBuckets)
+	for _, tc := range []struct {
+		name                   string
+		tokens, matched        int
+		tokenMax, minimum, max int
+	}{
+		{"one thousand tokens combines reuse ratios", 1024, 9999, 1024, 0, 10000},
+		{"two thousand tokens stays in the combined range", 2048, 0, 2048, 0, 10000},
+		{"above two thousand tokens uses the next input range", 2049, 4999, 4096, 0, 5000},
+		{"half reuse enters the upper range", 4096, 5000, 4096, 5000, 10000},
+		{"eight thousand tokens uses three reuse ranges", 8192, 9000, 8192, 9000, 10000},
+		{"sixteen thousand tokens retains the ninety-five percent edge", 16384, 9499, 16384, 8000, 9500},
+		{"ninety-five percent enters the top small-input range", 16384, 9500, 16384, 9500, 10000},
+		{"above sixteen thousand tokens increases reuse resolution", 16385, 2000, 20480, 2000, 4000},
+		{"medium inputs distinguish ninety-nine percent", 80 * 1024, 9900, 80 * 1024, 9900, 10000},
+		{"long inputs distinguish ninety-nine point five percent", 192 * 1024, 9950, 192 * 1024, 9950, 10000},
+		{"very long inputs retain the finest reuse ranges", 300 * 1024, 9950, 320 * 1024, 9950, 9990},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token := earlyChunkTokenBand(tc.tokens)
+			require.NotNil(t, grid.TokenBands[token].Max)
+			assert.Equal(t, tc.tokenMax, *grid.TokenBands[token].Max)
+			cache := earlyChunkCacheBand(token, tc.matched, 10000, true)
+			index := slices.IndexFunc(grid.CacheBandsByToken[token], func(band EarlyChunkBand) bool { return band.Index == cache })
+			require.NotEqual(t, -1, index)
+			band := grid.CacheBandsByToken[token][index]
+			assert.Equal(t, tc.minimum, band.Min)
+			require.NotNil(t, band.Max)
+			assert.Equal(t, tc.max, *band.Max)
+		})
+	}
+}
+
+func TestChatEarlyChunkSparseReuseFallbackDoesNotDiluteSufficientHistory(t *testing.T) {
+	now := time.Now()
+	cfg := chat_early_chunk_setting.Default()
+	cfg.MinSamples, cfg.EarliestMS = 20, 0
+	cfg.MinLeadMS, cfg.MaxLeadMS = 500, 500
+	token := earlyChunkTokenBand(12 * 1024)
+	cache := earlyChunkCacheBand(token, 8500, 10000, true)
+	neighbor := earlyChunkTokenBand(6 * 1024)
+	neighborCache := earlyChunkCacheBand(neighbor, 8000, 10000, true)
+	times := slices.Repeat([]int64{750}, 10)
+	cells := map[int]*earlyChunkCell{
+		earlyChunkCellID(token, cache):            earlyChunkTestCell(t, now, times...),
+		earlyChunkCellID(neighbor, neighborCache): earlyChunkTestCell(t, now, times...),
+	}
+	prediction := earlyChunkPredict(cells, token, cache, now, 500, cfg)
+	assert.True(t, prediction.Eligible, "reuse intervals with different partitions can be combined after widening")
+	assert.EqualValues(t, 20, prediction.Pending)
+	assert.Equal(t, 2, prediction.MergedCells, "each sample bucket is included once")
+	cells[earlyChunkCellID(token, cache)] = earlyChunkTestCell(t, now, slices.Repeat([]int64{750}, 20)...)
+	cells[earlyChunkCellID(neighbor, neighborCache)] = earlyChunkTestCell(t, now, -1)
+	prediction = earlyChunkPredict(cells, token, cache, now, 500, cfg)
+	assert.True(t, prediction.Eligible)
+	assert.Equal(t, 1, prediction.MergedCells, "sufficient exact history keeps its own prediction")
+	delete(cells, earlyChunkCellID(token, cache))
+	delete(cells, earlyChunkCellID(neighbor, neighborCache))
+	cells[earlyChunkCellID(token, earlyChunkUnknownCache)] = earlyChunkTestCell(t, now, slices.Repeat([]int64{750}, 20)...)
+	assert.Zero(t, earlyChunkPredict(cells, token, cache, now, 500, cfg).Pending, "unknown reuse samples never supply a known-range forecast")
 }
 
 func TestChatEarlyChunkIndependentDefaultAndUserPools(t *testing.T) {

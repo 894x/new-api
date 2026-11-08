@@ -51,24 +51,72 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
   const visible = useMemo(() => {
     const cells = new Map<number, EarlyChunkCell>()
     const tokenBands = new Set<number>()
-    const cacheBands = new Set<number>()
+    const cacheRanges: EarlyChunkBand[] = []
     for (const cell of props.grid.cells) {
       if (cell.metrics.samples <= 0) continue
       cells.set(cell.id, cell)
       tokenBands.add(cell.token_band)
-      cacheBands.add(cell.cache_band)
+      const bands =
+        props.grid.cache_bands_by_token?.[cell.token_band] ??
+        props.grid.cache_bands
+      const range = bands.find((band) => band.index === cell.cache_band)
+      if (range) cacheRanges.push(range)
+    }
+    const rows = props.grid.token_bands.filter((band) =>
+      tokenBands.has(band.index)
+    )
+    const boundaries = new Set<number>()
+    for (const row of rows) {
+      for (const band of props.grid.cache_bands_by_token?.[row.index] ?? []) {
+        if (band.unknown) continue
+        boundaries.add(band.min)
+        boundaries.add(band.max ?? 10000)
+      }
+    }
+    const columns: EarlyChunkBand[] = []
+    for (const band of props.grid.cache_bands) {
+      const populated = cacheRanges.some((range) => {
+        if (band.unknown || range.unknown) return band.unknown === range.unknown
+        return (
+          band.min >= range.min && (band.max ?? 10000) <= (range.max ?? 10000)
+        )
+      })
+      if (!populated) continue
+      const previous = columns.at(-1)
+      if (
+        props.grid.cache_bands_by_token &&
+        previous &&
+        !previous.unknown &&
+        !band.unknown &&
+        previous.max === band.min &&
+        !boundaries.has(band.min)
+      ) {
+        previous.max = band.max
+      } else {
+        columns.push({ ...band })
+      }
     }
     return {
       cells,
-      tokenBands: props.grid.token_bands.filter((band) =>
-        tokenBands.has(band.index)
-      ),
-      cacheBands: props.grid.cache_bands.filter((band) =>
-        cacheBands.has(band.index)
-      ),
+      tokenBands: rows,
+      cacheBands: columns,
     }
-  }, [props.grid.cells, props.grid.token_bands, props.grid.cache_bands])
+  }, [
+    props.grid.cells,
+    props.grid.token_bands,
+    props.grid.cache_bands,
+    props.grid.cache_bands_by_token,
+  ])
   const cell = selected == null ? undefined : visible.cells.get(selected)
+  const selectedToken = props.grid.token_bands.find(
+    (band) => band.index === cell?.token_band
+  )
+  const selectedCache = cell
+    ? (
+        props.grid.cache_bands_by_token?.[cell.token_band] ??
+        props.grid.cache_bands
+      ).find((band) => band.index === cell.cache_band)
+    : undefined
   const tokenLabel = (band: EarlyChunkBand): string => {
     if (band.unknown) return t('Unknown')
     if (band.max == null) return '> 512k'
@@ -240,7 +288,20 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
                   >
                     {tokenLabel(band)}
                   </TableHead>
-                  {visible.cacheBands.map((cache) => {
+                  {(
+                    props.grid.cache_bands_by_token?.[band.index] ??
+                    props.grid.cache_bands
+                  ).map((cache) => {
+                    const colSpan = visible.cacheBands.filter((column) => {
+                      if (column.unknown || cache.unknown) {
+                        return column.unknown === cache.unknown
+                      }
+                      return (
+                        column.min >= cache.min &&
+                        (column.max ?? 10000) <= (cache.max ?? 10000)
+                      )
+                    }).length
+                    if (colSpan === 0) return null
                     const id = band.index * 21 + cache.index
                     const entry = visible.cells.get(id)
                     const label = `${tokenLabel(band)} / ${cacheLabel(cache)}`
@@ -248,6 +309,7 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
                       return (
                         <TableCell
                           key={id}
+                          colSpan={colSpan}
                           className='text-muted-foreground text-center'
                           aria-label={`${label}: ${t('No Data')}`}
                         >
@@ -256,7 +318,7 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
                       )
                     }
                     return (
-                      <TableCell key={id}>
+                      <TableCell key={id} colSpan={colSpan}>
                         <Button
                           variant='ghost'
                           aria-label={label}
@@ -272,6 +334,7 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
                             selected === id && 'ring-2 ring-primary'
                           )}
                         >
+                          <span>{cacheLabel(cache)}</span>
                           <span>
                             n={formatNumber(entry.metrics.samples, locale)}
                           </span>
@@ -311,11 +374,11 @@ export function EarlyChunkGridView(props: { grid: EarlyChunkGrid }) {
         }}
         title={t('Bucket details')}
       >
-        {cell && (
+        {cell && selectedToken && selectedCache && (
           <EarlyChunkCellDetails
             cell={cell}
             grid={props.grid}
-            label={`${tokenLabel(props.grid.token_bands[cell.token_band])} / ${cacheLabel(props.grid.cache_bands[cell.cache_band])}`}
+            label={`${tokenLabel(selectedToken)} / ${cacheLabel(selectedCache)}`}
           />
         )}
       </Dialog>

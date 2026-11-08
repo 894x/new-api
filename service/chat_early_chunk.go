@@ -204,7 +204,7 @@ func BeginChatEarlyChunkAttempt(p *RetryParam, info *relaycommon.RelayInfo, chan
 		}
 	}
 	tokenBand := earlyChunkTokenBand(inputTokens)
-	cacheBand := earlyChunkCacheBand(match.MatchedBytes, inputBytes, cacheKnown)
+	cacheBand := earlyChunkCacheBand(tokenBand, match.MatchedBytes, inputBytes, cacheKnown)
 	started := info.StartTime
 	if info.RequestTiming != nil {
 		if received := info.RequestTiming.Snapshot().RequestReceivedAtMs; received > 0 && received < started.UnixMilli() {

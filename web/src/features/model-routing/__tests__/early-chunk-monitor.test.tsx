@@ -247,6 +247,55 @@ test('empty observations hide the grid and explain collection while off', async 
   ).not.toBeInTheDocument()
 })
 
+test('adaptive reuse ranges merge small-input columns and keep bucket details aligned', async () => {
+  const data = fixture()
+  data.token_bands = [
+    { index: 0, min: 0, max: 1024 },
+    { index: 3, min: 4096, max: 8192 },
+  ]
+  data.cache_bands = [
+    { index: 0, min: 0, max: 1000 },
+    { index: 1, min: 1000, max: 5000 },
+    { index: 5, min: 5000, max: 9000 },
+    { index: 10, min: 9000, max: 10000 },
+    { index: 20, min: 0, unknown: true },
+  ]
+  data.cache_bands_by_token = [
+    [
+      { index: 0, min: 0, max: 10000 },
+      { index: 20, min: 0, unknown: true },
+    ],
+    [],
+    [],
+    [
+      { index: 0, min: 0, max: 5000 },
+      { index: 5, min: 5000, max: 9000 },
+      { index: 10, min: 9000, max: 10000 },
+      { index: 20, min: 0, unknown: true },
+    ],
+  ]
+  data.cells.push({ ...data.cells[0], id: 68, token_band: 3, cache_band: 5 })
+  vi.spyOn(api, 'get').mockResolvedValue({ data: { success: true, data } })
+  const user = userEvent.setup()
+  mount()
+  const table = await screen.findByRole('table')
+  const small = within(table).getByRole('button', { name: '0–1k / 0–100%' })
+  expect(small.closest('td')).toHaveAttribute('colspan', '3')
+  expect(
+    within(table)
+      .getAllByRole('columnheader')
+      .map((header) => header.textContent)
+  ).toEqual(['Input tokens', '0–50%', '50–90%', '90–100%'])
+  expect(
+    within(table).getByRole('button', { name: '4–8k / 50–90%' })
+  ).toBeVisible()
+  small.focus()
+  await user.keyboard('{Enter}')
+  expect(
+    screen.getByRole('region', { name: 'Bucket details' })
+  ).toHaveTextContent('0–1k / 0–100%')
+})
+
 test('only axes with samples remain visible while holes between populated axes stay empty', async () => {
   const data = fixture()
   data.token_bands.splice(

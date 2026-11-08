@@ -22,9 +22,9 @@ const (
 	earlyChunkMaxBuckets     = 4096
 	earlyChunkMaxCellBytes   = 8192
 	earlyChunkMaxSlotSamples = 1_000_000
-	earlyChunkRedisPrefix    = "new-api:{chat-early-chunk:v2}:"
-	earlyChunkUnknownTokens  = 53
-	earlyChunkOverflowTokens = 52
+	earlyChunkRedisPrefix    = "new-api:{chat-early-chunk:v3}:"
+	earlyChunkUnknownTokens  = 42
+	earlyChunkOverflowTokens = 41
 	earlyChunkUnknownCache   = 20
 )
 
@@ -36,9 +36,13 @@ type EarlyChunkBand struct {
 }
 
 func earlyChunkTokenBands() []EarlyChunkBand {
-	bands := make([]EarlyChunkBand, 0, 54)
+	bands := make([]EarlyChunkBand, 0, earlyChunkUnknownTokens+1)
 	minimum := 0
-	for _, segment := range []struct{ end, step int }{{16 * 1024, 1024}, {64 * 1024, 4 * 1024}, {128 * 1024, 8 * 1024}, {256 * 1024, 16 * 1024}, {512 * 1024, 32 * 1024}} {
+	for _, maximum := range []int{1024, 2 * 1024, 4 * 1024, 8 * 1024, 16 * 1024} {
+		bands = append(bands, EarlyChunkBand{Index: len(bands), Min: minimum, Max: common.GetPointer(maximum)})
+		minimum = maximum
+	}
+	for _, segment := range []struct{ end, step int }{{64 * 1024, 4 * 1024}, {128 * 1024, 8 * 1024}, {256 * 1024, 16 * 1024}, {512 * 1024, 32 * 1024}} {
 		for minimum < segment.end {
 			maximum := minimum + segment.step
 			bands = append(bands, EarlyChunkBand{Index: len(bands), Min: minimum, Max: common.GetPointer(maximum)})
@@ -64,7 +68,7 @@ func earlyChunkTokenBand(tokens int) int {
 	if tokens <= 0 {
 		return earlyChunkUnknownTokens
 	}
-	for _, band := range earlyChunkTokenRanges[:52] {
+	for _, band := range earlyChunkTokenRanges[:earlyChunkOverflowTokens] {
 		if tokens <= *band.Max {
 			return band.Index
 		}
@@ -74,17 +78,52 @@ func earlyChunkTokenBand(tokens int) int {
 
 var earlyChunkTokenRanges = earlyChunkTokenBands()
 
-func earlyChunkCacheBand(matched, total int, known bool) int {
+// Cache indices refer to the finest display columns. Short inputs combine
+// those columns into progressively coarser ranges, without duplicating samples.
+func earlyChunkCacheBandsByToken() [][]EarlyChunkBand {
+	ranges := make([][]EarlyChunkBand, len(earlyChunkTokenRanges))
+	for token, band := range earlyChunkTokenRanges {
+		edges := earlyChunkCacheEdges[:]
+		if band.Max != nil {
+			switch {
+			case *band.Max <= 2*1024:
+				edges = []int{0, 10000}
+			case *band.Max <= 4*1024:
+				edges = []int{0, 5000, 10000}
+			case *band.Max <= 8*1024:
+				edges = []int{0, 5000, 9000, 10000}
+			case *band.Max <= 16*1024:
+				edges = []int{0, 5000, 8000, 9500, 10000}
+			case *band.Max <= 64*1024:
+				edges = []int{0, 2000, 4000, 6000, 8000, 9500, 10000}
+			case *band.Max <= 128*1024:
+				edges = []int{0, 2000, 4000, 6000, 8000, 9000, 9500, 9900, 10000}
+			case *band.Max <= 256*1024:
+				edges = []int{0, 1000, 2000, 4000, 6000, 8000, 9000, 9400, 9600, 9800, 9900, 9950, 10000}
+			}
+		}
+		for i, minimum := range edges[:len(edges)-1] {
+			ranges[token] = append(ranges[token], EarlyChunkBand{Index: slices.Index(earlyChunkCacheEdges[:], minimum), Min: minimum, Max: common.GetPointer(edges[i+1])})
+		}
+		ranges[token] = append(ranges[token], EarlyChunkBand{Index: earlyChunkUnknownCache, Unknown: true})
+	}
+	return ranges
+}
+
+var earlyChunkCacheRanges = earlyChunkCacheBandsByToken()
+
+func earlyChunkCacheBand(token, matched, total int, known bool) int {
 	if !known || total <= 0 {
 		return earlyChunkUnknownCache
 	}
 	ratio := int64(max(0, matched)) * 10000 / int64(total)
-	for i := range len(earlyChunkCacheEdges) - 1 {
-		if ratio < int64(earlyChunkCacheEdges[i+1]) {
-			return i
+	bands := earlyChunkCacheRanges[token]
+	for _, band := range bands[:len(bands)-1] {
+		if ratio < int64(*band.Max) {
+			return band.Index
 		}
 	}
-	return 19
+	return bands[len(bands)-2].Index
 }
 
 func earlyChunkCellID(tokens, cache int) int { return tokens*21 + cache }
@@ -179,7 +218,7 @@ func earlyChunkScopeKey(name string, channel *model.Channel, age int) string {
 }
 
 func earlyChunkChannelScopeKey(name string, channel chatPrefixChannel, age int) string {
-	encoded, _ := common.Marshal([]any{"grid-v2", name, channel.ID, channel, age})
+	encoded, _ := common.Marshal([]any{"grid-v3", name, channel.ID, channel, age})
 	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
 
@@ -387,12 +426,36 @@ func (total *earlyChunkAggregate) prediction(elapsed int64, config chat_early_ch
 
 func earlyChunkNeighborIDs(token, cache int) []int {
 	ids := []int{earlyChunkCellID(token, cache)}
-	if token >= 52 || cache == earlyChunkUnknownCache {
+	if token >= earlyChunkOverflowTokens || cache == earlyChunkUnknownCache {
 		return ids
 	}
-	for _, delta := range []int{-1, 1, -2, 2} {
-		if neighbor := token + delta; neighbor >= 0 && neighbor < 52 {
-			ids = append(ids, earlyChunkCellID(neighbor, cache))
+	bands := earlyChunkCacheRanges[token]
+	position := slices.IndexFunc(bands, func(band EarlyChunkBand) bool { return band.Index == cache })
+	if position < 0 {
+		return ids
+	}
+	seen := map[int]bool{ids[0]: true}
+	// Start with the exact reuse interval, then widen only when it cannot supply
+	// enough pending samples. A neighboring token row may have a different
+	// partition: include only whole buckets inside the current reuse interval.
+	for radius := range len(bands) - 1 {
+		minimum := bands[max(0, position-radius)].Min
+		maximum := *bands[min(len(bands)-2, position+radius)].Max
+		for _, delta := range []int{0, -1, 1, -2, 2} {
+			neighbor := token + delta
+			if neighbor < 0 || neighbor >= earlyChunkOverflowTokens {
+				continue
+			}
+			for _, band := range earlyChunkCacheRanges[neighbor] {
+				if band.Unknown || band.Min < minimum || *band.Max > maximum {
+					continue
+				}
+				id := earlyChunkCellID(neighbor, band.Index)
+				if !seen[id] {
+					ids = append(ids, id)
+					seen[id] = true
+				}
+			}
 		}
 	}
 	return ids
@@ -535,7 +598,7 @@ func earlyChunkReadCells(ctx context.Context, scope string, ids []int, now time.
 			if err != nil {
 				return nil, 0, 0, err
 			}
-			if n > 54*21 {
+			if n > (earlyChunkUnknownTokens+1)*21 {
 				return nil, 0, 0, fmt.Errorf("early chunk table exceeds cell limit")
 			}
 			values, err = client.HGetAll(ctx, key).Result()
@@ -563,7 +626,7 @@ func earlyChunkReadCells(ctx context.Context, scope string, ids []int, now time.
 		}
 		for field, value := range values {
 			id, err := strconv.Atoi(field)
-			if err != nil || id < 0 || id >= 54*21 {
+			if err != nil || id < 0 || id >= (earlyChunkUnknownTokens+1)*21 {
 				return nil, 0, 0, fmt.Errorf("invalid early chunk cell id")
 			}
 			cell, err := decodeEarlyChunkCell(value, age)
@@ -590,7 +653,7 @@ func earlyChunkReadCells(ctx context.Context, scope string, ids []int, now time.
 	chatEarlyChunkHistory.Lock()
 	defer chatEarlyChunkHistory.Unlock()
 	if ids != nil {
-		// Prediction touches at most five cells; global scans belong to the
+		// Prediction touches a bounded neighborhood; global scans belong to the
 		// low-frequency monitor, never the request path.
 		for _, id := range ids {
 			key := earlyChunkStoredKey{Scope: scope, Cell: id}
@@ -625,7 +688,7 @@ func earlyChunkReadCells(ctx context.Context, scope string, ids []int, now time.
 }
 
 func earlyChunkRecordCell(ctx context.Context, scope string, id int, record earlyChunkRecord, now time.Time, age int) error {
-	if id < 0 || id >= 54*21 || record.LatencyMS < 0 || record.LatencyMS > math.MaxInt32 || record.GapMS != nil && (*record.GapMS < 0 || *record.GapMS > math.MaxInt32) {
+	if id < 0 || id >= (earlyChunkUnknownTokens+1)*21 || record.LatencyMS < 0 || record.LatencyMS > math.MaxInt32 || record.GapMS != nil && (*record.GapMS < 0 || *record.GapMS > math.MaxInt32) {
 		return fmt.Errorf("invalid early chunk observation")
 	}
 	if !slices.Contains([]string{"content", "failure", "cancel"}, record.Kind) || !slices.Contains([]string{"completed", "failed", "cancelled"}, record.Outcome) || record.Kind != "content" && (record.Outcome == "completed" || record.GapMS != nil || record.Met) || record.Sent && !record.Decision || record.Met && !record.Decision {
@@ -737,26 +800,27 @@ type EarlyChunkCellView struct {
 }
 
 type ChatEarlyChunkGrid struct {
-	Model           string                          `json:"model"`
-	ChannelID       int                             `json:"channel_id"`
-	ChannelName     string                          `json:"channel_name"`
-	Scope           string                          `json:"scope"`
-	Backend         string                          `json:"backend"`
-	TokenBands      []EarlyChunkBand                `json:"token_bands"`
-	CacheBands      []EarlyChunkBand                `json:"cache_bands"`
-	LatencyBoundsMS []int64                         `json:"latency_bounds_ms"`
-	RegularBuckets  int                             `json:"regular_buckets"`
-	TrackedBuckets  int                             `json:"tracked_buckets"`
-	MaxBuckets      int                             `json:"max_buckets"`
-	PayloadBytes    int64                           `json:"payload_bytes"`
-	ReadErrors      uint64                          `json:"node_read_errors"`
-	WriteErrors     uint64                          `json:"node_write_errors"`
-	Evictions       uint64                          `json:"node_evictions"`
-	ProbeMS         int64                           `json:"probe_ms"`
-	Config          chat_early_chunk_setting.Config `json:"config"`
-	Summary         EarlyChunkCellMetrics           `json:"summary"`
-	Cells           []EarlyChunkCellView            `json:"cells"`
-	GeneratedAtMS   int64                           `json:"generated_at_ms"`
+	Model             string                          `json:"model"`
+	ChannelID         int                             `json:"channel_id"`
+	ChannelName       string                          `json:"channel_name"`
+	Scope             string                          `json:"scope"`
+	Backend           string                          `json:"backend"`
+	TokenBands        []EarlyChunkBand                `json:"token_bands"`
+	CacheBands        []EarlyChunkBand                `json:"cache_bands"`
+	CacheBandsByToken [][]EarlyChunkBand              `json:"cache_bands_by_token"`
+	LatencyBoundsMS   []int64                         `json:"latency_bounds_ms"`
+	RegularBuckets    int                             `json:"regular_buckets"`
+	TrackedBuckets    int                             `json:"tracked_buckets"`
+	MaxBuckets        int                             `json:"max_buckets"`
+	PayloadBytes      int64                           `json:"payload_bytes"`
+	ReadErrors        uint64                          `json:"node_read_errors"`
+	WriteErrors       uint64                          `json:"node_write_errors"`
+	Evictions         uint64                          `json:"node_evictions"`
+	ProbeMS           int64                           `json:"probe_ms"`
+	Config            chat_early_chunk_setting.Config `json:"config"`
+	Summary           EarlyChunkCellMetrics           `json:"summary"`
+	Cells             []EarlyChunkCellView            `json:"cells"`
+	GeneratedAtMS     int64                           `json:"generated_at_ms"`
 }
 
 func GetChatEarlyChunkGrid(ctx context.Context, name string, channel *model.Channel, probeMS int64) (*ChatEarlyChunkGrid, error) {
@@ -770,7 +834,11 @@ func GetChatEarlyChunkGrid(ctx context.Context, name string, channel *model.Chan
 		earlyChunkReadErrors.Add(1)
 		return nil, err
 	}
-	result := &ChatEarlyChunkGrid{Model: name, ChannelID: channel.Id, ChannelName: channel.Name, Scope: "model_channel", Backend: "memory", TokenBands: earlyChunkTokenRanges, CacheBands: earlyChunkCacheBands(), LatencyBoundsMS: earlyChunkBounds[:earlyChunkHistogramSize-1], RegularBuckets: 52 * 20, TrackedBuckets: tracked, MaxBuckets: earlyChunkMaxBuckets, PayloadBytes: payload, ReadErrors: earlyChunkReadErrors.Load(), WriteErrors: earlyChunkWriteErrors.Load(), Evictions: earlyChunkEvictions.Load(), ProbeMS: probeMS, Config: config, GeneratedAtMS: now.UnixMilli(), Cells: make([]EarlyChunkCellView, 0, len(cells))}
+	regularBuckets := 0
+	for _, bands := range earlyChunkCacheRanges[:earlyChunkOverflowTokens] {
+		regularBuckets += len(bands) - 1
+	}
+	result := &ChatEarlyChunkGrid{Model: name, ChannelID: channel.Id, ChannelName: channel.Name, Scope: "model_channel", Backend: "memory", TokenBands: earlyChunkTokenRanges, CacheBands: earlyChunkCacheBands(), CacheBandsByToken: earlyChunkCacheRanges, LatencyBoundsMS: earlyChunkBounds[:earlyChunkHistogramSize-1], RegularBuckets: regularBuckets, TrackedBuckets: tracked, MaxBuckets: earlyChunkMaxBuckets, PayloadBytes: payload, ReadErrors: earlyChunkReadErrors.Load(), WriteErrors: earlyChunkWriteErrors.Load(), Evictions: earlyChunkEvictions.Load(), ProbeMS: probeMS, Config: config, GeneratedAtMS: now.UnixMilli(), Cells: make([]EarlyChunkCellView, 0, len(cells))}
 	if common.RedisEnabled {
 		result.Backend = "redis"
 	}

@@ -76,6 +76,7 @@ export interface EarlyChunkGrid {
   backend: 'redis' | 'memory'
   token_bands: EarlyChunkBand[]
   cache_bands: EarlyChunkBand[]
+  cache_bands_by_token?: EarlyChunkBand[][]
   latency_bounds_ms: number[]
   regular_buckets: number
   tracked_buckets: number
