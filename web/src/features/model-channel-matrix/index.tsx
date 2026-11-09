@@ -17,26 +17,54 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { getRouteApi } from '@tanstack/react-router'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 import { ModelRoutingWorkspace } from '@/features/model-routing'
+import { RoutingWorkspaceDisplay } from '@/features/model-routing/routing-workspace-display'
 import { RoutingScopeSelect } from '@/features/model-routing/scope-select'
 import { UserRoutingWorkspace } from '@/features/model-routing/user-workspace'
+import {
+  MonitorLayoutPicker,
+  type MonitorLayout,
+} from '@/features/routing-monitor/monitor-layout-picker'
 
 import { GroupModelWorkspace } from './components/group-model-workspace'
 import { MatrixWorkspace } from './components/matrix-workspace'
 
 const route = getRouteApi('/_authenticated/model-channel-matrix/')
+const MonitorBoard = lazy(() =>
+  import('@/features/routing-monitor/monitor-board').then((module) => ({
+    default: module.MonitorBoard,
+  }))
+)
 
 export function ModelChannelMatrix() {
   const { t } = useTranslation()
   const search = route.useSearch()
   const navigate = route.useNavigate()
-  const [view, setView] = useState<'pools' | 'matrix' | 'groups'>('pools')
+  const [view, setView] = useState<'pools' | 'matrix' | 'groups' | 'monitor'>(
+    'pools'
+  )
+  const [monitorLayout, setMonitorLayout] = useState<MonitorLayout>({
+    rows: 2,
+    columns: 2,
+  })
   const [dirty, setDirty] = useState(false)
+  const layoutPicker = (
+    <MonitorLayoutPicker
+      value={view === 'monitor' ? monitorLayout : undefined}
+      disabled={dirty}
+      onChange={(layout) => {
+        if (dirty) return
+        setMonitorLayout(layout)
+        setView('monitor')
+      }}
+    />
+  )
   const scopeSelect = (
     <RoutingScopeSelect
       userId={search.user_id}
@@ -83,46 +111,76 @@ export function ModelChannelMatrix() {
       />
     )
   }
+  if (view === 'monitor') {
+    workspace = (
+      <RoutingWorkspaceDisplay
+        toolbar={
+          <p className='min-w-0 flex-1 font-medium'>
+            {t('Multi-panel monitoring')}
+          </p>
+        }
+        refreshAction={null}
+        toolbarActions={layoutPicker}
+      >
+        <Suspense
+          fallback={
+            <LoadingState message={t('Loading routing observations...')} />
+          }
+        >
+          <MonitorBoard layout={monitorLayout} userId={search.user_id} />
+        </Suspense>
+      </RoutingWorkspaceDisplay>
+    )
+  }
   return (
     <SectionPageLayout fixedContent>
       <SectionPageLayout.Title>{t('Model routing')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
         <div className='flex h-full min-h-0 flex-col gap-3'>
-          {!search.user_id && view !== 'pools' && (
+          {!search.user_id && view !== 'pools' && view !== 'monitor' && (
             <div className='flex flex-wrap gap-2'>{scopeSelect}</div>
           )}
-          {!search.user_id && (
-            <div
-              className='flex shrink-0 flex-wrap gap-2'
-              role='group'
-              aria-label={t('Routing view')}
-            >
-              <Button
-                variant={view === 'pools' ? 'default' : 'outline'}
-                size='sm'
-                disabled={dirty && view !== 'pools'}
-                onClick={() => setView('pools')}
+          <div className='flex shrink-0 flex-wrap items-center justify-between gap-2'>
+            {(!search.user_id || view === 'monitor') && (
+              <div
+                className='flex shrink-0 flex-wrap gap-2'
+                role='group'
+                aria-label={t('Routing view')}
               >
-                {t('Routing pools')}
-              </Button>
-              <Button
-                variant={view === 'groups' ? 'default' : 'outline'}
-                size='sm'
-                disabled={dirty && view !== 'groups'}
-                onClick={() => setView('groups')}
-              >
-                {t('Group-model matrix')}
-              </Button>
-              <Button
-                variant={view === 'matrix' ? 'default' : 'outline'}
-                size='sm'
-                disabled={dirty}
-                onClick={() => setView('matrix')}
-              >
-                {t('Channel defaults matrix')}
-              </Button>
-            </div>
-          )}
+                <Button
+                  variant={view === 'pools' ? 'default' : 'outline'}
+                  size='sm'
+                  disabled={dirty && view !== 'pools'}
+                  onClick={() => setView('pools')}
+                >
+                  {t('Routing pools')}
+                </Button>
+                {!search.user_id && (
+                  <Button
+                    variant={view === 'groups' ? 'default' : 'outline'}
+                    size='sm'
+                    disabled={dirty && view !== 'groups'}
+                    onClick={() => setView('groups')}
+                  >
+                    {t('Group-model matrix')}
+                  </Button>
+                )}
+                {!search.user_id && (
+                  <Button
+                    variant={view === 'matrix' ? 'default' : 'outline'}
+                    size='sm'
+                    disabled={dirty}
+                    onClick={() => setView('matrix')}
+                  >
+                    {t('Channel defaults matrix')}
+                  </Button>
+                )}
+              </div>
+            )}
+            {view !== 'monitor' && (
+              <div className='ml-auto'>{layoutPicker}</div>
+            )}
+          </div>
           {workspace}
         </div>
       </SectionPageLayout.Content>

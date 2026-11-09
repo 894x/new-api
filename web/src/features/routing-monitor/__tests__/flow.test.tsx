@@ -27,6 +27,37 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+test('a monitor panel uses a compact three-column flow when its own width reaches 22rem', () => {
+  const matchMedia = window.matchMedia
+  vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+    ...matchMedia(query),
+    matches: false,
+  }))
+  const route: MonitorRoute = {
+    group: 'standard',
+    model: 'base-model',
+    policy: '',
+    mode: 'priority',
+    dynamic: false,
+    last_seen: 0,
+    window_seconds: 60,
+    selection_count: 0,
+    truncated: false,
+    channels: [],
+    history: [],
+    events: [],
+  }
+  const view = render(<RoutingFlow route={route} at={0} paused={false} panel />)
+  const diagram = view.container.querySelector('[data-routing-flow-layout]')
+  expect(diagram).toHaveClass(
+    'grid-cols-1',
+    '@min-[22rem]/monitor-panel:grid-cols-[4rem_6.5rem_minmax(0,16rem)]'
+  )
+  expect(diagram).not.toHaveClass(
+    'md:grid-cols-[110px_165px_minmax(210px,260px)]'
+  )
+})
+
 test('each physical request animates once along its own channel and repeated snapshots do not replay it', async () => {
   vi.useFakeTimers()
   const paths = new Map([

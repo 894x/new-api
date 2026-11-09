@@ -28,6 +28,7 @@ export function ChannelStatus(props: {
   channel: MonitorChannel
   at: number
   priority?: boolean
+  compact?: boolean
 }) {
   const { t } = useTranslation()
   const tone = monitorChannelTone(props.channel, props.at, props.priority)
@@ -57,6 +58,7 @@ export function ChannelStatus(props: {
       title={props.channel.status_reason || label}
       className={cn(
         'border text-xs',
+        props.compact && 'h-4 px-1 text-[10px]',
         tone === 'neutral' && 'border-border text-foreground',
         tone === 'danger' && 'border-destructive/30 bg-destructive/10',
         tone === 'warning' && 'border-warning/40 bg-warning/10'

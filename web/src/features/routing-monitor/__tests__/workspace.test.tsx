@@ -201,6 +201,7 @@ function mount(
     fixedGroup?: string
     fixedModel?: string
     embedded?: boolean
+    panel?: boolean
     headerContainer?: HTMLElement | null
   }
 ) {
@@ -305,6 +306,107 @@ test('the embedded overview remains in place while observations load', async () 
   ).toBeVisible()
 })
 
+test.each(['user', 'default_pool'] as const)(
+  'a monitor panel keeps compact header controls and exposes %s pool details in its floating info panel',
+  async (source) => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    headerHosts.push(host)
+    mockApi({ source })
+    mount(7, undefined, {
+      fixedGroup: 'standard',
+      fixedModel: 'kimi-k3',
+      panel: true,
+      headerContainer: host,
+    })
+    const content = screen.getByRole('region', { name: 'Live routing flow' })
+    await within(content).findByRole('list', { name: 'Candidate channels' })
+    expect(
+      within(host).getByRole('combobox', { name: 'Monitor node' })
+    ).toBeVisible()
+    expect(within(host).getByRole('button', { name: 'Refresh' })).toBeVisible()
+    expect(
+      within(host).getByRole('button', { name: 'Refresh' })
+    ).not.toHaveTextContent('Refresh')
+    expect(within(host).getByLabelText('User #7')).toBeVisible()
+    expect(within(host).queryByText(/Snapshot time/)).not.toBeInTheDocument()
+    await userEvent.click(
+      within(host).getByRole('button', { name: 'Routing observations' })
+    )
+    const details = screen.getByRole('dialog', { name: 'Routing observations' })
+    expect(within(details).getByText(/Snapshot time/)).toBeVisible()
+    expect(
+      within(details).getByText(
+        'Each dot represents one upstream attempt on its channel, including retries.'
+      )
+    ).toBeVisible()
+    expect(
+      within(content).queryByText(
+        'Each dot represents one upstream attempt on its channel, including retries.'
+      )
+    ).not.toBeInTheDocument()
+    expect(
+      within(details).getByText(
+        source === 'user' ? 'User override' : 'Inherited base pool'
+      )
+    ).toBeVisible()
+    if (source === 'default_pool') {
+      expect(
+        within(details).getByText(
+          'This user inherits the base pool. The displayed traffic is shared base-pool traffic, not traffic attributed only to this user.'
+        )
+      ).toBeVisible()
+    }
+    await userEvent.keyboard('{Escape}')
+    expect(
+      within(content).queryByRole('combobox', { name: 'Monitor node' })
+    ).not.toBeInTheDocument()
+    const tabs = within(content).getByRole('tablist', {
+      name: 'Routing observation view',
+    })
+    expect(tabs.closest('[data-slot=card-header]')).toHaveClass(
+      'absolute',
+      'pointer-events-none'
+    )
+    expect(tabs).toHaveClass('pointer-events-auto')
+    expect(within(tabs).getAllByRole('tab')).toHaveLength(4)
+    const overview = within(content).getByRole('region', {
+      name: 'Routing overview',
+    })
+    expect(overview).toHaveClass('shrink-0')
+    expect(within(overview).getByText('Primary destination')).toBeVisible()
+    await userEvent.click(
+      within(tabs).getByRole('tab', { name: 'Traffic share history' })
+    )
+    expect(
+      within(content).getByRole('region', { name: 'Traffic share history' })
+    ).toBeVisible()
+    expect(overview).toBeVisible()
+    await userEvent.click(
+      within(tabs).getByRole('tab', { name: 'Routing changes' })
+    )
+    expect(
+      within(content).getByRole('list', { name: 'Routing changes' })
+    ).toBeVisible()
+    expect(
+      within(content).queryByRole('list', { name: 'Candidate channels' })
+    ).not.toBeInTheDocument()
+    expect(
+      within(tabs).getByRole('tab', { name: 'Dynamic flow' })
+    ).not.toHaveTextContent('Dynamic flow')
+    await userEvent.click(
+      within(tabs).getByRole('tab', { name: 'Channel details' })
+    )
+    expect(within(content).getByRole('table')).toBeVisible()
+    await userEvent.keyboard('{ArrowLeft}{Enter}')
+    await waitFor(() =>
+      expect(
+        within(tabs).getByRole('tab', { name: 'Dynamic flow' })
+      ).toHaveAttribute('aria-selected', 'true')
+    )
+  }
+)
+
 test('embedded controls and monitoring notices render in the global header instead of duplicating the body title', async () => {
   const host = document.createElement('div')
   document.body.append(host)
@@ -350,6 +452,37 @@ test('embedded controls and monitoring notices render in the global header inste
   expect(
     within(host).getByRole('button', { name: 'Resume live updates' })
   ).toHaveAttribute('aria-pressed', 'true')
+})
+
+test('compact history and event views show empty states while keeping the summary visible', async () => {
+  const snapshot = snapshotFixture()
+  for (const route of snapshot.nodes[0].routes) {
+    route.history = []
+    route.events = []
+  }
+  mockApi({ snapshot })
+  mount(undefined, undefined, {
+    fixedGroup: 'standard',
+    fixedModel: 'kimi-k3',
+    panel: true,
+  })
+  await screen.findByRole('list', { name: 'Candidate channels' })
+  const tabs = screen.getByRole('tablist', { name: 'Routing observation view' })
+  await userEvent.click(
+    within(tabs).getByRole('tab', { name: 'Traffic share history' })
+  )
+  expect(
+    within(
+      screen.getByRole('region', { name: 'Traffic share history' })
+    ).getByText('No Data')
+  ).toBeVisible()
+  await userEvent.click(
+    within(tabs).getByRole('tab', { name: 'Routing changes' })
+  )
+  expect(
+    screen.getByText('No allocation changes in this observation window')
+  ).toBeVisible()
+  expect(screen.getByRole('region', { name: 'Routing overview' })).toBeVisible()
 })
 
 test('the embedded history and event cards share a bounded footer while all recent events remain scrollable', async () => {

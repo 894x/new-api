@@ -23,6 +23,7 @@ import {
   StaticDataTable,
   type StaticDataTableColumn,
 } from '@/components/data-table'
+import { EmptyState } from '@/components/empty-state'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   ChartContainer,
@@ -153,6 +154,7 @@ export function ShareHistory(props: {
   route: MonitorRoute
   names?: Map<number, string>
   fill?: boolean
+  compact?: boolean
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
@@ -185,97 +187,125 @@ export function ShareHistory(props: {
       role='region'
       aria-label={t('Traffic share history')}
       data-routing-history-panel=''
-      className={props.fill ? 'xl:h-full xl:min-h-0' : undefined}
+      className={cn(
+        props.fill && 'xl:h-full xl:min-h-0',
+        props.compact &&
+          'h-full min-h-0 gap-2 rounded-none bg-transparent py-0 ring-0'
+      )}
     >
-      <CardHeader className='shrink-0'>
-        <CardTitle>{t('Traffic share history')}</CardTitle>
-        <p className='text-muted-foreground text-xs'>
-          {t('Selection share over the last {{seconds}} seconds', {
-            seconds: props.route.window_seconds,
-          })}
-        </p>
-      </CardHeader>
+      {!props.compact && (
+        <CardHeader className='shrink-0'>
+          <CardTitle>{t('Traffic share history')}</CardTitle>
+          <p className='text-muted-foreground text-xs'>
+            {t('Selection share over the last {{seconds}} seconds', {
+              seconds: props.route.window_seconds,
+            })}
+          </p>
+        </CardHeader>
+      )}
       <CardContent
-        className={
-          props.fill ? 'xl:flex xl:min-h-0 xl:flex-1 xl:flex-col' : undefined
-        }
+        className={cn(
+          props.fill && 'xl:flex xl:min-h-0 xl:flex-1 xl:flex-col',
+          props.compact && 'flex min-h-0 flex-1 flex-col px-3'
+        )}
       >
         <div
           className={cn(
             'mb-3 flex flex-wrap gap-4 text-xs',
-            props.fill && 'xl:max-h-12 xl:shrink-0 xl:overflow-y-auto'
+            props.fill && 'xl:max-h-12 xl:shrink-0 xl:overflow-y-auto',
+            props.compact &&
+              'mb-1 h-4 shrink-0 flex-nowrap gap-2 overflow-hidden'
           )}
         >
           {props.route.channels.map((channel) => (
             <span
               key={channel.channel_id}
-              className='flex min-w-0 items-center gap-1.5'
+              title={
+                props.names?.get(channel.channel_id) || `#${channel.channel_id}`
+              }
+              className={cn(
+                'flex min-w-0 items-center gap-1.5',
+                props.compact && 'flex-1'
+              )}
             >
               <i
                 className='size-2 shrink-0 rounded-full'
                 style={{ background: channelColor(channel.channel_id) }}
               />
-              <span className='break-all'>
+              <span
+                className={props.compact ? 'truncate text-[10px]' : 'break-all'}
+              >
                 {props.names?.get(channel.channel_id) ||
                   `#${channel.channel_id}`}
               </span>
             </span>
           ))}
         </div>
-        <ChartContainer
-          className={cn(
-            'h-48 w-full',
-            props.fill && 'xl:aspect-auto xl:h-auto xl:min-h-0 xl:flex-1'
-          )}
-          config={config}
-          aria-label={t('Channel selection share history')}
-        >
-          <LineChart
-            data={rows}
-            margin={{ top: 10, right: 10, left: -15, bottom: 0 }}
-            accessibilityLayer
+        {props.compact && rows.length === 0 ? (
+          <EmptyState title={t('No Data')} className='min-h-0 p-3' />
+        ) : (
+          <ChartContainer
+            className={cn(
+              'h-48 w-full',
+              props.fill && 'xl:aspect-auto xl:h-auto xl:min-h-0 xl:flex-1',
+              props.compact && 'aspect-auto h-full min-h-0 flex-1'
+            )}
+            config={config}
+            aria-label={t('Channel selection share history')}
           >
-            <CartesianGrid vertical={false} />
-            <XAxis
-              dataKey='at'
-              type='number'
-              domain={['dataMin', 'dataMax']}
-              tickFormatter={time}
-              minTickGap={55}
-            />
-            <YAxis
-              domain={[0, 100]}
-              tickCount={3}
-              tickFormatter={(value) => `${value}%`}
-              width={50}
-            />
-            <ChartTooltip
-              content={
-                <ChartTooltipContent
-                  labelFormatter={(value) => time(Number(value))}
-                  formatter={(value, name) => (
-                    <span>
-                      {config[String(name)]?.label}:{' '}
-                      {formatNumber(Number(value), locale)}%
-                    </span>
-                  )}
-                />
+            <LineChart
+              data={rows}
+              margin={
+                props.compact
+                  ? { top: 4, right: 2, left: 2, bottom: 4 }
+                  : { top: 10, right: 10, left: -15, bottom: 0 }
               }
-            />
-            {props.route.channels.map((channel) => (
-              <Line
-                key={channel.channel_id}
-                dataKey={`channel${channel.channel_id}`}
-                type='linear'
-                stroke={`var(--color-channel${channel.channel_id})`}
-                strokeWidth={2}
-                dot={false}
-                connectNulls={false}
-                isAnimationActive={false}
+              accessibilityLayer
+            >
+              <CartesianGrid vertical={false} />
+              <XAxis
+                hide={props.compact}
+                dataKey='at'
+                type='number'
+                domain={['dataMin', 'dataMax']}
+                tickFormatter={time}
+                minTickGap={55}
               />
-            ))}
-          </LineChart>
-        </ChartContainer>
+              <YAxis
+                hide={props.compact}
+                domain={[0, 100]}
+                tickCount={3}
+                tickFormatter={(value) => `${value}%`}
+                width={50}
+              />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={(value) => time(Number(value))}
+                    formatter={(value, name) => (
+                      <span>
+                        {config[String(name)]?.label}:{' '}
+                        {formatNumber(Number(value), locale)}%
+                      </span>
+                    )}
+                  />
+                }
+              />
+              {props.route.channels.map((channel) => (
+                <Line
+                  key={channel.channel_id}
+                  dataKey={`channel${channel.channel_id}`}
+                  type='linear'
+                  stroke={`var(--color-channel${channel.channel_id})`}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls={false}
+                  isAnimationActive={false}
+                />
+              ))}
+            </LineChart>
+          </ChartContainer>
+        )}
       </CardContent>
     </Card>
   )
@@ -311,6 +341,7 @@ export function RoutingEvents(props: {
   route: MonitorRoute
   names?: Map<number, string>
   fill?: boolean
+  compact?: boolean
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
@@ -319,18 +350,25 @@ export function RoutingEvents(props: {
       role='region'
       aria-label={t('Routing changes')}
       data-routing-events-panel=''
-      className={props.fill ? 'xl:h-full xl:min-h-0' : undefined}
+      className={cn(
+        props.fill && 'xl:h-full xl:min-h-0',
+        props.compact &&
+          'h-full min-h-0 gap-2 rounded-none bg-transparent py-0 ring-0'
+      )}
     >
-      <CardHeader className='shrink-0'>
-        <CardTitle>{t('Routing changes')}</CardTitle>
-      </CardHeader>
+      {!props.compact && (
+        <CardHeader className='shrink-0'>
+          <CardTitle>{t('Routing changes')}</CardTitle>
+        </CardHeader>
+      )}
       <CardContent
         data-routing-event-scroll=''
-        className={
-          props.fill
-            ? 'xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:overscroll-contain'
-            : undefined
-        }
+        className={cn(
+          props.fill &&
+            'xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:overscroll-contain',
+          props.compact &&
+            'min-h-0 flex-1 overflow-y-auto overscroll-contain px-3'
+        )}
       >
         {props.route.events.length === 0 && (
           <p className='text-muted-foreground py-4 text-sm'>

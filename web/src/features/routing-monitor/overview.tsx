@@ -33,6 +33,7 @@ export function RoutingOverview(props: {
   names?: Map<number, string>
   loading: boolean
   embedded?: boolean
+  compact?: boolean
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
@@ -86,99 +87,108 @@ export function RoutingOverview(props: {
       seconds: props.route?.window_seconds ?? 60,
     })
   }
+  const metrics = [
+    {
+      key: 'selections',
+      title: t('Routing selections'),
+      value: props.route
+        ? formatNumber(props.route.selection_count, locale)
+        : '—',
+      description: t('Last {{seconds}} seconds', {
+        seconds: props.route?.window_seconds ?? 60,
+      }),
+    },
+    {
+      key: 'primary',
+      title: t('Primary destination'),
+      value: primary
+        ? props.names?.get(primary.channel_id) || `#${primary.channel_id}`
+        : '—',
+      description: `${primary ? `${formatNumber(primary.target_share * 100, locale)}%` : '—'} · ${observed ? t('Selection share') : t('Target share')}`,
+    },
+    {
+      key: 'quality',
+      title: metricTitle,
+      value: metricValue,
+      description: metricDescription,
+    },
+    {
+      key: 'availability',
+      title: priority
+        ? t('Available channels')
+        : t('Verified healthy channels'),
+      value: props.route ? formatNumber(availableCount, locale) : '—',
+      suffix: ` / ${props.route ? formatNumber(totalCount, locale) : '—'}`,
+      description: priority
+        ? t('Channel auto-disable and recovery')
+        : t('Quality samples are shared by channel and model'),
+    },
+  ]
   return (
     <section
       aria-label={t('Routing overview')}
       aria-busy={props.loading}
       data-routing-monitor-overview=''
       className={cn(
-        'grid min-w-0 grid-cols-2 gap-3',
-        props.embedded
-          ? 'order-1 self-start xl:col-start-1 xl:row-start-1'
-          : 'xl:grid-cols-4'
+        'grid min-w-0 grid-cols-2',
+        props.compact
+          ? 'bg-muted/20 shrink-0 gap-x-3 gap-y-2 rounded-lg border px-3 py-2 @min-[28rem]/monitor-panel:grid-cols-4'
+          : 'gap-3',
+        !props.compact &&
+          (props.embedded
+            ? 'order-1 self-start xl:col-start-1 xl:row-start-1'
+            : 'xl:grid-cols-4')
       )}
     >
-      <Card size='sm'>
-        <CardContent>
-          <p className='text-muted-foreground text-xs'>
-            {t('Routing selections')}
-          </p>
-          {props.loading ? (
-            <Skeleton className='my-2 h-7 w-20' />
-          ) : (
-            <p className='mt-2 text-2xl font-medium tabular-nums'>
-              {props.route
-                ? formatNumber(props.route.selection_count, locale)
-                : '—'}
+      {metrics.map((metric) =>
+        props.compact ? (
+          <div key={metric.key} className='min-w-0' title={metric.description}>
+            <p
+              className='text-muted-foreground truncate text-[10px]'
+              title={metric.title}
+            >
+              {metric.title}
             </p>
-          )}
-          <p className='text-muted-foreground text-xs'>
-            {t('Last {{seconds}} seconds', {
-              seconds: props.route?.window_seconds ?? 60,
-            })}
-          </p>
-        </CardContent>
-      </Card>
-      <Card size='sm'>
-        <CardContent>
-          <p className='text-muted-foreground text-xs'>
-            {t('Primary destination')}
-          </p>
-          {props.loading ? (
-            <Skeleton className='my-2 h-7 w-24' />
-          ) : (
-            <p className='mt-2 text-lg font-medium break-all'>
-              {primary
-                ? props.names?.get(primary.channel_id) ||
-                  `#${primary.channel_id}`
-                : '—'}
-            </p>
-          )}
-          <p className='text-muted-foreground text-xs tabular-nums'>
-            {primary
-              ? `${formatNumber(primary.target_share * 100, locale)}%`
-              : '—'}{' '}
-            · {observed ? t('Selection share') : t('Target share')}
-          </p>
-        </CardContent>
-      </Card>
-      <Card size='sm'>
-        <CardContent>
-          <p className='text-muted-foreground text-xs'>{metricTitle}</p>
-          {props.loading ? (
-            <Skeleton className='my-2 h-7 w-20' />
-          ) : (
-            <p className='mt-2 text-2xl font-medium tabular-nums'>
-              {metricValue}
-            </p>
-          )}
-          <p className='text-muted-foreground text-xs'>{metricDescription}</p>
-        </CardContent>
-      </Card>
-      <Card size='sm'>
-        <CardContent>
-          <p className='text-muted-foreground text-xs'>
-            {priority
-              ? t('Available channels')
-              : t('Verified healthy channels')}
-          </p>
-          {props.loading ? (
-            <Skeleton className='my-2 h-7 w-20' />
-          ) : (
-            <p className='mt-2 text-2xl font-medium tabular-nums'>
-              {props.route ? formatNumber(availableCount, locale) : '—'}{' '}
-              <span className='text-muted-foreground text-sm'>
-                / {props.route ? formatNumber(totalCount, locale) : '—'}
-              </span>
-            </p>
-          )}
-          <p className='text-muted-foreground text-xs'>
-            {priority
-              ? t('Channel auto-disable and recovery')
-              : t('Quality samples are shared by channel and model')}
-          </p>
-        </CardContent>
-      </Card>
+            {props.loading ? (
+              <Skeleton className='mt-1 h-4 w-12' />
+            ) : (
+              <p
+                className='truncate text-sm font-medium tabular-nums'
+                title={`${metric.value}${metric.suffix ?? ''}`}
+              >
+                {metric.value}
+                {metric.suffix}
+              </p>
+            )}
+          </div>
+        ) : (
+          <Card key={metric.key} size='sm'>
+            <CardContent>
+              <p className='text-muted-foreground text-xs'>{metric.title}</p>
+              {props.loading ? (
+                <Skeleton className='my-2 h-7 w-20' />
+              ) : (
+                <p
+                  className={cn(
+                    'mt-2 font-medium break-all tabular-nums',
+                    metric.key === 'primary' ? 'text-lg' : 'text-2xl'
+                  )}
+                >
+                  {metric.value}
+                  {metric.suffix && (
+                    <span className='text-muted-foreground text-sm'>
+                      {metric.suffix}
+                    </span>
+                  )}
+                </p>
+              )}
+              <p className='text-muted-foreground text-xs tabular-nums'>
+                {metric.description}
+              </p>
+            </CardContent>
+          </Card>
+        )
+      )}
     </section>
   )
 }

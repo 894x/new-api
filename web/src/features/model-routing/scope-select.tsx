@@ -43,6 +43,7 @@ import { useAuthStore } from '@/stores/auth-store'
 export function RoutingScopeSelect(props: {
   userId?: number
   allUsers?: boolean
+  allowAllUsers?: boolean
   disabled: boolean
   onChange: (userId?: number, allUsers?: boolean) => void
 }) {
@@ -81,7 +82,7 @@ export function RoutingScopeSelect(props: {
     ...(canReadDefaults
       ? [{ value: '__default', label: t('Default resource pool') }]
       : []),
-    ...(canReadDefaults && canSearch
+    ...(canReadDefaults && canSearch && props.allowAllUsers !== false
       ? [{ value: '__all', label: t('All') }]
       : []),
     ...(users.data ?? [])
@@ -96,10 +97,14 @@ export function RoutingScopeSelect(props: {
   let value = '__default'
   if (props.allUsers) value = '__all'
   if (props.userId) value = String(props.userId)
-  const selected = options.find((option) => option.value === value) ?? {
-    value,
-    label: t('User #{{id}}', { id: props.userId }),
-  }
+  const selected =
+    options.find((option) => option.value === value) ??
+    (props.userId
+      ? {
+          value,
+          label: t('User #{{id}}', { id: props.userId }),
+        }
+      : null)
   return (
     <Combobox<{ value: string; label: string }>
       items={options}
@@ -110,7 +115,7 @@ export function RoutingScopeSelect(props: {
         setOpen(nextOpen)
         setSearch('')
       }}
-      inputValue={open ? search : selected.label}
+      inputValue={open ? search : (selected?.label ?? '')}
       onInputValueChange={(text, details) => {
         if (details.reason === 'input-change') setSearch(text)
       }}

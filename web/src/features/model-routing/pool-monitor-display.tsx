@@ -22,12 +22,21 @@ import { useTranslation } from 'react-i18next'
 import { LoadingState } from '@/components/loading-state'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  MonitorLayoutPicker,
+  type MonitorLayout,
+} from '@/features/routing-monitor/monitor-layout-picker'
 import { cn } from '@/lib/utils'
 
 import { RoutingWorkspaceDisplay } from './routing-workspace-display'
 
 const RoutingMonitorWorkspace = lazy(() => import('@/features/routing-monitor'))
 const EarlyChunkMonitor = lazy(() => import('./early-chunk-monitor'))
+const MonitorBoard = lazy(() =>
+  import('@/features/routing-monitor/monitor-board').then((module) => ({
+    default: module.MonitorBoard,
+  }))
+)
 
 export function PoolMonitorDisplay(props: {
   open: boolean
@@ -43,6 +52,7 @@ export function PoolMonitorDisplay(props: {
 }) {
   const { t } = useTranslation()
   const [view, setView] = useState<'routing' | 'ttft'>('routing')
+  const [monitorLayout, setMonitorLayout] = useState<MonitorLayout>()
   const [headerContainer, setHeaderContainer] = useState<HTMLElement | null>(
     null
   )
@@ -56,52 +66,91 @@ export function PoolMonitorDisplay(props: {
       fullscreen={props.open}
       onFullscreenChange={props.onOpenChange}
       hideToolbar={!props.open}
-      label={`${props.model} · ${groupLabel} · ${identity}`}
+      label={
+        monitorLayout
+          ? t('Multi-panel monitoring')
+          : `${props.model} · ${groupLabel} · ${identity}`
+      }
       exitFullscreenLabel={t('Back to card view')}
-      toolbarActions={props.toolbarActions}
+      toolbarActions={
+        <>
+          {props.toolbarActions}
+          {monitorLayout && (
+            <Button
+              variant='outline'
+              onClick={() => setMonitorLayout(undefined)}
+            >
+              {t('Single-panel mode')}
+            </Button>
+          )}
+          <MonitorLayoutPicker
+            value={monitorLayout}
+            onChange={setMonitorLayout}
+          />
+        </>
+      }
       toolbar={
         <div className='flex min-w-0 flex-1 flex-wrap items-center gap-3'>
-          <div className='flex min-w-0 flex-wrap items-center gap-2'>
-            <span className='min-w-0 text-base font-medium break-all'>
-              {props.model}
-            </span>
-            <Badge variant='secondary'>{groupLabel}</Badge>
-            <Badge variant='outline'>{identity}</Badge>
-          </div>
-          <div
-            ref={setHeaderContainer}
-            data-routing-monitor-header
-            className='flex min-w-0 flex-1 flex-wrap items-center gap-2'
-          />
-          <div
-            className='flex flex-wrap gap-1'
-            aria-label={t('Monitoring view')}
-          >
-            <Button
-              size='sm'
-              variant={view === 'routing' ? 'secondary' : 'ghost'}
-              aria-pressed={view === 'routing'}
-              onClick={() => setView('routing')}
+          {monitorLayout ? (
+            <span className='font-medium'>{t('Multi-panel monitoring')}</span>
+          ) : (
+            <div className='flex min-w-0 flex-wrap items-center gap-2'>
+              <span className='min-w-0 text-base font-medium break-all'>
+                {props.model}
+              </span>
+              <Badge variant='secondary'>{groupLabel}</Badge>
+              <Badge variant='outline'>{identity}</Badge>
+            </div>
+          )}
+          {!monitorLayout && (
+            <div
+              ref={setHeaderContainer}
+              data-routing-monitor-header
+              className='flex min-w-0 flex-1 flex-wrap items-center gap-2'
+            />
+          )}
+          {!monitorLayout && (
+            <div
+              className='flex flex-wrap gap-1'
+              aria-label={t('Monitoring view')}
             >
-              {t('Routing observations')}
-            </Button>
-            <Button
-              size='sm'
-              variant={view === 'ttft' ? 'secondary' : 'ghost'}
-              aria-pressed={view === 'ttft'}
-              onClick={() => setView('ttft')}
-            >
-              {t('TTFT prediction grid')}
-            </Button>
-          </div>
+              <Button
+                size='sm'
+                variant={view === 'routing' ? 'secondary' : 'ghost'}
+                aria-pressed={view === 'routing'}
+                onClick={() => setView('routing')}
+              >
+                {t('Routing observations')}
+              </Button>
+              <Button
+                size='sm'
+                variant={view === 'ttft' ? 'secondary' : 'ghost'}
+                aria-pressed={view === 'ttft'}
+                onClick={() => setView('ttft')}
+              >
+                {t('TTFT prediction grid')}
+              </Button>
+            </div>
+          )}
         </div>
       }
       refreshAction={null}
     >
+      {props.open && monitorLayout && (
+        <Suspense
+          fallback={
+            <LoadingState message={t('Loading routing observations...')} />
+          }
+        >
+          <MonitorBoard layout={monitorLayout} userId={props.userId} />
+        </Suspense>
+      )}
       <div
+        hidden={props.open && !!monitorLayout}
         className={cn(
-          'contents',
+          props.open && monitorLayout ? 'hidden' : 'contents',
           props.open &&
+            !monitorLayout &&
             'grid min-h-0 flex-1 items-start gap-4 overflow-y-auto xl:grid-cols-[minmax(22rem,26rem)_minmax(0,1fr)] xl:grid-rows-[auto_1fr] xl:overflow-hidden'
         )}
       >
@@ -119,7 +168,7 @@ export function PoolMonitorDisplay(props: {
         >
           {props.children}
         </div>
-        {props.open && (
+        {props.open && !monitorLayout && (
           <Suspense
             fallback={
               <div className='order-3 min-w-0 xl:col-start-2 xl:row-span-2 xl:row-start-1'>

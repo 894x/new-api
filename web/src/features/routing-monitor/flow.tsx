@@ -22,7 +22,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Card, CardContent } from '@/components/ui/card'
 import { toIntlLocale } from '@/i18n/languages'
-import { formatNumber } from '@/lib/format'
+import { formatCompactNumber, formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import type { MonitorRequest, MonitorRoute } from './api'
@@ -131,6 +131,7 @@ export function RoutingFlow(props: {
   paused: boolean
   names?: Map<number, string>
   fill?: boolean
+  panel?: boolean
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
@@ -213,14 +214,21 @@ export function RoutingFlow(props: {
   return (
     <div
       ref={container}
+      data-routing-flow-layout=''
       className={cn(
-        'relative grid min-w-0 grid-cols-1 items-center gap-7 px-4 py-6 md:grid-cols-[110px_165px_minmax(210px,260px)] md:justify-between md:gap-10',
+        'relative grid min-w-0 grid-cols-1 items-center',
+        props.panel
+          ? 'min-h-full gap-4 px-3 pt-12 pb-3 @min-[22rem]/monitor-panel:grid-cols-[4rem_6.5rem_minmax(0,16rem)] @min-[22rem]/monitor-panel:justify-between'
+          : 'gap-7 px-4 py-6 md:grid-cols-[110px_165px_minmax(210px,260px)] md:justify-between md:gap-10',
         props.fill && 'xl:min-h-full xl:py-3'
       )}
     >
       {geometry && (
         <svg
-          className='pointer-events-none absolute inset-0 hidden h-full w-full md:block'
+          className={cn(
+            'pointer-events-none absolute inset-0 hidden h-full w-full',
+            props.panel ? '@min-[22rem]/monitor-panel:block' : 'md:block'
+          )}
           viewBox={`0 0 ${geometry.width} ${geometry.height}`}
           role='img'
           aria-label={
@@ -267,16 +275,45 @@ export function RoutingFlow(props: {
       )}
       <Card
         data-flow-source
-        className='relative mx-auto w-full max-w-48 text-center md:mx-0 md:max-w-none'
+        title={
+          props.panel
+            ? t('Last {{seconds}} seconds', {
+                seconds: props.route.window_seconds,
+              })
+            : undefined
+        }
+        className={cn(
+          'relative mx-auto w-full max-w-48 text-center',
+          props.panel
+            ? 'rounded-lg py-2 @min-[22rem]/monitor-panel:mx-0 @min-[22rem]/monitor-panel:max-w-none @min-[22rem]/monitor-panel:self-start'
+            : 'md:mx-0 md:max-w-none'
+        )}
       >
-        <CardContent>
-          <p className='text-muted-foreground text-xs'>
+        <CardContent className={props.panel ? 'px-2' : undefined}>
+          <p
+            className={cn(
+              'text-muted-foreground text-xs',
+              props.panel && 'text-[10px]'
+            )}
+          >
             {t('Routing selections')}
           </p>
-          <p className='mt-2 text-2xl font-medium tabular-nums'>
-            {formatNumber(props.route.selection_count, locale)}
+          <p
+            title={formatNumber(props.route.selection_count, locale)}
+            className={cn(
+              'mt-2 text-2xl font-medium tabular-nums',
+              props.panel && 'mt-0 text-lg'
+            )}
+          >
+            {props.panel
+              ? formatCompactNumber(props.route.selection_count, locale)
+              : formatNumber(props.route.selection_count, locale)}
           </p>
-          <p className='text-muted-foreground text-xs'>
+          <p
+            className={
+              props.panel ? 'sr-only' : 'text-muted-foreground text-xs'
+            }
+          >
             {t('Last {{seconds}} seconds', {
               seconds: props.route.window_seconds,
             })}
@@ -285,12 +322,32 @@ export function RoutingFlow(props: {
       </Card>
       <Card
         data-flow-policy
-        className='ring-primary/35 relative mx-auto w-full max-w-60 shadow-[0_0_0_5px_var(--muted)] md:mx-0 md:max-w-none'
+        title={
+          props.panel ? `${policyDescription}\n${allocationStatus}` : undefined
+        }
+        className={cn(
+          'ring-primary/35 relative mx-auto w-full max-w-60 shadow-[0_0_0_5px_var(--muted)]',
+          props.panel
+            ? 'max-w-48 rounded-lg py-2 shadow-none @min-[22rem]/monitor-panel:mx-0 @min-[22rem]/monitor-panel:max-w-none @min-[22rem]/monitor-panel:self-start'
+            : 'md:mx-0 md:max-w-none'
+        )}
       >
-        <CardContent className='space-y-3'>
-          <h3 className='font-medium'>{policyTitle}</h3>
-          <p className='text-muted-foreground text-xs'>{policyDescription}</p>
-          <p className='border-t pt-2 text-xs'>{allocationStatus}</p>
+        <CardContent className={props.panel ? 'px-2 text-center' : 'space-y-3'}>
+          <h3
+            className={cn('font-medium', props.panel && 'text-xs break-words')}
+          >
+            {policyTitle}
+          </h3>
+          <p
+            className={
+              props.panel ? 'sr-only' : 'text-muted-foreground text-xs'
+            }
+          >
+            {policyDescription}
+          </p>
+          <p className={props.panel ? 'sr-only' : 'border-t pt-2 text-xs'}>
+            {allocationStatus}
+          </p>
         </CardContent>
       </Card>
       <div
@@ -308,14 +365,35 @@ export function RoutingFlow(props: {
               role='listitem'
               className={cn(
                 'gap-2',
+                props.panel &&
+                  'rounded-lg data-[size=sm]:gap-1 data-[size=sm]:py-2',
                 channel.target_share === mainShare && 'ring-primary/40',
                 tone === 'danger' && 'bg-destructive/5 ring-destructive/35',
                 tone === 'warning' && 'bg-warning/5 ring-warning/35'
               )}
             >
-              <CardContent className='space-y-2'>
-                <div className='flex flex-wrap items-center justify-between gap-1'>
-                  <span className='min-w-0 font-medium break-all'>
+              <CardContent
+                className={cn(
+                  'space-y-2',
+                  props.panel && 'space-y-1 group-data-[size=sm]/card:px-2'
+                )}
+              >
+                <div
+                  className={cn(
+                    'flex flex-wrap items-center justify-between gap-1',
+                    props.panel && 'flex-nowrap'
+                  )}
+                >
+                  <span
+                    title={
+                      props.names?.get(channel.channel_id) ||
+                      `#${channel.channel_id}`
+                    }
+                    className={cn(
+                      'min-w-0 font-medium break-all',
+                      props.panel && 'flex-1 truncate text-xs'
+                    )}
+                  >
                     {props.names?.get(channel.channel_id) ||
                       t('Channel #{{id}}', { id: channel.channel_id })}
                   </span>
@@ -323,10 +401,16 @@ export function RoutingFlow(props: {
                     channel={channel}
                     at={props.at}
                     priority={priority}
+                    compact={props.panel}
                   />
                 </div>
                 <div className='flex flex-wrap items-center justify-between gap-2'>
-                  <span className='text-muted-foreground text-xs'>
+                  <span
+                    className={cn(
+                      'text-muted-foreground text-xs',
+                      props.panel && 'text-[10px]'
+                    )}
+                  >
                     {priority ? (
                       <>
                         {t('Priority')}:{' '}
@@ -342,24 +426,41 @@ export function RoutingFlow(props: {
                       </>
                     )}
                   </span>
-                  <span className='text-lg font-medium tabular-nums'>
-                    <span className='text-muted-foreground mr-1 text-xs font-normal'>
+                  <span
+                    className={cn(
+                      'text-lg font-medium tabular-nums',
+                      props.panel && 'text-base'
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'text-muted-foreground mr-1 text-xs font-normal',
+                        props.panel && 'text-[10px]'
+                      )}
+                    >
                       {observed ? t('Selection share') : t('Target')}
                     </span>
                     {formatNumber(channel.target_share * 100, locale)}%
                   </span>
                 </div>
-                <div className='text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums'>
+                <div
+                  className={cn(
+                    'text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums',
+                    props.panel && 'text-[10px]'
+                  )}
+                >
                   <span>
                     TTFT{' '}
                     {channel.ttft_ms == null
                       ? '—'
                       : `${formatNumber(channel.ttft_ms, locale)} ms`}
                   </span>
-                  <span>
-                    {t('Selected')}:{' '}
-                    {formatNumber(channel.selected_share * 100, locale)}%
-                  </span>
+                  {(!props.panel || !observed) && (
+                    <span>
+                      {t('Selected')}:{' '}
+                      {formatNumber(channel.selected_share * 100, locale)}%
+                    </span>
+                  )}
                 </div>
                 <div className='bg-muted h-1 overflow-hidden rounded-full'>
                   <div

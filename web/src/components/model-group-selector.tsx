@@ -660,6 +660,7 @@ export const ModelGroupSelector: React.FC<ModelGroupSelectorProps> = ({
 
   const renderTrigger = () => (
     <Button
+      aria-label={t('Select model and group')}
       aria-expanded={open}
       className={cn(
         'h-8 max-w-[15rem] justify-start gap-2 border px-2.5 font-medium shadow-none',
@@ -820,9 +821,10 @@ export const ModelGroupSelector: React.FC<ModelGroupSelectorProps> = ({
     </div>
   )
 
+  const trigger = renderTrigger()
   return isMobile ? (
     <Drawer open={open} onOpenChange={setOpen}>
-      <DrawerTrigger asChild>{renderTrigger()}</DrawerTrigger>
+      <DrawerTrigger asChild>{trigger}</DrawerTrigger>
       <DrawerContent className='flex max-h-[80vh] min-h-[60vh] flex-col'>
         <DrawerHeader className='pb-3 text-left'>
           <DrawerTitle>{t('Select Model')}</DrawerTitle>
@@ -834,7 +836,9 @@ export const ModelGroupSelector: React.FC<ModelGroupSelectorProps> = ({
     </Drawer>
   ) : (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger render={renderTrigger()} />
+      <PopoverTrigger render={trigger} disabled={disabled}>
+        {trigger.props.children}
+      </PopoverTrigger>
       <PopoverContent
         align='end'
         className={cn(
