@@ -129,6 +129,7 @@ export function ChannelMonitoringStrip(props: {
   loading: boolean
   error: boolean
   maxSampleCount?: number
+  showTimelineLabels?: boolean
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
@@ -295,7 +296,11 @@ export function ChannelMonitoringStrip(props: {
                 type='button'
                 variant='ghost'
                 className='h-4 w-full items-end gap-px rounded-none p-0 hover:bg-transparent'
-                aria-describedby={`${volumeHintId} ${volumeHintId}-tooltip`}
+                aria-describedby={
+                  props.showTimelineLabels === false
+                    ? `${volumeHintId}-tooltip`
+                    : `${volumeHintId} ${volumeHintId}-tooltip`
+                }
                 aria-label={t('24-hour channel history for {{channel}}', {
                   channel: props.channelName,
                 })}
@@ -368,6 +373,9 @@ export function ChannelMonitoringStrip(props: {
             role='tooltip'
             className='max-w-[calc(100vw-2rem)] flex-col items-start gap-1 text-xs'
           >
+            {props.showTimelineLabels === false && (
+              <p>{t('Bar height shows sample volume')}</p>
+            )}
             {bucket && (
               <>
                 <p className='whitespace-nowrap'>
@@ -399,13 +407,15 @@ export function ChannelMonitoringStrip(props: {
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
-      <div className='text-muted-foreground flex justify-between text-[11px]'>
-        <span>{t('24 hours ago')}</span>
-        <span id={volumeHintId}>{t('Bar height shows sample volume')}</span>
-        <span>
-          {summary.truncated ? t('Partial monitoring history') : t('Now')}
-        </span>
-      </div>
+      {props.showTimelineLabels !== false && (
+        <div className='text-muted-foreground flex justify-between text-[11px]'>
+          <span>{t('24 hours ago')}</span>
+          <span id={volumeHintId}>{t('Bar height shows sample volume')}</span>
+          <span>
+            {summary.truncated ? t('Partial monitoring history') : t('Now')}
+          </span>
+        </div>
+      )}
       <Dialog
         open={open}
         onOpenChange={setOpen}

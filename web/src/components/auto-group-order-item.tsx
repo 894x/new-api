@@ -21,13 +21,26 @@ import {
   ArrowUp01Icon,
   Cancel01Icon,
   Drag01Icon,
+  Settings02Icon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Reorder, useDragControls } from 'motion/react'
-import type { KeyboardEvent, PointerEvent, ReactNode } from 'react'
+import {
+  useEffect,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTitle,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 
 type AutoGroupOrderItemProps = {
@@ -42,6 +55,9 @@ type AutoGroupOrderItemProps = {
   leading?: ReactNode
   children?: ReactNode
   footer?: ReactNode
+  settings?: ReactNode
+  settingsLabel?: string
+  settingsOpenRequest?: number
   onMove: (index: number, direction: 'up' | 'down') => void
   onRemove?: (group: string) => void
 }
@@ -49,6 +65,10 @@ type AutoGroupOrderItemProps = {
 export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
   const { t } = useTranslation()
   const dragControls = useDragControls()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  useEffect(() => {
+    if (props.settingsOpenRequest) setSettingsOpen(true)
+  }, [props.settingsOpenRequest])
 
   const handleDragStart = (event: PointerEvent<HTMLButtonElement>) => {
     if (props.disabled) return
@@ -164,6 +184,39 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
               aria-hidden='true'
             />
           </Button>
+        )}
+        {props.settings && (
+          <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
+            <PopoverTrigger
+              render={
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size={props.compact ? 'icon-xs' : 'icon-sm'}
+                  aria-label={props.settingsLabel ?? t('Settings')}
+                  title={props.settingsLabel ?? t('Settings')}
+                />
+              }
+            >
+              <HugeiconsIcon
+                icon={Settings02Icon}
+                strokeWidth={2}
+                aria-hidden='true'
+              />
+            </PopoverTrigger>
+            <PopoverContent
+              keepMounted
+              align='end'
+              sideOffset={8}
+              role='dialog'
+              className='max-h-[min(36rem,calc(100dvh-2rem))] w-[min(22rem,calc(100vw-1.5rem))] gap-3 overflow-y-auto overscroll-contain p-4'
+            >
+              <PopoverTitle className='break-all'>
+                {props.settingsLabel ?? t('Settings')}
+              </PopoverTitle>
+              {props.settings}
+            </PopoverContent>
+          </Popover>
         )}
       </div>
       {props.footer && (

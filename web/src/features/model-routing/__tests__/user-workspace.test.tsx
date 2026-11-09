@@ -40,6 +40,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { userRoutingPoolKeys, type UserRoutingPoolConfig } from '../api'
 import { RoutingScopeSelect } from '../scope-select'
 import { UserRoutingWorkspace } from '../user-workspace'
+import { getSettingsField } from './settings-queries'
 
 const clients: QueryClient[] = []
 beforeEach(() =>
@@ -170,7 +171,7 @@ test('channel retry overrides preserve zero, custom counts and explicit inherita
     .spyOn(api, 'patch')
     .mockResolvedValue({ data: { success: true } })
   const { card } = await mountWorkspace()
-  const retries = await within(card).findByRole('spinbutton', {
+  const retries = await getSettingsField('spinbutton', {
     name: 'Retries for Primary',
   })
   expect(retries).toHaveValue(3)
@@ -226,7 +227,7 @@ test.each(['-1', '1.5', '100'])(
     fireEvent.click(
       await within(card).findByRole('button', { name: 'Create user override' })
     )
-    const retries = within(card).getByRole('spinbutton', {
+    const retries = getSettingsField('spinbutton', {
       name: 'Retries for Primary',
     })
     fireEvent.change(retries, { target: { value } })
@@ -324,7 +325,7 @@ test('user pool early chunk overrides save with the user, model and group while 
     name: 'Edit scheduling strategy',
   })
   await userEvent.click(
-    within(dialog).getByRole('combobox', { name: 'Early empty chunk' })
+    getSettingsField('combobox', { name: 'Early empty chunk' })
   )
   await userEvent.click(screen.getByRole('option', { name: 'Observe only' }))
   await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
@@ -355,17 +356,19 @@ test('a channel early chunk override is edited in its user-pool row and saved wi
     .spyOn(api, 'patch')
     .mockResolvedValue({ data: { success: true } })
   const { card } = await mountWorkspace()
-  const selector = await within(card).findByRole('combobox', {
+  const selector = await getSettingsField('combobox', {
     name: 'Early chunk for Primary',
   })
   expect(selector).toBeDisabled()
   await userEvent.click(
     within(card).getByRole('button', { name: 'Edit user override' })
   )
-  await userEvent.click(selector)
+  await userEvent.click(
+    getSettingsField('combobox', { name: 'Early chunk for Primary' })
+  )
   await userEvent.click(screen.getByRole('option', { name: 'Enabled' }))
   expect(
-    within(card).getByRole('combobox', { name: 'Early chunk for Backup' })
+    getSettingsField('combobox', { name: 'Early chunk for Backup' })
   ).toHaveTextContent('Inherit pool')
   await userEvent.click(within(card).getByRole('button', { name: 'Save' }))
   await waitFor(() =>
@@ -433,7 +436,7 @@ test('user monitoring retains the same unsaved override and returns focus withou
   await userEvent.click(
     await within(card).findByRole('button', { name: 'Create user override' })
   )
-  const priority = within(card).getByRole('spinbutton', {
+  const priority = getSettingsField('spinbutton', {
     name: 'Priority for Primary',
   })
   fireEvent.change(priority, { target: { value: '0' } })
@@ -442,22 +445,22 @@ test('user monitoring retains the same unsaved override and returns focus withou
   const monitor = screen.getByRole('dialog', {
     name: 'kimi-k3 · vip · acme #42',
   })
-  expect(
-    within(monitor).getByRole('spinbutton', { name: 'Priority for Primary' })
-  ).toBe(priority)
+  expect(getSettingsField('spinbutton', { name: 'Priority for Primary' })).toBe(
+    priority
+  )
   expect(priority).toHaveValue(0)
   expect(
     await within(monitor).findByLabelText('Cache hit rate: 50%')
   ).toBeVisible()
-  await within(monitor).findByText('No adaptive routing observations')
+  await within(monitor).findByText(/No (?:adaptive )?routing observations/)
   expect(patch).not.toHaveBeenCalled()
   await userEvent.click(
     within(monitor).getByRole('button', { name: 'Back to card view' })
   )
   expect(trigger).toHaveFocus()
-  expect(
-    within(card).getByRole('spinbutton', { name: 'Priority for Primary' })
-  ).toBe(priority)
+  expect(getSettingsField('spinbutton', { name: 'Priority for Primary' })).toBe(
+    priority
+  )
   expect(priority).toHaveValue(0)
   await userEvent.click(within(card).getByRole('button', { name: 'Save' }))
   await waitFor(() =>
@@ -519,10 +522,11 @@ async function mountWorkspace() {
   await userEvent.click(
     await screen.findByRole('option', { name: 'All configurations' })
   )
-  return {
-    ...workspace,
-    card: await screen.findByRole('region', { name: 'kimi-k3 · vip' }),
-  }
+  const card = await screen.findByRole('region', { name: 'kimi-k3 · vip' })
+  await within(card).findByRole('button', {
+    name: /(?:Create|Edit) user override/,
+  })
+  return { ...workspace, card }
 }
 
 test('defaults to user overrides and lets operators switch to all or inherited pools', async () => {
@@ -595,17 +599,17 @@ test('shows the user identity and effective inherited priorities and weights wit
   ).toBeVisible()
   await waitFor(() =>
     expect(
-      within(card).getByRole('spinbutton', { name: 'Priority for Primary' })
+      getSettingsField('spinbutton', { name: 'Priority for Primary' })
     ).toHaveValue(100)
   )
   expect(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' })
+    getSettingsField('spinbutton', { name: 'Weight for Primary' })
   ).toHaveValue(7)
   expect(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' })
+    getSettingsField('spinbutton', { name: 'Weight for Primary' })
   ).toBeDisabled()
   expect(
-    within(card).getByRole('switch', { name: 'Enable Backup in this pool' })
+    getSettingsField('switch', { name: 'Enable Backup in this pool' })
   ).not.toBeChecked()
   expect(
     within(card).queryByRole('button', { name: 'Edit strategy' })
@@ -660,11 +664,11 @@ test('creates a user snapshot with explicit zero priority and weight while prese
     await within(card).findByRole('button', { name: 'Create user override' })
   )
   fireEvent.change(
-    within(card).getByRole('spinbutton', { name: 'Priority for Primary' }),
+    getSettingsField('spinbutton', { name: 'Priority for Primary' }),
     { target: { value: '0' } }
   )
   fireEvent.change(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' }),
+    getSettingsField('spinbutton', { name: 'Weight for Primary' }),
     { target: { value: '0' } }
   )
   expect(screen.getByRole('combobox', { name: 'Search models' })).toBeDisabled()
@@ -724,11 +728,11 @@ test('clearing a user weight explicitly restores inheritance and keeps the prior
     await within(card).findByRole('button', { name: 'Edit user override' })
   )
   fireEvent.change(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' }),
+    getSettingsField('spinbutton', { name: 'Weight for Primary' }),
     { target: { value: '' } }
   )
   expect(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' })
+    getSettingsField('spinbutton', { name: 'Weight for Primary' })
   ).toHaveAttribute('placeholder', '20')
   fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
   await waitFor(() =>
@@ -806,7 +810,7 @@ test('a rejected save preserves the draft and cancel unlocks filters without cha
     await within(card).findByRole('button', { name: 'Create user override' })
   )
   fireEvent.change(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' }),
+    getSettingsField('spinbutton', { name: 'Weight for Primary' }),
     { target: { value: '123' } }
   )
   fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
@@ -814,12 +818,12 @@ test('a rejected save preserves the draft and cancel unlocks filters without cha
     'Changes were not saved'
   )
   expect(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' })
+    getSettingsField('spinbutton', { name: 'Weight for Primary' })
   ).toHaveValue(123)
   fireEvent.click(within(card).getByRole('button', { name: 'Cancel' }))
   expect(screen.getByRole('combobox', { name: 'Search models' })).toBeEnabled()
   expect(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' })
+    getSettingsField('spinbutton', { name: 'Weight for Primary' })
   ).toHaveValue(7)
 })
 
@@ -852,7 +856,7 @@ test('background refresh preserves the original draft revision so concurrent edi
     await within(card).findByRole('button', { name: 'Create user override' })
   )
   fireEvent.change(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' }),
+    getSettingsField('spinbutton', { name: 'Weight for Primary' }),
     { target: { value: '42' } }
   )
   act(() =>
@@ -870,7 +874,7 @@ test('background refresh preserves the original draft revision so concurrent edi
   )
   expect(await within(card).findByRole('alert')).toBeVisible()
   expect(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' })
+    getSettingsField('spinbutton', { name: 'Weight for Primary' })
   ).toHaveValue(42)
 })
 
@@ -884,7 +888,7 @@ test('invalid fractional weights are rejected before saving', async () => {
     await within(card).findByRole('button', { name: 'Create user override' })
   )
   fireEvent.change(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' }),
+    getSettingsField('spinbutton', { name: 'Weight for Primary' }),
     { target: { value: '1.5' } }
   )
   fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
@@ -899,7 +903,7 @@ test('a failed background refresh keeps the unsaved user priority and weight dra
     await within(card).findByRole('button', { name: 'Create user override' })
   )
   fireEvent.change(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' }),
+    getSettingsField('spinbutton', { name: 'Weight for Primary' }),
     { target: { value: '42' } }
   )
   vi.mocked(api.get).mockRejectedValue(new Error('temporary network failure'))
@@ -913,7 +917,7 @@ test('a failed background refresh keeps the unsaved user priority and weight dra
     await within(card).findByRole('button', { name: 'Retry' })
   ).toBeVisible()
   expect(
-    within(card).getByRole('spinbutton', { name: 'Weight for Primary' })
+    getSettingsField('spinbutton', { name: 'Weight for Primary' })
   ).toHaveValue(42)
   expect(within(card).getByRole('button', { name: 'Save' })).toBeEnabled()
   expect(screen.getByRole('combobox', { name: 'Search models' })).toBeDisabled()
@@ -1009,10 +1013,11 @@ test('a user can add an enabled channel outside the default pool and save the co
     await screen.findByRole('option', { name: 'Outside default #3' })
   )
   await userEvent.click(within(card).getByRole('button', { name: 'Add' }))
+  await userEvent.click(
+    within(card).getByRole('button', { name: 'Settings: Outside default' })
+  )
   expect(
-    within(card).getByRole('spinbutton', {
-      name: 'Priority for Outside default',
-    })
+    getSettingsField('spinbutton', { name: 'Priority for Outside default' })
   ).toHaveValue(12)
   await userEvent.click(within(card).getByRole('button', { name: 'Save' }))
   await waitFor(() =>

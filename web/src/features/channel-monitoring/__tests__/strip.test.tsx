@@ -73,6 +73,31 @@ function fixture(): ChannelMonitorSummary {
   }
 }
 
+test('compact channel history hides the timeline footer and keeps its explanation in the tooltip', async () => {
+  const props = {
+    channelName: 'Example',
+    loading: false,
+    error: false,
+    summary: fixture(),
+  }
+  const { rerender } = render(<ChannelMonitoringStrip {...props} />)
+  expect(screen.getByText('24 hours ago')).toBeVisible()
+  rerender(<ChannelMonitoringStrip {...props} showTimelineLabels={false} />)
+  expect(screen.queryByText('24 hours ago')).not.toBeInTheDocument()
+  expect(
+    screen.queryByText('Bar height shows sample volume')
+  ).not.toBeInTheDocument()
+  expect(screen.queryByText('Now')).not.toBeInTheDocument()
+  const timeline = screen.getByRole('button', {
+    name: '24-hour channel history for Example',
+  })
+  await userEvent.hover(timeline)
+  const tooltip = await screen.findByRole('tooltip')
+  expect(
+    within(tooltip).getByText('Bar height shows sample volume')
+  ).toBeVisible()
+})
+
 test('a measured zero first-response time is preserved and missing generation speed is omitted', () => {
   render(
     <ChannelMonitoringStrip

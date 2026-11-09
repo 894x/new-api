@@ -388,6 +388,7 @@ function UserPoolEditor(props: {
         ) : (
           <PoolChannelList
             model={config.model}
+            validationAttempt={form.formState.submitCount}
             channels={displayed}
             candidates={candidates}
             disabled={disabled}

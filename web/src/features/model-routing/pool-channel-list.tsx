@@ -30,7 +30,6 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { ChannelMonitoringStrip } from '@/features/channel-monitoring/monitoring-strip'
 import { useChannelMonitoring } from '@/features/channel-monitoring/use-channel-monitoring'
 import { toIntlLocale } from '@/i18n/languages'
-import { cn } from '@/lib/utils'
 
 import type { PoolCandidate, PoolChannel } from './api'
 import type { EarlyChunkPool } from './early-chunk'
@@ -50,6 +49,7 @@ export function PoolChannelList(props: {
   channels: PoolChannelDraft[]
   candidates: PoolCandidate[]
   disabled: boolean
+  validationAttempt?: number
   allowInheritance?: boolean
   removable?: boolean
   earlyChunk?: EarlyChunkPool | null
@@ -112,33 +112,6 @@ export function PoolChannelList(props: {
 
   return (
     <div className='@container/channel-list space-y-2'>
-      <div
-        aria-hidden='true'
-        className={cn(
-          'text-muted-foreground flex items-center gap-1.5 pl-9 text-xs',
-          props.removable === false
-            ? 'pr-14 @max-[24rem]/channel-list:pr-8'
-            : 'pr-20 @max-[24rem]/channel-list:pr-14'
-        )}
-      >
-        <span className='min-w-0 flex-1 truncate' title={t('Channel Name')}>
-          {t('Channel Name')}
-        </span>
-        <span
-          className='w-12 shrink-0 truncate'
-          title={
-            props.allowInheritance ? t('User priority') : t('Base priority')
-          }
-        >
-          {t('Priority')}
-        </span>
-        <span className='w-12 shrink-0 truncate' title={t('Weight')}>
-          {t('Weight')}
-        </span>
-        <span className='w-8 shrink-0 truncate' title={t('Enabled in pool')}>
-          {t('Enable')}
-        </span>
-      </div>
       <Reorder.Group
         axis='y'
         values={props.channels.map((entry) => String(entry.channel_id))}
@@ -155,79 +128,15 @@ export function PoolChannelList(props: {
               group={String(entry.channel_id)}
               compact
               footer={
-                (props.allowInheritance || props.model) && (
-                  <>
-                    {props.onEarlyChunkChange && (
-                      <div className='mb-2'>
-                        <EarlyChunkModeSelect
-                          label={t('Early chunk for {{channel}}', {
-                            channel: name,
-                          })}
-                          inherit='pool'
-                          value={props.earlyChunk?.channels?.[entry.channel_id]}
-                          disabled={props.disabled}
-                          onChange={(mode) => {
-                            const channels = { ...props.earlyChunk?.channels }
-                            if (mode) channels[entry.channel_id] = mode
-                            else delete channels[entry.channel_id]
-                            props.onEarlyChunkChange?.({
-                              ...props.earlyChunk,
-                              channels: Object.keys(channels).length
-                                ? channels
-                                : undefined,
-                            })
-                          }}
-                        />
-                      </div>
-                    )}
-                    {props.allowInheritance && (
-                      <label className='text-muted-foreground mb-1 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs'>
-                        <span>{t('Maximum retries')}</span>
-                        <Input
-                          type='number'
-                          inputMode='numeric'
-                          min={0}
-                          max={99}
-                          step={1}
-                          className='h-7 w-16 [appearance:textfield] px-1 text-center text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
-                          value={
-                            entry.retry_times_override != null &&
-                            Number.isFinite(entry.retry_times_override)
-                              ? entry.retry_times_override
-                              : ''
-                          }
-                          placeholder={t('Inherit global')}
-                          aria-label={t('Retries for {{channel}}', {
-                            channel: name,
-                          })}
-                          aria-invalid={
-                            entry.retry_times_override != null &&
-                            (!Number.isInteger(entry.retry_times_override) ||
-                              entry.retry_times_override < 0 ||
-                              entry.retry_times_override > 99)
-                          }
-                          disabled={props.disabled}
-                          onChange={(event) =>
-                            update(entry.channel_id, {
-                              retry_times_override:
-                                event.target.value === ''
-                                  ? null
-                                  : event.target.valueAsNumber,
-                            })
-                          }
-                        />
-                      </label>
-                    )}
-                    {props.model && (
-                      <ChannelMonitoringStrip
-                        channelName={name}
-                        summary={observations.get(entry.channel_id)}
-                        loading={monitoring.isLoading}
-                        error={monitoring.isError}
-                        maxSampleCount={maxSampleCount}
-                      />
-                    )}
-                  </>
+                props.model && (
+                  <ChannelMonitoringStrip
+                    showTimelineLabels={false}
+                    channelName={name}
+                    summary={observations.get(entry.channel_id)}
+                    loading={monitoring.isLoading}
+                    error={monitoring.isError}
+                    maxSampleCount={maxSampleCount}
+                  />
                 )
               }
               labelClassName='flex-1 basis-0 text-xs'
@@ -268,6 +177,165 @@ export function PoolChannelList(props: {
               index={index}
               count={props.channels.length}
               disabled={props.disabled}
+              settingsOpenRequest={
+                (entry.priority !== null &&
+                  (!Number.isInteger(entry.priority) ||
+                    entry.priority < 0 ||
+                    entry.priority > 2147483647)) ||
+                (entry.weight !== null &&
+                  (!Number.isInteger(entry.weight) ||
+                    entry.weight < 0 ||
+                    entry.weight > 2147483637)) ||
+                (entry.retry_times_override != null &&
+                  (!Number.isInteger(entry.retry_times_override) ||
+                    entry.retry_times_override < 0 ||
+                    entry.retry_times_override > 99))
+                  ? props.validationAttempt
+                  : undefined
+              }
+              settingsLabel={`${t('Settings')}: ${name}`}
+              settings={
+                <div className='space-y-3'>
+                  <div className='grid min-w-0 grid-cols-2 gap-3'>
+                    <label className='flex min-w-0 flex-col items-start gap-1.5 text-xs'>
+                      <span className='text-muted-foreground'>
+                        {props.allowInheritance
+                          ? t('User priority')
+                          : t('Base priority')}
+                      </span>
+                      <Input
+                        type='number'
+                        inputMode='numeric'
+                        min={0}
+                        max={2147483647}
+                        step={1}
+                        value={
+                          entry.priority !== null &&
+                          Number.isFinite(entry.priority)
+                            ? entry.priority
+                            : ''
+                        }
+                        placeholder={
+                          props.allowInheritance
+                            ? String(candidate?.priority ?? 0)
+                            : undefined
+                        }
+                        disabled={props.disabled}
+                        className='h-8 w-full [appearance:textfield] px-2 text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
+                        aria-label={t('Priority for {{channel}}', {
+                          channel: name,
+                        })}
+                        onChange={(event) =>
+                          update(entry.channel_id, {
+                            priority:
+                              props.allowInheritance &&
+                              event.target.value === ''
+                                ? null
+                                : event.target.valueAsNumber,
+                          })
+                        }
+                      />
+                    </label>
+                    <label className='flex min-w-0 flex-col items-start gap-1.5 text-xs'>
+                      <span className='text-muted-foreground'>
+                        {t('Weight')}
+                      </span>
+                      <Input
+                        type='number'
+                        inputMode='numeric'
+                        min={0}
+                        max={2147483637}
+                        step={1}
+                        value={
+                          entry.weight !== null && Number.isFinite(entry.weight)
+                            ? entry.weight
+                            : ''
+                        }
+                        placeholder={
+                          props.allowInheritance
+                            ? String(candidate?.weight ?? 0)
+                            : undefined
+                        }
+                        disabled={props.disabled}
+                        className='h-8 w-full [appearance:textfield] px-2 text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
+                        aria-label={t('Weight for {{channel}}', {
+                          channel: name,
+                        })}
+                        onChange={(event) =>
+                          update(entry.channel_id, {
+                            weight:
+                              props.allowInheritance &&
+                              event.target.value === ''
+                                ? null
+                                : event.target.valueAsNumber,
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
+                  {props.onEarlyChunkChange && (
+                    <div className='mb-2'>
+                      <EarlyChunkModeSelect
+                        label={t('Early chunk for {{channel}}', {
+                          channel: name,
+                        })}
+                        inherit='pool'
+                        value={props.earlyChunk?.channels?.[entry.channel_id]}
+                        disabled={props.disabled}
+                        onChange={(mode) => {
+                          const channels = { ...props.earlyChunk?.channels }
+                          if (mode) channels[entry.channel_id] = mode
+                          else delete channels[entry.channel_id]
+                          props.onEarlyChunkChange?.({
+                            ...props.earlyChunk,
+                            channels: Object.keys(channels).length
+                              ? channels
+                              : undefined,
+                          })
+                        }}
+                      />
+                    </div>
+                  )}
+                  {props.allowInheritance && (
+                    <label className='text-muted-foreground mb-1 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs'>
+                      <span>{t('Maximum retries')}</span>
+                      <Input
+                        type='number'
+                        inputMode='numeric'
+                        min={0}
+                        max={99}
+                        step={1}
+                        className='h-7 w-16 [appearance:textfield] px-1 text-center text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
+                        value={
+                          entry.retry_times_override != null &&
+                          Number.isFinite(entry.retry_times_override)
+                            ? entry.retry_times_override
+                            : ''
+                        }
+                        placeholder={t('Inherit global')}
+                        aria-label={t('Retries for {{channel}}', {
+                          channel: name,
+                        })}
+                        aria-invalid={
+                          entry.retry_times_override != null &&
+                          (!Number.isInteger(entry.retry_times_override) ||
+                            entry.retry_times_override < 0 ||
+                            entry.retry_times_override > 99)
+                        }
+                        disabled={props.disabled}
+                        onChange={(event) =>
+                          update(entry.channel_id, {
+                            retry_times_override:
+                              event.target.value === ''
+                                ? null
+                                : event.target.valueAsNumber,
+                          })
+                        }
+                      />
+                    </label>
+                  )}
+                </div>
+              }
               onMove={move}
               onRemove={
                 props.removable === false
@@ -275,88 +343,18 @@ export function PoolChannelList(props: {
                   : () => setRemovingChannelId(entry.channel_id)
               }
             >
-              <div className='flex shrink-0 items-center gap-1.5'>
-                <label className='flex items-center gap-2 text-xs'>
-                  <span className='sr-only'>
-                    {props.allowInheritance
-                      ? t('User priority')
-                      : t('Base priority')}
-                  </span>
-                  <Input
-                    type='number'
-                    inputMode='numeric'
-                    min={0}
-                    max={2147483647}
-                    step={1}
-                    value={
-                      entry.priority !== null && Number.isFinite(entry.priority)
-                        ? entry.priority
-                        : ''
-                    }
-                    placeholder={
-                      props.allowInheritance
-                        ? String(candidate?.priority ?? 0)
-                        : undefined
-                    }
-                    disabled={props.disabled}
-                    className='h-7 w-12 [appearance:textfield] px-1 text-center text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
-                    aria-label={t('Priority for {{channel}}', {
-                      channel: name,
-                    })}
-                    onChange={(event) =>
-                      update(entry.channel_id, {
-                        priority:
-                          props.allowInheritance && event.target.value === ''
-                            ? null
-                            : event.target.valueAsNumber,
-                      })
-                    }
-                  />
-                </label>
-                <label className='flex items-center gap-2 text-xs'>
-                  <span className='sr-only'>{t('Weight')}</span>
-                  <Input
-                    type='number'
-                    inputMode='numeric'
-                    min={0}
-                    max={2147483637}
-                    step={1}
-                    value={
-                      entry.weight !== null && Number.isFinite(entry.weight)
-                        ? entry.weight
-                        : ''
-                    }
-                    placeholder={
-                      props.allowInheritance
-                        ? String(candidate?.weight ?? 0)
-                        : undefined
-                    }
-                    disabled={props.disabled}
-                    className='h-7 w-12 [appearance:textfield] px-1 text-center text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
-                    aria-label={t('Weight for {{channel}}', { channel: name })}
-                    onChange={(event) =>
-                      update(entry.channel_id, {
-                        weight:
-                          props.allowInheritance && event.target.value === ''
-                            ? null
-                            : event.target.valueAsNumber,
-                      })
-                    }
-                  />
-                </label>
-                <div className='flex w-8 items-center justify-center gap-2 text-xs'>
-                  <span className='sr-only'>{t('Enabled in pool')}</span>
-                  <Switch
-                    checked={entry.enabled}
-                    disabled={props.disabled}
-                    aria-label={t('Enable {{channel}} in this pool', {
-                      channel: name,
-                    })}
-                    onCheckedChange={(enabled) =>
-                      update(entry.channel_id, { enabled })
-                    }
-                  />
-                </div>
+              <div className='flex w-8 shrink-0 items-center justify-center'>
+                <span className='sr-only'>{t('Enabled in pool')}</span>
+                <Switch
+                  checked={entry.enabled}
+                  disabled={props.disabled}
+                  aria-label={t('Enable {{channel}} in this pool', {
+                    channel: name,
+                  })}
+                  onCheckedChange={(enabled) =>
+                    update(entry.channel_id, { enabled })
+                  }
+                />
               </div>
             </AutoGroupOrderItem>
           )

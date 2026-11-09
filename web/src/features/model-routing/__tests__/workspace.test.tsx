@@ -51,6 +51,7 @@ import type { RoutingPoolView } from '../api'
 import { PoolCard } from '../pool-card'
 import { RoutingWorkspaceDisplay } from '../routing-workspace-display'
 import { RoutingScopeSelect } from '../scope-select'
+import { getSettingsField } from './settings-queries'
 
 const clients: QueryClient[] = []
 afterEach(() => {
@@ -182,7 +183,10 @@ test('retains edited cards and locks filtering until the administrator resets th
     },
   }))
   const { onDirtyChange, client } = mountWorkspace()
-  const priority = await screen.findByRole('spinbutton', {
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Settings: Alpha' })
+  )
+  const priority = await getSettingsField('spinbutton', {
     name: 'Priority for Alpha',
   })
   expect(
@@ -199,13 +203,13 @@ test('retains edited cards and locks filtering until the administrator resets th
   ).toBeVisible()
   expect(screen.getByRole('combobox', { name: 'Search models' })).toBeDisabled()
   await userEvent.click(screen.getByRole('button', { name: 'Fullscreen' }))
-  expect(screen.getByRole('spinbutton', { name: 'Priority for Alpha' })).toBe(
+  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
     priority
   )
   expect(priority).toHaveValue(7)
   expect(screen.getByRole('combobox', { name: 'Search models' })).toBeDisabled()
   await userEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }))
-  expect(screen.getByRole('spinbutton', { name: 'Priority for Alpha' })).toBe(
+  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
     priority
   )
   expect(priority).toHaveValue(7)
@@ -416,7 +420,10 @@ test('Escape closes only the nested pool monitor and preserves the outer fullscr
   const fullscreen = screen.getByRole('button', { name: 'Fullscreen' })
   await userEvent.click(fullscreen)
   const outer = screen.getByRole('dialog', { name: 'Model routing' })
-  const priority = within(outer).getByRole('spinbutton', {
+  await userEvent.click(
+    within(outer).getByRole('button', { name: 'Settings: Alpha' })
+  )
+  const priority = getSettingsField('spinbutton', {
     name: 'Priority for Alpha',
   })
   fireEvent.change(priority, { target: { value: '7' } })
@@ -429,10 +436,12 @@ test('Escape closes only the nested pool monitor and preserves the outer fullscr
   const inner = screen.getByRole('dialog', {
     name: 'kimi-k3 · standard · Default configuration',
   })
-  expect(
-    within(inner).getByRole('spinbutton', { name: 'Priority for Alpha' })
-  ).toBe(priority)
+  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
+    priority
+  )
   expect(outer.parentElement?.inert).toBe(true)
+  await userEvent.keyboard('{Escape}')
+  expect(inner).toHaveAttribute('role', 'dialog')
   poolList.scrollTop = 0 // Browsers can clamp the list after its card moves into the portal.
   await userEvent.keyboard('{Escape}')
   expect(inner).not.toHaveAttribute('role', 'dialog')
@@ -657,8 +666,11 @@ test('all scope shows default and named user cards and filters by model and chan
   await userEvent.click(
     await within(userCard).findByRole('button', { name: 'Edit user override' })
   )
+  await userEvent.click(
+    within(userCard).getByRole('button', { name: 'Settings: Primary' })
+  )
   fireEvent.change(
-    within(userCard).getByRole('spinbutton', { name: 'Priority for Primary' }),
+    getSettingsField('spinbutton', { name: 'Priority for Primary' }, userCard),
     { target: { value: '50' } }
   )
   expect(

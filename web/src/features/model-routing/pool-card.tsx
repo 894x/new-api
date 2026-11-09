@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { Settings02Icon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useEffectEvent, useId, useState } from 'react'
 import { useForm, type FieldErrors } from 'react-hook-form'
@@ -38,6 +40,12 @@ import {
 import { Combobox } from '@/components/ui/combobox'
 import { Form } from '@/components/ui/form'
 import { Label } from '@/components/ui/label'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTitle,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -117,6 +125,7 @@ export function PoolCard(props: {
   const [tuningOpen, setTuningOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [channelToAdd, setChannelToAdd] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [editingStrategy, setEditingStrategy] = useState(false)
   const [restoring, setRestoring] = useState(false)
   const form = useForm<PoolFormValues>({
@@ -348,59 +357,94 @@ export function PoolCard(props: {
                   {t('Monitoring view')}
                 </Button>
               )}
+              <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
+                <PopoverTrigger
+                  render={
+                    <Button
+                      type='button'
+                      size='icon-sm'
+                      variant='ghost'
+                      aria-label={`${t('Settings')}: ${props.pool.model}`}
+                      title={t('Settings')}
+                    />
+                  }
+                >
+                  <HugeiconsIcon
+                    icon={Settings02Icon}
+                    strokeWidth={2}
+                    aria-hidden='true'
+                  />
+                </PopoverTrigger>
+                <PopoverContent
+                  keepMounted
+                  align='end'
+                  sideOffset={8}
+                  role='dialog'
+                  className='max-h-[min(40rem,calc(100dvh-2rem))] w-[min(26rem,calc(100vw-1.5rem))] gap-4 overflow-y-auto overscroll-contain p-4'
+                >
+                  <PopoverTitle>{`${t('Settings')}: ${props.pool.model}`}</PopoverTitle>
+                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='ghost'
+                      disabled={disabled}
+                      onClick={() => {
+                        setSettingsOpen(false)
+                        setEditingStrategy(true)
+                      }}
+                    >
+                      {t('Edit strategy')}
+                    </Button>
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label htmlFor={prefixControlId}>
+                      {t('Prefix cache routing')}
+                    </Label>
+                    <Select
+                      value={prefixValue}
+                      onValueChange={(value) =>
+                        form.setValue(
+                          'tuning.chat_prefix_enabled',
+                          value === 'inherit' ? undefined : value === 'true',
+                          { shouldDirty: true }
+                        )
+                      }
+                      disabled={disabled}
+                    >
+                      <SelectTrigger id={prefixControlId} className='w-full'>
+                        <SelectValue>{prefixLabel}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='inherit'>
+                          {t('Inherit global')}
+                        </SelectItem>
+                        <SelectItem value='true'>{t('Enabled')}</SelectItem>
+                        <SelectItem value='false'>{t('Disabled')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className='text-muted-foreground text-xs'>
+                      {t(
+                        'Override prefix cache routing for this pool. Capacity and lifetime use the global settings.'
+                      )}
+                    </p>
+                  </div>
+                  <EarlyChunkSettings
+                    value={values.tuning.chat_early_chunk}
+                    disabled={disabled}
+                    onChange={(value) =>
+                      form.setValue('tuning.chat_early_chunk', value, {
+                        shouldDirty: true,
+                      })
+                    }
+                  />
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
-          <div className='flex flex-wrap items-center justify-between gap-2'>
-            <span className='text-muted-foreground text-xs'>
-              {t(ROUTING_MODE_LABELS[values.mode])}
-            </span>
-            <Button
-              type='button'
-              size='sm'
-              variant='ghost'
-              disabled={disabled}
-              onClick={() => setEditingStrategy(true)}
-            >
-              {t('Edit strategy')}
-            </Button>
-          </div>
-          <div className='space-y-1.5'>
-            <Label htmlFor={prefixControlId}>{t('Prefix cache routing')}</Label>
-            <Select
-              value={prefixValue}
-              onValueChange={(value) =>
-                form.setValue(
-                  'tuning.chat_prefix_enabled',
-                  value === 'inherit' ? undefined : value === 'true',
-                  { shouldDirty: true }
-                )
-              }
-              disabled={disabled}
-            >
-              <SelectTrigger id={prefixControlId} className='w-full'>
-                <SelectValue>{prefixLabel}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value='inherit'>{t('Inherit global')}</SelectItem>
-                <SelectItem value='true'>{t('Enabled')}</SelectItem>
-                <SelectItem value='false'>{t('Disabled')}</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className='text-muted-foreground text-xs'>
-              {t(
-                'Override prefix cache routing for this pool. Capacity and lifetime use the global settings.'
-              )}
-            </p>
-          </div>
-          <EarlyChunkSettings
-            value={values.tuning.chat_early_chunk}
-            disabled={disabled}
-            onChange={(value) =>
-              form.setValue('tuning.chat_early_chunk', value, {
-                shouldDirty: true,
-              })
-            }
-          />
+          <span className='text-muted-foreground text-xs'>
+            {t(ROUTING_MODE_LABELS[values.mode])}
+          </span>
         </CardHeader>
         <form
           className='contents'
@@ -434,6 +478,7 @@ export function PoolCard(props: {
             ) : (
               <PoolChannelList
                 model={props.pool.model}
+                validationAttempt={form.formState.submitCount}
                 channels={values.channels}
                 candidates={available}
                 disabled={disabled}

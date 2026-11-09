@@ -37,6 +37,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { routingPoolKeys, type RoutingPoolView } from '../api'
 import { PoolCard } from '../pool-card'
+import { getSettingsField } from './settings-queries'
 
 const clients: QueryClient[] = []
 afterEach(() => {
@@ -76,6 +77,143 @@ function fixture(): RoutingPoolView {
   }
 }
 
+test('channel enable switches stay visible with settings closed and save only the selected toggle', async () => {
+  const pool = fixture()
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+    data: { success: true, data: { ...(body as object), revision: 'saved' } },
+  }))
+  mountCard(pool)
+  expect(
+    screen.getByRole('switch', { name: 'Enable Alpha in this pool' })
+  ).toBeVisible()
+  const beta = screen.getByRole('switch', { name: 'Enable Beta in this pool' })
+  expect(beta).toBeChecked()
+  await userEvent.click(beta)
+  expect(beta).not.toBeChecked()
+  expect(
+    screen.getByRole('button', { name: 'Settings: Beta' })
+  ).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        channels: [pool.channels[0], { ...pool.channels[1], enabled: false }],
+      })
+    )
+  )
+})
+
+test('pool and channel gears open floating settings outside the card and Escape returns focus', async () => {
+  const put = vi.spyOn(api, 'put')
+  mountCard(fixture(), true)
+  const pool = screen.getByRole('button', { name: 'Settings: kimi-k3' })
+  const alpha = screen.getByRole('button', { name: 'Settings: Alpha' })
+  const beta = screen.getByRole('button', { name: 'Settings: Beta' })
+  expect(pool).toHaveAttribute('aria-expanded', 'false')
+  expect(alpha).toHaveAttribute('aria-expanded', 'false')
+  expect(
+    screen.queryByRole('combobox', { name: 'Prefix cache routing' })
+  ).not.toBeInTheDocument()
+  expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument()
+  expect(screen.getAllByLabelText('Cache hit rate: —')).toHaveLength(2)
+
+  await userEvent.click(pool)
+  const poolPanel = screen.getByRole('dialog', { name: 'Settings: kimi-k3' })
+  expect(pool.closest('[data-slot="card"]')).not.toContainElement(poolPanel)
+  expect(
+    getSettingsField('combobox', { name: 'Prefix cache routing' })
+  ).toBeVisible()
+  expect(
+    getSettingsField('combobox', { name: 'Early empty chunk' })
+  ).toBeVisible()
+  expect(alpha).toHaveAttribute('aria-expanded', 'false')
+  await userEvent.keyboard('{Escape}')
+  expect(pool).toHaveAttribute('aria-expanded', 'false')
+  expect(pool).toHaveFocus()
+
+  alpha.focus()
+  await userEvent.keyboard('{Enter}')
+  expect(alpha).toHaveAttribute('aria-expanded', 'true')
+  const channelPanel = screen.getByRole('dialog', { name: 'Settings: Alpha' })
+  expect(alpha.closest('li')).not.toContainElement(channelPanel)
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toBeVisible()
+  expect(
+    getSettingsField('combobox', { name: 'Early chunk for Alpha' })
+  ).toBeVisible()
+  expect(beta).toHaveAttribute('aria-expanded', 'false')
+  expect(
+    screen.queryByRole('spinbutton', { name: 'Priority for Beta' })
+  ).not.toBeInTheDocument()
+  expect(put).not.toHaveBeenCalled()
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  await userEvent.keyboard('{Escape}')
+  expect(alpha).toHaveAttribute('aria-expanded', 'false')
+  expect(alpha).toHaveFocus()
+})
+
+test('closing the channel popover preserves explicit zero and saves the draft while hidden', async () => {
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+    data: { success: true, data: { ...(body as object), revision: 'saved' } },
+  }))
+  mountCard(fixture(), true)
+  const trigger = screen.getByRole('button', { name: 'Settings: Alpha' })
+  await userEvent.click(trigger)
+  fireEvent.change(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' }),
+    {
+      target: { value: '0' },
+    }
+  )
+  trigger.focus()
+  await userEvent.keyboard(' ')
+  expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  expect(trigger).toHaveFocus()
+  expect(
+    screen.queryByRole('spinbutton', { name: 'Priority for Alpha' })
+  ).not.toBeInTheDocument()
+  await userEvent.click(trigger)
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(0)
+  await userEvent.click(trigger)
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        channels: [
+          { channel_id: 1, priority: 0, weight: 10, enabled: true },
+          { channel_id: 2, priority: 80, weight: 0, enabled: true },
+        ],
+      })
+    )
+  )
+})
+
+test('saving an invalid value after closing the channel popover reopens its settings', async () => {
+  const put = vi.spyOn(api, 'put')
+  mountCard(fixture(), true)
+  const trigger = screen.getByRole('button', { name: 'Settings: Alpha' })
+  await userEvent.click(trigger)
+  fireEvent.change(
+    getSettingsField('spinbutton', { name: 'Weight for Alpha' }),
+    {
+      target: { value: '-1' },
+    }
+  )
+  await userEvent.click(trigger)
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'true'))
+  expect(
+    getSettingsField('spinbutton', { name: 'Weight for Alpha' })
+  ).toBeInvalid()
+  expect(put).not.toHaveBeenCalled()
+})
+
 test.each([
   ['Enabled', true, false],
   ['Disabled', false, true],
@@ -90,7 +228,7 @@ test.each([
       data: { success: true, data: { ...(body as object), revision: 'saved' } },
     }))
     mountCard(pool)
-    const selector = screen.getByRole('combobox', {
+    const selector = getSettingsField('combobox', {
       name: 'Prefix cache routing',
     })
     await userEvent.click(selector)
@@ -116,7 +254,7 @@ test.each([
 test('prefix routing override is disabled for read-only pools', () => {
   mountCard(fixture(), false)
   expect(
-    screen.getByRole('combobox', { name: 'Prefix cache routing' })
+    getSettingsField('combobox', { name: 'Prefix cache routing' })
   ).toBeDisabled()
 })
 
@@ -128,15 +266,15 @@ test('early chunks save the pool mode and only that pool channel override withou
   }))
   mountCard(pool)
   await userEvent.click(
-    screen.getByRole('combobox', { name: 'Early empty chunk' })
+    getSettingsField('combobox', { name: 'Early empty chunk' })
   )
   await userEvent.click(screen.getByRole('option', { name: 'Observe only' }))
   await userEvent.click(
-    screen.getByRole('combobox', { name: 'Early chunk for Alpha' })
+    getSettingsField('combobox', { name: 'Early chunk for Alpha' })
   )
   await userEvent.click(screen.getByRole('option', { name: 'Enabled' }))
   expect(
-    screen.getByRole('combobox', { name: 'Early chunk for Beta' })
+    getSettingsField('combobox', { name: 'Early chunk for Beta' })
   ).toHaveTextContent('Inherit pool')
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() =>
@@ -156,10 +294,10 @@ test('early chunks save the pool mode and only that pool channel override withou
 test('read-only pools cannot change early chunk or channel modes', async () => {
   mountCard(fixture(), false)
   expect(
-    screen.getByRole('combobox', { name: 'Early empty chunk' })
+    getSettingsField('combobox', { name: 'Early empty chunk' })
   ).toBeDisabled()
   expect(
-    screen.getByRole('combobox', { name: 'Early chunk for Alpha' })
+    getSettingsField('combobox', { name: 'Early chunk for Alpha' })
   ).toBeDisabled()
 })
 
@@ -173,7 +311,7 @@ test('pool parameters open beside the return action and save only explicit overr
   }))
   mountCard(pool)
   fireEvent.change(
-    screen.getByRole('spinbutton', { name: 'Priority for Alpha' }),
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' }),
     { target: { value: '7' } }
   )
   await userEvent.click(screen.getByRole('button', { name: 'Monitoring view' }))
@@ -431,27 +569,27 @@ test('opening and returning from a pool monitor retains the same dirty editor an
     data: { success: true, data: { ...(body as object), revision: 'saved' } },
   }))
   const { onDirtyChange } = mountCard(pool)
-  const priority = screen.getByRole('spinbutton', {
+  const priority = getSettingsField('spinbutton', {
     name: 'Priority for Alpha',
   })
   fireEvent.change(priority, { target: { value: '7' } })
   await userEvent.click(
-    screen.getByRole('switch', { name: 'Enable Beta in this pool' })
+    getSettingsField('switch', { name: 'Enable Beta in this pool' })
   )
   const trigger = screen.getByRole('button', { name: 'Monitoring view' })
   await userEvent.click(trigger)
   const monitor = screen.getByRole('dialog', {
     name: 'kimi-k3 · standard · Default configuration',
   })
-  expect(
-    within(monitor).getByRole('spinbutton', { name: 'Priority for Alpha' })
-  ).toBe(priority)
+  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
+    priority
+  )
   expect(priority).toHaveValue(7)
   expect(
     await within(monitor).findByLabelText('Cache hit rate: 75.25%')
   ).toBeVisible()
   expect(
-    await within(monitor).findByText('No adaptive routing observations')
+    await within(monitor).findByText(/No (?:adaptive )?routing observations/)
   ).toBeVisible()
   expect(
     monitor.querySelector('[data-routing-monitor-overview]')?.parentElement
@@ -468,7 +606,7 @@ test('opening and returning from a pool monitor retains the same dirty editor an
   expect(get).toHaveBeenCalledWith('/api/channel/routing-pool', {
     params: { routing_group: 'standard', model: 'kimi-k3' },
   })
-  const editor = priority.closest('[data-slot="card"]')?.parentElement
+  const editor = trigger.closest('[data-slot="card"]')?.parentElement
   expect(editor).toHaveClass('xl:row-start-2')
   await userEvent.click(
     within(monitor).getByRole('button', { name: 'TTFT prediction grid' })
@@ -478,27 +616,27 @@ test('opening and returning from a pool monitor retains the same dirty editor an
   expect(
     await within(monitor).findByText('Prediction statistics unavailable')
   ).toBeVisible()
-  expect(
-    within(monitor).getByRole('spinbutton', { name: 'Priority for Alpha' })
-  ).toBe(priority)
+  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
+    priority
+  )
   expect(priority).toHaveValue(7)
   await userEvent.click(
     within(monitor).getByRole('button', { name: 'Routing observations' })
   )
   expect(
-    await within(monitor).findByText('No adaptive routing observations')
+    await within(monitor).findByText(/No (?:adaptive )?routing observations/)
   ).toBeVisible()
   expect(editor).toHaveClass('xl:row-start-2')
   await userEvent.click(
     within(monitor).getByRole('button', { name: 'Back to card view' })
   )
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-  expect(screen.getByRole('spinbutton', { name: 'Priority for Alpha' })).toBe(
+  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
     priority
   )
   expect(priority).toHaveValue(7)
   expect(
-    screen.getByRole('switch', { name: 'Enable Beta in this pool' })
+    getSettingsField('switch', { name: 'Enable Beta in this pool' })
   ).not.toBeChecked()
   expect(trigger).toHaveFocus()
   expect(onDirtyChange).toHaveBeenLastCalledWith(true)
@@ -528,7 +666,7 @@ test('read-only pool monitoring keeps the original configuration visible when li
     await within(monitor).findByText('Unable to refresh routing observations')
   ).toBeVisible()
   expect(
-    within(monitor).getByRole('spinbutton', { name: 'Priority for Alpha' })
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
   ).toBeDisabled()
   expect(within(monitor).getByRole('button', { name: 'Save' })).toBeDisabled()
   expect(
@@ -545,7 +683,7 @@ test('discount-first strategy saves model latency limits and preserves the exist
     data: { success: true, data: { ...(body as object), revision: 'saved' } },
   }))
   mountCard()
-  await userEvent.click(screen.getByRole('button', { name: 'Edit strategy' }))
+  await userEvent.click(getSettingsField('button', { name: 'Edit strategy' }))
   await userEvent.click(
     screen.getByRole('combobox', { name: 'Scheduling strategy' })
   )
@@ -587,7 +725,7 @@ test('invalid discount latency limits prevent persistence and explain the valida
   const pool = fixture()
   pool.mode = 'discount'
   mountCard(pool)
-  await userEvent.click(screen.getByRole('button', { name: 'Edit strategy' }))
+  await userEvent.click(getSettingsField('button', { name: 'Edit strategy' }))
   fireEvent.change(
     screen.getByRole('spinbutton', {
       name: 'Maximum time per output token (ms)',
@@ -636,21 +774,21 @@ test('a failed save retains explicit zero priority, disabled state and the dirty
   vi.spyOn(api, 'put').mockRejectedValue(new Error('conflicting pool revision'))
   const { onDirtyChange } = mountCard()
   fireEvent.change(
-    screen.getByRole('spinbutton', { name: 'Priority for Alpha' }),
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' }),
     { target: { value: '0' } }
   )
   await userEvent.click(
-    screen.getByRole('switch', { name: 'Enable Beta in this pool' })
+    getSettingsField('switch', { name: 'Enable Beta in this pool' })
   )
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
   )
   expect(
-    screen.getByRole('spinbutton', { name: 'Priority for Alpha' })
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
   ).toHaveValue(0)
   expect(
-    screen.getByRole('switch', { name: 'Enable Beta in this pool' })
+    getSettingsField('switch', { name: 'Enable Beta in this pool' })
   ).not.toBeChecked()
   expect(onDirtyChange).toHaveBeenLastCalledWith(true)
 })
@@ -659,7 +797,7 @@ test('invalid numeric input prevents saving and explains the allowed value contr
   const put = vi.spyOn(api, 'put')
   mountCard()
   fireEvent.change(
-    screen.getByRole('spinbutton', { name: 'Weight for Alpha' }),
+    getSettingsField('spinbutton', { name: 'Weight for Alpha' }),
     { target: { value: '-1' } }
   )
   const form = screen.getByRole('button', { name: 'Save' }).closest('form')
@@ -712,8 +850,9 @@ test('an empty explicit pool stays empty until the administrator adds an availab
   ).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole('option', { name: 'Alpha #1' }))
   await userEvent.click(screen.getByRole('button', { name: 'Add' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Settings: Alpha' }))
   expect(
-    screen.getByRole('spinbutton', { name: 'Priority for Alpha' })
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
   ).toHaveValue(100)
 })
 
@@ -721,17 +860,17 @@ test('read-only cards expose configuration while disabling mutation, reordering 
   const get = vi.spyOn(api, 'get')
   const { onDirtyChange } = mountCard(fixture(), false)
   expect(
-    screen.getByRole('spinbutton', { name: 'Priority for Alpha' })
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
   ).toBeDisabled()
   expect(
-    screen.getByRole('switch', { name: 'Enable Alpha in this pool' })
+    getSettingsField('switch', { name: 'Enable Alpha in this pool' })
   ).toHaveAttribute('aria-disabled', 'true')
-  expect(screen.getByRole('button', { name: 'Edit strategy' })).toBeDisabled()
+  expect(getSettingsField('button', { name: 'Edit strategy' })).toBeDisabled()
   const drag = screen.getByRole('button', { name: 'Drag 2 to reorder' })
   expect(drag).toBeDisabled()
   fireEvent.keyDown(drag, { key: 'ArrowUp' })
   expect(
-    screen.getByRole('spinbutton', { name: 'Priority for Alpha' })
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
   ).toHaveValue(100)
   expect(onDirtyChange).not.toHaveBeenCalledWith(true)
   expect(get).toHaveBeenCalledTimes(1)
@@ -784,7 +923,7 @@ test('removing a channel requires confirmation and changes only the draft until 
     )
   ).toBeVisible()
   expect(
-    screen.getByRole('spinbutton', { name: 'Priority for Alpha', hidden: true })
+    getSettingsField('spinbutton', { name: 'Priority for Alpha', hidden: true })
   ).toHaveValue(100)
   await userEvent.click(
     within(confirmation).getByRole('button', { name: 'Cancel' })
@@ -793,7 +932,7 @@ test('removing a channel requires confirmation and changes only the draft until 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   )
   expect(
-    screen.getByRole('spinbutton', { name: 'Priority for Alpha' })
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
   ).toHaveValue(100)
   expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
   expect(put).not.toHaveBeenCalled()
@@ -811,7 +950,7 @@ test('removing a channel requires confirmation and changes only the draft until 
     screen.queryByRole('spinbutton', { name: 'Priority for Alpha' })
   ).not.toBeInTheDocument()
   expect(
-    screen.getByRole('spinbutton', { name: 'Weight for Beta' })
+    getSettingsField('spinbutton', { name: 'Weight for Beta' })
   ).toHaveValue(0)
   expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
   expect(put).not.toHaveBeenCalled()
@@ -858,7 +997,7 @@ test('configured discounts preserve zero and small fractions while unknown disco
   ).toBeTruthy()
   expect(
     discount.compareDocumentPosition(
-      screen.getByRole('spinbutton', { name: 'Priority for Alpha' })
+      getSettingsField('spinbutton', { name: 'Priority for Alpha' })
     ) & Node.DOCUMENT_POSITION_FOLLOWING
   ).toBeTruthy()
 })
