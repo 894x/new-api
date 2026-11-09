@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next'
 
 import { AutoGroupOrderItem } from '@/components/auto-group-order-item'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { StatusBadge } from '@/components/status-badge'
 import { TruncatedText } from '@/components/truncated-text'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -251,12 +252,37 @@ export function PoolChannelList(props: {
                         const name =
                           candidate?.channel_name ?? `#${entry.channel_id}`
                         const discount = candidate?.effective_cost_discount
+                        const observation = monitoring.isError
+                          ? undefined
+                          : observations.get(entry.channel_id)
+                        let tone: 'danger' | 'warning' | undefined
+                        if (!entry.enabled) {
+                          tone = 'warning'
+                        } else if (
+                          candidate?.available === false ||
+                          observation?.state === 'unavailable'
+                        ) {
+                          tone = 'danger'
+                        } else if (
+                          observation &&
+                          ['slow', 'very_slow', 'configuration'].includes(
+                            observation.state
+                          )
+                        ) {
+                          tone = 'warning'
+                        }
                         return (
                           <AutoGroupOrderItem
                             key={entry.channel_id}
                             group={String(entry.channel_id)}
                             compact
                             reorderable={false}
+                            className={cn(
+                              tone === 'danger' &&
+                                'border-destructive/35 bg-destructive/5',
+                              tone === 'warning' &&
+                                'border-warning/40 bg-warning/5'
+                            )}
                             footer={
                               props.model && (
                                 <ChannelMonitoringStrip
@@ -302,10 +328,16 @@ export function PoolChannelList(props: {
                                 <span className='text-muted-foreground shrink-0 text-[10px]'>
                                   #{entry.channel_id}
                                 </span>
-                                {!candidate?.available && (
-                                  <Badge variant='outline'>
-                                    {t('Unavailable')}
-                                  </Badge>
+                                {(!entry.enabled || !candidate?.available) && (
+                                  <StatusBadge
+                                    variant={tone ?? 'warning'}
+                                    copyable={false}
+                                    className='h-4 px-1 text-[10px]'
+                                  >
+                                    {entry.enabled
+                                      ? t('Unavailable')
+                                      : t('Disabled')}
+                                  </StatusBadge>
                                 )}
                               </div>
                             }

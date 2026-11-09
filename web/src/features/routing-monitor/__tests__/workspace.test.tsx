@@ -466,6 +466,32 @@ test('priority pools display observed traffic without adaptive target shares', a
   )
 })
 
+test.each([
+  ['Retired candidate', { active: false }, 'warning', 'priority'],
+  ['Manually disabled', { status: 2 }, 'warning', 'priority'],
+  ['Automatically disabled', { status: 3 }, 'destructive', 'priority'],
+  [
+    'Ejected',
+    { ejected_until: Number.MAX_SAFE_INTEGER },
+    'destructive',
+    'discount',
+  ],
+  ['Degraded', { degraded: true }, 'warning', 'discount'],
+] as const)(
+  'channels show %s with matching status and card emphasis',
+  async (label, state, tone, mode) => {
+    const snapshot = snapshotFixture()
+    const route = snapshot.nodes[0].routes[0]
+    route.mode = mode
+    Object.assign(route.channels[0], state)
+    mockApi({ mode, snapshot })
+    mount()
+    const badge = await screen.findByText(label)
+    expect(badge).toHaveClass(`text-${tone}`)
+    expect(badge.closest('[data-flow-channel]')).toHaveClass(`bg-${tone}/5`)
+  }
+)
+
 test('monitoring failure stops the flow and provides a retry action', async () => {
   mockApi({ fail: true })
   mount()

@@ -90,6 +90,26 @@ test('channel enable switches stay visible with settings closed and save only th
   expect(beta).toBeChecked()
   await userEvent.click(beta)
   expect(beta).not.toBeChecked()
+  expect(beta.closest('[data-order-item]')).toHaveClass('bg-warning/5')
+  expect(
+    within(beta.closest('[data-order-item]') as HTMLElement).getByText(
+      'Disabled'
+    )
+  ).toHaveClass('text-warning')
+  const alpha = screen.getByRole('switch', {
+    name: 'Enable Alpha in this pool',
+  })
+  expect(alpha.closest('[data-order-item]')).not.toHaveClass('bg-warning/5')
+  await userEvent.click(beta)
+  expect(beta).toBeChecked()
+  expect(beta.closest('[data-order-item]')).not.toHaveClass('bg-warning/5')
+  expect(
+    within(beta.closest('[data-order-item]') as HTMLElement).queryByText(
+      'Disabled'
+    )
+  ).not.toBeInTheDocument()
+  await userEvent.click(beta)
+  expect(beta).not.toBeChecked()
   expect(
     screen.getByRole('button', { name: 'Settings: Beta' })
   ).toHaveAttribute('aria-expanded', 'false')
@@ -102,6 +122,19 @@ test('channel enable switches stay visible with settings closed and save only th
         channels: [pool.channels[0], { ...pool.channels[1], enabled: false }],
       })
     )
+  )
+})
+
+test('an unavailable channel uses error emphasis while its pool switch remains enabled', () => {
+  const pool = fixture()
+  pool.candidates[0].available = false
+  mountCard(pool)
+  const channel = screen
+    .getByRole('switch', { name: 'Enable Alpha in this pool' })
+    .closest('[data-order-item]')
+  expect(channel).toHaveClass('bg-destructive/5')
+  expect(within(channel as HTMLElement).getByText('Unavailable')).toHaveClass(
+    'text-destructive'
   )
 })
 

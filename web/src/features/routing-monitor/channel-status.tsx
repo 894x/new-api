@@ -18,10 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
 
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/status-badge'
+import { cn } from '@/lib/utils'
 
 import type { MonitorChannel } from './api'
-import { monitorChannelStatus } from './route-data'
+import { monitorChannelStatus, monitorChannelTone } from './route-data'
 
 export function ChannelStatus(props: {
   channel: MonitorChannel
@@ -29,37 +30,39 @@ export function ChannelStatus(props: {
   priority?: boolean
 }) {
   const { t } = useTranslation()
-  if (props.channel.status === 2 || props.channel.status === 3) {
-    return (
-      <Badge variant='destructive' title={props.channel.status_reason}>
-        {props.channel.status === 3
-          ? t('Automatically disabled')
-          : t('Manually disabled')}
-      </Badge>
-    )
-  }
-  if (!props.channel.active) {
-    return <Badge variant='outline'>{t('Retired candidate')}</Badge>
-  }
-  if (props.priority) {
-    return (
-      <Badge variant='outline'>
-        {props.channel.selection_count === 0 ? t('Standby') : t('Available')}
-      </Badge>
-    )
-  }
+  const tone = monitorChannelTone(props.channel, props.at, props.priority)
   const status = monitorChannelStatus(props.channel, props.at)
-  if (status === 'ejected') {
-    return <Badge variant='destructive'>{t('Ejected')}</Badge>
+  let label = t('Healthy')
+  if (props.channel.status === 3) {
+    label = t('Automatically disabled')
+  } else if (props.channel.status === 2) {
+    label = t('Manually disabled')
+  } else if (!props.channel.active) {
+    label = t('Retired candidate')
+  } else if (props.priority) {
+    label = props.channel.selection_count === 0 ? t('Standby') : t('Available')
+  } else if (status === 'ejected') {
+    label = t('Ejected')
+  } else if (status === 'degraded') {
+    label = t('Degraded')
+  } else if (status === 'unverified') {
+    label = t('Awaiting samples')
+  } else if (status === 'probe') {
+    label = t('Exploration')
   }
-  if (status === 'degraded') {
-    return <Badge variant='warning'>{t('Degraded')}</Badge>
-  }
-  if (status === 'unverified') {
-    return <Badge variant='secondary'>{t('Awaiting samples')}</Badge>
-  }
-  if (status === 'probe') {
-    return <Badge variant='outline'>{t('Exploration')}</Badge>
-  }
-  return <Badge variant='secondary'>{t('Healthy')}</Badge>
+  return (
+    <StatusBadge
+      variant={tone}
+      copyable={false}
+      title={props.channel.status_reason || label}
+      className={cn(
+        'border text-xs',
+        tone === 'neutral' && 'border-border text-foreground',
+        tone === 'danger' && 'border-destructive/30 bg-destructive/10',
+        tone === 'warning' && 'border-warning/40 bg-warning/10'
+      )}
+    >
+      {label}
+    </StatusBadge>
+  )
 }

@@ -53,6 +53,20 @@ export function monitorChannelStatus(
   return 'healthy'
 }
 
+export function monitorChannelTone(
+  channel: MonitorChannel,
+  now: number,
+  priority = false
+): 'danger' | 'warning' | 'neutral' {
+  if (channel.status === 3) return 'danger'
+  if (channel.status === 2 || !channel.active) return 'warning'
+  if (priority) return 'neutral'
+  const status = monitorChannelStatus(channel, now)
+  if (status === 'ejected') return 'danger'
+  if (status === 'degraded') return 'warning'
+  return 'neutral'
+}
+
 export function weightedDiscount(channels: MonitorChannel[]): number | null {
   let total = 0
   let share = 0

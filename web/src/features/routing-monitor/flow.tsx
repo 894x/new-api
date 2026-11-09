@@ -27,7 +27,7 @@ import { cn } from '@/lib/utils'
 
 import type { MonitorRequest, MonitorRoute } from './api'
 import { ChannelStatus } from './channel-status'
-import { channelColor } from './route-data'
+import { channelColor, monitorChannelTone } from './route-data'
 
 interface FlowGeometry {
   width: number
@@ -298,76 +298,82 @@ export function RoutingFlow(props: {
         role='list'
         aria-label={t('Candidate channels')}
       >
-        {props.route.channels.map((channel) => (
-          <Card
-            key={channel.channel_id}
-            data-flow-channel
-            size='sm'
-            role='listitem'
-            className={cn(
-              'gap-2',
-              channel.target_share === mainShare && 'ring-primary/40'
-            )}
-          >
-            <CardContent className='space-y-2'>
-              <div className='flex flex-wrap items-center justify-between gap-1'>
-                <span className='min-w-0 font-medium break-all'>
-                  {props.names?.get(channel.channel_id) ||
-                    t('Channel #{{id}}', { id: channel.channel_id })}
-                </span>
-                <ChannelStatus
-                  channel={channel}
-                  at={props.at}
-                  priority={priority}
-                />
-              </div>
-              <div className='flex flex-wrap items-center justify-between gap-2'>
-                <span className='text-muted-foreground text-xs'>
-                  {priority ? (
-                    <>
-                      {t('Priority')}: {formatNumber(channel.priority, locale)}{' '}
-                      · {t('Weight')}: {formatNumber(channel.weight, locale)}
-                    </>
-                  ) : (
-                    <>
-                      {t('Effective discount')}:{' '}
-                      {channel.effective_cost_discount == null
-                        ? '—'
-                        : `×${formatNumber(channel.effective_cost_discount, locale)}`}
-                    </>
-                  )}
-                </span>
-                <span className='text-lg font-medium tabular-nums'>
-                  <span className='text-muted-foreground mr-1 text-xs font-normal'>
-                    {observed ? t('Selection share') : t('Target')}
+        {props.route.channels.map((channel) => {
+          const tone = monitorChannelTone(channel, props.at, priority)
+          return (
+            <Card
+              key={channel.channel_id}
+              data-flow-channel
+              size='sm'
+              role='listitem'
+              className={cn(
+                'gap-2',
+                channel.target_share === mainShare && 'ring-primary/40',
+                tone === 'danger' && 'bg-destructive/5 ring-destructive/35',
+                tone === 'warning' && 'bg-warning/5 ring-warning/35'
+              )}
+            >
+              <CardContent className='space-y-2'>
+                <div className='flex flex-wrap items-center justify-between gap-1'>
+                  <span className='min-w-0 font-medium break-all'>
+                    {props.names?.get(channel.channel_id) ||
+                      t('Channel #{{id}}', { id: channel.channel_id })}
                   </span>
-                  {formatNumber(channel.target_share * 100, locale)}%
-                </span>
-              </div>
-              <div className='text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums'>
-                <span>
-                  TTFT{' '}
-                  {channel.ttft_ms == null
-                    ? '—'
-                    : `${formatNumber(channel.ttft_ms, locale)} ms`}
-                </span>
-                <span>
-                  {t('Selected')}:{' '}
-                  {formatNumber(channel.selected_share * 100, locale)}%
-                </span>
-              </div>
-              <div className='bg-muted h-1 overflow-hidden rounded-full'>
-                <div
-                  className='h-full rounded-full'
-                  style={{
-                    width: `${Math.min(100, Math.max(0, channel.target_share * 100))}%`,
-                    background: channelColor(channel.channel_id),
-                  }}
-                />
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+                  <ChannelStatus
+                    channel={channel}
+                    at={props.at}
+                    priority={priority}
+                  />
+                </div>
+                <div className='flex flex-wrap items-center justify-between gap-2'>
+                  <span className='text-muted-foreground text-xs'>
+                    {priority ? (
+                      <>
+                        {t('Priority')}:{' '}
+                        {formatNumber(channel.priority, locale)} · {t('Weight')}
+                        : {formatNumber(channel.weight, locale)}
+                      </>
+                    ) : (
+                      <>
+                        {t('Effective discount')}:{' '}
+                        {channel.effective_cost_discount == null
+                          ? '—'
+                          : `×${formatNumber(channel.effective_cost_discount, locale)}`}
+                      </>
+                    )}
+                  </span>
+                  <span className='text-lg font-medium tabular-nums'>
+                    <span className='text-muted-foreground mr-1 text-xs font-normal'>
+                      {observed ? t('Selection share') : t('Target')}
+                    </span>
+                    {formatNumber(channel.target_share * 100, locale)}%
+                  </span>
+                </div>
+                <div className='text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums'>
+                  <span>
+                    TTFT{' '}
+                    {channel.ttft_ms == null
+                      ? '—'
+                      : `${formatNumber(channel.ttft_ms, locale)} ms`}
+                  </span>
+                  <span>
+                    {t('Selected')}:{' '}
+                    {formatNumber(channel.selected_share * 100, locale)}%
+                  </span>
+                </div>
+                <div className='bg-muted h-1 overflow-hidden rounded-full'>
+                  <div
+                    className='h-full rounded-full'
+                    style={{
+                      width: `${Math.min(100, Math.max(0, channel.target_share * 100))}%`,
+                      background: channelColor(channel.channel_id),
+                    }}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          )
+        })}
       </div>
     </div>
   )

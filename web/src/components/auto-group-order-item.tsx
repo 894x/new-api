@@ -47,6 +47,7 @@ import { cn } from '@/lib/utils'
 type AutoGroupOrderItemProps = {
   group: string
   label?: ReactNode
+  className?: string
   labelClassName?: string
   removeClassName?: string
   compact?: boolean
@@ -104,7 +105,8 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
   const itemClassName = cn(
     'bg-background relative flex min-w-0 items-center rounded-lg border',
     props.compact ? '@container/order-item gap-1 p-1' : 'gap-2 p-2',
-    props.footer && 'flex-wrap'
+    props.footer && 'flex-wrap',
+    props.className
   )
   const content = (
     <>
