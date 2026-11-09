@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
@@ -27,10 +28,11 @@ type ChannelDisableImpactCustomer struct {
 	AlternativeChannels int    `json:"alternative_channels"`
 }
 
-type ChannelDisableImpact struct {
-	Channels      []ChannelDisableImpactChannel  `json:"channels"`
-	Customers     []ChannelDisableImpactCustomer `json:"customers"`
-	CustomerCount int                            `json:"customer_count"`
+type ChannelStatusImpact struct {
+	Channels      []ChannelDisableImpactChannel    `json:"channels"`
+	Customers     []ChannelDisableImpactCustomer   `json:"customers"`
+	CustomerCount int                              `json:"customer_count"`
+	RoutingPools  []model.ChannelStatusRoutingPool `json:"routing_pools"`
 }
 
 type channelImpactRoute struct {
@@ -79,9 +81,15 @@ func channelImpactKeyRoutes(user model.User, tokens []model.Token, models map[st
 // GetChannelDisableImpact previews configuration eligibility for active users
 // with usable API keys. It does not claim that a request is currently in flight
 // or predict request-specific affinity, capacity, or parameter constraints.
-func GetChannelDisableImpact(ctx context.Context, ids []int, tag *string, operatorRole int) (ChannelDisableImpact, error) {
-	result := ChannelDisableImpact{Channels: []ChannelDisableImpactChannel{}, Customers: []ChannelDisableImpactCustomer{}}
-	snapshot, err := model.LoadChannelDisableImpactSnapshot(ctx, ids, tag, operatorRole)
+func GetChannelDisableImpact(ctx context.Context, ids []int, tag *string, operatorRole int) (ChannelStatusImpact, error) {
+	return GetChannelStatusImpact(ctx, ids, tag, operatorRole, common.ChannelStatusManuallyDisabled)
+}
+
+// GetChannelStatusImpact shares the deduplicated membership preview for both
+// actions. Customer eligibility is calculated only for disabling live routes.
+func GetChannelStatusImpact(ctx context.Context, ids []int, tag *string, operatorRole, targetStatus int) (ChannelStatusImpact, error) {
+	result := ChannelStatusImpact{Channels: []ChannelDisableImpactChannel{}, Customers: []ChannelDisableImpactCustomer{}}
+	snapshot, err := model.LoadChannelStatusImpactSnapshot(ctx, ids, tag, operatorRole, targetStatus)
 	if err != nil {
 		return result, err
 	}
@@ -95,6 +103,17 @@ func GetChannelDisableImpact(ctx context.Context, ids []int, tag *string, operat
 				modelNames[name] = true
 			}
 		}
+	}
+	selectedIDs := make([]int, 0, len(selected))
+	for id := range selected {
+		selectedIDs = append(selectedIDs, id)
+	}
+	result.RoutingPools, err = model.LoadChannelStatusRoutingPools(ctx, selectedIDs, operatorRole)
+	if err != nil {
+		return result, err
+	}
+	if targetStatus == common.ChannelStatusEnabled {
+		return result, nil
 	}
 	tokens := make(map[int][]model.Token)
 	for _, token := range snapshot.Tokens {

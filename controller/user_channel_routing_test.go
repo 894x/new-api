@@ -104,8 +104,8 @@ func TestChannelDisableImpactDatabaseMatrix(t *testing.T) {
 					response := userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/disable-impact", `{"ids":[9201]}`, GetChannelDisableImpact)
 					require.Equal(t, http.StatusOK, response.Code)
 					var body struct {
-						Success bool                         `json:"success"`
-						Data    service.ChannelDisableImpact `json:"data"`
+						Success bool                        `json:"success"`
+						Data    service.ChannelStatusImpact `json:"data"`
 					}
 					require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
 					require.True(t, body.Success, response.Body.String())
@@ -154,8 +154,8 @@ func TestChannelDisableImpactDatabaseMatrix(t *testing.T) {
 			}
 			missing := userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/disable-impact", `{"ids":[999999]}`, GetChannelDisableImpact)
 			var empty struct {
-				Success bool                         `json:"success"`
-				Data    service.ChannelDisableImpact `json:"data"`
+				Success bool                        `json:"success"`
+				Data    service.ChannelStatusImpact `json:"data"`
 			}
 			require.NoError(t, common.Unmarshal(missing.Body.Bytes(), &empty))
 			assert.True(t, empty.Success)
@@ -177,14 +177,227 @@ func TestChannelDisableImpactDatabaseMatrix(t *testing.T) {
 }
 
 func TestChannelDisableImpactRequiresCustomerRoutingPermission(t *testing.T) {
+	for _, scenario := range []struct {
+		path    string
+		handler gin.HandlerFunc
+	}{{"disable-impact", GetChannelDisableImpact}, {"enable-impact", GetChannelEnableImpact}} {
+		t.Run(scenario.path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Set("id", 0)
+			c.Set("role", common.RoleCommonUser)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/channel/"+scenario.path, strings.NewReader(`{"ids":[9201]}`))
+			scenario.handler(c)
+			assert.Equal(t, http.StatusForbidden, recorder.Code)
+			assert.NotContains(t, recorder.Body.String(), "customers")
+		})
+	}
+}
+
+func TestChannelRoutingPoolStatusDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+				t.Skip("isolated database DSN not configured")
+			}
+			t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+			db := setupManageUserTestDB(t)
+			previousCache := common.MemoryCacheEnabled
+			common.MemoryCacheEnabled = true
+			t.Cleanup(func() { common.MemoryCacheEnabled = previousCache })
+			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.Token{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+			channels := []model.Channel{
+				{Id: 9301, Name: "Target", Key: "private-key", Type: 1, Status: common.ChannelStatusEnabled, Models: "explicit,implicit", Group: "default", Priority: common.GetPointer(int64(25))},
+				{Id: 9302, Name: "Retained", Type: 1, Status: common.ChannelStatusEnabled, Models: "explicit,implicit", Group: "default", Priority: common.GetPointer(int64(10))},
+			}
+			for i := range channels {
+				require.NoError(t, db.Create(&channels[i]).Error)
+				require.NoError(t, channels[i].AddAbilities(nil))
+			}
+			users := []model.User{
+				{Username: "no-key", Role: common.RoleCommonUser, Group: "default", Status: common.UserStatusDisabled, AffCode: "disablepool1"},
+				{Username: "higher-role", Role: common.RoleRootUser, Group: "default", Status: common.UserStatusEnabled, AffCode: "disablepool2"},
+			}
+			require.NoError(t, db.Create(&users).Error)
+			pool := model.ModelRoutingPool{RoutingGroup: "default", Model: "explicit", Mode: model.RoutingModePriority, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 9301, Priority: 0, Weight: 7, Enabled: true}, {ChannelID: 9302, Priority: 10, Weight: 13, Enabled: true}}}
+			require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+			beforeRevision := pool.Revision
+			scoped := model.UserGroupChannelRoutingOverride{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[0].Id, Model: "explicit", ChannelId: 9301, Priority: common.GetPointer(int64(0)), Weight: common.GetPointer(uint(9))}, RoutingGroup: "default"}
+			require.NoError(t, db.Create(&scoped).Error)
+			userRevision, err := model.UserChannelRoutingRevision([]model.UserChannelRoutingOverride{scoped.UserChannelRoutingOverride})
+			require.NoError(t, err)
+			legacy := model.UserChannelRoutingOverride{UserId: users[0].Id, Model: "explicit", ChannelId: 9301, Priority: common.GetPointer(int64(12))}
+			require.NoError(t, db.Create(&legacy).Error)
+			higher := model.UserGroupChannelRoutingOverride{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: users[1].Id, Model: "explicit", ChannelId: 9301}, RoutingGroup: "default"}
+			require.NoError(t, db.Create(&higher).Error)
+			rows, err := model.LoadChannelStatusRoutingPools(context.Background(), []int{9301}, common.RoleAdminUser)
+			require.NoError(t, err)
+			require.Len(t, rows, 4, "one explicit default, one implicit default, scoped and legacy user pools; no per-key expansion")
+			for _, row := range rows {
+				assert.NotEqual(t, users[1].Id, row.UserID)
+			}
+			// Channel-only disabling must preserve all pool membership flags.
+			response := userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/status/batch", `{"ids":[9301],"status":2}`, BatchUpdateChannelStatus)
+			require.Equal(t, http.StatusOK, response.Code)
+			unchanged, err := model.GetModelRoutingPool("default", "explicit")
+			require.NoError(t, err)
+			assert.True(t, unchanged.Channels[0].Enabled)
+			require.True(t, model.UpdateChannelStatus(9301, "", common.ChannelStatusEnabled, "test"))
+			response = userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/status/batch", `{"ids":[9301,9301],"status":2,"disable_routing_pools":true}`, BatchUpdateChannelStatus)
+			require.Equal(t, http.StatusOK, response.Code)
+			var body struct {
+				Success bool `json:"success"`
+				Data    int  `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+			require.True(t, body.Success, response.Body.String())
+			assert.Equal(t, 1, body.Data)
+			updated, err := model.GetModelRoutingPool("default", "explicit")
+			require.NoError(t, err)
+			require.Len(t, updated.Channels, 2)
+			assert.False(t, updated.Channels[0].Enabled)
+			assert.EqualValues(t, 0, updated.Channels[0].Priority)
+			assert.EqualValues(t, 7, updated.Channels[0].Weight)
+			assert.Equal(t, pool.Channels[1], updated.Channels[1])
+			assert.NotEqual(t, beforeRevision, updated.Revision)
+			assert.ErrorIs(t, model.SaveModelRoutingPool(&pool, beforeRevision), model.ErrRoutingPoolConflict)
+			for _, user := range users {
+				overrides, err := model.ListUserGroupChannelRoutingOverrides(user.Id, "explicit")
+				require.NoError(t, err)
+				require.Len(t, overrides, 1)
+				assert.True(t, overrides[0].Disabled)
+				if user.Id == users[0].Id {
+					assert.EqualValues(t, 0, *overrides[0].Priority)
+					assert.EqualValues(t, 9, *overrides[0].Weight)
+				}
+			}
+			assert.ErrorIs(t, model.PatchUserChannelRoutingForGroup(users[0].Id, "explicit", "default", userRevision, []model.UserChannelRoutingPatch{{ChannelId: 9301, Enabled: common.GetPointer(true)}}), model.ErrUserChannelRoutingConflict)
+			legacyRows, err := model.ListUserChannelRoutingOverrides(users[0].Id, "explicit")
+			require.NoError(t, err)
+			assert.True(t, legacyRows[0].Disabled)
+			assert.EqualValues(t, 12, *legacyRows[0].Priority)
+			implicit, err := model.GetModelRoutingPool("default", "implicit")
+			require.NoError(t, err)
+			require.NotNil(t, implicit)
+			require.Len(t, implicit.Channels, 2)
+			assert.False(t, implicit.Channels[0].Enabled)
+			assert.True(t, implicit.Channels[1].Enabled)
+			require.True(t, model.UpdateChannelStatus(9301, "", common.ChannelStatusEnabled, "test"))
+			param := service.RetryParam{ModelName: "implicit", Ctx: &gin.Context{}}
+			allowed, err := param.ModelRoutingPoolAllows("default", 9301)
+			require.NoError(t, err)
+			assert.False(t, allowed, "enabling the channel does not re-enable its pool entry")
+			// An error late in the transaction must roll back earlier pool edits.
+			require.NoError(t, db.Create(&model.ModelRoutingPool{RoutingGroup: "zzz", Model: "broken", Mode: model.RoutingModePriority, Revision: "broken", ChannelsJSON: "invalid"}).Error)
+			count, err := model.SetChannelsAndRoutingPoolsEnabled(context.Background(), []int{9302}, common.RoleRootUser, false)
+			require.Error(t, err)
+			assert.Zero(t, count)
+			updated, err = model.GetModelRoutingPool("default", "explicit")
+			require.NoError(t, err)
+			assert.True(t, updated.Channels[1].Enabled)
+			var retained model.Channel
+			require.NoError(t, db.First(&retained, 9302).Error)
+			assert.Equal(t, common.ChannelStatusEnabled, retained.Status)
+			require.NoError(t, db.Where("routing_group = ? AND model = ?", "zzz", "broken").Delete(&model.ModelRoutingPool{}).Error)
+			require.NoError(t, db.Model(&model.UserGroupChannelRoutingOverride{}).Where("user_id = ?", users[1].Id).Update("disabled", false).Error)
+			count, err = model.SetChannelsAndRoutingPoolsEnabled(context.Background(), []int{9301, 9302}, common.RoleAdminUser, false)
+			require.NoError(t, err)
+			assert.Equal(t, 2, count)
+			higherRows, err := model.ListUserGroupChannelRoutingOverrides(users[1].Id, "explicit")
+			require.NoError(t, err)
+			assert.False(t, higherRows[0].Disabled, "admin operations cannot edit equal or higher roles")
+			count, err = model.SetChannelsAndRoutingPoolsEnabled(context.Background(), []int{9301, 9302}, common.RoleRootUser, false)
+			require.NoError(t, err)
+			assert.Zero(t, count, "repeated disabling is safe even when channels are already disabled")
+			updated, err = model.GetModelRoutingPool("default", "explicit")
+			require.NoError(t, err)
+			for _, entry := range updated.Channels {
+				assert.False(t, entry.Enabled)
+			}
+			// Enabling also previews disabled memberships and customers without
+			// keys, even when a selected channel has already been enabled alone.
+			response = userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/status/batch", `{"ids":[9301],"status":1}`, BatchUpdateChannelStatus)
+			require.Equal(t, http.StatusOK, response.Code)
+			updated, err = model.GetModelRoutingPool("default", "explicit")
+			require.NoError(t, err)
+			assert.False(t, updated.Channels[0].Enabled, "channel-only enable preserves disabled memberships")
+			preview := userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/enable-impact", `{"ids":[9301,9302]}`, GetChannelEnableImpact)
+			var enableImpact struct {
+				Success bool                        `json:"success"`
+				Data    service.ChannelStatusImpact `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(preview.Body.Bytes(), &enableImpact))
+			require.True(t, enableImpact.Success, preview.Body.String())
+			assert.Len(t, enableImpact.Data.Channels, 2)
+			assert.Len(t, enableImpact.Data.RoutingPools, 7)
+			assert.NotContains(t, preview.Body.String(), "private-key")
+			beforeEnableRevision := updated.Revision
+			count, err = model.SetChannelsAndRoutingPoolsEnabled(context.Background(), []int{9301}, common.RoleAdminUser, true)
+			require.NoError(t, err)
+			assert.Zero(t, count)
+			higherRows, err = model.ListUserGroupChannelRoutingOverrides(users[1].Id, "explicit")
+			require.NoError(t, err)
+			assert.True(t, higherRows[0].Disabled, "admin enable cannot change higher-role overrides")
+			response = userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/status/batch", `{"ids":[9301,9301],"status":1,"update_routing_pools":true}`, BatchUpdateChannelStatus)
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+			require.True(t, body.Success, response.Body.String())
+			assert.Zero(t, body.Data, "an already enabled channel can still enable pool memberships")
+			updated, err = model.GetModelRoutingPool("default", "explicit")
+			require.NoError(t, err)
+			assert.True(t, updated.Channels[0].Enabled)
+			assert.False(t, updated.Channels[1].Enabled, "only selected entries are enabled")
+			assert.EqualValues(t, 0, updated.Channels[0].Priority)
+			assert.EqualValues(t, 7, updated.Channels[0].Weight)
+			assert.NotEqual(t, beforeEnableRevision, updated.Revision)
+			for _, user := range users {
+				rows, err := model.ListUserGroupChannelRoutingOverrides(user.Id, "explicit")
+				require.NoError(t, err)
+				require.Len(t, rows, 1)
+				assert.False(t, rows[0].Disabled)
+			}
+			legacyRows, err = model.ListUserChannelRoutingOverrides(users[0].Id, "explicit")
+			require.NoError(t, err)
+			assert.False(t, legacyRows[0].Disabled)
+			// A channel excluded from a configured pool must not be added to it.
+			excluded := model.Channel{Id: 9303, Name: "Excluded", Type: 1, Status: common.ChannelStatusManuallyDisabled, Models: "explicit,unconfigured", Group: "default"}
+			require.NoError(t, db.Create(&excluded).Error)
+			require.NoError(t, excluded.AddAbilities(nil))
+			response = userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/status/batch", `{"ids":[9303],"status":1,"update_routing_pools":true}`, BatchUpdateChannelStatus)
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+			require.True(t, body.Success, response.Body.String())
+			assert.Equal(t, 1, body.Data)
+			updated, err = model.GetModelRoutingPool("default", "explicit")
+			require.NoError(t, err)
+			assert.Len(t, updated.Channels, 2)
+			unconfigured, err := model.GetModelRoutingPool("default", "unconfigured")
+			require.NoError(t, err)
+			assert.Nil(t, unconfigured, "enabling does not create new pool restrictions")
+			// A failed enable rolls back both pool flags and channel status.
+			require.NoError(t, db.Create(&model.ModelRoutingPool{RoutingGroup: "zzz", Model: "broken", Mode: model.RoutingModePriority, Revision: "broken", ChannelsJSON: "invalid"}).Error)
+			count, err = model.SetChannelsAndRoutingPoolsEnabled(context.Background(), []int{9302}, common.RoleRootUser, true)
+			require.Error(t, err)
+			assert.Zero(t, count)
+			updated, err = model.GetModelRoutingPool("default", "explicit")
+			require.NoError(t, err)
+			assert.False(t, updated.Channels[1].Enabled)
+			require.NoError(t, db.First(&retained, 9302).Error)
+			assert.Equal(t, common.ChannelStatusManuallyDisabled, retained.Status)
+		})
+	}
+}
+
+func TestChannelStatusRoutingPoolsRejectsUnauthorizedAndInvalidRequests(t *testing.T) {
+	for _, body := range []string{`{"ids":[1],"status":1,"disable_routing_pools":true}`, `{"ids":[-1],"status":2,"disable_routing_pools":true}`, `{"ids":[-1],"status":1,"update_routing_pools":true}`} {
+		response := userRoutingRequestAtURL(t, 1, http.MethodPost, "/api/channel/status/batch", body, BatchUpdateChannelStatus)
+		assert.Equal(t, http.StatusBadRequest, response.Code)
+	}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Set("id", 0)
 	c.Set("role", common.RoleCommonUser)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/channel/disable-impact", strings.NewReader(`{"ids":[9201]}`))
-	GetChannelDisableImpact(c)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/channel/status/batch", strings.NewReader(`{"ids":[1],"status":2,"disable_routing_pools":true}`))
+	BatchUpdateChannelStatus(c)
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
-	assert.NotContains(t, recorder.Body.String(), "customers")
 }
 
 func userRoutingRequest(t *testing.T, userID int, method, body string, handler gin.HandlerFunc) *httptest.ResponseRecorder {

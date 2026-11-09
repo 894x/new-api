@@ -59,19 +59,19 @@ import {
 } from '@/lib/admin-permissions'
 import { useAuthStore } from '@/stores/auth-store'
 
+import type { ChannelStatusAction } from '../api'
 import { MODEL_FETCHABLE_TYPES } from '../constants'
 import {
   channelsQueryKeys,
   handleDeleteChannel,
   handleTestChannel,
-  handleToggleChannelStatus,
   isChannelEnabled,
   isMultiKeyChannel,
 } from '../lib'
 import type { Channel } from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
-import { ChannelDisableDialog } from './dialogs/channel-disable-dialog'
+import { ChannelStatusDialog } from './dialogs/channel-status-dialog'
 
 interface DataTableRowActionsProps {
   row: Row<Channel>
@@ -85,9 +85,10 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const queryClient = useQueryClient()
   const currentUser = useAuthStore((s) => s.auth.user)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
-  const [disableConfirmOpen, setDisableConfirmOpen] = useState(false)
+  const [statusAction, setStatusAction] = useState<ChannelStatusAction | null>(
+    null
+  )
   const [isTesting, setIsTesting] = useState(false)
-  const [isTogglingStatus, setIsTogglingStatus] = useState(false)
 
   const isEnabled = isChannelEnabled(channel)
   const isMultiKey = isMultiKeyChannel(channel)
@@ -144,26 +145,13 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     setOpen('multi-key-manage')
   }
 
-  const handleToggleStatus = async (
-    e?: React.MouseEvent<HTMLButtonElement>
-  ) => {
+  const handleToggleStatus = (e?: React.MouseEvent<HTMLButtonElement>) => {
     e?.stopPropagation()
-    if (isEnabled) {
-      setDisableConfirmOpen(true)
-      return
-    }
-    setIsTogglingStatus(true)
-    try {
-      await handleToggleChannelStatus(channel.id, channel.status, queryClient)
-    } finally {
-      setIsTogglingStatus(false)
-    }
+    setStatusAction(isEnabled ? 'disable' : 'enable')
   }
 
   let statusIcon = <Power className='size-4' />
-  if (isTogglingStatus) {
-    statusIcon = <Loader2 className='size-4 animate-spin' />
-  } else if (isEnabled) {
+  if (isEnabled) {
     statusIcon = <PowerOff className='size-4' />
   }
 
@@ -239,7 +227,6 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               variant='ghost'
               size='icon-sm'
               onClick={handleToggleStatus}
-              disabled={isTogglingStatus}
               aria-label={isEnabled ? t('Disable') : t('Enable')}
               className={
                 isEnabled
@@ -388,10 +375,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           setDeleteConfirmOpen(false)
         }}
       />
-      {disableConfirmOpen && (
-        <ChannelDisableDialog
+      {statusAction && (
+        <ChannelStatusDialog
           target={{ ids: [channel.id] }}
-          onOpenChange={setDisableConfirmOpen}
+          action={statusAction}
+          onOpenChange={(open) => !open && setStatusAction(null)}
         />
       )}
     </div>

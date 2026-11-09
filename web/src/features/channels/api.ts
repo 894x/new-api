@@ -252,7 +252,9 @@ export async function updateChannelStatus(
   return res.data
 }
 
-export type ChannelDisableTarget =
+export type ChannelStatusAction = 'enable' | 'disable'
+
+export type ChannelStatusTarget =
   | { ids: number[]; tag?: never }
   | { tag: string; ids?: never }
 
@@ -268,21 +270,34 @@ export type ChannelDisableImpactCustomer = {
   alternative_channels: number
 }
 
-export type ChannelDisableImpact = {
+export type ChannelStatusImpact = {
   channels: { id: number; name: string }[]
   customers: ChannelDisableImpactCustomer[]
   customer_count: number
+  routing_pools: ChannelStatusRoutingPool[]
 }
 
-export async function getChannelDisableImpact(
-  target: ChannelDisableTarget,
+export type ChannelStatusRoutingPool = {
+  source: 'default_pool' | 'channel_defaults' | 'user' | 'legacy_user'
+  user_id: number
+  username: string
+  channel_id: number
+  model: string
+  routing_group: string
+  priority: number | null
+  enabled: boolean
+}
+
+export async function getChannelStatusImpact(
+  target: ChannelStatusTarget,
+  action: ChannelStatusAction,
   signal?: AbortSignal
-): Promise<ChannelDisableImpact> {
+): Promise<ChannelStatusImpact> {
   const response = await api.post<{
     success: boolean
     message?: string
-    data: ChannelDisableImpact
-  }>('/api/channel/disable-impact', target, { signal })
+    data: ChannelStatusImpact
+  }>(`/api/channel/${action}-impact`, target, { signal })
   requireServerSuccess(response.data)
   return response.data.data
 }
@@ -292,11 +307,16 @@ export async function getChannelDisableImpact(
  */
 export async function batchUpdateChannelStatus(
   ids: number[],
-  status: number
+  status: number,
+  updateRoutingPools = false
 ): Promise<{ success: boolean; message?: string; data?: number }> {
   const res = await api.post(
     '/api/channel/status/batch',
-    { ids, status },
+    {
+      ids,
+      status,
+      ...(updateRoutingPools ? { update_routing_pools: true } : {}),
+    },
     channelActionConfig()
   )
   return res.data

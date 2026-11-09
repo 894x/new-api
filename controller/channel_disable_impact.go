@@ -14,6 +14,14 @@ import (
 )
 
 func GetChannelDisableImpact(c *gin.Context) {
+	getChannelStatusImpact(c, common.ChannelStatusManuallyDisabled)
+}
+
+func GetChannelEnableImpact(c *gin.Context) {
+	getChannelStatusImpact(c, common.ChannelStatusEnabled)
+}
+
+func getChannelStatusImpact(c *gin.Context, targetStatus int) {
 	// Channel operators must also be allowed to read customer routing details.
 	if !authz.Can(c.GetInt("id"), c.GetInt("role"), authz.UserGroupConfigRead) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "No permission to view customer routing"})
@@ -34,7 +42,7 @@ func GetChannelDisableImpact(c *gin.Context) {
 	request.IDs = slices.Compact(request.IDs)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
-	impact, err := service.GetChannelDisableImpact(ctx, request.IDs, request.Tag, c.GetInt("role"))
+	impact, err := service.GetChannelStatusImpact(ctx, request.IDs, request.Tag, c.GetInt("role"), targetStatus)
 	if err != nil {
 		common.ApiError(c, err)
 		return

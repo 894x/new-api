@@ -40,9 +40,10 @@ import {
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { handleBatchDelete, handleBatchEnable, handleBatchSetTag } from '../lib'
+import type { ChannelStatusAction } from '../api'
+import { handleBatchDelete, handleBatchSetTag } from '../lib'
 import type { Channel } from '../types'
-import { ChannelDisableDialog } from './dialogs/channel-disable-dialog'
+import { ChannelStatusDialog } from './dialogs/channel-status-dialog'
 
 interface DataTableBulkActionsProps<TData> {
   table: Table<TData>
@@ -55,7 +56,10 @@ export function DataTableBulkActions<TData>({
   const queryClient = useQueryClient()
   const [showTagDialog, setShowTagDialog] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [disableIds, setDisableIds] = useState<number[] | null>(null)
+  const [statusTarget, setStatusTarget] = useState<{
+    ids: number[]
+    action: ChannelStatusAction
+  } | null>(null)
   const [tagValue, setTagValue] = useState('')
   const currentUser = useAuthStore((s) => s.auth.user)
   const canEditSensitive = hasPermission(
@@ -80,11 +84,11 @@ export function DataTableBulkActions<TData>({
   }
 
   const handleEnableAll = () => {
-    handleBatchEnable(selectedIds, queryClient, handleClearSelection)
+    setStatusTarget({ ids: [...selectedIds], action: 'enable' })
   }
 
   const handleDisableAll = () => {
-    setDisableIds([...selectedIds])
+    setStatusTarget({ ids: [...selectedIds], action: 'disable' })
   }
 
   const handleDeleteAll = () => {
@@ -105,11 +109,12 @@ export function DataTableBulkActions<TData>({
 
   return (
     <>
-      {disableIds && (
-        <ChannelDisableDialog
-          target={{ ids: disableIds }}
-          onOpenChange={(open) => !open && setDisableIds(null)}
-          onDisabled={handleClearSelection}
+      {statusTarget && (
+        <ChannelStatusDialog
+          target={{ ids: statusTarget.ids }}
+          action={statusTarget.action}
+          onOpenChange={(open) => !open && setStatusTarget(null)}
+          onApplied={handleClearSelection}
         />
       )}
       <BulkActionsToolbar table={table} entityName='channel'>

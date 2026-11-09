@@ -10,9 +10,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// ChannelDisableImpactSnapshot contains routing metadata only. Credentials and
+// ChannelStatusImpactSnapshot contains routing metadata only. Credentials and
 // request contents are deliberately excluded from the database projections.
-type ChannelDisableImpactSnapshot struct {
+type ChannelStatusImpactSnapshot struct {
 	Channels       []Channel
 	Users          []User
 	Tokens         []Token
@@ -20,10 +20,13 @@ type ChannelDisableImpactSnapshot struct {
 	GroupOverrides []UserGroupChannelRoutingOverride
 }
 
-func LoadChannelDisableImpactSnapshot(ctx context.Context, ids []int, tag *string, operatorRole int) (ChannelDisableImpactSnapshot, error) {
-	var snapshot ChannelDisableImpactSnapshot
+func LoadChannelStatusImpactSnapshot(ctx context.Context, ids []int, tag *string, operatorRole, targetStatus int) (ChannelStatusImpactSnapshot, error) {
+	var snapshot ChannelStatusImpactSnapshot
 	db := DB.WithContext(ctx)
-	channels := db.Model(&Channel{}).Where("status = ?", common.ChannelStatusEnabled)
+	channels := db.Model(&Channel{})
+	if targetStatus == common.ChannelStatusManuallyDisabled {
+		channels = channels.Where("status = ?", common.ChannelStatusEnabled)
+	}
 	if tag != nil {
 		channels = channels.Where("tag = ?", *tag)
 	} else {
@@ -32,7 +35,7 @@ func LoadChannelDisableImpactSnapshot(ctx context.Context, ids []int, tag *strin
 	if err := channels.Select([]string{"id", "name", "models", "group", "status"}).Order("id").Find(&snapshot.Channels).Error; err != nil {
 		return snapshot, err
 	}
-	if len(snapshot.Channels) == 0 {
+	if len(snapshot.Channels) == 0 || targetStatus == common.ChannelStatusEnabled {
 		return snapshot, nil
 	}
 	groups := []string{"", "auto"}

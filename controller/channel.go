@@ -1239,8 +1239,10 @@ type ChannelStatusRequest struct {
 }
 
 type ChannelStatusBatchRequest struct {
-	Ids    []int `json:"ids"`
-	Status int   `json:"status"`
+	Ids                 []int `json:"ids"`
+	Status              int   `json:"status"`
+	DisableRoutingPools bool  `json:"disable_routing_pools"`
+	UpdateRoutingPools  bool  `json:"update_routing_pools"`
 }
 
 func UpdateChannel(c *gin.Context) {
@@ -1509,6 +1511,30 @@ func BatchUpdateChannelStatus(c *gin.Context) {
 	req := ChannelStatusBatchRequest{}
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Ids) == 0 || !isManageableChannelStatus(req.Status) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if req.DisableRoutingPools || req.UpdateRoutingPools {
+		if req.DisableRoutingPools && req.Status != common.ChannelStatusManuallyDisabled || len(req.Ids) > 1000 || slices.ContainsFunc(req.Ids, func(id int) bool { return id <= 0 }) {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid channel selection"})
+			return
+		}
+		if !authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelWrite) || !authz.Can(c.GetInt("id"), c.GetInt("role"), authz.UserGroupConfigRead) || !authz.Can(c.GetInt("id"), c.GetInt("role"), authz.UserGroupConfigWrite) {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "No permission to edit routing pools"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+		defer cancel()
+		count, err := model.SetChannelsAndRoutingPoolsEnabled(ctx, req.Ids, c.GetInt("role"), req.Status == common.ChannelStatusEnabled)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		model.InitChannelCache()
+		if req.Status != common.ChannelStatusEnabled {
+			closeActiveChannelWebSockets(req.Ids)
+		}
+		recordManageAudit(c, "channel.status_update_batch", map[string]any{"count": count, "total": len(req.Ids), "status": req.Status, "update_routing_pools": true, "ids": req.Ids})
+		common.ApiSuccess(c, count)
 		return
 	}
 	changedCount := 0

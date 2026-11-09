@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQueryClient } from '@tanstack/react-query'
 import type { Row } from '@tanstack/react-table'
 import { Power, PowerOff, Pencil, Edit } from 'lucide-react'
 import { useState } from 'react'
@@ -35,10 +34,10 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 
-import { handleEnableTagChannels } from '../lib'
+import type { ChannelStatusAction } from '../api'
 import type { Channel } from '../types'
 import { useChannels } from './channels-provider'
-import { ChannelDisableDialog } from './dialogs/channel-disable-dialog'
+import { ChannelStatusDialog } from './dialogs/channel-status-dialog'
 
 interface DataTableTagRowActionsProps {
   row: Row<Channel>
@@ -48,17 +47,18 @@ export function DataTableTagRowActions({ row }: DataTableTagRowActionsProps) {
   const { t } = useTranslation()
   const tag = row.original.tag
   const { setOpen, setCurrentTag } = useChannels()
-  const queryClient = useQueryClient()
-  const [disableConfirmOpen, setDisableConfirmOpen] = useState(false)
+  const [statusAction, setStatusAction] = useState<ChannelStatusAction | null>(
+    null
+  )
 
   if (!tag) return null
 
   const handleEnableAll = () => {
-    handleEnableTagChannels(tag, queryClient)
+    setStatusAction('enable')
   }
 
   const handleDisableAll = () => {
-    setDisableConfirmOpen(true)
+    setStatusAction('disable')
   }
 
   const handleBatchEdit = () => {
@@ -73,10 +73,11 @@ export function DataTableTagRowActions({ row }: DataTableTagRowActionsProps) {
 
   return (
     <div className='-ml-1.5 flex items-center gap-1'>
-      {disableConfirmOpen && (
-        <ChannelDisableDialog
+      {statusAction && (
+        <ChannelStatusDialog
           target={{ tag }}
-          onOpenChange={setDisableConfirmOpen}
+          action={statusAction}
+          onOpenChange={(open) => !open && setStatusAction(null)}
         />
       )}
       <Tooltip>
