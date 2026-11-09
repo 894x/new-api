@@ -36,8 +36,13 @@ export function RoutingOverview(props: {
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  const priority = props.route?.mode === 'priority'
+  const observed = priority || props.route?.aggregate
   const channels =
-    props.route?.channels.filter((channel) => channel.active) ?? []
+    props.route?.channels.filter(
+      (channel) =>
+        channel.active && channel.status !== 2 && channel.status !== 3
+    ) ?? []
   const primary = channels.reduce<(typeof channels)[number] | undefined>(
     (current, channel) =>
       !current || channel.target_share > current.target_share
@@ -49,6 +54,38 @@ export function RoutingOverview(props: {
   const healthy = channels.filter((channel) =>
     ['healthy', 'probe'].includes(monitorChannelStatus(channel, props.at))
   ).length
+  const availableCount = priority ? channels.length : healthy
+  const totalCount = priority
+    ? (props.route?.channels.length ?? 0)
+    : channels.length
+  const completed =
+    props.route?.channels.reduce(
+      (sum, channel) => sum + (channel.completed_count ?? 0),
+      0
+    ) ?? 0
+  const succeeded =
+    props.route?.channels.reduce(
+      (sum, channel) => sum + (channel.success_count ?? 0),
+      0
+    ) ?? 0
+  let metricTitle = observed
+    ? t('Selection weighted discount')
+    : t('Target weighted discount')
+  let metricValue =
+    discount == null ? '—' : `×${formatNumber(discount, locale)}`
+  let metricDescription = observed
+    ? t('Based on effective discounts and selection shares')
+    : t('Based on effective discounts and target shares')
+  if (priority) {
+    metricTitle = t('Success rate')
+    metricValue =
+      completed > 0
+        ? `${formatNumber((succeeded / completed) * 100, locale)}%`
+        : '—'
+    metricDescription = t('Last {{seconds}} seconds', {
+      seconds: props.route?.window_seconds ?? 60,
+    })
+  }
   return (
     <section
       aria-label={t('Routing overview')}
@@ -101,49 +138,44 @@ export function RoutingOverview(props: {
             {primary
               ? `${formatNumber(primary.target_share * 100, locale)}%`
               : '—'}{' '}
-            ·{' '}
-            {props.route?.aggregate ? t('Selection share') : t('Target share')}
+            · {observed ? t('Selection share') : t('Target share')}
           </p>
         </CardContent>
       </Card>
       <Card size='sm'>
         <CardContent>
-          <p className='text-muted-foreground text-xs'>
-            {props.route?.aggregate
-              ? t('Selection weighted discount')
-              : t('Target weighted discount')}
-          </p>
+          <p className='text-muted-foreground text-xs'>{metricTitle}</p>
           {props.loading ? (
             <Skeleton className='my-2 h-7 w-20' />
           ) : (
             <p className='mt-2 text-2xl font-medium tabular-nums'>
-              {discount == null ? '—' : `×${formatNumber(discount, locale)}`}
+              {metricValue}
             </p>
           )}
-          <p className='text-muted-foreground text-xs'>
-            {props.route?.aggregate
-              ? t('Based on effective discounts and selection shares')
-              : t('Based on effective discounts and target shares')}
-          </p>
+          <p className='text-muted-foreground text-xs'>{metricDescription}</p>
         </CardContent>
       </Card>
       <Card size='sm'>
         <CardContent>
           <p className='text-muted-foreground text-xs'>
-            {t('Verified healthy channels')}
+            {priority
+              ? t('Available channels')
+              : t('Verified healthy channels')}
           </p>
           {props.loading ? (
             <Skeleton className='my-2 h-7 w-20' />
           ) : (
             <p className='mt-2 text-2xl font-medium tabular-nums'>
-              {props.route ? formatNumber(healthy, locale) : '—'}{' '}
+              {props.route ? formatNumber(availableCount, locale) : '—'}{' '}
               <span className='text-muted-foreground text-sm'>
-                / {props.route ? formatNumber(channels.length, locale) : '—'}
+                / {props.route ? formatNumber(totalCount, locale) : '—'}
               </span>
             </p>
           )}
           <p className='text-muted-foreground text-xs'>
-            {t('Quality samples are shared by channel and model')}
+            {priority
+              ? t('Channel auto-disable and recovery')
+              : t('Quality samples are shared by channel and model')}
           </p>
         </CardContent>
       </Card>

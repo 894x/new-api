@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -738,12 +741,105 @@ func TestSelectChannelsForAutomaticTestPassiveRecoveryOnlyUsesAutoDisabled(t *te
 		{Id: 1, Status: common.ChannelStatusEnabled},
 		{Id: 2, Status: common.ChannelStatusAutoDisabled},
 		{Id: 3, Status: common.ChannelStatusManuallyDisabled},
+		{Id: 4, Status: common.ChannelStatusEnabled, Key: "a\nb", ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeyStatusList: map[int]int{0: common.ChannelStatusAutoDisabled}}},
 	}
 
 	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModePassiveRecovery)
 
-	require.Len(t, selected, 1)
+	require.Len(t, selected, 2)
 	require.Equal(t, 2, selected[0].Id)
+	assert.Equal(t, 4, selected[1].Id)
+}
+
+func TestMultiKeyAutomaticRecoveryDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		for _, cache := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/cache_%t", dialect, cache), func(t *testing.T) {
+				if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+					t.Skip("isolated database DSN not configured")
+				}
+				t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+				initModelListColumnNames(t)
+				db := setupManageUserTestDB(t)
+				if dialect == "postgres" {
+					// Initialize dialect-specific reserved-column quoting without migrations.
+					t.Setenv("SQL_DSN", os.Getenv("TEST_POSTGRES_DSN"))
+					previousMaster := common.IsMasterNode
+					common.IsMasterNode = false
+					require.NoError(t, model.InitDB())
+					common.IsMasterNode = previousMaster
+					connection, err := model.DB.DB()
+					require.NoError(t, err)
+					require.NoError(t, connection.Close())
+					model.DB, model.LOG_DB = db, db
+				}
+				require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+				withSelfUseModeEnabled(t)
+				previousCache, previousEnable, previousConsumeLog := common.MemoryCacheEnabled, common.AutomaticEnableChannelEnabled, common.LogConsumeEnabled
+				common.MemoryCacheEnabled, common.AutomaticEnableChannelEnabled = cache, true
+				common.LogConsumeEnabled = false
+				t.Cleanup(func() {
+					common.MemoryCacheEnabled, common.AutomaticEnableChannelEnabled = previousCache, previousEnable
+					common.LogConsumeEnabled = previousConsumeLog
+				})
+				root := model.User{Username: "key-recovery-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", Quota: 1000000}
+				require.NoError(t, db.Create(&root).Error)
+				var requests []string
+				var requestsMu sync.Mutex
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					key := r.Header.Get("Authorization")
+					requestsMu.Lock()
+					requests = append(requests, key)
+					requestsMu.Unlock()
+					w.Header().Set("Content-Type", "application/json")
+					if key != "Bearer recovered" {
+						w.WriteHeader(http.StatusUnauthorized)
+						_, _ = io.WriteString(w, `{"error":{"message":"invalid key","type":"invalid_api_key"}}`)
+						return
+					}
+					_, _ = io.WriteString(w, `{"id":"recovery","object":"chat.completion","model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+				}))
+				t.Cleanup(upstream.Close)
+				baseURL := upstream.URL
+				channel := model.Channel{Type: constant.ChannelTypeOpenAI, Key: "recovered\nstill-bad\nmanual", BaseURL: &baseURL, Models: "gpt-4o-mini", Group: "default", Status: common.ChannelStatusAutoDisabled, ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeySize: 3, MultiKeyMode: constant.MultiKeyModePolling, MultiKeyStatusList: map[int]int{0: common.ChannelStatusAutoDisabled, 1: common.ChannelStatusAutoDisabled, 2: common.ChannelStatusManuallyDisabled}}}
+				require.NoError(t, db.Create(&channel).Error)
+				require.NoError(t, channel.AddAbilities(nil))
+				if cache {
+					model.InitChannelCache()
+				}
+				summary := testChannelForHealthCheck(context.Background(), &channel, root.Id, false, 10000000)
+				assert.Equal(t, 2, summary.Tested)
+				assert.Equal(t, 1, summary.Enabled)
+				requestsMu.Lock()
+				assert.Equal(t, []string{"Bearer recovered", "Bearer still-bad"}, requests)
+				requests = nil
+				requestsMu.Unlock()
+				persisted, err := model.GetChannelById(channel.Id, true)
+				require.NoError(t, err)
+				assert.Equal(t, common.ChannelStatusEnabled, persisted.Status)
+				assert.NotContains(t, persisted.ChannelInfo.MultiKeyStatusList, 0)
+				assert.Equal(t, common.ChannelStatusAutoDisabled, persisted.ChannelInfo.MultiKeyStatusList[1])
+				assert.Equal(t, common.ChannelStatusManuallyDisabled, persisted.ChannelInfo.MultiKeyStatusList[2])
+				var ability model.Ability
+				require.NoError(t, db.Where("channel_id = ?", channel.Id).First(&ability).Error)
+				assert.True(t, ability.Enabled)
+				common.AutomaticEnableChannelEnabled = false
+				testChannelForHealthCheck(context.Background(), persisted, root.Id, false, 10000000)
+				requestsMu.Lock()
+				assert.Empty(t, requests, "disabled passive recovery does not dispatch probes")
+				requestsMu.Unlock()
+				common.AutomaticEnableChannelEnabled = true
+				summary = testChannelForHealthCheck(context.Background(), persisted, root.Id, false, 10000000)
+				assert.Equal(t, 1, summary.Tested, "partially available channels still retry their disabled key")
+				requestsMu.Lock()
+				assert.Equal(t, []string{"Bearer still-bad"}, requests)
+				requestsMu.Unlock()
+				assert.False(t, model.EnableAutoDisabledChannel(channel.Id, "manual"))
+				require.True(t, model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusManuallyDisabled, "operator"))
+				assert.False(t, model.EnableAutoDisabledChannel(channel.Id, "still-bad"), "late probe cannot override manual channel disable")
+			})
+		}
+	}
 }
 
 func TestSelectChannelsForAutomaticTestScheduledSkipsManualDisabled(t *testing.T) {

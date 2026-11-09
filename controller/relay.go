@@ -316,14 +316,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
-		observeAttempt := service.RequestDynamicRoutingEnabled(c) && shouldObserveDynamicRoutingAttempt(c, relayInfo)
+		priorityMonitor := service.PriorityRoutingMonitorEnabled(c)
+		observeAttempt := !priorityMonitor && service.RequestDynamicRoutingEnabled(c) && shouldObserveDynamicRoutingAttempt(c, relayInfo)
 		monitorEndpoint := service.ChannelTrafficMonitoringEndpoint(channel, relayInfo, publicModelName)
 		if observeAttempt {
 			relayInfo.BeginDynamicRoutingAttempt(channel.Id, channel.Type, publicModelName, true)
-			service.BindRoutingMonitorAttempt(c, relayInfo, channel.Id)
-		} else if monitorEndpoint != "" {
+		} else if priorityMonitor || monitorEndpoint != "" {
 			relayInfo.BeginChannelMonitoringAttempt(channel.Id, channel.Type, publicModelName)
 		}
+		service.BindRoutingMonitorAttempt(c, relayInfo, channel.Id)
 
 		failureStage = "relay_attempt"
 		service.BeginChatEarlyChunkAttempt(retryParam, relayInfo, channel)
@@ -348,6 +349,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			if attempt, ok := finishDynamicRoutingAttempt(c, relayInfo, newAPIError); ok && shouldPublishDynamicRoutingAttempt(attempt) {
 				key, sample := dynamicRoutingSampleFromAttempt(attempt)
 				service.ObserveDynamicRoutingSample(key, sample, service.RequestDynamicRoutingEnabled(c))
+			}
+		} else if priorityMonitor {
+			if attempt, ok := finishDynamicRoutingAttempt(c, relayInfo, newAPIError); ok {
+				_, sample := dynamicRoutingSampleFromAttempt(attempt)
+				service.ObservePriorityRoutingSample(c, sample)
 			}
 		} else if monitorEndpoint != "" {
 			relayInfo.FinishDynamicRoutingAttempt(newAPIError)

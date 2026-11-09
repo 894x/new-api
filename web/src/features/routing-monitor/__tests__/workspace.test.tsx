@@ -249,7 +249,7 @@ test('a card monitor keeps its fixed group and model instead of choosing another
     fixedModel: 'fixed-model',
     embedded: true,
   })
-  await screen.findByText('No adaptive routing observations')
+  await screen.findByText('No routing observations')
   expect(get).toHaveBeenCalledWith(
     '/api/channel/routing-pool',
     expect.objectContaining({
@@ -435,13 +435,35 @@ test('pausing freezes the snapshot and resuming loads the next actual count', as
   await screen.findAllByText('321')
 })
 
-test('shows an empty observation state for priority pools instead of old adaptive data', async () => {
+test('priority pools hide old adaptive observations', async () => {
   mockApi({ mode: 'priority' })
   mount()
-  await screen.findByText('No adaptive routing observations')
+  await screen.findByText('No routing observations')
   expect(
     screen.queryByRole('list', { name: 'Candidate channels' })
   ).not.toBeInTheDocument()
+})
+
+test('priority pools display observed traffic without adaptive target shares', async () => {
+  const snapshot = snapshotFixture()
+  const route = snapshot.nodes[0].routes[0]
+  route.mode = 'priority'
+  route.dynamic = false
+  route.channels[1].probe = false
+  mockApi({ mode: 'priority', snapshot })
+  mount()
+  await screen.findByRole('list', { name: 'Candidate channels' })
+  expect(screen.getByText('Priority routing')).toBeVisible()
+  expect(screen.queryByText('Warming up')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('tab', { name: 'Channel details' }))
+  expect(screen.getByRole('columnheader', { name: 'Priority' })).toBeVisible()
+  expect(screen.getByRole('columnheader', { name: 'Weight' })).toBeVisible()
+  expect(
+    screen.queryByRole('columnheader', { name: 'Target share' })
+  ).not.toBeInTheDocument()
+  expect(screen.getByRole('row', { name: /Channel A/ })).toHaveTextContent(
+    '99.19%'
+  )
 })
 
 test('monitoring failure stops the flow and provides a retry action', async () => {
@@ -459,7 +481,7 @@ test('a previous smart allocation is hidden after the pool changes to discount m
   snapshot.nodes[0].routes[0].mode = 'smart'
   mockApi({ snapshot })
   mount()
-  await screen.findByText('No adaptive routing observations')
+  await screen.findByText('No routing observations')
   expect(
     screen.queryByRole('list', { name: 'Candidate channels' })
   ).not.toBeInTheDocument()
@@ -480,9 +502,7 @@ test('user models remain available when the shared base catalog has incompatible
       'kimi-k3'
     )
   )
-  expect(
-    await screen.findByText('No adaptive routing observations')
-  ).toBeVisible()
+  expect(await screen.findByText('No routing observations')).toBeVisible()
 })
 
 test('inherited channel defaults follow the live legacy switch without reloading pool configuration', async () => {
@@ -510,9 +530,7 @@ test('inherited channel defaults follow the live legacy switch without reloading
   await act(async () => {
     await client.refetchQueries({ queryKey: monitorKey(7), exact: true })
   })
-  expect(
-    await screen.findByText('No adaptive routing observations')
-  ).toBeVisible()
+  expect(await screen.findByText('No routing observations')).toBeVisible()
   expect(
     get.mock.calls.filter(([url]) => url.includes('/channel-routing-overrides'))
   ).toHaveLength(configReads)
@@ -605,9 +623,7 @@ test('defaults to all-node totals and preserves them when the responding gateway
     await client.refetchQueries({ queryKey: monitorKey(), exact: true })
   })
   expect(screen.getByRole('list', { name: 'Candidate channels' })).toBeVisible()
-  expect(
-    screen.queryByText('No adaptive routing observations')
-  ).not.toBeInTheDocument()
+  expect(screen.queryByText('No routing observations')).not.toBeInTheDocument()
   expect(
     screen.getByRole('combobox', { name: 'Monitor node' })
   ).toHaveTextContent('All nodes (combined)')

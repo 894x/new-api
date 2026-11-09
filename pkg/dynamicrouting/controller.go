@@ -38,6 +38,7 @@ type RouteKey struct {
 	Model         string
 	Policy        string
 	discountFirst bool
+	priorityOnly  bool
 }
 
 // DiscountLimits defines the service quality required before cost takes precedence.

@@ -77,7 +77,10 @@ export default function RoutingMonitorWorkspace(
   )
   const activeChannels =
     route?.channels.filter(
-      (channel) => channel.active || dispatchedChannels.has(channel.channel_id)
+      (channel) =>
+        route?.mode === 'priority' ||
+        channel.active ||
+        dispatchedChannels.has(channel.channel_id)
     ) ?? []
   const inherited =
     !!props.userId && data.detail.data && data.detail.data.source !== 'user'
@@ -102,9 +105,9 @@ export default function RoutingMonitorWorkspace(
     (data.detail.isPending && !!data.model)
   let content = (
     <EmptyState
-      title={t('No adaptive routing observations')}
+      title={t('No routing observations')}
       description={t(
-        'Streaming requests using smart or discount-first routing will appear here. Priority routing and non-streaming requests are not included.'
+        'Priority routing requests and streaming requests using smart or discount-first routing will appear here.'
       )}
     />
   )
@@ -191,15 +194,23 @@ export default function RoutingMonitorWorkspace(
                 'Each dot represents one upstream attempt on its channel, including retries.'
               )}
             </p>
-            {t(
-              route.aggregate
-                ? 'Line width represents selection share across reporting nodes. Select a node to inspect its target allocation and quality.'
-                : 'Line width represents target share. Dashed lines represent exploration or recovery probes.'
-            )}
+            {route.mode === 'priority'
+              ? t(
+                  'Line width represents observed traffic share. Priority and weight determine selection; channel auto-disable and recovery rules remain in effect.'
+                )
+              : t(
+                  route.aggregate
+                    ? 'Line width represents selection share across reporting nodes. Select a node to inspect its target allocation and quality.'
+                    : 'Line width represents target share. Dashed lines represent exploration or recovery probes.'
+                )}
             <p>
-              {t(
-                'Selections include retries and local candidate decisions; they are not upstream request counts.'
-              )}
+              {route.mode === 'priority'
+                ? t(
+                    'Counts represent physical upstream attempts, including retries.'
+                  )
+                : t(
+                    'Selections include retries and local candidate decisions; they are not upstream request counts.'
+                  )}
             </p>
           </CardContent>
         </Card>

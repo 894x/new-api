@@ -20,6 +20,12 @@ import { api } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
 export interface MonitorChannel {
+  status?: number
+  status_reason?: string
+  completed_count?: number
+  success_count?: number
+  failure_count?: number
+  latency_ms?: number | null
   channel_id: number
   active: boolean
   priority: number
@@ -60,6 +66,8 @@ export interface MonitorEvent {
     | 'degraded'
     | 'recovery'
     | 'allocation_changed'
+    | 'channel_disabled'
+    | 'channel_enabled'
   channel_ids: number[]
   allocations: { channel_id: number; share: number; probe: boolean }[]
 }
@@ -71,7 +79,7 @@ export interface MonitorRoute {
   group: string
   model: string
   policy: string
-  mode: 'smart' | 'discount'
+  mode: 'priority' | 'smart' | 'discount'
   dynamic: boolean
   last_seen: number
   window_seconds: number

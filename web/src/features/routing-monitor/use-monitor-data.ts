@@ -201,6 +201,15 @@ export function useMonitorData(
         )
     )
   }
+  if (route?.mode === 'priority') {
+    route = {
+      ...route,
+      channels: route.channels.map((channel) => ({
+        ...channel,
+        target_share: channel.selected_share,
+      })),
+    }
+  }
   return {
     monitor,
     fixed: !!fixedIdentity,

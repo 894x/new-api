@@ -32,7 +32,6 @@ export function effectiveMonitorRoute(
   mode?: RoutingMode
 ): MonitorRoute | undefined {
   if (userId && !source) return undefined
-  if (mode === 'priority') return undefined
   const policy = userId && source === 'user' ? `user:${userId}` : ''
   return node?.routes.find(
     (route) =>

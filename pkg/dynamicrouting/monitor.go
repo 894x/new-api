@@ -47,6 +47,12 @@ type RequestSnapshot struct {
 }
 
 type RouteChannelSnapshot struct {
+	Status                int      `json:"status,omitempty"`
+	StatusReason          string   `json:"status_reason,omitempty"`
+	CompletedCount        int64    `json:"completed_count,omitempty"`
+	SuccessCount          int64    `json:"success_count,omitempty"`
+	FailureCount          int64    `json:"failure_count,omitempty"`
+	LatencyMS             *float64 `json:"latency_ms,omitempty"`
 	ChannelID             int      `json:"channel_id"`
 	Priority              int64    `json:"priority"`
 	Weight                uint     `json:"weight"`
@@ -106,6 +112,10 @@ func (c *Controller) RecordDispatch(key RouteKey, discount bool, channelID int, 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	key.discountFirst = discount
+	c.recordDispatchLocked(key, channelID, at)
+}
+
+func (c *Controller) recordDispatchLocked(key RouteKey, channelID int, at time.Time) {
 	state := c.monitor[key]
 	if state == nil || channelID <= 0 {
 		return
@@ -121,6 +131,8 @@ func (c *Controller) RecordDispatch(key RouteKey, discount bool, channelID int, 
 }
 
 type monitoredChannel struct {
+	status       int
+	statusReason string
 	priority     int64
 	weight       uint
 	discount     float64
@@ -137,6 +149,95 @@ type monitorBucket struct {
 	count     int64
 	counts    map[int]int64
 	truncated bool
+	outcomes  map[int]priorityOutcome
+}
+
+type priorityOutcome struct {
+	completed int64
+	succeeded int64
+	latency   time.Duration
+}
+
+// RecordPriorityDispatch only records an already-selected physical attempt. It
+// never selects candidates or changes the adaptive controller's routing state.
+func (c *Controller) RecordPriorityDispatch(key RouteKey, candidates []Candidate, channelID int, at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cleanupExpiredLocked(at)
+	key.priorityOnly = true
+	c.recordMonitorLocked(key, candidates, Decision{HasSelection: true, SelectedChannelID: channelID}, at)
+	c.recordDispatchLocked(key, channelID, at)
+}
+
+func (c *Controller) RecordPriorityOutcome(key RouteKey, channelID int, sample Sample) {
+	if sample.UpstreamStartedAt.IsZero() || sample.ObservedAt.Before(sample.UpstreamStartedAt) {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key.priorityOnly = true
+	state := c.monitor[key]
+	if state == nil {
+		return
+	}
+	second := sample.ObservedAt.Unix()
+	index := int((second%monitorWindowSeconds + monitorWindowSeconds) % monitorWindowSeconds)
+	bucket := &state.buckets[index]
+	if bucket.second > second {
+		return
+	}
+	if bucket.second != second {
+		*bucket = monitorBucket{second: second}
+	}
+	if bucket.outcomes == nil {
+		bucket.outcomes = make(map[int]priorityOutcome)
+	}
+	if _, exists := bucket.outcomes[channelID]; !exists && len(bucket.outcomes) >= maxMonitorChannels {
+		bucket.truncated = true
+		return
+	}
+	outcome := bucket.outcomes[channelID]
+	outcome.completed++
+	if sample.Success {
+		outcome.succeeded++
+	}
+	outcome.latency += sample.ObservedAt.Sub(sample.UpstreamStartedAt)
+	bucket.outcomes[channelID] = outcome
+	if sample.ObservedAt.After(state.lastSeen) {
+		state.lastSeen = sample.ObservedAt
+	}
+	// These observations live in the passive collector, separate from adaptive QoS.
+	if sample.Success && ((sample.HasTTFT && sample.TTFT > 0) || (sample.HasTPOT && sample.TPOT > 0)) {
+		c.appendWindowSampleLocked(c.observations, ObservationKey{ChannelID: channelID, Model: key.Model}, sample)
+	}
+}
+
+func (c *Controller) RecordChannelStatus(channelID, status int, reason string, at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, state := range c.monitor {
+		if !key.priorityOnly {
+			continue
+		}
+		channel, exists := state.channels[channelID]
+		if !exists || channel.status == status && channel.statusReason == reason {
+			continue
+		}
+		channel.status, channel.statusReason = status, reason
+		channel.active = status == 1
+		state.channels[channelID] = channel
+		if at.After(state.lastSeen) {
+			state.lastSeen = at
+		}
+		kind := "channel_disabled"
+		if status == 1 {
+			kind = "channel_enabled"
+		}
+		if len(state.events) >= maxMonitorEvents {
+			state.events = state.events[1:]
+		}
+		state.events = append(state.events, RouteEventSnapshot{At: at.UnixMilli(), Kind: kind, ChannelIDs: []int{channelID}, Allocations: []RouteEventAllocation{}})
+	}
 }
 
 // Recording reuses temporary lookup maps under Controller.mu. Stable routing
@@ -215,13 +316,25 @@ func (c *Controller) recordMonitorLocked(key RouteKey, candidates []Candidate, d
 	for id, previous := range state.channels {
 		if _, exists := active[id]; !exists {
 			candidatesChanged = candidatesChanged || previous.active
+			if key.priorityOnly && previous.status > 1 {
+				previous.active = false
+				state.channels[id] = previous
+				continue
+			}
 			delete(state.channels, id)
 		}
 	}
 	for id, candidate := range active {
 		previous, exists := state.channels[id]
+		if !exists && len(state.channels) >= maxMonitorChannels {
+			state.truncated = true
+			continue
+		}
 		allocation := allocations[id]
 		current := monitoredChannel{priority: candidate.Priority, weight: candidate.Weight, discount: candidateDiscount(candidate), active: true, share: allocation.Share, probe: allocation.Probe, degraded: degraded[id], unverified: unverified[id]}
+		if key.priorityOnly {
+			current.status = 1
+		}
 		if route := c.routes[key]; route != nil {
 			if ejection, ejected := route.ejections[id]; ejected {
 				current.ejectedUntil = ejection.ejectedUntil
@@ -275,8 +388,11 @@ func (c *Controller) recordMonitorLocked(key RouteKey, candidates []Candidate, d
 		index += monitorWindowSeconds
 	}
 	bucket := &state.buckets[index]
-	if bucket.second != second || bucket.counts == nil {
+	if bucket.second != second {
 		*bucket = monitorBucket{second: second, counts: make(map[int]int64)}
+	}
+	if bucket.counts == nil {
+		bucket.counts = make(map[int]int64)
 	}
 	bucket.count++
 	if _, tracked := state.channels[decision.SelectedChannelID]; tracked {
@@ -318,7 +434,11 @@ func (c *Controller) MonitorSnapshot(now time.Time) []RouteSnapshot {
 		if key.discountFirst {
 			snapshot.Mode = "discount"
 		}
+		if key.priorityOnly {
+			snapshot.Mode = "priority"
+		}
 		counts := make(map[int]int64)
+		outcomes := make(map[int]priorityOutcome)
 		for second := firstSecond; second <= now.Unix(); second++ {
 			index := int(second % monitorWindowSeconds)
 			if index < 0 {
@@ -332,6 +452,13 @@ func (c *Controller) MonitorSnapshot(now time.Time) []RouteSnapshot {
 				for id, count := range bucket.counts {
 					point.Channels = append(point.Channels, RouteHistoryChannel{ChannelID: id, SelectionCount: count, SelectedShare: float64(count) / float64(bucket.count)})
 					counts[id] += count
+				}
+				for id, outcome := range bucket.outcomes {
+					total := outcomes[id]
+					total.completed += outcome.completed
+					total.succeeded += outcome.succeeded
+					total.latency += outcome.latency
+					outcomes[id] = total
 				}
 				slices.SortFunc(point.Channels, func(a, b RouteHistoryChannel) int { return cmp.Compare(a.ChannelID, b.ChannelID) })
 			}
@@ -355,7 +482,13 @@ func (c *Controller) MonitorSnapshot(now time.Time) []RouteSnapshot {
 			snapshot.Channels = append(snapshot.Channels, RouteChannelSnapshot{ChannelID: id, SelectionCount: counts[id]})
 		}
 		for id, channel := range state.channels {
-			value := RouteChannelSnapshot{ChannelID: id, Priority: channel.priority, Weight: channel.weight, Active: true, TargetShare: channel.share, SelectionCount: counts[id], Probe: channel.probe, Degraded: channel.degraded, Unverified: channel.unverified}
+			value := RouteChannelSnapshot{ChannelID: id, Priority: channel.priority, Weight: channel.weight, Active: channel.active, TargetShare: channel.share, SelectionCount: counts[id], Probe: channel.probe, Degraded: channel.degraded, Unverified: channel.unverified, Status: channel.status, StatusReason: channel.statusReason}
+			if outcome := outcomes[id]; outcome.completed > 0 {
+				value.CompletedCount, value.SuccessCount = outcome.completed, outcome.succeeded
+				value.FailureCount = outcome.completed - outcome.succeeded
+				latency := float64(outcome.latency) / float64(outcome.completed) / float64(time.Millisecond)
+				value.LatencyMS = &latency
+			}
 			if channel.discount <= 1 {
 				discount := channel.discount
 				value.EffectiveCostDiscount = &discount

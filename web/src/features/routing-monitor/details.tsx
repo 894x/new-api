@@ -19,7 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { useTranslation } from 'react-i18next'
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts'
 
-import { StaticDataTable } from '@/components/data-table'
+import {
+  StaticDataTable,
+  type StaticDataTableColumn,
+} from '@/components/data-table'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   ChartContainer,
@@ -31,7 +34,7 @@ import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-import type { MonitorEvent, MonitorRoute } from './api'
+import type { MonitorChannel, MonitorEvent, MonitorRoute } from './api'
 import { ChannelStatus } from './channel-status'
 import { channelColor } from './route-data'
 
@@ -42,72 +45,106 @@ export function ChannelDetails(props: {
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  const priority = props.route.mode === 'priority'
+  const columns: StaticDataTableColumn<MonitorChannel>[] = [
+    {
+      id: 'name',
+      header: t('Channel'),
+      cell: (channel) =>
+        props.names?.get(channel.channel_id) || `#${channel.channel_id}`,
+    },
+    {
+      id: 'priority',
+      header: t('Priority'),
+      cell: (channel) => formatNumber(channel.priority, locale),
+    },
+    {
+      id: 'weight',
+      header: t('Weight'),
+      cell: (channel) => formatNumber(channel.weight, locale),
+    },
+    {
+      id: 'discount',
+      header: t('Effective discount'),
+      cell: (channel) =>
+        channel.effective_cost_discount == null
+          ? '—'
+          : `×${formatNumber(channel.effective_cost_discount, locale)}`,
+    },
+    {
+      id: 'target',
+      header: t('Target share'),
+      className: 'text-right',
+      cell: (channel) =>
+        props.route.aggregate
+          ? '—'
+          : `${formatNumber(channel.target_share * 100, locale)}%`,
+    },
+    {
+      id: 'actual',
+      header: t('Selection share'),
+      className: 'text-right',
+      cell: (channel) =>
+        `${formatNumber(channel.selected_share * 100, locale)}%`,
+    },
+    {
+      id: 'count',
+      header: t('Routing selections'),
+      className: 'text-right',
+      cell: (channel) => formatNumber(channel.selection_count, locale),
+    },
+    {
+      id: 'ttft',
+      header: 'TTFT',
+      className: 'text-right',
+      cell: (channel) =>
+        channel.ttft_ms == null
+          ? '—'
+          : `${formatNumber(channel.ttft_ms, locale)} ms`,
+    },
+    {
+      id: 'tpot',
+      header: 'TPOT',
+      className: 'text-right',
+      cell: (channel) =>
+        channel.tpot_ms == null
+          ? '—'
+          : `${formatNumber(channel.tpot_ms, locale)} ms`,
+    },
+    {
+      id: 'success',
+      header: t('Success rate'),
+      cell: (channel) =>
+        channel.completed_count
+          ? `${formatNumber(((channel.success_count ?? 0) / channel.completed_count) * 100, locale)}%`
+          : '—',
+    },
+    {
+      id: 'latency',
+      header: t('Average latency'),
+      cell: (channel) =>
+        channel.latency_ms == null
+          ? '—'
+          : `${formatNumber(channel.latency_ms, locale)} ms`,
+    },
+    {
+      id: 'state',
+      header: t('Status'),
+      cell: (channel) => (
+        <ChannelStatus channel={channel} at={props.at} priority={priority} />
+      ),
+    },
+  ]
   return (
     <StaticDataTable
       data={props.route.channels}
       getRowKey={(channel) => channel.channel_id}
       tableClassName='min-w-[720px]'
-      columns={[
-        {
-          id: 'name',
-          header: t('Channel'),
-          cell: (channel) =>
-            props.names?.get(channel.channel_id) || `#${channel.channel_id}`,
-        },
-        {
-          id: 'discount',
-          header: t('Effective discount'),
-          cell: (channel) =>
-            channel.effective_cost_discount == null
-              ? '—'
-              : `×${formatNumber(channel.effective_cost_discount, locale)}`,
-        },
-        {
-          id: 'target',
-          header: t('Target share'),
-          className: 'text-right',
-          cell: (channel) =>
-            props.route.aggregate
-              ? '—'
-              : `${formatNumber(channel.target_share * 100, locale)}%`,
-        },
-        {
-          id: 'actual',
-          header: t('Selection share'),
-          className: 'text-right',
-          cell: (channel) =>
-            `${formatNumber(channel.selected_share * 100, locale)}%`,
-        },
-        {
-          id: 'count',
-          header: t('Routing selections'),
-          className: 'text-right',
-          cell: (channel) => formatNumber(channel.selection_count, locale),
-        },
-        {
-          id: 'ttft',
-          header: 'TTFT',
-          className: 'text-right',
-          cell: (channel) =>
-            channel.ttft_ms == null
-              ? '—'
-              : `${formatNumber(channel.ttft_ms, locale)} ms`,
-        },
-        {
-          id: 'tpot',
-          header: 'TPOT',
-          className: 'text-right',
-          cell: (channel) =>
-            channel.tpot_ms == null
-              ? '—'
-              : `${formatNumber(channel.tpot_ms, locale)} ms`,
-        },
-        {
-          id: 'state',
-          header: t('Status'),
-          cell: (channel) => <ChannelStatus channel={channel} at={props.at} />,
-        },
-      ]}
+      columns={columns.filter((column) =>
+        priority
+          ? column.id !== 'target' && column.id !== 'discount'
+          : column.id !== 'success' && column.id !== 'latency'
+      )}
     />
   )
 }
@@ -246,6 +283,12 @@ export function ShareHistory(props: {
 
 function EventLabel(props: { event: MonitorEvent }) {
   const { t } = useTranslation()
+  if (props.event.kind === 'channel_disabled') {
+    return <>{t('Channel disabled by existing rules')}</>
+  }
+  if (props.event.kind === 'channel_enabled') {
+    return <>{t('Channel restored by health checks')}</>
+  }
   if (props.event.kind === 'initialized') {
     return <>{t('Routing allocation initialized')}</>
   }
@@ -318,6 +361,9 @@ export function RoutingEvents(props: {
                 </time>
               </div>
               <p className='text-muted-foreground mt-1 text-xs break-words'>
+                {event.channel_ids
+                  .map((id) => props.names?.get(id) || `#${id}`)
+                  .join(' · ')}{' '}
                 {event.allocations
                   .map(
                     (allocation) =>

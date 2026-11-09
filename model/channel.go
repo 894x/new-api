@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"strings"
 	"sync"
 
@@ -376,6 +377,19 @@ func (channel *Channel) GetAutoBan() bool {
 		return false
 	}
 	return *channel.AutoBan == 1
+}
+
+// HasAutoDisabledKey includes partially available channels in recovery checks.
+func (channel *Channel) HasAutoDisabledKey() bool {
+	if !channel.ChannelInfo.IsMultiKey {
+		return false
+	}
+	for i := range channel.GetKeys() {
+		if channel.ChannelInfo.MultiKeyStatusList[i] == common.ChannelStatusAutoDisabled {
+			return true
+		}
+	}
+	return false
 }
 
 func (channel *Channel) Save() error {
@@ -867,6 +881,16 @@ func hasEnabledMultiKey(keys []string, statusList map[int]int) bool {
 }
 
 func UpdateChannelStatus(channelId int, usingKey string, status int, reason string) bool {
+	return updateChannelStatus(channelId, usingKey, status, reason, false)
+}
+
+// EnableAutoDisabledChannel rechecks the persisted state under the status lock;
+// a successful probe must never undo a later manual channel or key disable.
+func EnableAutoDisabledChannel(channelId int, usingKey string) bool {
+	return updateChannelStatus(channelId, usingKey, common.ChannelStatusEnabled, "", true)
+}
+
+func updateChannelStatus(channelId int, usingKey string, status int, reason string, recovery bool) bool {
 	if common.MemoryCacheEnabled {
 		channelStatusLock.Lock()
 		defer channelStatusLock.Unlock()
@@ -879,9 +903,40 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	pollingLock.Lock()
 	defer pollingLock.Unlock()
 
-	channel, err := GetChannelById(channelId, true)
+	var tx *gorm.DB
+	var channel *Channel
+	var err error
+	if recovery {
+		tx = DB.Begin()
+		if tx.Error != nil {
+			return false
+		}
+		defer tx.Rollback()
+		channel = &Channel{}
+		err = lockForUpdate(tx).First(channel, channelId).Error
+	} else {
+		channel, err = GetChannelById(channelId, true)
+	}
 	if err != nil {
 		return false
+	}
+	if recovery {
+		if channel.Status == common.ChannelStatusManuallyDisabled {
+			return false
+		}
+		if channel.ChannelInfo.IsMultiKey {
+			keyIndex := slices.Index(channel.GetKeys(), usingKey)
+			if keyIndex < 0 {
+				return false
+			}
+			keyStatus := channel.ChannelInfo.MultiKeyStatusList[keyIndex]
+			if keyStatus == common.ChannelStatusManuallyDisabled ||
+				(keyStatus != common.ChannelStatusAutoDisabled && channel.Status != common.ChannelStatusAutoDisabled) {
+				return false
+			}
+		} else if channel.Status != common.ChannelStatusAutoDisabled || channel.Key != usingKey {
+			return false
+		}
 	}
 	if !channel.ChannelInfo.IsMultiKey && channel.Status == status {
 		return false
@@ -900,7 +955,9 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 		channel.Status = status
 	}
 
-	tx := DB.Begin()
+	if tx == nil {
+		tx = DB.Begin()
+	}
 	if tx.Error != nil {
 		return false
 	}

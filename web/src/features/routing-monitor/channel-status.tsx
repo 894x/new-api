@@ -23,10 +23,30 @@ import { Badge } from '@/components/ui/badge'
 import type { MonitorChannel } from './api'
 import { monitorChannelStatus } from './route-data'
 
-export function ChannelStatus(props: { channel: MonitorChannel; at: number }) {
+export function ChannelStatus(props: {
+  channel: MonitorChannel
+  at: number
+  priority?: boolean
+}) {
   const { t } = useTranslation()
+  if (props.channel.status === 2 || props.channel.status === 3) {
+    return (
+      <Badge variant='destructive' title={props.channel.status_reason}>
+        {props.channel.status === 3
+          ? t('Automatically disabled')
+          : t('Manually disabled')}
+      </Badge>
+    )
+  }
   if (!props.channel.active) {
     return <Badge variant='outline'>{t('Retired candidate')}</Badge>
+  }
+  if (props.priority) {
+    return (
+      <Badge variant='outline'>
+        {props.channel.selection_count === 0 ? t('Standby') : t('Available')}
+      </Badge>
+    )
   }
   const status = monitorChannelStatus(props.channel, props.at)
   if (status === 'ejected') {

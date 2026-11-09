@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	settingconfig "github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/alicebob/miniredis/v2"
@@ -28,6 +29,57 @@ func resetDynamicRoutingControllerForTest() {
 	defer dynamicRoutingRuntime.Unlock()
 	dynamicRoutingRuntime.controller = nil
 	dynamicRoutingRuntime.version = 0
+	priorityRoutingRuntime.Lock()
+	priorityRoutingRuntime.controller = nil
+	priorityRoutingRuntime.Unlock()
+}
+
+func TestPriorityRoutingMonitorCountsOnlyPhysicalDispatchAndDoesNotEnableDynamicRouting(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	configureDynamicRoutingForTest(t, false)
+	const name = "priority-monitor-model"
+	createPrioritizedChannelSelectFixture(t, db, 3901, "default", name, 100)
+	createPrioritizedChannelSelectFixture(t, db, 3902, "default", name, 10)
+	pool := model.ModelRoutingPool{RoutingGroup: "default", Model: name, Mode: model.RoutingModePriority, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 3901, Priority: 100, Weight: 10, Enabled: true}, {ChannelID: 3902, Priority: 10, Weight: 10, Enabled: true}}}
+	require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+	model.InitChannelCache()
+	ctx := newChannelSelectContext()
+	param := &RetryParam{Ctx: ctx, ModelName: name, TokenGroup: "default", RequestPath: "/v1/chat/completions"}
+	selected, _, err := CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, 3901, selected.Id)
+	assert.False(t, DynamicRoutingEnabled())
+	assert.Empty(t, GetRoutingMonitor(context.Background(), 0).Nodes[0].Routes, "selection without physical dispatch is not traffic")
+	require.True(t, PriorityRoutingMonitorEnabled(ctx))
+	info := &relaycommon.RelayInfo{}
+	info.BeginChannelMonitoringAttempt(selected.Id, selected.Type, name)
+	BindRoutingMonitorAttempt(ctx, info, selected.Id)
+	info.MarkAttemptUpstreamStarted()
+	info.MarkAttemptUpstreamStarted()
+	response := GetRoutingMonitor(context.Background(), 0)
+	require.Len(t, response.Nodes[0].Routes, 1)
+	route := response.Nodes[0].Routes[0]
+	assert.Equal(t, "priority", route.Mode)
+	assert.EqualValues(t, 1, route.SelectionCount)
+	require.Len(t, route.Requests, 1)
+	assert.Equal(t, selected.Id, route.Requests[0].ChannelID)
+	assert.False(t, DynamicRoutingEnabled())
+	param.MarkAttempted(selected.Id)
+	fallback, _, err := CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
+	require.NotNil(t, fallback)
+	require.Equal(t, 3902, fallback.Id)
+	info.BeginChannelMonitoringAttempt(fallback.Id, fallback.Type, name)
+	BindRoutingMonitorAttempt(ctx, info, fallback.Id)
+	info.MarkAttemptUpstreamStarted()
+	route = GetRoutingMonitor(context.Background(), 0).Nodes[0].Routes[0]
+	assert.EqualValues(t, 2, route.SelectionCount)
+	require.Len(t, route.Channels, 2, "retry exclusion must not retire the primary from the monitor")
+	assert.True(t, route.Channels[0].Active)
+	assert.EqualValues(t, 100, route.Channels[0].Priority)
+	assert.Equal(t, 3901, route.Requests[0].ChannelID)
+	assert.Equal(t, 3902, route.Requests[1].ChannelID)
 }
 
 func configureDynamicRoutingForTest(t *testing.T, enabled bool) {

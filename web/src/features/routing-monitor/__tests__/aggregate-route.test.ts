@@ -206,3 +206,41 @@ test('weights TTFT and TPOT with their own valid sample counts rather than avera
   expect(combined.channels[0].ttft_sample_count).toBe(3)
   expect(combined.channels[0].tpot_sample_count).toBe(3)
 })
+
+test('priority completion metrics sum outcomes and weight latency by completed attempts across nodes', () => {
+  const first = route(49, 2)
+  const second = route(49, 1)
+  first.mode = 'priority'
+  second.mode = 'priority'
+  Object.assign(first.channels[0], {
+    completed_count: 2,
+    success_count: 1,
+    failure_count: 1,
+    latency_ms: 100,
+  })
+  Object.assign(second.channels[0], {
+    completed_count: 1,
+    success_count: 1,
+    failure_count: 0,
+    latency_ms: 400,
+  })
+  const nodes: MonitorNode[] = [
+    { id: 'a', name: 'A', local: true, updated_at: 10000, routes: [first] },
+    { id: 'b', name: 'B', local: false, updated_at: 10000, routes: [second] },
+  ]
+  const combined = aggregateMonitorRoutes(nodes, 10000, (node) =>
+    effectiveMonitorRoute(
+      node,
+      'standard',
+      'kimi-k3',
+      undefined,
+      undefined,
+      'priority'
+    )
+  )
+  assert(combined)
+  expect(combined.channels[0].completed_count).toBe(3)
+  expect(combined.channels[0].success_count).toBe(2)
+  expect(combined.channels[0].failure_count).toBe(1)
+  expect(combined.channels[0].latency_ms).toBe(200)
+})

@@ -52,6 +52,42 @@ func TestMonitorCountsSelectionsInWindowAndKeepsUserAndModeSeparate(t *testing.T
 	assert.EqualValues(t, 1, after[0].History[58].SelectionCount)
 }
 
+func TestPriorityMonitorRecordsPhysicalTrafficAndLeavesAdaptiveRecoveryIndependent(t *testing.T) {
+	controller, key, candidates, _, now := discountRoutingFixture(t)
+	controller.RecordPriorityDispatch(key, candidates, 1, now)
+	controller.RecordPriorityOutcome(key, 1, Sample{ObservedAt: now.Add(time.Second), UpstreamStartedAt: now, Success: true, HasTTFT: true, TTFT: 100 * time.Millisecond})
+	controller.RecordPriorityDispatch(key, candidates, 2, now.Add(time.Second))
+	controller.RecordPriorityOutcome(key, 2, Sample{ObservedAt: now.Add(3 * time.Second), UpstreamStartedAt: now.Add(time.Second), HardFailure: true})
+	controller.RecordChannelStatus(2, 3, "upstream unavailable", now.Add(3*time.Second))
+	snapshots := controller.MonitorSnapshot(now.Add(3 * time.Second))
+	require.Len(t, snapshots, 1)
+	priority := snapshots[0]
+	assert.Equal(t, "priority", priority.Mode)
+	assert.False(t, priority.Dynamic)
+	assert.EqualValues(t, 2, priority.SelectionCount)
+	require.Len(t, priority.Requests, 2)
+	assert.EqualValues(t, 1, priority.Channels[0].CompletedCount)
+	assert.EqualValues(t, 1, priority.Channels[0].SuccessCount)
+	require.NotNil(t, priority.Channels[0].LatencyMS)
+	assert.Equal(t, float64(1000), *priority.Channels[0].LatencyMS)
+	assert.EqualValues(t, 1, priority.Channels[1].FailureCount)
+	assert.Equal(t, 3, priority.Channels[1].Status)
+	assert.Equal(t, "channel_disabled", priority.Events[0].Kind)
+	assert.Zero(t, priority.Channels[0].TargetShare)
+	// Passive status and failures do not eject a channel from adaptive routing.
+	decision := controller.SelectAvoiding(key, candidates, nil, now.Add(3*time.Second))
+	assert.True(t, decision.HasSelection)
+	snapshots = controller.MonitorSnapshot(now.Add(3 * time.Second))
+	require.Len(t, snapshots, 2)
+	assert.Equal(t, "smart", snapshots[1].Mode)
+	for _, channel := range snapshots[1].Channels {
+		assert.Zero(t, channel.EjectedUntil)
+	}
+	controller.RecordChannelStatus(2, 1, "", now.Add(4*time.Second))
+	assert.Equal(t, "channel_enabled", controller.MonitorSnapshot(now.Add(4 * time.Second))[0].Events[0].Kind)
+	assert.Zero(t, controller.MonitorSnapshot(now.Add(64 * time.Second))[0].SelectionCount)
+}
+
 func TestMonitorReadsAreDetachedAndNeverAdvanceRoutingOrExpireObservations(t *testing.T) {
 	controller, key, candidates, limits, now := discountRoutingFixture(t)
 	control, controlKey, controlCandidates, controlLimits, _ := discountRoutingFixture(t)

@@ -36,6 +36,7 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 
 	success := model.UpdateChannelStatus(channelError.ChannelId, channelError.UsingKey, common.ChannelStatusAutoDisabled, reason)
 	if success {
+		recordPriorityChannelStatus(channelError.ChannelId)
 		if shouldCloseActiveWebSocketsAfterDisable(channelError.ChannelId) {
 			CloseActiveWebSocketsForChannel(channelError.ChannelId, ChannelDisabledCloseReason)
 		}
@@ -46,14 +47,16 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 	}
 }
 
-func EnableChannel(channelId int, usingKey string, channelName string) {
-	success := model.UpdateChannelStatus(channelId, usingKey, common.ChannelStatusEnabled, "")
+func EnableChannel(channelId int, usingKey string, channelName string) bool {
+	success := model.EnableAutoDisabledChannel(channelId, usingKey)
 	if success {
+		recordPriorityChannelStatus(channelId)
 		subject := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
 		NotifyRootUser(formatNotifyType(channelId, common.ChannelStatusEnabled), subject, content)
 		notifyWecomBotChannelEnabled(channelName, channelId)
 	}
+	return success
 }
 
 func ShouldDisableChannel(err *types.NewAPIError) bool {

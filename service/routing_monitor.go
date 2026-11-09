@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
@@ -51,20 +54,107 @@ type RoutingMonitorResponse struct {
 var routingMonitorInstanceID = uuid.NewString()
 var routingMonitorReporterOnce sync.Once
 
+// Priority observations never enter the adaptive routing controller.
+var priorityRoutingRuntime = struct {
+	sync.Mutex
+	controller *dynamicrouting.Controller
+}{}
+
 const routingMonitorDispatchContextKey = "routing_monitor_dispatch"
 
 type routingMonitorDispatch struct {
 	channelID int
 	started   func(time.Time)
+	finished  func(dynamicrouting.Sample)
+}
+
+func PriorityRoutingMonitorEnabled(c *gin.Context) bool {
+	value, _ := c.Get(routingMonitorDispatchContextKey)
+	dispatch, ok := value.(routingMonitorDispatch)
+	return ok && dispatch.finished != nil
+}
+
+func ObservePriorityRoutingSample(c *gin.Context, sample dynamicrouting.Sample) {
+	value, _ := c.Get("priority_routing_outcome")
+	if observe, ok := value.(func(dynamicrouting.Sample)); ok {
+		observe(sample)
+	}
+}
+
+func recordPriorityRoutingSelection(param *RetryParam, group string, channel *model.Channel) {
+	// Retry exclusions belong to one attempt, not to the pool's topology.
+	monitorParam := *param
+	monitorParam.AttemptedChannelIds = nil
+	filters, err := monitorParam.SelectionFilters(group)
+	if err != nil {
+		return
+	}
+	eligible, err := model.ListChannelSelectionCandidates(group, param.ModelName, filters)
+	if err != nil {
+		return
+	}
+	candidates := make([]dynamicrouting.Candidate, 0, len(eligible))
+	for _, entry := range eligible {
+		priority := int64(0)
+		if entry.Priority != nil {
+			priority = *entry.Priority
+		}
+		candidates = append(candidates, dynamicrouting.Candidate{ChannelID: entry.ChannelId, Priority: priority, Weight: entry.Weight})
+	}
+	key := dynamicrouting.RouteKey{Group: group, Model: param.ModelName}
+	strategy, err := param.RoutingStrategy(group)
+	if err != nil {
+		return
+	}
+	if len(filters.UserRoutingOverrides) > 0 || strategy != nil && strategy.UserId > 0 {
+		key.Policy = fmt.Sprintf("user:%d", common.GetContextKeyInt(param.Ctx, constant.ContextKeyUserId))
+	}
+	priorityRoutingRuntime.Lock()
+	if priorityRoutingRuntime.controller == nil {
+		config := dynamic_routing_setting.GetSnapshot().Config
+		config.Enabled = false
+		priorityRoutingRuntime.controller, err = dynamicrouting.NewController(config)
+	}
+	controller := priorityRoutingRuntime.controller
+	priorityRoutingRuntime.Unlock()
+	if err != nil || controller == nil {
+		return
+	}
+	startRoutingMonitorReporter()
+	param.Ctx.Set(routingMonitorDispatchContextKey, routingMonitorDispatch{
+		channelID: channel.Id,
+		started:   func(at time.Time) { controller.RecordPriorityDispatch(key, candidates, channel.Id, at) },
+		finished:  func(sample dynamicrouting.Sample) { controller.RecordPriorityOutcome(key, channel.Id, sample) },
+	})
+}
+
+func recordPriorityChannelStatus(channelID int) {
+	priorityRoutingRuntime.Lock()
+	controller := priorityRoutingRuntime.controller
+	priorityRoutingRuntime.Unlock()
+	if controller == nil {
+		return
+	}
+	channel, err := model.GetChannelById(channelID, true)
+	if err != nil {
+		return
+	}
+	reason, _ := channel.GetOtherInfo()["status_reason"].(string)
+	if len(reason) > 1024 {
+		reason = strings.ToValidUTF8(reason[:1024], "") + "…"
+	}
+	controller.RecordChannelStatus(channelID, channel.Status, reason, time.Now())
 }
 
 // BindRoutingMonitorAttempt consumes the selection's immutable observer. Only
 // physical dispatch can invoke it; local rejection and retry selection cannot.
 func BindRoutingMonitorAttempt(c *gin.Context, info *relaycommon.RelayInfo, channelID int) {
+	c.Set("priority_routing_outcome", nil)
 	observer, _ := c.Get(routingMonitorDispatchContextKey)
 	c.Set(routingMonitorDispatchContextKey, nil)
 	if dispatch, ok := observer.(routingMonitorDispatch); ok && dispatch.channelID == channelID {
 		info.OnDynamicRoutingUpstreamStarted(dispatch.started)
+		c.Set("priority_routing_outcome", dispatch.finished)
 	}
 }
 
@@ -119,6 +209,16 @@ func localRoutingMonitorNode(now time.Time) RoutingMonitorNode {
 	if controller != nil {
 		node.Routes = controller.MonitorSnapshot(now)
 		node.Truncated = len(node.Routes) >= 512
+	}
+	priorityRoutingRuntime.Lock()
+	priority := priorityRoutingRuntime.controller
+	priorityRoutingRuntime.Unlock()
+	if priority != nil {
+		node.Routes = append(node.Routes, priority.MonitorSnapshot(now)...)
+		if len(node.Routes) > 512 {
+			node.Routes = node.Routes[:512]
+			node.Truncated = true
+		}
 	}
 	return node
 }

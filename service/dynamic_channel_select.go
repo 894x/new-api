@@ -97,6 +97,9 @@ func getSatisfiedChannelForRoute(param *RetryParam, group string, retry int) (*m
 		retry = 0
 	}
 	channel, err := selectChannelWithCapacity(param, group, retry)
+	if err == nil && channel != nil {
+		recordPriorityRoutingSelection(param, group, channel)
+	}
 	allAttempted := false
 	if pool != nil && channel == nil {
 		for _, entry := range pool.Channels {

@@ -135,6 +135,23 @@ export function RoutingFlow(props: {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const reduceMotion = useReducedMotion()
+  const priority = props.route.mode === 'priority'
+  const observed = priority || props.route.aggregate
+  let policyTitle = t('Smart routing')
+  let policyDescription = t('Adjust allocation using observed channel quality')
+  let allocationStatus = props.route.dynamic
+    ? t('Adaptive allocation active')
+    : t('Warming up')
+  if (priority) {
+    allocationStatus = t('Channel auto-disable and recovery')
+    policyTitle = t('Priority routing')
+    policyDescription = t(
+      'Select by priority and weight; recover using channel health checks'
+    )
+  } else if (props.route.mode === 'discount') {
+    policyTitle = t('Discount-first routing')
+    policyDescription = t('Prefer lower discounts while meeting quality limits')
+  }
   const id = useId().replaceAll(/[^a-zA-Z0-9]/g, '')
   const container = useRef<HTMLDivElement>(null)
   const [geometry, setGeometry] = useState<FlowGeometry>()
@@ -207,7 +224,7 @@ export function RoutingFlow(props: {
           viewBox={`0 0 ${geometry.width} ${geometry.height}`}
           role='img'
           aria-label={
-            props.route.aggregate
+            observed
               ? t('Routing flow: line width represents selection share')
               : t('Routing flow: line width represents target share')
           }
@@ -271,21 +288,9 @@ export function RoutingFlow(props: {
         className='ring-primary/35 relative mx-auto w-full max-w-60 shadow-[0_0_0_5px_var(--muted)] md:mx-0 md:max-w-none'
       >
         <CardContent className='space-y-3'>
-          <h3 className='font-medium'>
-            {props.route.mode === 'discount'
-              ? t('Discount-first routing')
-              : t('Smart routing')}
-          </h3>
-          <p className='text-muted-foreground text-xs'>
-            {props.route.mode === 'discount'
-              ? t('Prefer lower discounts while meeting quality limits')
-              : t('Adjust allocation using observed channel quality')}
-          </p>
-          <p className='border-t pt-2 text-xs'>
-            {props.route.dynamic
-              ? t('Adaptive allocation active')
-              : t('Warming up')}
-          </p>
+          <h3 className='font-medium'>{policyTitle}</h3>
+          <p className='text-muted-foreground text-xs'>{policyDescription}</p>
+          <p className='border-t pt-2 text-xs'>{allocationStatus}</p>
         </CardContent>
       </Card>
       <div
@@ -310,18 +315,31 @@ export function RoutingFlow(props: {
                   {props.names?.get(channel.channel_id) ||
                     t('Channel #{{id}}', { id: channel.channel_id })}
                 </span>
-                <ChannelStatus channel={channel} at={props.at} />
+                <ChannelStatus
+                  channel={channel}
+                  at={props.at}
+                  priority={priority}
+                />
               </div>
               <div className='flex flex-wrap items-center justify-between gap-2'>
                 <span className='text-muted-foreground text-xs'>
-                  {t('Effective discount')}:{' '}
-                  {channel.effective_cost_discount == null
-                    ? '—'
-                    : `×${formatNumber(channel.effective_cost_discount, locale)}`}
+                  {priority ? (
+                    <>
+                      {t('Priority')}: {formatNumber(channel.priority, locale)}{' '}
+                      · {t('Weight')}: {formatNumber(channel.weight, locale)}
+                    </>
+                  ) : (
+                    <>
+                      {t('Effective discount')}:{' '}
+                      {channel.effective_cost_discount == null
+                        ? '—'
+                        : `×${formatNumber(channel.effective_cost_discount, locale)}`}
+                    </>
+                  )}
                 </span>
                 <span className='text-lg font-medium tabular-nums'>
                   <span className='text-muted-foreground mr-1 text-xs font-normal'>
-                    {props.route.aggregate ? t('Selection share') : t('Target')}
+                    {observed ? t('Selection share') : t('Target')}
                   </span>
                   {formatNumber(channel.target_share * 100, locale)}%
                 </span>

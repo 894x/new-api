@@ -76,6 +76,8 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
+type channelHealthCheckRequestKey struct{}
+
 func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
 	if ctx == nil {
 		ctx = context.Background()
@@ -190,7 +192,8 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	c.Set("group", group)
 
 	var newAPIError *types.NewAPIError
-	if _, monitored := ctx.Value(channelMonitoringRequestKey{}).(operation_setting.MonitorSetting); monitored {
+	_, healthCheck := ctx.Value(channelHealthCheckRequestKey{}).(bool)
+	if _, monitored := ctx.Value(channelMonitoringRequestKey{}).(operation_setting.MonitorSetting); monitored || healthCheck {
 		newAPIError = middleware.SetupContextForChannelProbe(c, channel, testModel)
 	} else {
 		newAPIError = middleware.SetupContextForSelectedChannel(c, channel, testModel)
@@ -958,10 +961,52 @@ type channelTestSummary struct {
 }
 
 func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, testUserID int, allowDisable bool, disableThreshold int64) channelTestSummary {
+	if channel.Status == common.ChannelStatusManuallyDisabled {
+		return channelTestSummary{}
+	}
+	hasDisabledKeys := channel.HasAutoDisabledKey()
+	if hasDisabledKeys && !allowDisable && !common.AutomaticEnableChannelEnabled {
+		return channelTestSummary{}
+	}
+	if !common.AutomaticEnableChannelEnabled || !hasDisabledKeys {
+		return checkChannelHealth(ctx, channel, testUserID, allowDisable, disableThreshold)
+	}
+	summary := channelTestSummary{}
+	// Probe disabled keys through a detached single-key channel. Normal key
+	// selection stays strict, and polling cannot persist a temporary key map.
+	for i, key := range channel.GetKeys() {
+		if ctx.Err() != nil {
+			return summary
+		}
+		if channel.ChannelInfo.MultiKeyStatusList[i] != common.ChannelStatusAutoDisabled {
+			continue
+		}
+		probe := *channel
+		probe.Key = key
+		probe.ChannelInfo.IsMultiKey = false
+		probe.Status = common.ChannelStatusAutoDisabled
+		result := checkChannelHealth(ctx, &probe, testUserID, false, disableThreshold)
+		summary.Tested += result.Tested
+		summary.Succeeded += result.Succeeded
+		summary.Failed += result.Failed
+		summary.Enabled += result.Enabled
+	}
+	if allowDisable && channel.Status == common.ChannelStatusEnabled {
+		result := checkChannelHealth(ctx, channel, testUserID, allowDisable, disableThreshold)
+		summary.Tested += result.Tested
+		summary.Succeeded += result.Succeeded
+		summary.Failed += result.Failed
+		summary.Disabled += result.Disabled
+	}
+	return summary
+}
+
+func checkChannelHealth(ctx context.Context, channel *model.Channel, testUserID int, allowDisable bool, disableThreshold int64) channelTestSummary {
 	summary := channelTestSummary{}
 	isChannelEnabled := channel.Status == common.ChannelStatusEnabled
 	tik := time.Now()
-	result := testChannel(ctx, channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel))
+	probeCtx := context.WithValue(ctx, channelHealthCheckRequestKey{}, true)
+	result := testChannel(probeCtx, channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel))
 	milliseconds := time.Since(tik).Milliseconds()
 	if ctx.Err() != nil {
 		return summary
@@ -995,8 +1040,9 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 	}
 
 	if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
-		service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
-		summary.Enabled++
+		if service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name) {
+			summary.Enabled++
+		}
 	}
 
 	channel.UpdateResponseTime(milliseconds)
@@ -1157,7 +1203,7 @@ func selectChannelsForAutomaticTest(channels []*model.Channel, mode string) []*m
 		if mode == operation_setting.ChannelTestModeAutoBanOnly && !channel.GetAutoBan() {
 			continue
 		}
-		if mode == operation_setting.ChannelTestModePassiveRecovery && channel.Status != common.ChannelStatusAutoDisabled {
+		if mode == operation_setting.ChannelTestModePassiveRecovery && channel.Status != common.ChannelStatusAutoDisabled && !channel.HasAutoDisabledKey() {
 			continue
 		}
 		selected = append(selected, channel)

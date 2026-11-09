@@ -113,6 +113,19 @@ export function aggregateMonitorRoutes(
         continue
       }
       combined.selection_count += channel.selection_count
+      const completed =
+        (combined.completed_count ?? 0) + (channel.completed_count ?? 0)
+      if (completed > 0) {
+        combined.latency_ms =
+          ((combined.latency_ms ?? 0) * (combined.completed_count ?? 0) +
+            (channel.latency_ms ?? 0) * (channel.completed_count ?? 0)) /
+          completed
+      }
+      combined.completed_count = completed
+      combined.success_count =
+        (combined.success_count ?? 0) + (channel.success_count ?? 0)
+      combined.failure_count =
+        (combined.failure_count ?? 0) + (channel.failure_count ?? 0)
       combined.sample_count += channel.sample_count
       const ttft = combineMonitorMetric(
         combined.ttft_ms,
