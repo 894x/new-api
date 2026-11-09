@@ -96,11 +96,49 @@ func GetUserChannelRouting(c *gin.Context) {
 		}
 	}
 	if modelName == "" {
+		poolView := c.Query("view") == "pool"
+		usedGroups := make(map[string]bool)
+		if poolView {
+			// Read group metadata only; inactive keys still represent groups the
+			// customer created, while soft-deleted keys are excluded by GORM.
+			var tokens []model.Token
+			if err := model.DB.Model(&model.Token{}).Where("user_id = ?", userID).Select("group", "auto_groups").Distinct().Find(&tokens).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			for _, token := range tokens {
+				switch token.Group {
+				case "":
+					usedGroups[user.Group] = true
+				case "auto":
+					autoGroups, err := token.GetAutoGroups()
+					if err != nil {
+						continue
+					}
+					if len(autoGroups) == 0 {
+						autoGroups = service.GetUserAutoGroup(user.Group)
+					} else {
+						autoGroups = service.FilterUserTokenAutoGroups(user.Group, autoGroups)
+					}
+					for _, group := range autoGroups {
+						usedGroups[group] = true
+					}
+				default:
+					usedGroups[token.Group] = true
+				}
+			}
+		}
 		// Only globally published, currently usable Key groups belong in this
 		// editor. Resource pools and the implicit customer identity group do not.
 		for group, description := range setting.GetUserUsableGroupsCopy() {
-			if _, ok := usable[group]; ok && group != "auto" && ratio_setting.ContainsGroupRatio(group) {
+			if _, ok := usable[group]; ok && group != "auto" && ratio_setting.ContainsGroupRatio(group) && (!poolView || usedGroups[group]) {
 				response.KeyGroups[group] = description
+			}
+		}
+		if poolView {
+			groups = groups[:0]
+			for group := range response.KeyGroups {
+				groups = append(groups, group)
 			}
 		}
 		models, err := service.GetUserGroupsEnabledModels(user.Group, groups)
@@ -108,7 +146,6 @@ func GetUserChannelRouting(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
-		poolView := c.Query("view") == "pool"
 		var allowedPairs map[string]map[string]bool
 		if poolView {
 			allowedPairs, err = model.GetAllowedGroupModelPairs()
@@ -118,7 +155,8 @@ func GetUserChannelRouting(c *gin.Context) {
 			}
 		}
 		for _, override := range groupOverrides {
-			if poolView && !allowedPairs[override.RoutingGroup][ratio_setting.RoutingMatchModelName(override.Model)] {
+			_, public := response.KeyGroups[override.RoutingGroup]
+			if poolView && (!public || !allowedPairs[override.RoutingGroup][ratio_setting.RoutingMatchModelName(override.Model)]) {
 				continue
 			}
 			models = append(models, override.Model)
@@ -128,7 +166,8 @@ func GetUserChannelRouting(c *gin.Context) {
 			}
 		}
 		for _, strategy := range strategies {
-			if poolView && !allowedPairs[strategy.RoutingGroup][ratio_setting.RoutingMatchModelName(strategy.Model)] {
+			_, public := response.KeyGroups[strategy.RoutingGroup]
+			if poolView && (!public || !allowedPairs[strategy.RoutingGroup][ratio_setting.RoutingMatchModelName(strategy.Model)]) {
 				continue
 			}
 			models = append(models, strategy.Model)

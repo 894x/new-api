@@ -759,6 +759,96 @@ func TestUserChannelRoutingCatalogSeparatesPublicKeyGroupsFromResourcePools(t *t
 	assert.Equal(t, map[string][]string{"gpt-5": {"standard", "vip"}}, response.Data.ConfiguredKeyGroups)
 }
 
+func TestUserRoutingPoolCatalogUsesCreatedTokenGroupsDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+				t.Skip("isolated database DSN not configured")
+			}
+			t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
+			db := setupManageUserTestDB(t)
+			require.NoError(t, db.AutoMigrate(&model.Token{}, &model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserGroupChannelRoutingOverride{}))
+			previousGroups, previousRatios := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString()
+			previousAuto, previousLimit := setting.AutoGroups2JsonString(), setting.GetMaxTokenAutoGroups()
+			t.Cleanup(func() {
+				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousGroups))
+				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+				require.NoError(t, setting.UpdateAutoGroupsByJsonString(previousAuto))
+				require.NoError(t, setting.UpdateMaxTokenAutoGroups(strconv.Itoa(previousLimit)))
+			})
+			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP","unused":"Unused","deleted":"Deleted","stale":"Stale","auto":"Auto"}`))
+			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1,"unused":1,"deleted":1,"internal":1}`))
+			require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["default","vip","unused"]`))
+			require.NoError(t, setting.UpdateMaxTokenAutoGroups("2"))
+			user := model.User{Username: "created-key-groups", Group: "default", AffCode: "createdkeygroups"}
+			other := model.User{Username: "other-key-groups", Group: "default", AffCode: "otherkeygroups"}
+			require.NoError(t, db.Create(&user).Error)
+			require.NoError(t, db.Create(&other).Error)
+			channel := model.Channel{Id: 9341, Name: "Public", Type: 1, Status: common.ChannelStatusEnabled, Models: "catalog-model", Group: "default,vip,unused,deleted,stale,internal"}
+			require.NoError(t, db.Create(&channel).Error)
+			require.NoError(t, channel.AddAbilities(nil))
+			require.NoError(t, db.Create(&model.Token{UserId: other.Id, Key: "other-user-secret", Group: "unused"}).Error)
+			deleted := model.Token{UserId: user.Id, Key: "deleted-secret", Group: "deleted"}
+			require.NoError(t, db.Create(&deleted).Error)
+			require.NoError(t, db.Delete(&deleted).Error)
+			require.NoError(t, db.Create(&model.UserGroupChannelRoutingOverride{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: user.Id, Model: "catalog-model", ChannelId: channel.Id}, RoutingGroup: "vip"}).Error)
+			require.NoError(t, db.Create(&model.UserGroupChannelRoutingOverride{UserChannelRoutingOverride: model.UserChannelRoutingOverride{UserId: user.Id, Model: "stale-model", ChannelId: channel.Id}, RoutingGroup: "unused"}).Error)
+			for _, tc := range []struct {
+				name   string
+				tokens []model.Token
+				groups []string
+			}{
+				{name: "no_created_keys"},
+				{name: "only_created_group", tokens: []model.Token{{Group: "vip"}}, groups: []string{"vip"}},
+				{name: "duplicate_groups", tokens: []model.Token{{Group: "vip"}, {Group: "vip"}}, groups: []string{"vip"}},
+				{name: "disabled_and_expired_keys_still_created", tokens: []model.Token{{Group: "default", Status: common.TokenStatusDisabled}, {Group: "vip", ExpiredTime: 1}}, groups: []string{"default", "vip"}},
+				{name: "empty_group_inherits_user_group", tokens: []model.Token{{Group: ""}}, groups: []string{"default"}},
+				{name: "auto_inherits_global_groups", tokens: []model.Token{{Group: "auto"}}, groups: []string{"default", "unused", "vip"}},
+				{name: "custom_auto_groups_respect_current_limit", tokens: []model.Token{{Group: "auto", AutoGroups: `["missing","vip","default","unused"]`}}, groups: []string{"default", "vip"}},
+				{name: "custom_auto_never_falls_back", tokens: []model.Token{{Group: "auto", AutoGroups: `["missing"]`}}},
+				{name: "malformed_auto_never_falls_back", tokens: []model.Token{{Group: "auto", AutoGroups: `invalid`}}},
+				{name: "empty_auto_list_inherits_global_groups", tokens: []model.Token{{Group: "auto", AutoGroups: `[]`}}, groups: []string{"default", "unused", "vip"}},
+				{name: "unpublished_and_stale_groups_hidden", tokens: []model.Token{{Group: "internal"}, {Group: "stale"}, {Group: "vip"}}, groups: []string{"vip"}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					for i := range tc.tokens {
+						tc.tokens[i].UserId = user.Id
+						tc.tokens[i].Key = fmt.Sprintf("catalog-secret-%s-%d", tc.name, i)
+						require.NoError(t, db.Create(&tc.tokens[i]).Error)
+					}
+					t.Cleanup(func() {
+						require.NoError(t, db.Where("user_id = ?", user.Id).Delete(&model.Token{}).Error)
+					})
+					recorder := userRoutingRequestAtURL(t, user.Id, http.MethodGet, "/api/user/1/channel-routing-overrides?view=pool", "", GetUserChannelRouting)
+					require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+					var response struct {
+						Success bool
+						Data    userChannelRoutingResponse
+					}
+					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+					require.True(t, response.Success, recorder.Body.String())
+					groups := make([]string, 0, len(response.Data.KeyGroups))
+					for group := range response.Data.KeyGroups {
+						groups = append(groups, group)
+					}
+					assert.ElementsMatch(t, tc.groups, groups)
+					if len(tc.groups) == 0 {
+						assert.Empty(t, response.Data.Models)
+						assert.Empty(t, response.Data.ModelGroups)
+					} else {
+						assert.Equal(t, []string{"catalog-model"}, response.Data.Models)
+						assert.Equal(t, map[string][]string{"catalog-model": tc.groups}, response.Data.ModelGroups)
+					}
+					assert.NotContains(t, response.Data.ConfiguredKeyGroups, "stale-model")
+					assert.NotContains(t, recorder.Body.String(), "secret")
+				})
+			}
+			legacy := userRoutingRequestAtURL(t, user.Id, http.MethodGet, "/api/user/1/channel-routing-overrides", "", GetUserChannelRouting)
+			assert.Contains(t, legacy.Body.String(), `"stale-model"`, "saved overrides remain accessible for cleanup")
+		})
+	}
+}
+
 func TestRoutingPoolCatalogsRespectGroupModelMatrixDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {
@@ -767,7 +857,7 @@ func TestRoutingPoolCatalogsRespectGroupModelMatrixDatabaseMatrix(t *testing.T) 
 			}
 			t.Setenv("TEST_MANAGE_USER_DIALECT", dialect)
 			db := setupManageUserTestDB(t)
-			require.NoError(t, db.AutoMigrate(&model.Option{}, &model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
+			require.NoError(t, db.AutoMigrate(&model.Option{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}))
 			previousGroups, previousRatios := setting.UserUsableGroups2JSONString(), ratio_setting.GroupRatio2JSONString()
 			common.OptionMapRWMutex.Lock()
 			previousOptions := common.OptionMap
@@ -788,6 +878,7 @@ func TestRoutingPoolCatalogsRespectGroupModelMatrixDatabaseMatrix(t *testing.T) 
 			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1}`))
 			user := model.User{Username: "matrix-pools", Group: "default", AffCode: "matrixpools"}
 			require.NoError(t, db.Create(&user).Error)
+			require.NoError(t, db.Create(&[]model.Token{{UserId: user.Id, Key: "matrix-default", Group: "default"}, {UserId: user.Id, Key: "matrix-vip", Group: "vip"}}).Error)
 			channel := model.Channel{Id: 9351, Name: "Matrix candidate", Type: 1, Status: common.ChannelStatusEnabled, Models: "allowed,blocked,strategy-only,removed,removed-strategy,disabled,alias@effort:high", Group: "default,vip"}
 			require.NoError(t, db.Create(&channel).Error)
 			require.NoError(t, channel.AddAbilities(nil))
@@ -903,9 +994,10 @@ func TestUserRoutingPoolEditorDatabaseMatrix(t *testing.T) {
 				common.MemoryCacheEnabled = false
 				require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP"}`))
 				require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":2}`))
-				require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}))
+				require.NoError(t, db.AutoMigrate(&model.Token{}, &model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}))
 				user := model.User{Username: "pool-editor", Group: "default", AffCode: "pooleditor"}
 				require.NoError(t, db.Create(&user).Error)
+				require.NoError(t, db.Create(&[]model.Token{{UserId: user.Id, Key: "editor-default", Group: "default"}, {UserId: user.Id, Key: "editor-vip", Group: "vip"}}).Error)
 				channel := model.Channel{Id: 9801, Type: 1, Name: "Public", Models: "gpt-5", Group: "default,vip", Status: common.ChannelStatusEnabled, Priority: common.GetPointer(int64(10)), Weight: common.GetPointer(uint(20))}
 				require.NoError(t, db.Create(&channel).Error)
 				require.NoError(t, channel.AddAbilities(nil))
