@@ -161,6 +161,50 @@ function mockPool(config = fixture()) {
   return state
 }
 
+test('user channels with inherited priorities group together and header weights preserve priority inheritance', async () => {
+  const config = fixture()
+  config.configured = true
+  config.source = 'user'
+  config.channels[1].inherited_priority = config.channels[0].inherited_priority
+  mockPool(config)
+  const patch = vi
+    .spyOn(api, 'patch')
+    .mockResolvedValue({ data: { success: true } })
+  const { card } = await mountWorkspace()
+  await userEvent.click(
+    within(card).getByRole('button', { name: 'Edit user override' })
+  )
+  const group = within(card).getByRole('group', { name: 'Priority 10' })
+  expect(within(group).getByText('Primary')).toBeVisible()
+  expect(within(group).getByText('Backup')).toBeVisible()
+  const weight = within(group).getByRole('spinbutton', {
+    name: 'Weight for Primary',
+  })
+  expect(weight).toHaveAttribute('placeholder', '20')
+  fireEvent.change(weight, { target: { value: '0' } })
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  await userEvent.click(within(card).getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(patch).toHaveBeenCalledWith(
+      '/api/user/42/channel-routing-overrides',
+      expect.objectContaining({
+        overrides: expect.arrayContaining([
+          expect.objectContaining({
+            channel_id: 1,
+            priority_override: null,
+            weight_override: 0,
+          }),
+          expect.objectContaining({
+            channel_id: 2,
+            priority_override: null,
+            weight_override: null,
+          }),
+        ]),
+      })
+    )
+  )
+})
+
 test('channel retry overrides preserve zero, custom counts and explicit inheritance without changing global settings', async () => {
   const config = fixture()
   config.configured = true
@@ -179,7 +223,10 @@ test('channel retry overrides preserve zero, custom counts and explicit inherita
   fireEvent.click(
     within(card).getByRole('button', { name: 'Edit user override' })
   )
-  fireEvent.change(retries, { target: { value: '0' } })
+  fireEvent.change(
+    getSettingsField('spinbutton', { name: 'Retries for Primary' }),
+    { target: { value: '0' } }
+  )
   fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
   await waitFor(() =>
     expect(patch).toHaveBeenCalledWith(
@@ -199,7 +246,10 @@ test('channel retry overrides preserve zero, custom counts and explicit inherita
   fireEvent.click(
     within(card).getByRole('button', { name: 'Edit user override' })
   )
-  fireEvent.change(retries, { target: { value: '' } })
+  fireEvent.change(
+    getSettingsField('spinbutton', { name: 'Retries for Primary' }),
+    { target: { value: '' } }
+  )
   fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
   await waitFor(() =>
     expect(patch).toHaveBeenLastCalledWith(
@@ -230,7 +280,10 @@ test.each(['-1', '1.5', '100'])(
     const retries = getSettingsField('spinbutton', {
       name: 'Retries for Primary',
     })
-    fireEvent.change(retries, { target: { value } })
+    fireEvent.change(
+      getSettingsField('spinbutton', { name: 'Retries for Primary' }),
+      { target: { value } }
+    )
     expect(retries).toHaveAttribute('aria-invalid', 'true')
     fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
     expect(
@@ -445,10 +498,9 @@ test('user monitoring retains the same unsaved override and returns focus withou
   const monitor = screen.getByRole('dialog', {
     name: 'kimi-k3 · vip · acme #42',
   })
-  expect(getSettingsField('spinbutton', { name: 'Priority for Primary' })).toBe(
-    priority
-  )
-  expect(priority).toHaveValue(0)
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Primary' })
+  ).toHaveValue(0)
   expect(
     await within(monitor).findByLabelText('Cache hit rate: 50%')
   ).toBeVisible()
@@ -458,10 +510,9 @@ test('user monitoring retains the same unsaved override and returns focus withou
     within(monitor).getByRole('button', { name: 'Back to card view' })
   )
   expect(trigger).toHaveFocus()
-  expect(getSettingsField('spinbutton', { name: 'Priority for Primary' })).toBe(
-    priority
-  )
-  expect(priority).toHaveValue(0)
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Primary' })
+  ).toHaveValue(0)
   await userEvent.click(within(card).getByRole('button', { name: 'Save' }))
   await waitFor(() =>
     expect(patch).toHaveBeenCalledWith(

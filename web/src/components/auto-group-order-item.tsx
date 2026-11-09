@@ -24,9 +24,10 @@ import {
   Settings02Icon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { Reorder, useDragControls } from 'motion/react'
+import { motion, Reorder, useDragControls } from 'motion/react'
 import {
   useEffect,
+  useEffectEvent,
   useState,
   type KeyboardEvent,
   type PointerEvent,
@@ -49,6 +50,8 @@ type AutoGroupOrderItemProps = {
   labelClassName?: string
   removeClassName?: string
   compact?: boolean
+  reorderable?: boolean
+  reorderLabel?: string
   disabled?: boolean
   index: number
   count: number
@@ -58,6 +61,10 @@ type AutoGroupOrderItemProps = {
   settings?: ReactNode
   settingsLabel?: string
   settingsOpenRequest?: number
+  settingsTriggerId?: string
+  onSettingsOpenChange?: (open: boolean, restoreFocus?: boolean) => void
+  onDrop?: (point: { x: number; y: number }) => void
+  onDraggingChange?: (dragging: boolean) => void
   onMove: (index: number, direction: 'up' | 'down') => void
   onRemove?: (group: string) => void
 }
@@ -65,9 +72,16 @@ type AutoGroupOrderItemProps = {
 export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
   const { t } = useTranslation()
   const dragControls = useDragControls()
+  const reorderLabel = props.reorderLabel ?? props.group
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const notifySettingsOpen = useEffectEvent((open: boolean) =>
+    props.onSettingsOpenChange?.(open)
+  )
   useEffect(() => {
-    if (props.settingsOpenRequest) setSettingsOpen(true)
+    if (props.settingsOpenRequest) {
+      setSettingsOpen(true)
+      notifySettingsOpen(true)
+    }
   }, [props.settingsOpenRequest])
 
   const handleDragStart = (event: PointerEvent<HTMLButtonElement>) => {
@@ -87,31 +101,29 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
     }
   }
 
-  return (
-    <Reorder.Item
-      value={props.group}
-      dragListener={false}
-      dragMomentum={false}
-      dragControls={dragControls}
-      className={cn(
-        'bg-background relative flex min-w-0 items-center rounded-lg border',
-        props.compact ? '@container/order-item gap-1 p-1' : 'gap-2 p-2',
-        props.footer && 'flex-wrap'
+  const itemClassName = cn(
+    'bg-background relative flex min-w-0 items-center rounded-lg border',
+    props.compact ? '@container/order-item gap-1 p-1' : 'gap-2 p-2',
+    props.footer && 'flex-wrap'
+  )
+  const content = (
+    <>
+      {(props.reorderable !== false || props.onDrop) && (
+        <Button
+          type='button'
+          variant='ghost'
+          size={props.compact ? 'icon-xs' : 'icon-sm'}
+          className='text-muted-foreground cursor-grab touch-none font-mono active:cursor-grabbing'
+          aria-label={t('Drag {{group}} to reorder', { group: reorderLabel })}
+          title={t('Drag {{group}} to reorder', { group: reorderLabel })}
+          onPointerDown={handleDragStart}
+          onKeyDown={handleDragKeyDown}
+          disabled={props.disabled}
+        >
+          <HugeiconsIcon icon={Drag01Icon} strokeWidth={2} aria-hidden='true' />
+        </Button>
       )}
-    >
-      <Button
-        type='button'
-        variant='ghost'
-        size={props.compact ? 'icon-xs' : 'icon-sm'}
-        className='text-muted-foreground cursor-grab touch-none font-mono active:cursor-grabbing'
-        aria-label={t('Drag {{group}} to reorder', { group: props.group })}
-        title={t('Drag {{group}} to reorder', { group: props.group })}
-        onPointerDown={handleDragStart}
-        onKeyDown={handleDragKeyDown}
-        disabled={props.disabled}
-      >
-        <HugeiconsIcon icon={Drag01Icon} strokeWidth={2} aria-hidden='true' />
-      </Button>
+
       {props.leading}
       <div
         className={cn(
@@ -133,41 +145,43 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
       <div
         className={cn('flex shrink-0 items-center', !props.compact && 'gap-1')}
       >
-        <div
-          className={cn(
-            'flex shrink-0',
-            props.compact ? '@max-[24rem]/order-item:flex-col' : 'gap-1'
-          )}
-        >
-          <Button
-            type='button'
-            variant='ghost'
-            size={props.compact ? 'icon-xs' : 'icon-sm'}
-            disabled={props.disabled || props.index === 0}
-            aria-label={t('Move {{group}} up', { group: props.group })}
-            onClick={() => props.onMove(props.index, 'up')}
+        {props.reorderable !== false && (
+          <div
+            className={cn(
+              'flex shrink-0',
+              props.compact ? '@max-[24rem]/order-item:flex-col' : 'gap-1'
+            )}
           >
-            <HugeiconsIcon
-              icon={ArrowUp01Icon}
-              strokeWidth={2}
-              aria-hidden='true'
-            />
-          </Button>
-          <Button
-            type='button'
-            variant='ghost'
-            size={props.compact ? 'icon-xs' : 'icon-sm'}
-            disabled={props.disabled || props.index === props.count - 1}
-            aria-label={t('Move {{group}} down', { group: props.group })}
-            onClick={() => props.onMove(props.index, 'down')}
-          >
-            <HugeiconsIcon
-              icon={ArrowDown01Icon}
-              strokeWidth={2}
-              aria-hidden='true'
-            />
-          </Button>
-        </div>
+            <Button
+              type='button'
+              variant='ghost'
+              size={props.compact ? 'icon-xs' : 'icon-sm'}
+              disabled={props.disabled || props.index === 0}
+              aria-label={t('Move {{group}} up', { group: reorderLabel })}
+              onClick={() => props.onMove(props.index, 'up')}
+            >
+              <HugeiconsIcon
+                icon={ArrowUp01Icon}
+                strokeWidth={2}
+                aria-hidden='true'
+              />
+            </Button>
+            <Button
+              type='button'
+              variant='ghost'
+              size={props.compact ? 'icon-xs' : 'icon-sm'}
+              disabled={props.disabled || props.index === props.count - 1}
+              aria-label={t('Move {{group}} down', { group: reorderLabel })}
+              onClick={() => props.onMove(props.index, 'down')}
+            >
+              <HugeiconsIcon
+                icon={ArrowDown01Icon}
+                strokeWidth={2}
+                aria-hidden='true'
+              />
+            </Button>
+          </div>
+        )}
         {props.onRemove && (
           <Button
             type='button'
@@ -186,8 +200,19 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
           </Button>
         )}
         {props.settings && (
-          <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <Popover
+            open={settingsOpen}
+            onOpenChange={(open, details) => {
+              const restoreFocus =
+                !open &&
+                (details.reason === 'escape-key' ||
+                  details.reason === 'trigger-press')
+              setSettingsOpen(open)
+              props.onSettingsOpenChange?.(open, restoreFocus)
+            }}
+          >
             <PopoverTrigger
+              id={props.settingsTriggerId}
               render={
                 <Button
                   type='button'
@@ -224,6 +249,50 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
           {props.footer}
         </div>
       )}
+    </>
+  )
+  if (props.reorderable === false) {
+    if (props.onDrop) {
+      return (
+        <motion.li
+          data-order-item={props.group}
+          drag={props.disabled ? false : 'y'}
+          dragControls={dragControls}
+          dragListener={false}
+          dragMomentum={false}
+          dragSnapToOrigin
+          whileDrag={{ zIndex: 20 }}
+          className={itemClassName}
+          onDragStart={() => props.onDraggingChange?.(true)}
+          onDragEnd={(event, info) => {
+            props.onDraggingChange?.(false)
+            props.onDrop?.({
+              x:
+                'clientX' in event
+                  ? event.clientX
+                  : info.point.x - window.scrollX,
+              y:
+                'clientY' in event
+                  ? event.clientY
+                  : info.point.y - window.scrollY,
+            })
+          }}
+        >
+          {content}
+        </motion.li>
+      )
+    }
+    return <li className={itemClassName}>{content}</li>
+  }
+  return (
+    <Reorder.Item
+      value={props.group}
+      dragListener={false}
+      dragMomentum={false}
+      dragControls={dragControls}
+      className={itemClassName}
+    >
+      {content}
     </Reorder.Item>
   )
 }

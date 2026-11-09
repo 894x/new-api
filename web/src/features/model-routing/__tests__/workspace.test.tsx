@@ -203,27 +203,29 @@ test('retains edited cards and locks filtering until the administrator resets th
   ).toBeVisible()
   expect(screen.getByRole('combobox', { name: 'Search models' })).toBeDisabled()
   await userEvent.click(screen.getByRole('button', { name: 'Fullscreen' }))
-  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
-    priority
-  )
-  expect(priority).toHaveValue(7)
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(7)
   expect(screen.getByRole('combobox', { name: 'Search models' })).toBeDisabled()
   await userEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }))
-  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
-    priority
-  )
-  expect(priority).toHaveValue(7)
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(7)
   await act(async () => {
     await client.invalidateQueries({ queryKey: ['model-routing-pools'] })
   })
-  expect(priority).toHaveValue(7)
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(7)
   await userEvent.click(screen.getByRole('button', { name: 'Reset' }))
   await waitFor(() =>
     expect(
       screen.getByRole('combobox', { name: 'Search models' })
     ).toBeEnabled()
   )
-  expect(priority).toHaveValue(100)
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(100)
   expect(
     screen.queryByText(
       'Save or reset edited cards before changing filters or views.'
@@ -436,9 +438,9 @@ test('Escape closes only the nested pool monitor and preserves the outer fullscr
   const inner = screen.getByRole('dialog', {
     name: 'kimi-k3 · standard · Default configuration',
   })
-  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
-    priority
-  )
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(7)
   expect(outer.parentElement?.inert).toBe(true)
   await userEvent.keyboard('{Escape}')
   expect(inner).toHaveAttribute('role', 'dialog')
@@ -453,14 +455,19 @@ test('Escape closes only the nested pool monitor and preserves the outer fullscr
   expect(screen.getByRole('dialog', { name: 'Model routing' })).toBe(outer)
   expect(outer.parentElement?.inert).not.toBe(true)
   expect(document.body.style.overflow).toBe('hidden')
-  expect(priority).toHaveValue(7)
-  expect(poolList.scrollTop).toBe(120)
   expect(trigger).toHaveFocus()
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(7)
+  expect(poolList.scrollTop).toBe(120)
+  await userEvent.keyboard('{Escape}')
   await userEvent.keyboard('{Escape}')
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(document.body.style.overflow).toBe(overflow)
   expect(fullscreen).toHaveFocus()
-  expect(priority).toHaveValue(7)
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(7)
 })
 
 test('unmounting nested fullscreen workspaces restores the page background and original scroll lock', async () => {

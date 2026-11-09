@@ -105,6 +105,155 @@ test('channel enable switches stay visible with settings closed and save only th
   )
 })
 
+test('equal-priority channels share a group and header weights save without changing their priorities', async () => {
+  const pool = fixture()
+  pool.channels[1].priority = 100
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+    data: { success: true, data: { ...(body as object), revision: 'saved' } },
+  }))
+  mountCard(pool)
+  const group = screen.getByRole('group', { name: 'Priority 100' })
+  expect(within(group).getByText('Alpha')).toBeVisible()
+  expect(within(group).getByText('Beta')).toBeVisible()
+  expect(screen.getAllByRole('group', { name: /^Priority / })).toHaveLength(1)
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  const weight = within(group).getByRole('spinbutton', {
+    name: 'Weight for Beta',
+  })
+  fireEvent.change(weight, { target: { value: '30' } })
+  expect(
+    screen.getByRole('button', { name: 'Settings: Beta' })
+  ).toHaveAttribute('aria-expanded', 'false')
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        channels: [pool.channels[0], { ...pool.channels[1], weight: 30 }],
+      })
+    )
+  )
+})
+
+test('moving a priority group preserves tied membership and channel weights', async () => {
+  const pool = fixture()
+  pool.channels.push({
+    channel_id: 3,
+    priority: 100,
+    weight: 30,
+    enabled: false,
+  })
+  pool.candidates.push({
+    channel_id: 3,
+    channel_name: 'Gamma',
+    priority: 100,
+    weight: 30,
+    available: true,
+  })
+  pool.channels.push({ channel_id: 4, priority: 20, weight: 9, enabled: true })
+  pool.candidates.push({
+    channel_id: 4,
+    channel_name: 'Delta',
+    priority: 20,
+    weight: 9,
+    available: true,
+  })
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+    data: { success: true, data: { ...(body as object), revision: 'saved' } },
+  }))
+  mountCard(pool)
+  const handle = screen.getByRole('button', {
+    name: 'Drag Priority 80 to reorder',
+  })
+  handle.focus()
+  fireEvent.keyDown(handle, { key: 'ArrowUp' })
+  expect(
+    screen.getByRole('button', { name: 'Drag Priority 100 to reorder' })
+  ).toHaveFocus()
+  const group = screen.getByRole('group', { name: 'Priority 80' })
+  expect(within(group).getByText('Alpha')).toBeVisible()
+  expect(within(group).getByText('Gamma')).toBeVisible()
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        channels: [
+          { ...pool.channels[1], priority: 100 },
+          { ...pool.channels[0], priority: 80 },
+          { ...pool.channels[2], priority: 80 },
+          pool.channels[3],
+        ],
+      })
+    )
+  )
+})
+
+test('a channel drag handle moves only that channel into the adjacent priority group', async () => {
+  const pool = fixture()
+  pool.channels[1].priority = 100
+  pool.channels.push({ channel_id: 3, priority: 80, weight: 5, enabled: true })
+  pool.candidates.push({
+    channel_id: 3,
+    channel_name: 'Gamma',
+    priority: 80,
+    weight: 5,
+    available: true,
+  })
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
+    data: { success: true, data: { ...(body as object), revision: 'saved' } },
+  }))
+  mountCard(pool)
+  const handle = screen.getByRole('button', { name: 'Drag 1 to reorder' })
+  expect(handle).toBeVisible()
+  fireEvent.keyDown(handle, { key: 'ArrowDown' })
+  expect(
+    within(screen.getByRole('group', { name: 'Priority 100' })).getByText(
+      'Beta'
+    )
+  ).toBeVisible()
+  const target = screen.getByRole('group', { name: 'Priority 80' })
+  expect(within(target).getByText('Alpha')).toBeVisible()
+  expect(within(target).getByText('Gamma')).toBeVisible()
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        channels: [
+          pool.channels[1],
+          pool.channels[2],
+          { ...pool.channels[0], priority: 80 },
+        ],
+      })
+    )
+  )
+})
+
+test('editing channel priority keeps its popover focused and regroups after the editor closes', async () => {
+  mountCard()
+  const priority = getSettingsField('spinbutton', {
+    name: 'Priority for Alpha',
+  })
+  await userEvent.clear(priority)
+  await userEvent.type(priority, '80')
+  expect(priority).toHaveFocus()
+  expect(screen.getByRole('dialog', { name: 'Settings: Alpha' })).toBeVisible()
+  expect(
+    within(screen.getByRole('group', { name: 'Priority 100' })).getByText(
+      'Alpha'
+    )
+  ).toBeVisible()
+  await userEvent.keyboard('{Escape}')
+  expect(screen.getByRole('button', { name: 'Settings: Alpha' })).toHaveFocus()
+  expect(
+    screen.queryByRole('group', { name: 'Priority 100' })
+  ).not.toBeInTheDocument()
+  const group = screen.getByRole('group', { name: 'Priority 80' })
+  expect(within(group).getByText('Alpha')).toBeVisible()
+  expect(within(group).getByText('Beta')).toBeVisible()
+})
+
 test('pool and channel gears open floating settings outside the card and Escape returns focus', async () => {
   const put = vi.spyOn(api, 'put')
   mountCard(fixture(), true)
@@ -116,7 +265,9 @@ test('pool and channel gears open floating settings outside the card and Escape 
   expect(
     screen.queryByRole('combobox', { name: 'Prefix cache routing' })
   ).not.toBeInTheDocument()
-  expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('spinbutton', { name: 'Priority for Alpha' })
+  ).not.toBeInTheDocument()
   expect(screen.getAllByLabelText('Cache hit rate: —')).toHaveLength(2)
 
   await userEvent.click(pool)
@@ -133,7 +284,7 @@ test('pool and channel gears open floating settings outside the card and Escape 
   expect(pool).toHaveAttribute('aria-expanded', 'false')
   expect(pool).toHaveFocus()
 
-  alpha.focus()
+  act(() => alpha.focus())
   await userEvent.keyboard('{Enter}')
   expect(alpha).toHaveAttribute('aria-expanded', 'true')
   const channelPanel = screen.getByRole('dialog', { name: 'Settings: Alpha' })
@@ -160,7 +311,7 @@ test('closing the channel popover preserves explicit zero and saves the draft wh
     data: { success: true, data: { ...(body as object), revision: 'saved' } },
   }))
   mountCard(fixture(), true)
-  const trigger = screen.getByRole('button', { name: 'Settings: Alpha' })
+  let trigger = screen.getByRole('button', { name: 'Settings: Alpha' })
   await userEvent.click(trigger)
   fireEvent.change(
     getSettingsField('spinbutton', { name: 'Priority for Alpha' }),
@@ -170,6 +321,7 @@ test('closing the channel popover preserves explicit zero and saves the draft wh
   )
   trigger.focus()
   await userEvent.keyboard(' ')
+  trigger = screen.getByRole('button', { name: 'Settings: Alpha' })
   expect(trigger).toHaveAttribute('aria-expanded', 'false')
   expect(trigger).toHaveFocus()
   expect(
@@ -197,19 +349,20 @@ test('closing the channel popover preserves explicit zero and saves the draft wh
 test('saving an invalid value after closing the channel popover reopens its settings', async () => {
   const put = vi.spyOn(api, 'put')
   mountCard(fixture(), true)
-  const trigger = screen.getByRole('button', { name: 'Settings: Alpha' })
+  let trigger = screen.getByRole('button', { name: 'Settings: Alpha' })
   await userEvent.click(trigger)
   fireEvent.change(
-    getSettingsField('spinbutton', { name: 'Weight for Alpha' }),
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' }),
     {
       target: { value: '-1' },
     }
   )
   await userEvent.click(trigger)
+  trigger = screen.getByRole('button', { name: 'Settings: Alpha' })
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'true'))
   expect(
-    getSettingsField('spinbutton', { name: 'Weight for Alpha' })
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
   ).toBeInvalid()
   expect(put).not.toHaveBeenCalled()
 })
@@ -581,10 +734,9 @@ test('opening and returning from a pool monitor retains the same dirty editor an
   const monitor = screen.getByRole('dialog', {
     name: 'kimi-k3 · standard · Default configuration',
   })
-  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
-    priority
-  )
-  expect(priority).toHaveValue(7)
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(7)
   expect(
     await within(monitor).findByLabelText('Cache hit rate: 75.25%')
   ).toBeVisible()
@@ -616,10 +768,9 @@ test('opening and returning from a pool monitor retains the same dirty editor an
   expect(
     await within(monitor).findByText('Prediction statistics unavailable')
   ).toBeVisible()
-  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
-    priority
-  )
-  expect(priority).toHaveValue(7)
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(7)
   await userEvent.click(
     within(monitor).getByRole('button', { name: 'Routing observations' })
   )
@@ -631,14 +782,13 @@ test('opening and returning from a pool monitor retains the same dirty editor an
     within(monitor).getByRole('button', { name: 'Back to card view' })
   )
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-  expect(getSettingsField('spinbutton', { name: 'Priority for Alpha' })).toBe(
-    priority
-  )
-  expect(priority).toHaveValue(7)
+  expect(trigger).toHaveFocus()
+  expect(
+    getSettingsField('spinbutton', { name: 'Priority for Alpha' })
+  ).toHaveValue(7)
   expect(
     getSettingsField('switch', { name: 'Enable Beta in this pool' })
   ).not.toBeChecked()
-  expect(trigger).toHaveFocus()
   expect(onDirtyChange).toHaveBeenLastCalledWith(true)
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() =>
@@ -743,15 +893,18 @@ test('invalid discount latency limits prevent persistence and explain the valida
   )
 })
 
-test('keyboard reordering persists channel order and priorities while preserving zero weights', async () => {
+test('keyboard reordering swaps priority groups while preserving zero weights', async () => {
   const pool = fixture()
   const put = vi.spyOn(api, 'put').mockImplementation(async (_url, body) => ({
     data: { success: true, data: { ...(body as object), revision: 'saved' } },
   }))
   const { onDirtyChange } = mountCard(pool)
-  fireEvent.keyDown(screen.getByRole('button', { name: 'Drag 2 to reorder' }), {
-    key: 'ArrowUp',
-  })
+  fireEvent.keyDown(
+    screen.getByRole('button', { name: 'Drag Priority 80 to reorder' }),
+    {
+      key: 'ArrowUp',
+    }
+  )
   await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true))
   await userEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() =>
@@ -762,8 +915,8 @@ test('keyboard reordering persists channel order and priorities while preserving
         model: 'kimi-k3',
         revision: 'original',
         channels: [
-          { channel_id: 2, priority: 2, weight: 0, enabled: true },
-          { channel_id: 1, priority: 1, weight: 10, enabled: true },
+          { channel_id: 2, priority: 100, weight: 0, enabled: true },
+          { channel_id: 1, priority: 80, weight: 10, enabled: true },
         ],
       })
     )
@@ -866,7 +1019,9 @@ test('read-only cards expose configuration while disabling mutation, reordering 
     getSettingsField('switch', { name: 'Enable Alpha in this pool' })
   ).toHaveAttribute('aria-disabled', 'true')
   expect(getSettingsField('button', { name: 'Edit strategy' })).toBeDisabled()
-  const drag = screen.getByRole('button', { name: 'Drag 2 to reorder' })
+  const drag = screen.getByRole('button', {
+    name: 'Drag Priority 80 to reorder',
+  })
   expect(drag).toBeDisabled()
   fireEvent.keyDown(drag, { key: 'ArrowUp' })
   expect(
