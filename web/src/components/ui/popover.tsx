@@ -53,7 +53,7 @@ function PopoverContent({
     | 'collisionAvoidance'
   >) {
   return (
-    <PopoverPrimitive.Portal keepMounted={keepMounted}>
+    <PopoverPrimitive.Portal keepMounted={keepMounted} className='contents'>
       <PopoverPrimitive.Positioner
         align={align}
         alignOffset={alignOffset}

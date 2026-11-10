@@ -110,6 +110,7 @@ export function PoolCard(props: {
   canWrite: boolean
   groupLabel?: string
   targetLabel?: string
+  embedded?: boolean
   onDirtyChange: (dirty: boolean) => void
 }) {
   const { t } = useTranslation()
@@ -122,6 +123,7 @@ export function PoolCard(props: {
     ADMIN_PERMISSION_ACTIONS.READ
   )
   const [monitorOpen, setMonitorOpen] = useState(false)
+  const [overviewDirty, setOverviewDirty] = useState(false)
   const [tuningOpen, setTuningOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [channelToAdd, setChannelToAdd] = useState<string | null>(null)
@@ -152,8 +154,8 @@ export function PoolCard(props: {
   const dirty = form.formState.isDirty
   const notifyDirty = useEffectEvent(props.onDirtyChange)
   useEffect(() => {
-    notifyDirty(dirty)
-  }, [dirty])
+    notifyDirty(dirty || overviewDirty)
+  }, [dirty, overviewDirty])
   useEffect(() => () => notifyDirty(false), [])
   useEffect(() => {
     if (!dirty) {
@@ -290,6 +292,9 @@ export function PoolCard(props: {
 
   return (
     <PoolMonitorDisplay
+      embedded={props.embedded}
+      onDirtyChange={setOverviewDirty}
+      initialDirty={dirty}
       open={monitorOpen && canMonitor}
       onOpenChange={setMonitorOpen}
       model={props.pool.model}
@@ -320,7 +325,8 @@ export function PoolCard(props: {
       <Card
         className={cn(
           'min-w-0 gap-4 py-4',
-          monitorOpen && canMonitor && 'xl:h-full xl:min-h-0'
+          (props.embedded || (monitorOpen && canMonitor)) &&
+            'xl:h-full xl:min-h-0'
         )}
       >
         <CardHeader className='shrink-0 gap-3 px-3'>
@@ -346,7 +352,7 @@ export function PoolCard(props: {
                     : props.pool.routing_group}
                 </span>
               </Badge>
-              {canMonitor && (
+              {canMonitor && !props.embedded && (
                 <Button
                   type='button'
                   size='sm'
@@ -455,8 +461,7 @@ export function PoolCard(props: {
           <CardContent
             className={cn(
               'space-y-3 px-3',
-              monitorOpen &&
-                canMonitor &&
+              (props.embedded || (monitorOpen && canMonitor)) &&
                 'xl:min-h-0 xl:flex-1 xl:overflow-y-auto'
             )}
           >

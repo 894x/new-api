@@ -791,7 +791,7 @@ test('opening and returning from a pool monitor retains the same dirty editor an
   expect(get).toHaveBeenCalledWith('/api/channel/routing-pool', {
     params: { routing_group: 'standard', model: 'kimi-k3' },
   })
-  const editor = trigger.closest('[data-slot="card"]')?.parentElement
+  const editor = trigger.closest('[data-pool-editor]')
   expect(editor).toHaveClass('xl:row-start-2')
   await userEvent.click(
     within(monitor).getByRole('button', { name: 'TTFT prediction grid' })

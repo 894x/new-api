@@ -89,11 +89,19 @@ export function UserPoolCard(props: {
   model: string
   group: string
   groupLabel: string
+  embedded?: boolean
   onDirtyChange: (dirty: boolean) => void
 }) {
   const { t } = useTranslation()
   const actor = useAuthStore((state) => state.auth.user)
   const [monitorOpen, setMonitorOpen] = useState(false)
+  const [editorDirty, setEditorDirty] = useState(false)
+  const [overviewDirty, setOverviewDirty] = useState(false)
+  const notifyDirty = useEffectEvent(props.onDirtyChange)
+  useEffect(() => {
+    notifyDirty(editorDirty || overviewDirty)
+  }, [editorDirty, overviewDirty])
+  useEffect(() => () => notifyDirty(false), [])
   const query = useQuery({
     queryKey: userRoutingPoolKeys.detail(
       props.userId,
@@ -104,6 +112,8 @@ export function UserPoolCard(props: {
     refetchOnWindowFocus: false,
     meta: { errorToast: false },
   })
+  const displayUsername =
+    props.username ?? (props.embedded ? query.data?.username : undefined)
   const canMonitor =
     hasPermission(
       actor,
@@ -114,6 +124,9 @@ export function UserPoolCard(props: {
     canAccessUserGroupConfig(actor, query.data.user_role)
   return (
     <PoolMonitorDisplay
+      embedded={props.embedded}
+      onDirtyChange={setOverviewDirty}
+      initialDirty={editorDirty}
       open={monitorOpen && canMonitor}
       onOpenChange={setMonitorOpen}
       model={props.model}
@@ -130,17 +143,18 @@ export function UserPoolCard(props: {
       <Card
         className={cn(
           'min-w-0 gap-4 py-4',
-          monitorOpen && canMonitor && 'xl:h-full xl:min-h-0'
+          (props.embedded || (monitorOpen && canMonitor)) &&
+            'xl:h-full xl:min-h-0'
         )}
         role='region'
-        aria-label={`${props.username ? `${props.username} · ` : ''}${props.model} · ${props.groupLabel}`}
+        aria-label={`${displayUsername ? `${displayUsername} · ` : ''}${props.model} · ${props.groupLabel}`}
       >
         <CardHeader className='flex shrink-0 flex-wrap items-start justify-between gap-2 px-3'>
           <CardTitle className='min-w-0 text-base break-all'>
             {props.model}
-            {props.username && (
+            {displayUsername && (
               <span className='text-muted-foreground block text-xs font-normal'>
-                {props.username} · #{props.userId}
+                {displayUsername} · #{props.userId}
               </span>
             )}
           </CardTitle>
@@ -148,7 +162,7 @@ export function UserPoolCard(props: {
             <Badge variant='secondary' className='max-w-full'>
               <span className='truncate'>{props.groupLabel}</span>
             </Badge>
-            {canMonitor && (
+            {canMonitor && !props.embedded && (
               <Button
                 type='button'
                 size='sm'
@@ -176,8 +190,8 @@ export function UserPoolCard(props: {
             key={`${props.userId}:${props.group}:${props.model}`}
             config={query.data}
             group={props.group}
-            expanded={monitorOpen && canMonitor}
-            onDirtyChange={props.onDirtyChange}
+            expanded={props.embedded || (monitorOpen && canMonitor)}
+            onDirtyChange={setEditorDirty}
             readOnly={props.readOnly}
           />
         )}

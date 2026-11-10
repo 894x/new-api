@@ -28,6 +28,7 @@ import {
   DrawerDescription,
   DrawerTitle,
 } from '../drawer'
+import { Popover, PopoverContent, PopoverTrigger } from '../popover'
 import {
   Select,
   SelectContent,
@@ -187,6 +188,33 @@ describe('popups inside a drawer', () => {
 })
 
 describe('popups outside a drawer', () => {
+  it('keeps a mounted popover portal out of layout before opening and after closing', async () => {
+    render(
+      <Popover>
+        <PopoverTrigger>Channel settings</PopoverTrigger>
+        <PopoverContent keepMounted>
+          <input aria-label='Channel weight' defaultValue='10' />
+        </PopoverContent>
+      </Popover>
+    )
+    const portal = document.body.querySelector('[data-base-ui-portal]')
+    // The floating positioner is out of flow; its portal wrapper must not
+    // become an extra grid item, even while the popup stays mounted.
+    expect(portal).toHaveClass('contents')
+    const user = userEvent.setup()
+    const trigger = screen.getByRole('button', { name: 'Channel settings' })
+    await user.click(trigger)
+    const weight = screen.getByRole('textbox', { name: 'Channel weight' })
+    await user.clear(weight)
+    await user.type(weight, '25')
+    expect(weight).toHaveValue('25')
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    await user.keyboard('{Escape}')
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(document.body).toContainElement(portal as HTMLElement)
+    expect(portal).toHaveClass('contents')
+  })
+
   it('anchors editable combobox options in viewport coordinates outside dialogs', async () => {
     render(<ProviderCombobox allowCustomValue onValueChange={vi.fn()} />)
     const user = userEvent.setup()
