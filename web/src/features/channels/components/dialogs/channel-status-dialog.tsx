@@ -60,6 +60,7 @@ type ChannelStatusDialogProps = {
   action?: ChannelStatusAction
   onOpenChange: (open: boolean) => void
   onApplied?: () => void
+  allowPoolUpdates?: boolean
 }
 
 export function ChannelStatusDialog(props: ChannelStatusDialogProps) {
@@ -70,6 +71,7 @@ export function ChannelStatusDialog(props: ChannelStatusDialogProps) {
   const enabling = action === 'enable'
   const currentUser = useAuthStore((state) => state.auth.user)
   const canDisablePools =
+    props.allowPoolUpdates !== false &&
     hasPermission(
       currentUser,
       ADMIN_PERMISSION_RESOURCES.CHANNEL,
@@ -297,15 +299,17 @@ export function ChannelStatusDialog(props: ChannelStatusDialogProps) {
                 'Default pools are shown once per model and group. User overrides are listed separately, including customers without active API keys.'
               )}
             </p>
-            <p className='text-muted-foreground text-xs'>
-              {enabling
-                ? t(
-                    'Enabling pool entries preserves priorities and weights and restores existing memberships only.'
-                  )
-                : t(
-                    'Disabling pool entries preserves their priorities and weights. Enabling the channel later will not enable these entries.'
-                  )}
-            </p>
+            {props.allowPoolUpdates !== false && (
+              <p className='text-muted-foreground text-xs'>
+                {enabling
+                  ? t(
+                      'Enabling pool entries preserves priorities and weights and restores existing memberships only.'
+                    )
+                  : t(
+                      'Disabling pool entries preserves their priorities and weights. Enabling the channel later will not enable these entries.'
+                    )}
+              </p>
+            )}
             <div className='flex flex-wrap gap-2'>
               {impact.data.channels.map((channel) => (
                 <Badge

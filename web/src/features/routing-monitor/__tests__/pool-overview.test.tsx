@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -28,9 +29,10 @@ import userEvent from '@testing-library/user-event'
 import { useState, type ReactNode } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 
-import type {
-  RoutingPoolView,
-  UserRoutingPoolConfig,
+import {
+  userRoutingPoolKeys,
+  type RoutingPoolView,
+  type UserRoutingPoolConfig,
 } from '@/features/model-routing/api'
 import { MonitorPoolEditor } from '@/features/model-routing/monitor-pool-editor'
 import { PoolCard } from '@/features/model-routing/pool-card'
@@ -204,9 +206,10 @@ function mount(
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
   })
   clients.push(client)
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   )
+  return { ...view, client }
 }
 
 function Workspace() {
@@ -283,6 +286,7 @@ test('two pools merge a shared channel, expand it per pool, and keep channel qua
   const channel = await screen.findByRole('button', { name: 'View channel 49' })
   expect(channel).toHaveTextContent('40')
   await userEvent.click(channel)
+  expect(channel).toHaveAttribute('aria-pressed', 'true')
   const quality = screen.getByLabelText('Pools using this channel')
   expect(within(quality).getByText(/kimi-a/)).toBeVisible()
   expect(within(quality).getByText(/kimi-b/)).toBeVisible()
@@ -349,8 +353,42 @@ test('adding a pool opens the existing editor, keeps its draft when switching po
     screen.getByRole('spinbutton', { name: 'Weight for Shared upstream' })
   ).toBe(weight)
   expect(weight).toHaveValue(33)
+  await userEvent.click(screen.getByRole('button', { name: 'View channel 49' }))
+  const channelPools = screen.getByRole('region', {
+    name: 'Channel routing pools',
+  })
+  expect(channelPools).toHaveTextContent('kimi-a')
+  expect(channelPools).toHaveTextContent('kimi-b')
   expect(
-    within(chips).getByRole('button', {
+    screen.queryByRole('spinbutton', { name: 'Weight for Shared upstream' })
+  ).not.toBeInTheDocument()
+  expect(
+    within(channelPools).getByRole('button', {
+      name: 'Disable in all related pools',
+    })
+  ).toBeDisabled()
+  await userEvent.click(
+    within(channelPools).getByRole('button', {
+      name: 'View Default configuration · standard · kimi-b pool',
+    })
+  )
+  expect(
+    screen.getByRole('spinbutton', { name: 'Weight for Shared upstream' })
+  ).toBe(weight)
+  expect(weight).toHaveValue(33)
+  await userEvent.click(screen.getByRole('button', { name: 'View channel 49' }))
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Routing observations' })
+  )
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Multi-pool overview' })
+  )
+  expect(
+    screen.getByRole('spinbutton', { name: 'Weight for Shared upstream' })
+  ).toBe(weight)
+  expect(weight).toHaveValue(33)
+  expect(
+    within(screen.getByLabelText('Monitoring pools')).getByRole('button', {
       name: 'Remove Default configuration · kimi-b from monitoring',
     })
   ).toBeDisabled()
@@ -426,6 +464,41 @@ test('an embedded user pool retains its existing edit and save operations withou
   expect(
     screen.queryByRole('button', { name: 'Monitoring view' })
   ).not.toBeInTheDocument()
+})
+
+test('a clean user editor shows externally updated membership after a batch action instead of retaining its old editing snapshot', async () => {
+  mockApi()
+  const { client } = mount(
+    <UserPoolCard
+      embedded
+      userId={42}
+      model='kimi-a'
+      group='standard'
+      groupLabel='Standard'
+      onDirtyChange={vi.fn()}
+    />
+  )
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Edit user override' })
+  )
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  const fresh = userFixture()
+  fresh.revision = 'batch-updated'
+  fresh.pool_channels = [
+    { channel_id: 49, priority: 10, weight: 10, enabled: false },
+  ]
+  await act(async () => {
+    client.setQueryData(
+      userRoutingPoolKeys.detail(42, 'standard', 'kimi-a'),
+      fresh
+    )
+  })
+  expect(
+    await screen.findByRole('button', { name: 'Edit user override' })
+  ).toBeVisible()
+  expect(
+    screen.getByRole('switch', { name: 'Enable Shared upstream in this pool' })
+  ).not.toBeChecked()
 })
 
 test('read-only embedded pools keep editing disabled', async () => {

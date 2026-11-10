@@ -87,6 +87,9 @@ export function PoolMonitorDisplay(props: {
   const initialKey = monitorTargetKey(initialTarget)
   const [targets, setTargets] = useState<MonitorTarget[]>(() => [initialTarget])
   const [selectedTarget, setSelectedTarget] = useState(initialTarget)
+  const [selectedChannel, setSelectedChannel] = useState<number>()
+  const [channelPanelContainer, setChannelPanelContainer] =
+    useState<HTMLElement | null>(null)
   const [dirtyPanels, setDirtyPanels] = useState<Record<string, boolean>>({})
   const overviewDirty = Object.values(dirtyPanels).some(Boolean)
   const notifyDirty = useEffectEvent((dirty: boolean) =>
@@ -121,24 +124,35 @@ export function PoolMonitorDisplay(props: {
   return (
     <RoutingWorkspaceDisplay
       fullscreen={props.open}
-      onFullscreenChange={props.onOpenChange}
+      onFullscreenChange={(open) => {
+        if (!open) setSelectedChannel(undefined)
+        props.onOpenChange(open)
+      }}
       hideToolbar={!props.open}
       label={workspaceLabel}
       exitFullscreenLabel={t('Back to card view')}
       toolbarActions={
         <>
-          {(!overview || selectedKey === initialKey) && props.toolbarActions}
+          {(!overview ||
+            (selectedChannel === undefined && selectedKey === initialKey)) &&
+            props.toolbarActions}
           {monitorLayout && (
             <Button
               variant='outline'
-              onClick={() => setMonitorLayout(undefined)}
+              onClick={() => {
+                setMonitorLayout(undefined)
+                setSelectedChannel(undefined)
+              }}
             >
               {t('Single-panel mode')}
             </Button>
           )}
           <MonitorLayoutPicker
             value={monitorLayout}
-            onChange={setMonitorLayout}
+            onChange={(layout) => {
+              setMonitorLayout(layout)
+              setSelectedChannel(undefined)
+            }}
           />
         </>
       }
@@ -183,7 +197,10 @@ export function PoolMonitorDisplay(props: {
                 size='sm'
                 variant={view === 'routing' ? 'secondary' : 'ghost'}
                 aria-pressed={view === 'routing'}
-                onClick={() => setView('routing')}
+                onClick={() => {
+                  setView('routing')
+                  setSelectedChannel(undefined)
+                }}
               >
                 {t('Routing observations')}
               </Button>
@@ -191,7 +208,10 @@ export function PoolMonitorDisplay(props: {
                 size='sm'
                 variant={view === 'ttft' ? 'secondary' : 'ghost'}
                 aria-pressed={view === 'ttft'}
-                onClick={() => setView('ttft')}
+                onClick={() => {
+                  setView('ttft')
+                  setSelectedChannel(undefined)
+                }}
               >
                 {t('TTFT prediction grid')}
               </Button>
@@ -233,9 +253,24 @@ export function PoolMonitorDisplay(props: {
           )}
         >
           <div
-            hidden={props.open && overview && selectedKey !== initialKey}
+            ref={setChannelPanelContainer}
+            hidden={!props.open || !overview || selectedChannel === undefined}
             className={
-              props.open && overview && selectedKey !== initialKey
+              props.open && overview && selectedChannel !== undefined
+                ? 'flex min-h-0 flex-1 flex-col'
+                : 'hidden'
+            }
+          />
+          <div
+            hidden={
+              props.open &&
+              overview &&
+              (selectedKey !== initialKey || selectedChannel !== undefined)
+            }
+            className={
+              props.open &&
+              overview &&
+              (selectedKey !== initialKey || selectedChannel !== undefined)
                 ? 'hidden'
                 : 'contents'
             }
@@ -246,7 +281,11 @@ export function PoolMonitorDisplay(props: {
             .filter((target) => monitorTargetKey(target) !== initialKey)
             .map((target) => {
               const key = monitorTargetKey(target)
-              const active = props.open && overview && key === selectedKey
+              const active =
+                props.open &&
+                overview &&
+                selectedChannel === undefined &&
+                key === selectedKey
               return (
                 <div
                   key={key}
@@ -282,6 +321,8 @@ export function PoolMonitorDisplay(props: {
                 <PoolOverview
                   targets={targets}
                   selectedTarget={selectedTarget}
+                  channelPanelContainer={channelPanelContainer}
+                  onSelectChannel={setSelectedChannel}
                   isDirty={(target) =>
                     monitorTargetKey(target) === initialKey
                       ? !!props.initialDirty

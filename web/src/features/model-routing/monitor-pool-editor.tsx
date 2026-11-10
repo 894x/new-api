@@ -21,13 +21,8 @@ import { useTranslation } from 'react-i18next'
 
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
+import { canEditDefaultPool } from '@/features/routing-monitor/channel-pool-actions'
 import type { MonitorTarget } from '@/features/routing-monitor/monitor-panel'
-import {
-  ADMIN_PERMISSION_ACTIONS,
-  ADMIN_PERMISSION_RESOURCES,
-  hasPermission,
-} from '@/lib/admin-permissions'
-import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getRoutingPool, routingPoolKeys } from './api'
@@ -92,19 +87,7 @@ function DefaultMonitorPoolEditor(props: {
         tuning_defaults: data.tuning_defaults,
       }}
       targetLabel={t('Default configuration')}
-      canWrite={
-        (actor?.role ?? 0) >= ROLE.ADMIN &&
-        hasPermission(
-          actor,
-          ADMIN_PERMISSION_RESOURCES.CHANNEL,
-          ADMIN_PERMISSION_ACTIONS.READ
-        ) &&
-        hasPermission(
-          actor,
-          ADMIN_PERMISSION_RESOURCES.CHANNEL,
-          ADMIN_PERMISSION_ACTIONS.WRITE
-        )
-      }
+      canWrite={canEditDefaultPool(actor)}
       onDirtyChange={props.onDirtyChange}
     />
   )

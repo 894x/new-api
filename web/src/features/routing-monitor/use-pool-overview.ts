@@ -172,6 +172,9 @@ export function usePoolOverview(
         snapshot?.coverage === 'local' ||
         selectedNodes.some((node) => at - node.updated_at > 15000),
       inherited: !!target.userId && !!source && source !== 'user',
+      baseConfig: base,
+      userConfig: user,
+      configError: !!configQuery?.isError,
     }
   })
   return {

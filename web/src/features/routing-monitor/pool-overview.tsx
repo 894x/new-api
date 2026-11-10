@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
@@ -30,6 +31,7 @@ import { Switch } from '@/components/ui/switch'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
 
+import { ChannelPoolPanel } from './channel-pool-panel'
 import { ChannelStatus } from './channel-status'
 import { MonitorPanel, type MonitorTarget } from './monitor-panel'
 import { monitorTargetKey, overviewFlows } from './pool-overview-data'
@@ -43,6 +45,8 @@ export function PoolOverview(props: {
   onSelect: (target: MonitorTarget) => void
   onRemove: (target: MonitorTarget) => void
   isDirty: (target: MonitorTarget) => boolean
+  channelPanelContainer?: HTMLElement | null
+  onSelectChannel?: (id: number | undefined) => void
 }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
@@ -100,34 +104,51 @@ export function PoolOverview(props: {
   )
   const select = (target: MonitorTarget, id?: number) => {
     props.onSelect(target)
+    props.onSelectChannel?.(undefined)
     setFocused(true)
     setChannelId(id)
   }
   const selectChannel = (id: number) => {
-    const owner =
-      flows.find(
-        (flow) =>
-          flow.targets.some(
-            (pool) => monitorTargetKey(pool.target) === selectedKey
-          ) && flow.route.channels.some((channel) => channel.channel_id === id)
-      ) ??
-      flows.find((flow) =>
-        flow.route.channels.some((channel) => channel.channel_id === id)
-      )
-    if (owner) {
-      select(
-        owner.targets.find(
-          (pool) => monitorTargetKey(pool.target) === selectedKey
-        )?.target ?? owner.targets[0].target,
-        id
-      )
-    }
+    setFocused(true)
+    setChannelId(id)
+    props.onSelectChannel?.(id)
   }
   return (
     <section
       className='flex h-full min-h-0 min-w-0 flex-col gap-3'
       aria-label={t('Multi-pool overview')}
     >
+      {channelId !== undefined &&
+        props.channelPanelContainer &&
+        createPortal(
+          <ChannelPoolPanel
+            key={channelId}
+            channelId={channelId}
+            name={
+              data.pools
+                .map((pool) => pool.names.get(channelId))
+                .find(Boolean) ?? `#${channelId}`
+            }
+            pools={data.pools}
+            isDirty={props.isDirty}
+            onSelect={(target) => {
+              if (
+                !props.targets.some(
+                  (item) => monitorTargetKey(item) === monitorTargetKey(target)
+                )
+              ) {
+                props.onAdd(target)
+              }
+              select(target, channelId)
+            }}
+            onClose={() => {
+              setFocused(false)
+              setChannelId(undefined)
+              props.onSelectChannel?.(undefined)
+            }}
+          />,
+          props.channelPanelContainer
+        )}
       <div className='flex shrink-0 flex-wrap items-center gap-2'>
         <Input
           value={search}
@@ -283,6 +304,7 @@ export function PoolOverview(props: {
           onClick={() => {
             setFocused(false)
             setChannelId(undefined)
+            props.onSelectChannel?.(undefined)
           }}
         >
           {t('Clear highlight')}
@@ -391,6 +413,7 @@ export function PoolOverview(props: {
                 setAdding(false)
                 setFocused(false)
                 setChannelId(undefined)
+                props.onSelectChannel?.(undefined)
               }
             }}
           />

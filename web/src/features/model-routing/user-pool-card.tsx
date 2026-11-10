@@ -249,6 +249,15 @@ function UserPoolEditor(props: {
   })
   const values = form.watch()
   const dirty = editing && (form.formState.isDirty || !config.configured)
+  useEffect(() => {
+    if (
+      editingBase &&
+      !dirty &&
+      editingBase.revision !== props.config.revision
+    ) {
+      setEditingBase(null)
+    }
+  }, [dirty, editingBase, props.config.revision])
   const hasRetryError = form.formState.errors.channels?.some?.(
     (row) => row?.retry_times_override
   )

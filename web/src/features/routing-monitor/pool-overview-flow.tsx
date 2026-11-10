@@ -331,8 +331,12 @@ export function PoolOverviewFlow(props: {
             key={key}
             variant='outline'
             aria-label={t('View channel {{id}}', { id: channel.id })}
+            aria-pressed={props.focused && props.channelId === channel.id}
             className={cn(
               'absolute left-[75.9%] h-20 w-[21.45%] min-w-0 flex-col items-stretch gap-3 bg-card px-3 text-left shadow-none',
+              props.focused &&
+                props.channelId === channel.id &&
+                'ring-2 ring-primary/30',
               props.focused &&
                 !props.flows.some(
                   (flow) =>

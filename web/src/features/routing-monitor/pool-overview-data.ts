@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { RoutingMode } from '@/features/model-routing/api'
+import type {
+  getRoutingPool,
+  RoutingMode,
+  UserRoutingPoolConfig,
+} from '@/features/model-routing/api'
 
 import type { MonitorRoute } from './api'
 import type { MonitorTarget } from './monitor-panel'
@@ -31,6 +35,9 @@ export type OverviewPool = {
   unavailable: boolean
   partial: boolean
   inherited: boolean
+  baseConfig?: Awaited<ReturnType<typeof getRoutingPool>>
+  userConfig?: UserRoutingPoolConfig
+  configError?: boolean
 }
 
 export type OverviewFlow = {
