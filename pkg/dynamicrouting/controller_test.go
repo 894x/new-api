@@ -1168,7 +1168,7 @@ func TestActiveRecoveryDoesNotExpireWithIdleCustomerTraffic(t *testing.T) {
 	controller.Select(key, candidates, base)
 	at := base.Add(time.Hour)
 	require.Len(t, controller.RecoveryTargets(at), 1, "recovery remains scheduled without customer traffic")
-	assert.True(t, controller.IsRecovering(key, 1, at))
+	assert.True(t, controller.IsRecovering(key, false, 1, at))
 	decision := controller.Select(key, candidates, at)
 	assert.Equal(t, 2, decision.SelectedChannelID)
 	require.Len(t, decision.Allocations, 1)

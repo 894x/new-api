@@ -88,7 +88,7 @@ func (p *RetryParam) channelRecovering(group string, channelID int) (bool, error
 		if len(overrides) > 0 || strategy != nil && strategy.UserId > 0 {
 			key.Policy = fmt.Sprintf("user:%d", common.GetContextKeyInt(p.Ctx, constant.ContextKeyUserId))
 		}
-		if controller.IsRecovering(key, channelID, time.Now()) {
+		if controller.IsRecovering(key, strategy != nil && strategy.Mode == model.RoutingModeDiscount, channelID, time.Now()) {
 			return true, nil
 		}
 	}

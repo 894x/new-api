@@ -76,9 +76,10 @@ func (c *Controller) RecoveryTargets(now time.Time) []RecoveryTarget {
 }
 
 // IsRecovering also protects pins and session affinity that bypass selection.
-func (c *Controller) IsRecovering(route RouteKey, channelID int, now time.Time) bool {
+func (c *Controller) IsRecovering(route RouteKey, discount bool, channelID int, now time.Time) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	route.discountFirst = discount
 	state := c.routes[route]
 	if state == nil || state.expired(state.config, now) {
 		return false

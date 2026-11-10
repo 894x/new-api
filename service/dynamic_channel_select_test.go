@@ -170,24 +170,42 @@ func TestActiveRecoveryProbeRejectsExpiredLeaseBeforeDispatchAndPublish(t *testi
 }
 
 func TestActiveRecoveryAlsoFiltersNonStreamingRequests(t *testing.T) {
-	db := setupChannelSelectAutoGroupsTest(t)
-	configureDynamicRoutingForTest(t, true)
-	const name = "non-streaming-recovery-model"
-	createPrioritizedChannelSelectFixture(t, db, 3911, "default", name, 100)
-	createPrioritizedChannelSelectFixture(t, db, 3912, "default", name, 10)
-	model.InitChannelCache()
-	controller, enabled, err := currentDynamicRoutingController(true)
-	require.NoError(t, err)
-	require.True(t, enabled)
-	now := time.Now()
-	controller.Observe(dynamicrouting.ObservationKey{ChannelID: 3911, Model: name}, dynamicrouting.Sample{ObservedAt: now, HardFailure: true})
-	controller.Select(dynamicrouting.RouteKey{Group: "default", Model: name}, []dynamicrouting.Candidate{{ChannelID: 3911, Priority: 100}, {ChannelID: 3912, Priority: 10}}, now)
-	ctx := newChannelSelectContext()
-	param := &RetryParam{Ctx: ctx, ModelName: name, TokenGroup: "default", RequestPath: "/v1/chat/completions", DynamicRoutingEligible: false}
-	selected, _, err := CacheGetRandomSatisfiedChannel(param)
-	require.NoError(t, err)
-	require.NotNil(t, selected)
-	assert.Equal(t, 3912, selected.Id)
+	for _, mode := range []string{"legacy", model.RoutingModeSmart, model.RoutingModeDiscount} {
+		t.Run(mode, func(t *testing.T) {
+			db := setupChannelSelectAutoGroupsTest(t)
+			configureDynamicRoutingForTest(t, true)
+			const name = "non-streaming-recovery-model"
+			createPrioritizedChannelSelectFixture(t, db, 3911, "default", name, 100)
+			createPrioritizedChannelSelectFixture(t, db, 3912, "default", name, 10)
+			if mode != "legacy" {
+				pool := model.ModelRoutingPool{RoutingGroup: "default", Model: name, Mode: mode, Channels: []model.ModelRoutingPoolChannel{{ChannelID: 3911, Priority: 100, Weight: 10, Enabled: true}, {ChannelID: 3912, Priority: 10, Weight: 10, Enabled: true}}}
+				require.NoError(t, model.SaveModelRoutingPool(&pool, ""))
+			}
+			model.InitChannelCache()
+			controller, enabled, err := currentDynamicRoutingController(true)
+			require.NoError(t, err)
+			require.True(t, enabled)
+			now := time.Now()
+			controller.Observe(dynamicrouting.ObservationKey{ChannelID: 3911, Model: name}, dynamicrouting.Sample{ObservedAt: now, HardFailure: true})
+			key := dynamicrouting.RouteKey{Group: "default", Model: name}
+			candidates := []dynamicrouting.Candidate{{ChannelID: 3911, Priority: 100}, {ChannelID: 3912, Priority: 10}}
+			if mode == model.RoutingModeDiscount {
+				decision := controller.SelectDiscountAvoiding(key, candidates, nil, dynamicrouting.DiscountLimits{MaxTTFT: 15 * time.Second, MaxTPOT: 200 * time.Millisecond}, now)
+				assert.NotEqual(t, 3911, decision.SelectedChannelID)
+			} else {
+				controller.Select(key, candidates, now)
+			}
+			discount := mode == model.RoutingModeDiscount
+			assert.True(t, controller.IsRecovering(key, discount, 3911, now))
+			assert.False(t, controller.IsRecovering(key, !discount, 3911, now), "recovery state remains scoped to the selected strategy")
+			ctx := newChannelSelectContext()
+			param := &RetryParam{Ctx: ctx, ModelName: name, TokenGroup: "default", RequestPath: "/v1/chat/completions", DynamicRoutingEligible: false}
+			selected, _, err := CacheGetRandomSatisfiedChannel(param)
+			require.NoError(t, err)
+			require.NotNil(t, selected)
+			assert.Equal(t, 3912, selected.Id)
+		})
+	}
 }
 
 func TestPriorityRoutingMonitorCountsOnlyPhysicalDispatchAndDoesNotEnableDynamicRouting(t *testing.T) {
