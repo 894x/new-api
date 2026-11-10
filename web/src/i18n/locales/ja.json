@@ -2543,6 +2543,7 @@
     "e.g., us-central1 or JSON format for model-specific regions": "例: us-central1 またはモデル固有のリージョンを示す JSON 形式",
     "e.g., v2.1": "例: v2.1",
     "Each backup code can only be used once.": "各バックアップコードは1回しか使用できません。",
+    "Each bar represents 15 minutes; gray indicates no data": "各バーは15分間を表し、灰色はデータなしを示します",
     "Each bucket is evaluated at its candidate time. Enter elapsed time to inspect a request that is still waiting.": "各バケットの候補時刻で評価します。経過時間を入力すると、待機中リクエストの予測を確認できます。",
     "Each card overrides channel defaults for one model and public group. Customer-specific routing takes precedence.": "各カードはモデルと公開グループのチャネル既定設定を上書きします。ユーザー専用設定が優先されます。",
     "Each dot represents one upstream attempt on its channel, including retries.": "各点は、そのチャネルへの実際の上流リクエスト試行を表します。再試行も含みます。",

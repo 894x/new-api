@@ -149,10 +149,7 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
       >
         {props.reorderable !== false && (
           <div
-            className={cn(
-              'flex shrink-0',
-              props.compact ? '@max-[24rem]/order-item:flex-col' : 'gap-1'
-            )}
+            className={cn('flex flex-row shrink-0', !props.compact && 'gap-1')}
           >
             <Button
               type='button'
@@ -236,7 +233,7 @@ export function AutoGroupOrderItem(props: AutoGroupOrderItemProps) {
               align='end'
               sideOffset={8}
               role='dialog'
-              className='max-h-[min(36rem,calc(100dvh-2rem))] w-[min(22rem,calc(100vw-1.5rem))] gap-3 overflow-y-auto overscroll-contain p-4'
+              className='max-h-[min(36rem,calc(100dvh-2rem))] w-[min(18rem,calc(100vw-1.5rem))] gap-3 overflow-y-auto overscroll-contain p-4'
             >
               <PopoverTitle className='break-all'>
                 {props.settingsLabel ?? t('Settings')}

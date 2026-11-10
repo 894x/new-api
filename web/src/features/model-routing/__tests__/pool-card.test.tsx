@@ -37,6 +37,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { routingPoolKeys, type RoutingPoolView } from '../api'
 import { PoolCard } from '../pool-card'
+import { RoutingWorkspaceDisplay } from '../routing-workspace-display'
 import { getSettingsField } from './settings-queries'
 
 const clients: QueryClient[] = []
@@ -261,6 +262,68 @@ test('a channel drag handle moves only that channel into the adjacent priority g
       })
     )
   )
+})
+
+test('pool header places the group below the model with an icon and strategy aligned to the right', () => {
+  mountCard()
+  const header = screen
+    .getByText('kimi-k3')
+    .closest('[data-slot="card-header"]')
+  const group = within(header as HTMLElement).getByTitle('standard')
+  const strategy = within(header as HTMLElement).getByText('Priority routing')
+  expect(group.parentElement).toHaveClass('flex', 'justify-between')
+  expect(group.parentElement).toContainElement(strategy)
+  expect(strategy).toHaveClass('ml-auto')
+  expect(strategy.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+})
+
+test('compact priority controls stay in one row and channel weights use a narrow input', () => {
+  mountCard()
+  const up = screen.getByRole('button', { name: 'Move Priority 100 up' })
+  expect(up.parentElement).toHaveClass('flex-row')
+  expect(up.parentElement).toContainElement(
+    screen.getByRole('button', { name: 'Move Priority 100 down' })
+  )
+  expect(
+    screen.getByRole('spinbutton', { name: 'Weight for Alpha' })
+  ).toHaveClass('h-6', 'w-10', 'px-1', 'py-0')
+})
+
+test('channel settings remain interactive after entering fullscreen and selecting an early chunk mode', async () => {
+  mountCard(fixture(), true, true)
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('button', { name: 'Fullscreen' }))
+  await user.click(screen.getByRole('button', { name: 'Settings: Alpha' }))
+  const priority = screen.getByRole('spinbutton', {
+    name: 'Priority for Alpha',
+  })
+  expect(screen.getByRole('dialog', { name: 'Settings: Alpha' })).toHaveClass(
+    'w-[min(18rem,calc(100vw-1.5rem))]'
+  )
+  for (
+    let element: HTMLElement | null = priority;
+    element;
+    element = element.parentElement
+  ) {
+    expect(element.inert).not.toBe(true)
+  }
+  await user.click(priority)
+  expect(priority).toHaveFocus()
+  await user.clear(priority)
+  await user.type(priority, '80')
+  await user.click(
+    screen.getByRole('combobox', { name: 'Early chunk for Alpha' })
+  )
+  await user.click(await screen.findByRole('option', { name: 'Observe only' }))
+  expect(
+    screen.getByRole('combobox', { name: 'Early chunk for Alpha' })
+  ).toHaveTextContent('Observe only')
+  await user.keyboard('{Escape}')
+  expect(screen.getByRole('dialog', { name: 'Model routing' })).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Settings: Alpha' })).toHaveFocus()
+  expect(
+    screen.queryByRole('group', { name: 'Priority 100' })
+  ).not.toBeInTheDocument()
 })
 
 test('editing channel priority keeps its popover focused and regroups after the editor closes', async () => {
@@ -676,15 +739,24 @@ test('inherited probe precision survives interface language changes and invalid 
   }
 })
 
-function mountCard(pool = fixture(), canWrite = true) {
+function mountCard(pool = fixture(), canWrite = true, workspace = false) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
   clients.push(client)
   const onDirtyChange = vi.fn()
+  const card = (
+    <PoolCard pool={pool} canWrite={canWrite} onDirtyChange={onDirtyChange} />
+  )
   render(
     <QueryClientProvider client={client}>
-      <PoolCard pool={pool} canWrite={canWrite} onDirtyChange={onDirtyChange} />
+      {workspace ? (
+        <RoutingWorkspaceDisplay toolbar={null} refreshAction={null}>
+          {card}
+        </RoutingWorkspaceDisplay>
+      ) : (
+        card
+      )}
     </QueryClientProvider>
   )
   return { client, onDirtyChange }

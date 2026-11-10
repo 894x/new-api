@@ -2543,6 +2543,7 @@
     "e.g., us-central1 or JSON format for model-specific regions": "e.g., us-central1 or JSON format for model-specific regions",
     "e.g., v2.1": "e.g., v2.1",
     "Each backup code can only be used once.": "Each backup code can only be used once.",
+    "Each bar represents 15 minutes; gray indicates no data": "Each bar represents 15 minutes; gray indicates no data",
     "Each bucket is evaluated at its candidate time. Enter elapsed time to inspect a request that is still waiting.": "Each bucket is evaluated at its candidate time. Enter elapsed time to inspect a request that is still waiting.",
     "Each card overrides channel defaults for one model and public group. Customer-specific routing takes precedence.": "Each card overrides channel defaults for one model and public group. Customer-specific routing takes precedence.",
     "Each dot represents one upstream attempt on its channel, including retries.": "Each dot represents one upstream attempt on its channel, including retries.",

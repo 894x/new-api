@@ -76,8 +76,6 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
-type channelHealthCheckRequestKey struct{}
-
 func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
 	if ctx == nil {
 		ctx = context.Background()
@@ -191,13 +189,9 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	group, _ := model.GetUserGroup(testUserID, false)
 	c.Set("group", group)
 
-	var newAPIError *types.NewAPIError
-	_, healthCheck := ctx.Value(channelHealthCheckRequestKey{}).(bool)
-	if _, monitored := ctx.Value(channelMonitoringRequestKey{}).(operation_setting.MonitorSetting); monitored || healthCheck {
-		newAPIError = middleware.SetupContextForChannelProbe(c, channel, testModel)
-	} else {
-		newAPIError = middleware.SetupContextForSelectedChannel(c, channel, testModel)
-	}
+	// Manual tests and background checks probe the selected upstream independently
+	// of customer routing pools, while retaining administrator and key checks.
+	newAPIError := middleware.SetupContextForChannelProbe(c, channel, testModel)
 	if newAPIError != nil {
 		return testResult{
 			context:     c,
@@ -1005,8 +999,7 @@ func checkChannelHealth(ctx context.Context, channel *model.Channel, testUserID 
 	summary := channelTestSummary{}
 	isChannelEnabled := channel.Status == common.ChannelStatusEnabled
 	tik := time.Now()
-	probeCtx := context.WithValue(ctx, channelHealthCheckRequestKey{}, true)
-	result := testChannel(probeCtx, channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel))
+	result := testChannel(ctx, channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel))
 	milliseconds := time.Since(tik).Milliseconds()
 	if ctx.Err() != nil {
 		return summary

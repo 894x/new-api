@@ -26,6 +26,7 @@ import { StatusBadgeTypeContext } from '@/components/status-badge'
 import { CHANNEL_STATUS } from '../constants'
 import { isTagAggregateRow, parseGroupsList } from '../lib'
 import type { Channel } from '../types'
+import { ChannelCardMonitoring } from './channel-card-monitoring'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
 
@@ -42,9 +43,11 @@ const SENSITIVE_MASK = '••••'
 function ChannelCardComponent({
   row,
   isSelected,
+  monitoringChannelIds,
 }: {
   row: Row<Channel>
   isSelected: boolean
+  monitoringChannelIds?: number[]
 }) {
   const { t } = useTranslation()
   const { sensitiveVisible } = useChannels()
@@ -170,6 +173,13 @@ function ChannelCardComponent({
             <span className='text-muted-foreground text-sm'>-</span>
           )}
         </div>
+        {!isTagRow && (
+          <ChannelCardMonitoring
+            channel={row.original}
+            channelIds={monitoringChannelIds}
+            sensitiveVisible={sensitiveVisible}
+          />
+        )}
       </div>
     </ChannelRowActionsLayoutContext.Provider>
   )

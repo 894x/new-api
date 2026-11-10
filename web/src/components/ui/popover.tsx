@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { Popover as PopoverPrimitive } from '@base-ui/react/popover'
 import * as React from 'react'
 
+import { usePortalContainer } from '@/components/ui/portal-container'
 import { cn } from '@/lib/utils'
 
 function Popover({ ...props }: PopoverPrimitive.Root.Props) {
@@ -52,8 +53,13 @@ function PopoverContent({
     | 'collisionBoundary'
     | 'collisionAvoidance'
   >) {
+  const container = usePortalContainer()
   return (
-    <PopoverPrimitive.Portal keepMounted={keepMounted} className='contents'>
+    <PopoverPrimitive.Portal
+      keepMounted={keepMounted}
+      container={container}
+      className='contents'
+    >
       <PopoverPrimitive.Positioner
         align={align}
         alignOffset={alignOffset}

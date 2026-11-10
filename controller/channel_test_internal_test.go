@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -778,6 +779,76 @@ func TestResolveChannelTestUserIDUsesRequestUser(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 2, userID)
+}
+
+func TestManualChannelTestUsesAdministratorProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		role      int
+		status    int
+		keyStatus int
+		key       string
+		wantError relaytypes.ErrorCode
+		wantCalls int32
+	}{
+		{name: "administrator outside routing pool", role: common.RoleAdminUser, status: common.UserStatusEnabled, key: "enabled-key", wantCalls: 1},
+		{name: "root outside routing pool", role: common.RoleRootUser, status: common.UserStatusEnabled, key: "enabled-key", wantCalls: 1},
+		{name: "ordinary user", role: common.RoleCommonUser, status: common.UserStatusEnabled, key: "enabled-key", wantError: relaytypes.ErrorCodeAccessDenied},
+		{name: "disabled administrator", role: common.RoleAdminUser, status: common.UserStatusDisabled, key: "enabled-key", wantError: relaytypes.ErrorCodeAccessDenied},
+		{name: "automatically disabled key", role: common.RoleAdminUser, status: common.UserStatusEnabled, key: "disabled-key", keyStatus: common.ChannelStatusAutoDisabled, wantError: relaytypes.ErrorCodeChannelNoAvailableKey},
+		{name: "manually disabled key", role: common.RoleAdminUser, status: common.UserStatusEnabled, key: "disabled-key", keyStatus: common.ChannelStatusManuallyDisabled, wantError: relaytypes.ErrorCodeChannelNoAvailableKey},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupModelListControllerTestDB(t)
+			withSelfUseModeEnabled(t)
+			require.NoError(t, db.AutoMigrate(&model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.UserRoutingStrategy{}))
+			previousCache, previousConsumeLog := common.MemoryCacheEnabled, common.LogConsumeEnabled
+			common.MemoryCacheEnabled, common.LogConsumeEnabled = false, false
+			t.Cleanup(func() { common.MemoryCacheEnabled, common.LogConsumeEnabled = previousCache, previousConsumeLog })
+			user := model.User{Username: "manual-probe", Role: tc.role, Status: tc.status, Group: "default", Quota: 1000000}
+			require.NoError(t, db.Create(&user).Error)
+			var calls atomic.Int32
+			authorization := make(chan string, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				authorization <- r.Header.Get("Authorization")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"manual-probe","object":"chat.completion","model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+			}))
+			t.Cleanup(upstream.Close)
+			channel := model.Channel{Type: constant.ChannelTypeOpenAI, Key: tc.key, BaseURL: &upstream.URL, Models: "gpt-4o-mini", Group: "default", Status: common.ChannelStatusEnabled}
+			if tc.keyStatus != 0 {
+				channel.ChannelInfo = model.ChannelInfo{IsMultiKey: true, MultiKeyStatusList: map[int]int{0: tc.keyStatus}}
+			}
+			require.NoError(t, db.Create(&channel).Error)
+			require.NoError(t, channel.AddAbilities(nil))
+			require.NoError(t, db.Create(&model.ModelRoutingPool{RoutingGroup: "default", Model: "gpt-4o-mini", Mode: model.RoutingModePriority, ChannelsJSON: "[]"}).Error)
+			businessContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+			businessContext.Set("id", user.Id)
+			businessContext.Set("group", user.Group)
+			require.ErrorIs(t, service.ValidateSelectedChannelGroupPolicy(businessContext, channel.Id, "gpt-4o-mini"), service.ErrGroupModelChannelDenied)
+
+			// No monitoring or health-check marker: this is the manual test path.
+			result := testChannel(context.Background(), &channel, user.Id, "gpt-4o-mini", string(constant.EndpointTypeOpenAI), false)
+			if tc.wantError != "" {
+				require.Error(t, result.localErr)
+				require.NotNil(t, result.newAPIError)
+				assert.Equal(t, tc.wantError, result.newAPIError.GetErrorCode())
+			} else {
+				require.NoError(t, result.localErr)
+				assert.Nil(t, result.newAPIError)
+			}
+			assert.Equal(t, tc.wantCalls, calls.Load())
+			if tc.wantCalls > 0 {
+				select {
+				case header := <-authorization:
+					assert.Equal(t, "Bearer "+tc.key, header)
+				default:
+					t.Fatal("manual test did not reach the configured upstream")
+				}
+			}
+		})
+	}
 }
 
 func TestSelectChannelsForAutomaticTestPassiveRecoveryOnlyUsesAutoDisabled(t *testing.T) {

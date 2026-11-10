@@ -175,18 +175,14 @@ export function UserRoutingWorkspace(props: {
             <div
               role='list'
               aria-label={t('User routing pools')}
-              className='min-w-0 columns-[24rem] gap-4'
+              className='grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,24rem),1fr))] items-start gap-4'
             >
               {filtered
                 .slice((currentPage - 1) * pageSize, currentPage * pageSize)
                 .map((entry) => {
                   const key = `${entry.model}\u0000${entry.group}`
                   return (
-                    <div
-                      key={key}
-                      role='listitem'
-                      className='mb-4 inline-block w-full break-inside-avoid align-top'
-                    >
+                    <div key={key} role='listitem' className='min-w-0'>
                       <UserPoolCard
                         userId={props.userId}
                         model={entry.model}

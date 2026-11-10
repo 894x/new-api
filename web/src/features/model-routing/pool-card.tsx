@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Settings02Icon } from '@hugeicons/core-free-icons'
+import { Route02Icon, Settings02Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useEffectEvent, useId, useState } from 'react'
@@ -340,18 +340,6 @@ export function PoolCard(props: {
               )}
             </CardTitle>
             <div className='flex max-w-full flex-wrap items-center justify-end gap-2'>
-              <Badge
-                variant='secondary'
-                title={props.pool.routing_group}
-                className='max-w-full'
-              >
-                <span className='truncate'>
-                  {props.groupLabel &&
-                  props.groupLabel !== props.pool.routing_group
-                    ? `${props.groupLabel} · ${props.pool.routing_group}`
-                    : props.pool.routing_group}
-                </span>
-              </Badge>
               {canMonitor && !props.embedded && (
                 <Button
                   type='button'
@@ -448,9 +436,29 @@ export function PoolCard(props: {
               </Popover>
             </div>
           </div>
-          <span className='text-muted-foreground text-xs'>
-            {t(ROUTING_MODE_LABELS[values.mode])}
-          </span>
+          <div className='flex min-w-0 items-center justify-between gap-2'>
+            <Badge
+              variant='secondary'
+              title={props.pool.routing_group}
+              className='max-w-full min-w-0 shrink'
+            >
+              <span className='truncate'>
+                {props.groupLabel &&
+                props.groupLabel !== props.pool.routing_group
+                  ? `${props.groupLabel} · ${props.pool.routing_group}`
+                  : props.pool.routing_group}
+              </span>
+            </Badge>
+            <span className='text-muted-foreground ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs'>
+              <HugeiconsIcon
+                icon={Route02Icon}
+                className='size-3.5 shrink-0'
+                strokeWidth={2}
+                aria-hidden='true'
+              />
+              {t(ROUTING_MODE_LABELS[values.mode])}
+            </span>
+          </div>
         </CardHeader>
         <form
           className='contents'

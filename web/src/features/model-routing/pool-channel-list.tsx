@@ -116,12 +116,6 @@ export function PoolChannelList(props: {
   const observations = new Map(
     monitoring.data?.map((entry) => [entry.channel_id, entry])
   )
-  let maxSampleCount = 1
-  for (const summary of monitoring.data ?? []) {
-    for (const bucket of summary.buckets) {
-      maxSampleCount = Math.max(maxSampleCount, bucket.count)
-    }
-  }
   const candidates = new Map(
     props.candidates.map((candidate) => [candidate.channel_id, candidate])
   )
@@ -291,7 +285,6 @@ export function PoolChannelList(props: {
                                   summary={observations.get(entry.channel_id)}
                                   loading={monitoring.isLoading}
                                   error={monitoring.isError}
-                                  maxSampleCount={maxSampleCount}
                                 />
                               )
                             }
@@ -606,7 +599,7 @@ export function PoolChannelList(props: {
                                     : undefined
                                 }
                                 disabled={props.disabled}
-                                className='h-7 w-14 [appearance:textfield] px-1 text-center text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
+                                className='h-6 w-10 [appearance:textfield] px-1 py-0 text-center text-xs tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
                                 aria-label={t('Weight for {{channel}}', {
                                   channel: name,
                                 })}

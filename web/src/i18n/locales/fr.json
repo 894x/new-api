@@ -2543,6 +2543,7 @@
     "e.g., us-central1 or JSON format for model-specific regions": "par ex., us-central1 ou format JSON pour les régions spécifiques au modèle",
     "e.g., v2.1": "par ex., v2.1",
     "Each backup code can only be used once.": "Chaque code de sauvegarde ne peut être utilisé qu'une seule fois.",
+    "Each bar represents 15 minutes; gray indicates no data": "Chaque barre représente 15 min ; le gris indique une absence de données",
     "Each bucket is evaluated at its candidate time. Enter elapsed time to inspect a request that is still waiting.": "Chaque case est évaluée à son instant candidat. Saisissez le temps écoulé pour examiner une requête encore en attente.",
     "Each card overrides channel defaults for one model and public group. Customer-specific routing takes precedence.": "Chaque carte remplace les règles par défaut pour un modèle et un groupe. Les règles propres au client sont prioritaires.",
     "Each dot represents one upstream attempt on its channel, including retries.": "Chaque point représente une tentative réelle vers le canal amont, y compris les nouvelles tentatives.",

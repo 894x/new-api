@@ -18,8 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { ReactNode } from 'react'
+import { createRef, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { Dialog } from '@/components/dialog'
 
 import { Combobox } from '../combobox'
 import {
@@ -29,6 +31,7 @@ import {
   DrawerTitle,
 } from '../drawer'
 import { Popover, PopoverContent, PopoverTrigger } from '../popover'
+import { PortalContainerContext } from '../portal-container'
 import {
   Select,
   SelectContent,
@@ -213,6 +216,26 @@ describe('popups outside a drawer', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
     expect(document.body).toContainElement(portal as HTMLElement)
     expect(portal).toHaveClass('contents')
+  })
+
+  it('keeps a dialog selector interactive when its parent supplies a background popup container', async () => {
+    const container = createRef<HTMLDivElement>()
+    const change = vi.fn()
+    render(
+      <div ref={container}>
+        <PortalContainerContext.Provider value={container}>
+          <Dialog defaultOpen title='Edit strategy'>
+            <ProviderSelect onValueChange={change} />
+          </Dialog>
+        </PortalContainerContext.Provider>
+      </div>
+    )
+    const user = userEvent.setup()
+    const dialog = screen.getByRole('dialog', { name: 'Edit strategy' })
+    await user.click(within(dialog).getByRole('combobox', { name: 'Provider' }))
+    await user.click(await screen.findByRole('option', { name: 'Google' }))
+    expect(change).toHaveBeenCalledWith('gemini', expect.anything())
+    expect(dialog).toBeInTheDocument()
   })
 
   it('anchors editable combobox options in viewport coordinates outside dialogs', async () => {

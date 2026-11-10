@@ -85,6 +85,8 @@ export async function getChannelMonitoring(
       }>('/api/channel/monitoring', {
         params: { model, channel_ids: ids.join(',') },
         signal,
+        // React Query shares this request and owns its cancellation lifecycle.
+        disableDuplicate: true,
       })
       const summaries = requireServerSuccess(response.data).data
       if (

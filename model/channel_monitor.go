@@ -125,9 +125,11 @@ type ChannelMonitorRecord struct {
 	StatusCode      int      `json:"status_code"`
 	ErrorCode       string   `json:"error_code" gorm:"size:64"`
 	TimingHistogram string   `json:"-" gorm:"type:text"`
+	WindowRevision  int64    `json:"-" gorm:"default:0"`
 }
 
 func SaveChannelMonitorRecord(ctx context.Context, record *ChannelMonitorRecord) error {
+	record.WindowRevision = 1
 	return DB.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(record).Error
 }
 
@@ -137,9 +139,20 @@ func SaveChannelTrafficRecords(ctx context.Context, records []ChannelMonitorReco
 	if len(records) == 0 {
 		return nil
 	}
+	records = slices.Clone(records)
+	for i := range records {
+		records[i].WindowRevision = 1
+	}
+	updates := clause.AssignmentColumns([]string{"count", "created_at", "observed_at_ms", "latency_ms", "ttft_ms", "tokens_per_second", "error_code", "timing_histogram"})
+	updates = append(updates, clause.Assignment{
+		Column: clause.Column{Name: "window_revision"},
+		Value: clause.Expr{SQL: "COALESCE(?, 0) + 1", Vars: []any{
+			clause.Column{Table: clause.CurrentTable, Name: "window_revision"},
+		}},
+	})
 	return DB.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "sample_key"}},
-		DoUpdates: clause.AssignmentColumns([]string{"count", "created_at", "observed_at_ms", "latency_ms", "ttft_ms", "tokens_per_second", "error_code", "timing_histogram"}),
+		DoUpdates: updates,
 	}).CreateInBatches(records, 100).Error
 }
 
@@ -181,6 +194,12 @@ type ChannelMonitorSummary struct {
 }
 
 func ChannelMonitorSummaries(ctx context.Context, channels []*Channel, modelName string, enabled bool, interval time.Duration, excludedStatusCodes []operation_setting.StatusCodeRange, now time.Time) ([]ChannelMonitorSummary, error) {
+	return channelMonitorWindows.summaries(ctx, channels, modelName, enabled, interval, excludedStatusCodes, now)
+}
+
+// Retain the bounded database calculation for oversized windows and as the
+// reference path when a window cannot be retained in the incremental cache.
+func channelMonitorSummariesUncached(ctx context.Context, channels []*Channel, modelName string, enabled bool, interval time.Duration, excludedStatusCodes []operation_setting.StatusCodeRange, now time.Time) ([]ChannelMonitorSummary, error) {
 	const bucketSeconds = int64(15 * 60)
 	end := now.Unix()
 	start := end/bucketSeconds*bucketSeconds + bucketSeconds - 24*60*60

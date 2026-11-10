@@ -2543,6 +2543,7 @@
     "e.g., us-central1 or JSON format for model-specific regions": "例如，us-central1 或模型特定區域的 JSON 格式",
     "e.g., v2.1": "例如，v2.1",
     "Each backup code can only be used once.": "每個備用代碼只能使用一次。",
+    "Each bar represents 15 minutes; gray indicates no data": "每條代表 15 分鐘；灰色表示無資料",
     "Each bucket is evaluated at its candidate time. Enter elapsed time to inspect a request that is still waiting.": "預設在各桶自己的候選時刻評估；輸入已等待時間，可查看仍在等待的請求預測。",
     "Each card overrides channel defaults for one model and public group. Customer-specific routing takes precedence.": "每張卡片獨立覆寫一個模型與對外群組的管道預設規則，使用者專屬設定優先生效",
     "Each dot represents one upstream attempt on its channel, including retries.": "每個圓點對應一次實際發往該渠道的上游請求嘗試，包含重試。",

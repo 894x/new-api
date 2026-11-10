@@ -22,6 +22,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import * as React from 'react'
 
 import { Button } from '@/components/ui/button'
+import { PortalContainerContext } from '@/components/ui/portal-container'
 import { cn } from '@/lib/utils'
 
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
@@ -75,7 +76,10 @@ function DialogContent({
         )}
         {...props}
       >
-        {children}
+        {/* This modal owns its layer; nested popups must not inherit a background host. */}
+        <PortalContainerContext.Provider value={undefined}>
+          {children}
+        </PortalContainerContext.Provider>
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot='dialog-close'

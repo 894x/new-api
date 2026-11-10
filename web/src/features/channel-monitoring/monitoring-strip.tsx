@@ -128,7 +128,6 @@ export function ChannelMonitoringStrip(props: {
   summary?: ChannelMonitorSummary
   loading: boolean
   error: boolean
-  maxSampleCount?: number
   showTimelineLabels?: boolean
 }) {
   const { t, i18n } = useTranslation()
@@ -192,11 +191,6 @@ export function ChannelMonitoringStrip(props: {
   const bucket = summary.buckets[slot]
   const bucketStatus = states[bucket?.state ?? 'empty'] ?? states.empty
   const latest = summary.latest
-  const maxSampleCount = Math.max(
-    1,
-    props.maxSampleCount ??
-      summary.buckets.reduce((count, point) => Math.max(count, point.count), 0)
-  )
   const currentBucket = summary.buckets.at(-1)
   const performance = currentBucket?.performance
   const hasTTFT = performance?.ttft_p50_ms != null
@@ -335,16 +329,7 @@ export function ChannelMonitoringStrip(props: {
                     <span
                       key={point.timestamp}
                       data-bucket={index}
-                      style={{
-                        height:
-                          point.count > 0
-                            ? 3 +
-                              (9 * Math.log1p(point.count)) /
-                                Math.log1p(
-                                  Math.max(maxSampleCount, point.count)
-                                )
-                            : 2,
-                      }}
+                      style={{ height: 12 }}
                       className='bg-muted-foreground/25 flex min-w-0 flex-1 flex-col-reverse overflow-hidden rounded-[1px]'
                     >
                       {bucketStates
@@ -374,7 +359,9 @@ export function ChannelMonitoringStrip(props: {
             className='max-w-[calc(100vw-2rem)] flex-col items-start gap-1 text-xs'
           >
             {props.showTimelineLabels === false && (
-              <p>{t('Bar height shows sample volume')}</p>
+              <p>
+                {t('Each bar represents 15 minutes; gray indicates no data')}
+              </p>
             )}
             {bucket && (
               <>
@@ -410,7 +397,9 @@ export function ChannelMonitoringStrip(props: {
       {props.showTimelineLabels !== false && (
         <div className='text-muted-foreground flex justify-between text-[11px]'>
           <span>{t('24 hours ago')}</span>
-          <span id={volumeHintId}>{t('Bar height shows sample volume')}</span>
+          <span id={volumeHintId}>
+            {t('Each bar represents 15 minutes; gray indicates no data')}
+          </span>
           <span>
             {summary.truncated ? t('Partial monitoring history') : t('Now')}
           </span>

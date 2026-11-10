@@ -58,6 +58,7 @@ import {
   getChannelTableRowId,
   isTagAggregateRow,
   getChannelTypeLabel,
+  getDefaultMonitoringModel,
 } from '../lib'
 import type { Channel, ChannelSortBy } from '../types'
 import { ChannelCard } from './channel-card'
@@ -308,6 +309,18 @@ export function ChannelsTable() {
   const totalCount = data?.data?.total || 0
   const typeCounts = data?.data?.type_counts
 
+  const monitoringChannelIds = useMemo(() => {
+    const groups = new Map<string, number[]>()
+    for (const channel of data?.data?.items ?? []) {
+      const model = getDefaultMonitoringModel(channel)
+      if (!model) continue
+      const ids = groups.get(model)
+      if (ids) ids.push(channel.id)
+      else groups.set(model, [channel.id])
+    }
+    return groups
+  }, [data?.data?.items])
+
   // Columns configuration
   const columns = useChannelsColumns({ enableSelection: batchMode })
 
@@ -426,7 +439,13 @@ export function ChannelsTable() {
       enableCardView
       viewModeStorageKey={CHANNELS_VIEW_MODE_STORAGE_KEY}
       renderCard={(row, { isSelected }) => (
-        <ChannelCard row={row} isSelected={isSelected} />
+        <ChannelCard
+          row={row}
+          isSelected={isSelected}
+          monitoringChannelIds={monitoringChannelIds.get(
+            getDefaultMonitoringModel(row.original) ?? ''
+          )}
+        />
       )}
       cardGridClassName='grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-3 2xl:grid-cols-4'
       applyHeaderSize

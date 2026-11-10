@@ -29,6 +29,28 @@ import {
 } from '../constants'
 import type { Channel, ChannelSettings, ChannelOtherSettings } from '../types'
 
+export function getDefaultMonitoringModel(
+  channel: Pick<Channel, 'monitor_config' | 'test_model' | 'models'>
+): string | undefined {
+  let targetModel: string | undefined
+  try {
+    const config = JSON.parse(channel.monitor_config || '{}') as {
+      targets?: { model?: unknown }[]
+    } | null
+    const firstModel = config?.targets?.[0]?.model
+    if (typeof firstModel === 'string') targetModel = firstModel.trim()
+  } catch {
+    // Invalid persisted configuration is handled by the monitoring API.
+  }
+  // Follow the backend's MonitorTargets default selection order.
+  const model =
+    targetModel ||
+    channel.test_model?.trim() ||
+    parseModelsList(channel.models)[0]
+  if (!model || new TextEncoder().encode(model).length > 128) return undefined
+  return model
+}
+
 // ============================================================================
 // Channel Type Utilities
 // ============================================================================

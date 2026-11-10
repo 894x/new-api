@@ -16,6 +16,10 @@ type ChannelCacheStats struct {
 // QueryChannelCacheStats uses the same bounded log scan as channel diagnostics.
 // Cache reads are input-token weighted; unknown cache usage is not a measured zero.
 func QueryChannelCacheStats(ctx context.Context, channelIDs []int, modelName string, startTs, endTs int64) (map[int]*ChannelCacheStats, error) {
+	return channelCacheWindows.stats(ctx, channelIDs, modelName, startTs, endTs)
+}
+
+func queryChannelCacheStatsUncached(ctx context.Context, channelIDs []int, modelName string, startTs, endTs int64) (map[int]*ChannelCacheStats, error) {
 	stats := make(map[int]*ChannelCacheStats, len(channelIDs))
 	for _, id := range channelIDs {
 		stats[id] = &ChannelCacheStats{}
@@ -114,6 +118,8 @@ type perfLogFilter struct {
 	EndTs       int64
 	ErrorOnly   bool
 	ConsumeOnly bool
+	AfterID     int64
+	OnTruncated func(PerfChannelLog)
 }
 
 func visitPerfLogs(ctx context.Context, filter perfLogFilter, visit func(PerfChannelLog)) (int, bool, error) {
@@ -149,6 +155,9 @@ func visitPerfLogs(ctx context.Context, filter perfLogFilter, visit func(PerfCha
 		if cursor > 0 {
 			query = query.Where("id < ?", cursor)
 		}
+		if filter.AfterID > 0 {
+			query = query.Where("id > ?", filter.AfterID)
+		}
 		rows, err := query.Order("id DESC").Limit(500).Rows()
 		if err != nil {
 			return count, false, err
@@ -165,6 +174,9 @@ func visitPerfLogs(ctx context.Context, filter perfLogFilter, visit func(PerfCha
 				return count, false, err
 			}
 			if count >= 50000 || payloadBytes+len(row.Other) > 32<<20 {
+				if filter.OnTruncated != nil {
+					filter.OnTruncated(row)
+				}
 				_ = rows.Close()
 				return count, true, nil
 			}

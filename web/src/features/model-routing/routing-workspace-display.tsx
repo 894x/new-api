@@ -33,6 +33,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { PortalContainerContext } from '@/components/ui/portal-container'
 import { cn } from '@/lib/utils'
 
 const fullscreenHosts: HTMLElement[] = []
@@ -58,6 +59,7 @@ export function RoutingWorkspaceDisplay(props: {
   const fullscreen = props.fullscreen ?? localFullscreen
   const minimalInline = props.hideToolbar && !fullscreen
   const [container] = useState(() => document.createElement('div'))
+  const portalContainer = useRef(container)
   const inlineContainer = useRef<HTMLDivElement>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const returnScroll = useRef<
@@ -203,45 +205,47 @@ export function RoutingWorkspaceDisplay(props: {
       )}
     >
       {createPortal(
-        <section
-          role={regionRole}
-          aria-modal={fullscreen || undefined}
-          aria-label={
-            minimalInline ? undefined : (props.label ?? t('Model routing'))
-          }
-          className={cn(
-            'flex min-h-0 min-w-0 flex-1 flex-col gap-4',
-            minimalInline && 'contents',
-            fullscreen &&
-              'bg-background fixed inset-0 z-40 overflow-hidden p-3 sm:p-4'
-          )}
-        >
-          {!props.hideToolbar && (
-            <div className='flex shrink-0 flex-wrap items-center gap-2'>
-              {props.toolbar}
-              <div className='flex shrink-0 items-center gap-2'>
-                {props.toolbarActions}
-                {props.refreshAction}
-                <Button
-                  type='button'
-                  variant='outline'
-                  aria-pressed={fullscreen}
-                  onClick={() => changeFullscreen(!fullscreen)}
-                >
-                  <HugeiconsIcon
-                    icon={fullscreen ? ArrowShrink02Icon : ArrowExpand02Icon}
-                    data-icon='inline-start'
-                    aria-hidden='true'
-                  />
-                  {fullscreen
-                    ? (props.exitFullscreenLabel ?? t('Exit fullscreen'))
-                    : t('Fullscreen')}
-                </Button>
+        <PortalContainerContext.Provider value={portalContainer}>
+          <section
+            role={regionRole}
+            aria-modal={fullscreen || undefined}
+            aria-label={
+              minimalInline ? undefined : (props.label ?? t('Model routing'))
+            }
+            className={cn(
+              'flex min-h-0 min-w-0 flex-1 flex-col gap-4',
+              minimalInline && 'contents',
+              fullscreen &&
+                'bg-background fixed inset-0 z-40 overflow-hidden p-3 sm:p-4'
+            )}
+          >
+            {!props.hideToolbar && (
+              <div className='flex shrink-0 flex-wrap items-center gap-2'>
+                {props.toolbar}
+                <div className='flex shrink-0 items-center gap-2'>
+                  {props.toolbarActions}
+                  {props.refreshAction}
+                  <Button
+                    type='button'
+                    variant='outline'
+                    aria-pressed={fullscreen}
+                    onClick={() => changeFullscreen(!fullscreen)}
+                  >
+                    <HugeiconsIcon
+                      icon={fullscreen ? ArrowShrink02Icon : ArrowExpand02Icon}
+                      data-icon='inline-start'
+                      aria-hidden='true'
+                    />
+                    {fullscreen
+                      ? (props.exitFullscreenLabel ?? t('Exit fullscreen'))
+                      : t('Fullscreen')}
+                  </Button>
+                </div>
               </div>
-            </div>
-          )}
-          {props.children}
-        </section>,
+            )}
+            {props.children}
+          </section>
+        </PortalContainerContext.Provider>,
         container
       )}
     </div>

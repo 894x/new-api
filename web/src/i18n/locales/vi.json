@@ -2543,6 +2543,7 @@
     "e.g., us-central1 or JSON format for model-specific regions": "chẳng hạn như us-central1 hoặc định dạng JSON cho các khu vực dành riêng cho mô hình",
     "e.g., v2.1": "e.g., v2.1",
     "Each backup code can only be used once.": "Mỗi mã dự phòng chỉ có thể được sử dụng một lần.",
+    "Each bar represents 15 minutes; gray indicates no data": "Mỗi cột biểu thị 15 phút; màu xám nghĩa là không có dữ liệu",
     "Each bucket is evaluated at its candidate time. Enter elapsed time to inspect a request that is still waiting.": "Mỗi ô được đánh giá tại thời điểm dự kiến riêng. Nhập thời gian đã chờ để xem dự đoán cho yêu cầu vẫn đang chờ.",
     "Each card overrides channel defaults for one model and public group. Customer-specific routing takes precedence.": "Mỗi thẻ ghi đè quy tắc kênh mặc định cho một mô hình và nhóm công khai. Quy tắc riêng của người dùng được ưu tiên.",
     "Each dot represents one upstream attempt on its channel, including retries.": "Mỗi chấm là một lần gửi yêu cầu thực tế tới kênh thượng nguồn, bao gồm cả lần thử lại.",

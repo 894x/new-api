@@ -85,7 +85,7 @@ test('compact channel history hides the timeline footer and keeps its explanatio
   rerender(<ChannelMonitoringStrip {...props} showTimelineLabels={false} />)
   expect(screen.queryByText('24 hours ago')).not.toBeInTheDocument()
   expect(
-    screen.queryByText('Bar height shows sample volume')
+    screen.queryByText('Each bar represents 15 minutes; gray indicates no data')
   ).not.toBeInTheDocument()
   expect(screen.queryByText('Now')).not.toBeInTheDocument()
   const timeline = screen.getByRole('button', {
@@ -94,7 +94,9 @@ test('compact channel history hides the timeline footer and keeps its explanatio
   await userEvent.hover(timeline)
   const tooltip = await screen.findByRole('tooltip')
   expect(
-    within(tooltip).getByText('Bar height shows sample volume')
+    within(tooltip).getByText(
+      'Each bar represents 15 minutes; gray indicates no data'
+    )
   ).toBeVisible()
 })
 
@@ -168,7 +170,7 @@ test('keyboard selection opens the matching historical probe bucket', async () =
   ).toBeInTheDocument()
 })
 
-test('bar heights encode sample volume on a shared bounded scale while empty intervals stay flat', () => {
+test('empty, sparse and busy intervals keep the same fixed bar height', () => {
   const summary = fixture()
   summary.buckets[0] = { ...summary.buckets[0], count: 0, state: 'empty' }
   summary.buckets[1].count = 1
@@ -180,23 +182,19 @@ test('bar heights encode sample volume on a shared bounded scale while empty int
       summary={summary}
       loading={false}
       error={false}
-      maxSampleCount={1000}
     />
   )
   const timeline = screen.getByRole('button', {
     name: '24-hour channel history for Example',
   })
   const bars = timeline.querySelectorAll<HTMLElement>('[data-bucket]')
-  const heights = [...bars]
-    .slice(0, 4)
-    .map((bar) => Number.parseFloat(bar.style.height))
-  expect(heights[0]).toBe(2)
+  for (const bar of bars) {
+    expect(bar).toHaveStyle({ height: '12px' })
+  }
   expect(bars[0].querySelector('[data-state]')).toBeNull()
-  expect(heights[1]).toBeGreaterThan(heights[0])
-  expect(heights[2]).toBeGreaterThan(heights[1])
-  expect(heights[3]).toBeGreaterThan(heights[2])
-  expect(heights[3]).toBe(12)
-  expect(timeline).toHaveAccessibleDescription('Bar height shows sample volume')
+  expect(timeline).toHaveAccessibleDescription(
+    'Each bar represents 15 minutes; gray indicates no data'
+  )
 })
 
 test('a mixed interval stacks normal, slow, failed and excluded samples by their actual proportions', () => {

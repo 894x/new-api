@@ -3,6 +3,9 @@ package model
 import (
 	"context"
 	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,7 +76,7 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 				if upgrade {
 					// Also exercise upgrading this feature's preceding schema.
 					require.NoError(t, db.AutoMigrate(&ChannelMonitorRecord{}))
-					fields := []string{"TimingHistogram"}
+					fields := []string{"TimingHistogram", "WindowRevision"}
 					if schemaVersion == "legacy probes" {
 						fields = append(fields, "Source", "Count", "BucketAt", "ObservedAtMs")
 					}
@@ -250,6 +253,222 @@ func TestChannelMonitoringDatabaseMatrix(t *testing.T) {
 				require.NoError(t, err)
 				assert.Nil(t, partial[0].Buckets[95].Performance, "known collection gaps cannot show a complete percentile")
 			})
+			t.Run("incremental windows", func(t *testing.T) {
+				verifyChannelMonitoringWindows(t, db, dialect)
+			})
+		})
+	}
+}
+
+func verifyChannelMonitoringWindows(t *testing.T, db *gorm.DB, dialect string) {
+	t.Helper()
+	require.NoError(t, db.Where("1 = 1").Delete(&ChannelMonitorRecord{}).Error)
+	var driver gorm.Dialector
+	switch dialect {
+	case "sqlite":
+		driver = sqlite.Open(":memory:")
+	case "mysql":
+		dsn := os.Getenv("TEST_MYSQL_LOG_DSN")
+		if dsn == "" {
+			dsn = os.Getenv("TEST_MYSQL_DSN")
+		}
+		driver = mysql.Open(dsn)
+	case "postgres":
+		dsn := os.Getenv("TEST_POSTGRES_LOG_DSN")
+		if dsn == "" {
+			dsn = os.Getenv("TEST_POSTGRES_DSN")
+		}
+		driver = postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
+	}
+	logDB, err := gorm.Open(driver, &gorm.Config{NamingStrategy: schema.NamingStrategy{TablePrefix: "channel_window_log_test_"}})
+	require.NoError(t, err)
+	logSQL, err := logDB.DB()
+	require.NoError(t, err)
+	logSQL.SetMaxOpenConns(1)
+	require.NoError(t, logDB.AutoMigrate(&Log{}))
+	previousLog := LOG_DB
+	LOG_DB = logDB
+	t.Cleanup(func() {
+		LOG_DB = previousLog
+		require.NoError(t, logDB.Migrator().DropTable(&Log{}))
+		require.NoError(t, logSQL.Close())
+	})
+	ctx := context.Background()
+	now := time.Unix(1800000300, 0)
+	start := now.Unix()/900*900 + 900 - 86400
+	channel := &Channel{Id: 7101, Models: "model-a,model-b", Status: common.ChannelStatusEnabled, MonitorConfig: `{"targets":[{"model":"model-a","endpoint_type":"openai"},{"model":"model-a","endpoint_type":"anthropic"}]}`}
+	channels := []*Channel{channel, {Id: 7102, Models: "model-a", Status: common.ChannelStatusEnabled}}
+	firstToken := int64(140)
+	records := []ChannelMonitorRecord{
+		{SampleKey: "edge", ChannelID: 7101, Model: "model-a", EndpointType: "openai", Source: "probe", State: "healthy", LatencyMs: 100, CreatedAt: start},
+		{SampleKey: "history", ChannelID: 7101, Model: "model-a", EndpointType: "openai", Source: "probe", State: "slow", LatencyMs: 6000, CreatedAt: now.Unix() - 3600},
+		{SampleKey: "latest-other-protocol", ChannelID: 7101, Model: "model-a", EndpointType: "anthropic", State: "unavailable", StatusCode: 503, CreatedAt: now.Unix() - 100, ObservedAtMs: now.UnixMilli() - 100000},
+		{SampleKey: "latest", ChannelID: 7101, Model: "model-a", EndpointType: "openai", Source: "probe", State: "healthy", StatusCode: 200, LatencyMs: 200, TTFTMs: &firstToken, CreatedAt: now.Unix() - 1},
+		{SampleKey: "future", ChannelID: 7101, Model: "model-a", EndpointType: "openai", Source: "probe", State: "healthy", CreatedAt: now.Unix() + 1},
+	}
+	for i := range records {
+		require.NoError(t, SaveChannelMonitorRecord(ctx, &records[i]))
+	}
+	traffic := ChannelMonitorRecord{SampleKey: "window-traffic", ChannelID: 7101, Model: "model-a", EndpointType: "openai", Source: "traffic", State: "healthy", StatusCode: 200, Count: 2, LatencyMs: 300, CreatedAt: now.Unix(), BucketAt: now.Unix() / 900 * 900}
+	var timing ChannelMonitorTimings
+	timing.Add(ChannelMonitorRecord{State: "healthy", LatencyMs: 100})
+	timing.Add(ChannelMonitorRecord{State: "healthy", LatencyMs: 300})
+	encoded, err := common.Marshal(timing)
+	require.NoError(t, err)
+	traffic.TimingHistogram = string(encoded)
+	require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{traffic}))
+	logs := []Log{
+		{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix() - 86400 - 1, PromptTokens: 100, Other: `{"cache_tokens":100}`},
+		{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix() - 86400, PromptTokens: 100, Other: `{"cache_tokens":100}`},
+		{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix() - 86400 + 1, PromptTokens: 100, Other: `{"cache_tokens":0}`},
+		{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix() - 3600, PromptTokens: 100, Other: `{}`},
+		{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix() - 100, PromptTokens: 100, Other: `{"cache_tokens":-1}`},
+		{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix(), PromptTokens: 100, Other: `{"cache_tokens":900}`},
+		{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix() + 1, PromptTokens: 100, Other: `{"cache_tokens":100}`},
+		{ChannelId: 7102, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix(), PromptTokens: 100, Other: `{`},
+		{ChannelId: 7102, ModelName: "model-b", Type: LogTypeConsume, CreatedAt: now.Unix(), PromptTokens: 100, Other: `{"cache_tokens":100}`},
+		{ChannelId: 7101, ModelName: "model-a", Type: LogTypeError, CreatedAt: now.Unix(), PromptTokens: 100, Other: `{"cache_tokens":100}`},
+	}
+	require.NoError(t, logDB.CreateInBatches(&logs, 100).Error)
+	check := func(at time.Time, excluded []operation_setting.StatusCodeRange) {
+		t.Helper()
+		want, err := channelMonitorSummariesUncached(ctx, channels, "model-a", true, 5*time.Minute, excluded, at)
+		require.NoError(t, err)
+		got, err := ChannelMonitorSummaries(ctx, channels, "model-a", true, 5*time.Minute, excluded, at)
+		require.NoError(t, err)
+		assert.Equal(t, want, got, "incremental monitoring must match the original calculation at %s", at)
+		wantCache, err := queryChannelCacheStatsUncached(ctx, []int{7101, 7102}, "model-a", at.Unix()-86400, at.Unix())
+		require.NoError(t, err)
+		gotCache, err := QueryChannelCacheStats(ctx, []int{7102, 7101, 7101}, "model-a", at.Unix()-86400, at.Unix())
+		require.NoError(t, err)
+		assert.Equal(t, wantCache, gotCache, "cache tokens retain the exact inclusive 24h window at %s", at)
+	}
+	check(now, nil)
+	check(now, nil)
+	check(now.Add(time.Second), nil)
+	check(now.Add(2*time.Second), nil)
+	excluded := []operation_setting.StatusCodeRange{{Start: 503, End: 503}}
+	check(now.Add(2*time.Second), excluded)
+	check(now.Add(2*time.Second), nil)
+	channel.MonitorConfig = `{"targets":[{"model":"model-a","endpoint_type":"openai"}]}`
+	check(now.Add(2*time.Second), nil)
+	channel.MonitorConfig = `{"enabled":false}`
+	check(now.Add(2*time.Second), nil)
+	channel.MonitorConfig = ""
+	check(now.Add(2*time.Second), nil)
+	// A same-count correction must refresh the histogram even though the traffic
+	// bucket's ID, count and observation timestamp have not changed.
+	var corrected ChannelMonitorTimings
+	corrected.Add(ChannelMonitorRecord{State: "healthy", LatencyMs: 9000})
+	corrected.Add(ChannelMonitorRecord{State: "healthy", LatencyMs: 9000})
+	encoded, err = common.Marshal(corrected)
+	require.NoError(t, err)
+	traffic.TimingHistogram = string(encoded)
+	require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{traffic}))
+	require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{traffic}))
+	check(now.Add(2*time.Second), nil)
+	// Delayed writes into a closed bucket are visible across independently
+	// constructed reader caches; no process-local invalidation is required.
+	late := traffic
+	late.SampleKey, late.CreatedAt, late.BucketAt = "late", now.Unix()-3600, (now.Unix()-3600)/900*900
+	require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{late}))
+	check(now.Add(2*time.Second), nil)
+	late.Count = 3
+	late.TimingHistogram = ""
+	require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{late}))
+	check(now.Add(2*time.Second), nil)
+	gap := ChannelMonitorRecord{SampleKey: "window-gap", Source: "gap", State: "collection_gap", CreatedAt: now.Unix()}
+	require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{gap}))
+	check(now.Add(2*time.Second), nil)
+	require.NoError(t, db.Where("sample_key = ?", gap.SampleKey).Delete(&ChannelMonitorRecord{}).Error)
+	check(now.Add(2*time.Second), nil)
+	// A new low-ID backfill represents an older transaction committing late.
+	require.NoError(t, logDB.Create(&Log{Id: 9000, ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix(), PromptTokens: 100, Other: `{"cache_tokens":90}`}).Error)
+	check(now.Add(2*time.Second), nil)
+	require.NoError(t, logDB.Create(&Log{Id: 8500, ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix(), PromptTokens: 100, Other: `{"cache_tokens":15}`}).Error)
+	check(now.Add(2*time.Second), nil)
+	require.NoError(t, logDB.Create(&Log{Id: 8000, ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix() - 3600, PromptTokens: 100, Other: `{"cache_tokens":10}`}).Error)
+	check(now.Add(2*time.Second), nil)
+	require.NoError(t, logDB.Where("id = ?", logs[3].Id).Delete(&Log{}).Error)
+	check(now.Add(2*time.Second), nil)
+	check(now.Add(15*time.Minute), nil)
+	check(now.Add(time.Hour), nil)
+	check(now.Add(25*time.Hour), nil)
+	check(now, nil) // Clock rollback / historical window rebuild.
+	// Returned maps and pointers cannot corrupt the cached interval.
+	got, err := ChannelMonitorSummaries(ctx, channels, "model-a", true, 5*time.Minute, nil, now)
+	require.NoError(t, err)
+	got[0].Buckets[95].StateCounts["healthy"] = -100
+	got[0].SourceCounts["probe"] = -100
+	if got[0].Latest.TTFTMs != nil {
+		*got[0].Latest.TTFTMs = -100
+	}
+	check(now, nil)
+	// Concurrent readers return detached results while sharing the same window.
+	want, err := channelMonitorSummariesUncached(ctx, channels, "model-a", true, 5*time.Minute, nil, now)
+	require.NoError(t, err)
+	var readers sync.WaitGroup
+	for range 3 {
+		readers.Go(func() {
+			actual, err := ChannelMonitorSummaries(ctx, channels, "model-a", true, 5*time.Minute, nil, now)
+			assert.NoError(t, err)
+			assert.Equal(t, want, actual)
+		})
+	}
+	readers.Wait()
+	// Observe materialized history reads, rather than depending on SQL spelling
+	// or selected columns: a warm poll must not reread the historical payloads.
+	var historyRows atomic.Int64
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("test:monitor_window_reads", func(tx *gorm.DB) {
+		if _, ok := tx.Statement.Dest.(*[]ChannelMonitorRecord); ok {
+			historyRows.Add(tx.RowsAffected)
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove("test:monitor_window_reads") })
+	_, err = ChannelMonitorSummaries(ctx, channels, "model-a", true, 5*time.Minute, nil, now)
+	require.NoError(t, err)
+	assert.Zero(t, historyRows.Load(), "unchanged history is served from the window")
+	late.Count++
+	require.NoError(t, SaveChannelTrafficRecords(ctx, []ChannelMonitorRecord{late}))
+	_, err = ChannelMonitorSummaries(ctx, channels, "model-a", true, 5*time.Minute, nil, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), historyRows.Load(), "a closed-bucket correction rereads only that interval")
+	// Extreme token sums retain the original floating-point order via fallback.
+	require.NoError(t, logDB.Create(&Log{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix(), PromptTokens: 1 << 54, Other: `{"cache_tokens":1}`}).Error)
+	check(now, nil)
+	t.Run("global log truncation", func(t *testing.T) {
+		require.NoError(t, logDB.Where("1 = 1").Delete(&Log{}).Error)
+		// One record past the public safety limit protects global ID selection;
+		// a per-channel/per-bucket cap would include the excluded channel below.
+		limited := make([]Log, 50001)
+		for i := range limited {
+			limited[i] = Log{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix() - int64(i%2)*900, PromptTokens: 100, Other: `{"cache_tokens":40}`}
+		}
+		limited[0].ChannelId = 7102
+		require.NoError(t, logDB.CreateInBatches(&limited, 500).Error)
+		check(now, nil)
+		check(now, nil)
+		actual, err := QueryChannelCacheStats(ctx, []int{7101, 7102}, "model-a", now.Unix()-86400, now.Unix())
+		require.NoError(t, err)
+		assert.True(t, actual[7102].Truncated)
+		assert.Nil(t, actual[7102].HitRate, "the first excluded channel must not enter the numerator or denominator")
+		require.NoError(t, logDB.Create(&Log{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix(), PromptTokens: 200, Other: `{"cache_tokens":200}`}).Error)
+		check(now, nil)
+		check(now, nil)
+		require.NoError(t, logDB.Where("id = ?", limited[1].Id).Delete(&Log{}).Error)
+		check(now, nil)
+	})
+	if dialect == "sqlite" {
+		t.Run("global payload truncation", func(t *testing.T) {
+			require.NoError(t, logDB.Where("1 = 1").Delete(&Log{}).Error)
+			payload := `{"cache_tokens":100,"padding":"` + strings.Repeat("x", 17<<20) + `"}`
+			require.NoError(t, logDB.Create(&Log{ChannelId: 7102, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix(), PromptTokens: 100, Other: payload}).Error)
+			require.NoError(t, logDB.Create(&Log{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix(), PromptTokens: 100, Other: payload}).Error)
+			check(now, nil)
+			check(now, nil)
+			// Appending moves the byte boundary without admitting the sentinel.
+			require.NoError(t, logDB.Create(&Log{ChannelId: 7101, ModelName: "model-a", Type: LogTypeConsume, CreatedAt: now.Unix(), PromptTokens: 100, Other: `{"cache_tokens":0}`}).Error)
+			check(now, nil)
 		})
 	}
 }

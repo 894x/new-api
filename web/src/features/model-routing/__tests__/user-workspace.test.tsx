@@ -681,23 +681,30 @@ test('shows the user identity and effective inherited priorities and weights wit
   expect(model).toHaveValue('All models')
 })
 
-test('user pool cards fill each responsive column without a fixed maximum width or splitting across columns', async () => {
-  mockPool()
+test('user pools use available horizontal space with responsive grid columns that fit narrow containers', async () => {
+  mockPool({
+    ...fixture(),
+    model_groups: { 'kimi-k3': ['vip', 'default', 'pro', 'backup'] },
+  })
   const { card } = await mountWorkspace()
   const list = screen.getByRole('list', { name: 'User routing pools' })
-  expect(list).toHaveClass('columns-[24rem]', 'gap-4')
-  expect(list).not.toHaveClass('grid')
-  const item = within(list)
-    .getAllByRole('listitem')
-    .find((entry) => entry.contains(card))
-  expect(item).toHaveClass(
-    'inline-block',
-    'w-full',
-    'break-inside-avoid',
-    'mb-4'
+  expect(list).toHaveClass(
+    'grid',
+    'grid-cols-[repeat(auto-fill,minmax(min(100%,24rem),1fr))]',
+    'items-start',
+    'gap-4'
   )
-  expect(item?.className).not.toMatch(/max-w-/)
-  expect(item).toContainElement(card)
+  expect(list).not.toHaveClass('columns-[24rem]')
+  const items = within(list)
+    .getAllByRole('listitem')
+    .filter((item) => item.parentElement === list)
+  expect(items).toHaveLength(4)
+  for (const item of items) {
+    expect(item).toHaveClass('min-w-0')
+    expect(item).not.toHaveClass('inline-block', 'mb-4')
+    expect(item.className).not.toMatch(/max-w-/)
+  }
+  expect(list).toContainElement(card)
 })
 
 test('creates a user snapshot with explicit zero priority and weight while preserving excluded default channels', async () => {
