@@ -219,7 +219,11 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 			return err
 		}
 
-		info.ClaudeConvertInfo.Usage = usage
+		// The buffered final chunk is a new conversion step too. Without this
+		// increment, one-chunk streams miss message_start and two-chunk streams
+		// can emit it twice.
+		info.SendResponseCount++
+		info.EnsureClaudeConvertInfo().Usage = usage
 
 		result, err := service.ConvertStreamResponse(c, info, types.RelayFormatClaude, &streamResponse)
 		if err != nil {
@@ -235,7 +239,38 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 				return err
 			}
 		}
-		info.ClaudeConvertInfo.Done = true
+		if info.ClaudeConvertInfo.Done {
+			return nil
+		}
+		if info.StreamStatus != nil {
+			outcome := info.StreamStatus.OutcomeSnapshot()
+			completed := outcome.EndReason == relaycommon.StreamEndReasonDone ||
+				(outcome.EndReason == relaycommon.StreamEndReasonEOF && outcome.Response == relaycommon.ResponseOutcomeCompleted)
+			if !completed || outcome.HasErrors || outcome.Response == relaycommon.ResponseOutcomeFailed {
+				return nil
+			}
+		}
+
+		// A final usage chunk may retain an empty choice without finish_reason.
+		// Finalize the existing conversion state so every open block closes and
+		// message_delta/message_stop are emitted exactly once.
+		state, err := relayconvert.NewResponseStreamState(types.RelayFormatOpenAI, types.RelayFormatClaude, relayconvert.ResponseStreamOptions{})
+		if err != nil {
+			return err
+		}
+		results, err := service.FinalizeStreamResponse(c, info, state)
+		if err != nil {
+			return err
+		}
+		for _, result := range results {
+			resp, ok := result.Value.(*dto.ClaudeResponse)
+			if !ok || resp == nil {
+				return fmt.Errorf("expected Claude stream response, got %T", result.Value)
+			}
+			if err := helper.ClaudeData(c, *resp); err != nil {
+				return err
+			}
+		}
 		return nil
 
 	case types.RelayFormatGemini:
