@@ -61,6 +61,40 @@ func ObserveDynamicRoutingSample(key dynamicrouting.ObservationKey, sample dynam
 	controller.Observe(key, sample)
 }
 
+func (p *RetryParam) channelRecovering(group string, channelID int) (bool, error) {
+	dynamicRoutingRuntime.Lock()
+	controller := dynamicRoutingRuntime.controller
+	dynamicRoutingRuntime.Unlock()
+	if controller == nil {
+		return false, nil
+	}
+	groups := []string{group}
+	if group == "auto" {
+		groups = GetRequestAutoGroups(p.Ctx, common.GetContextKeyString(p.Ctx, constant.ContextKeyUserGroup))
+	}
+	for _, selectedGroup := range groups {
+		strategy, err := p.RoutingStrategy(selectedGroup)
+		if err != nil {
+			return false, err
+		}
+		if !strategy.UsesDynamicRouting() && (strategy != nil || !DynamicRoutingEnabled()) {
+			continue
+		}
+		overrides, err := p.UserChannelRoutingForGroup(selectedGroup)
+		if err != nil {
+			return false, err
+		}
+		key := dynamicrouting.RouteKey{Group: selectedGroup, Model: p.ModelName}
+		if len(overrides) > 0 || strategy != nil && strategy.UserId > 0 {
+			key.Policy = fmt.Sprintf("user:%d", common.GetContextKeyInt(p.Ctx, constant.ContextKeyUserId))
+		}
+		if controller.IsRecovering(key, channelID, time.Now()) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func getSatisfiedChannelForRoute(param *RetryParam, group string, retry int) (*model.Channel, bool, error) {
 	userRouting, err := param.UserChannelRoutingForGroup(group)
 	if err != nil {
@@ -89,6 +123,36 @@ func getSatisfiedChannelForRoute(param *RetryParam, group string, retry int) (*m
 		channel, handled, allAttempted, err := selectDynamicSatisfiedChannel(param, group)
 		if handled || err != nil {
 			return channel, allAttempted, err
+		}
+	}
+	// Non-streaming requests use static priority selection, but must honor the
+	// same fault isolation as streaming requests in this smart route.
+	if smart || strategy == nil && DynamicRoutingEnabled() {
+		filters, err := param.SelectionFilters(group)
+		if err != nil {
+			return nil, false, err
+		}
+		candidates, err := model.ListChannelSelectionCandidates(group, param.ModelName, filters)
+		if err != nil {
+			return nil, false, err
+		}
+		allowed := make(map[int]struct{}, len(candidates))
+		blocked := false
+		for _, candidate := range candidates {
+			recovering, err := param.channelRecovering(group, candidate.ChannelId)
+			if err != nil {
+				return nil, false, err
+			}
+			if recovering {
+				blocked = true
+				continue
+			}
+			allowed[candidate.ChannelId] = struct{}{}
+		}
+		if blocked {
+			filtered := *param
+			filtered.AllowedChannelIds = allowed
+			param = &filtered
 		}
 	}
 	if pool != nil && len(userRouting) == 0 && len(param.AttemptedChannelIds) > 0 {

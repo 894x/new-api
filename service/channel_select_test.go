@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
@@ -179,6 +180,8 @@ func TestVideoDeliveryPreferenceDoesNotOverrideStrictAffinity(t *testing.T) {
 
 func TestSelectChannelStrictAffinityPrecedesDynamicRouting(t *testing.T) {
 	db := setupChannelSelectAutoGroupsTest(t)
+	resetDynamicRoutingControllerForTest()
+	t.Cleanup(resetDynamicRoutingControllerForTest)
 	createChannelSelectAutoGroupsChannel(t, db, 9301, "default", "gpt-5")
 	createChannelSelectAutoGroupsChannel(t, db, 9302, "default", "gpt-5")
 	model.InitChannelCache()
@@ -197,8 +200,17 @@ func TestSelectChannelStrictAffinityPrecedesDynamicRouting(t *testing.T) {
 	cache := getChannelAffinityCache()
 	require.NoError(t, cache.SetWithTTL(cacheKey, 9301, time.Minute))
 	t.Cleanup(func() { _, _ = cache.DeleteMany([]string{cacheKey}) })
-	for _, available := range []bool{true, false} {
-		if !available {
+	for _, state := range []string{"available", "recovering", "disabled"} {
+		require.NoError(t, cache.SetWithTTL(cacheKey, 9301, time.Minute))
+		if state == "recovering" {
+			controller, enabled, err := currentDynamicRoutingController(true)
+			require.NoError(t, err)
+			require.True(t, enabled)
+			now := time.Now()
+			controller.Observe(dynamicrouting.ObservationKey{ChannelID: 9301, Model: "gpt-5"}, dynamicrouting.Sample{ObservedAt: now, HardFailure: true})
+			controller.Select(dynamicrouting.RouteKey{Group: "default", Model: "gpt-5"}, []dynamicrouting.Candidate{{ChannelID: 9301}, {ChannelID: 9302}}, now)
+		}
+		if state == "disabled" {
 			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 9301).Update("status", common.ChannelStatusManuallyDisabled).Error)
 			model.InitChannelCache()
 		}
@@ -208,7 +220,7 @@ func TestSelectChannelStrictAffinityPrecedesDynamicRouting(t *testing.T) {
 		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 		selected, _, selectErr := SelectChannelForRequest(c, "gpt-5", &RetryParam{Ctx: c, TokenGroup: "default", ModelName: "gpt-5", DynamicRoutingEligible: true})
-		if available {
+		if state == "available" {
 			require.Nil(t, selectErr)
 			require.NotNil(t, selected)
 			assert.Equal(t, 9301, selected.Id)
@@ -217,6 +229,14 @@ func TestSelectChannelStrictAffinityPrecedesDynamicRouting(t *testing.T) {
 			require.NotNil(t, selectErr)
 			assert.Equal(t, http.StatusServiceUnavailable, selectErr.StatusCode)
 			assert.Equal(t, "strict_session_binding_unavailable", selectErr.Message)
+		}
+		if state == "recovering" {
+			GetChannelConstraints(c).AddPin(hostdto.ChannelPin{ChannelId: 9301, Source: hostdto.PinSourceOriginTask})
+			selected, _, selectErr = SelectChannelForRequest(c, "gpt-5", &RetryParam{Ctx: c, TokenGroup: "default", ModelName: "gpt-5", DynamicRoutingEligible: true})
+			assert.Nil(t, selected)
+			require.NotNil(t, selectErr)
+			assert.Equal(t, http.StatusServiceUnavailable, selectErr.StatusCode)
+			assert.Equal(t, "channel_recovering", selectErr.Message, "an explicit pin cannot send customer traffic into recovery")
 		}
 	}
 }

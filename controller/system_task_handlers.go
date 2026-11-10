@@ -19,6 +19,7 @@ import (
 // so a DB lease dedups execution across multiple master instances and each
 // run is recorded as one task row. Call this before service.StartSystemTaskRunner.
 func RegisterScheduledSystemTasks() {
+	service.StartDynamicRoutingRecoveryProbes(probeDynamicRoutingRecovery)
 	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(channelMonitoringHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})

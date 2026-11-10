@@ -378,6 +378,9 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 		if err := ValidateSelectedChannelGroupPolicy(c, channel.Id, modelName); err != nil {
 			return nil, "", &ChannelSelectError{StatusCode: http.StatusForbidden, Message: "channel_excluded_by_routing_policy"}
 		}
+		if recovering, err := retry.channelRecovering(retry.TokenGroup, channel.Id); err != nil || recovering {
+			return nil, "", &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: "channel_recovering"}
+		}
 		if err := retry.ApplyChannelRetryPolicy(common.GetContextKeyString(c, constant.ContextKeyUsingGroup), channel.Id); err != nil {
 			return nil, "", &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: "user_channel_routing_unavailable"}
 		}
@@ -429,6 +432,8 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			if affinitySatisfied {
 				parametersSupported, capabilityErr := preferred.SupportsSelectionRequest(modelName, retry.RequestBody, retry.RequestBodySize)
 				affinitySatisfied = capabilityErr == nil && parametersSupported && ValidateSelectedChannelGroupPolicy(c, preferred.Id, modelName) == nil
+				recovering, recoveryErr := retry.channelRecovering(usingGroup, preferred.Id)
+				affinitySatisfied = affinitySatisfied && recoveryErr == nil && !recovering
 				if retry.AllowedChannelIds != nil {
 					_, allowed := retry.AllowedChannelIds[preferred.Id]
 					affinitySatisfied = affinitySatisfied && allowed

@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
@@ -20,6 +21,33 @@ import (
 )
 
 type channelMonitoringRequestKey struct{}
+
+// Recovery checks carry synthetic input, use the administrator test executor,
+// and publish health only; their tiny payload must not calibrate customer latency.
+func probeDynamicRoutingRecovery(ctx context.Context, key dynamicrouting.ObservationKey) (dynamicrouting.Sample, bool) {
+	channel, err := model.CacheGetChannel(key.ChannelID)
+	if err != nil || channel.Status != common.ChannelStatusEnabled {
+		return dynamicrouting.Sample{}, false
+	}
+	endpoint := channel.MonitoringEndpoint(model.ChannelMonitorTarget{Model: key.Model})
+	switch constant.EndpointType(endpoint) {
+	case constant.EndpointTypeOpenAI, constant.EndpointTypeOpenAIResponse, constant.EndpointTypeAnthropic, constant.EndpointTypeGemini:
+	default:
+		return dynamicrouting.Sample{}, false
+	}
+	testUserID, err := resolveChannelTestUserID(nil)
+	if err != nil {
+		return dynamicrouting.Sample{}, false
+	}
+	settings := *operation_setting.GetMonitorSetting()
+	settings.ChannelMonitoringPrompt = "Reply with OK."
+	settings.ChannelMonitoringMaxTokens = 32
+	ctx = context.WithValue(ctx, channelMonitoringRequestKey{}, settings)
+	started := time.Now()
+	result := testChannel(ctx, channel, testUserID, key.Model, endpoint, true)
+	success := ctx.Err() == nil && result.localErr == nil && result.newAPIError == nil
+	return dynamicrouting.Sample{RecoveryProbe: true, UpstreamStartedAt: started, ObservedAt: time.Now(), Success: success, HardFailure: !success}, true
+}
 
 // The existing test executor owns conversion, channel policies, and accounting;
 // monitoring only supplies bounded request settings and observes its outcome.

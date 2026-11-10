@@ -34,6 +34,162 @@ func resetDynamicRoutingControllerForTest() {
 	priorityRoutingRuntime.Unlock()
 }
 
+func recoveryProbeFixture(t *testing.T, client *redis.Client, clock func() time.Time, probe DynamicRoutingRecoveryProbe) (*recoveryProbeRunner, *dynamicrouting.Controller, dynamicrouting.ObservationKey) {
+	t.Helper()
+	controller, err := dynamicrouting.NewController(dynamicrouting.Config{
+		Enabled: true, MaxSamples: 20, MaxAge: 90 * time.Second, MinSamples: 3,
+		ProbeFraction: 0.05, RecoveryObservationWindow: 10 * time.Second,
+	})
+	require.NoError(t, err)
+	key := dynamicrouting.ObservationKey{ChannelID: 1, Model: "active-recovery-fixture"}
+	failedAt := clock().Add(-30 * time.Second)
+	controller.Observe(key, dynamicrouting.Sample{ObservedAt: failedAt, HardFailure: true})
+	controller.Select(dynamicrouting.RouteKey{Group: "default", Model: key.Model}, []dynamicrouting.Candidate{{ChannelID: key.ChannelID}}, failedAt)
+	return &recoveryProbeRunner{
+		client: client, probe: probe, clock: clock, launch: func(work func()) { work() },
+		workers: make(chan struct{}, 1), running: make(map[dynamicrouting.ObservationKey]bool),
+		next: make(map[dynamicrouting.ObservationKey]time.Time), seen: make(map[dynamicrouting.ObservationKey]int64),
+	}, controller, key
+}
+
+func TestActiveRecoveryProbesCoordinateNodesWithoutCustomerTraffic(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	now := time.Date(2026, 11, 10, 0, 1, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	calls := 0
+	probe := func(ctx context.Context, key dynamicrouting.ObservationKey) (dynamicrouting.Sample, bool) {
+		calls++
+		_, bounded := ctx.Deadline()
+		assert.True(t, bounded)
+		return dynamicrouting.Sample{UpstreamStartedAt: now, ObservedAt: now, Success: true, HasTTFT: true, TTFT: time.Millisecond}, true
+	}
+	first, firstController, key := recoveryProbeFixture(t, client, clock, probe)
+	second, secondController, _ := recoveryProbeFixture(t, client, clock, probe)
+	for cycle := range 5 {
+		first.tick(context.Background(), firstController, now)
+		second.tick(context.Background(), secondController, now)
+		assert.Equal(t, cycle+1, calls, "two nodes must share one upstream probe")
+		first.tick(context.Background(), firstController, now.Add(time.Second))
+		second.tick(context.Background(), secondController, now.Add(time.Second))
+		assert.Equal(t, cycle+1, calls, "the interval cannot be shortened by repeated ticks")
+		if cycle < 4 {
+			now = now.Add(5 * time.Second)
+			server.FastForward(5 * time.Second)
+		}
+	}
+	assert.Empty(t, firstController.RecoveryTargets(now))
+	assert.Empty(t, secondController.RecoveryTargets(now))
+	assert.Zero(t, firstController.ObservationStats(key, now).SampleCount, "synthetic probes must not change customer latency calibration")
+}
+
+func TestActiveRecoveryIgnoresDuplicateAndOutOfOrderFeedback(t *testing.T) {
+	now := time.Date(2026, 11, 10, 0, 1, 0, 0, time.UTC)
+	runner, controller, key := recoveryProbeFixture(t, nil, func() time.Time { return now }, nil)
+	first := recoveryProbeResult{ID: "first", StartedAt: now.UnixMilli(), EndedAt: now.UnixMilli(), Success: true}
+	second := recoveryProbeResult{ID: "second", StartedAt: now.Add(5 * time.Second).UnixMilli(), EndedAt: now.Add(5 * time.Second).UnixMilli(), Success: true}
+	runner.applyResult(controller, key, first)
+	controller.RecoveryTargets(now)
+	runner.applyResult(controller, key, second)
+	controller.RecoveryTargets(now.Add(5 * time.Second))
+	runner.applyResult(controller, key, first)
+	runner.applyResult(controller, key, second)
+	controller.RecoveryTargets(now.Add(5 * time.Second))
+	third := recoveryProbeResult{ID: "third", StartedAt: now.Add(15 * time.Second).UnixMilli(), EndedAt: now.Add(15 * time.Second).UnixMilli(), Success: true}
+	runner.applyResult(controller, key, third)
+	assert.Len(t, controller.RecoveryTargets(now.Add(15*time.Second)), 1, "replayed samples must not start the observation window early")
+}
+
+func TestActiveRecoveryChecksContinueDuringCooldown(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	now := time.Date(2026, 11, 10, 0, 1, 0, 0, time.UTC)
+	calls := 0
+	runner, controller, _ := recoveryProbeFixture(t, client, func() time.Time { return now }, func(context.Context, dynamicrouting.ObservationKey) (dynamicrouting.Sample, bool) {
+		calls++
+		return dynamicrouting.Sample{UpstreamStartedAt: now, ObservedAt: now, Success: true}, true
+	})
+	now = now.Add(-15 * time.Second)
+	runner.tick(context.Background(), controller, now)
+	now = now.Add(5 * time.Second)
+	server.FastForward(5 * time.Second)
+	runner.tick(context.Background(), controller, now)
+	assert.Equal(t, 2, calls)
+	assert.Len(t, controller.RecoveryTargets(now), 1, "early probe successes do not bypass the traffic cooldown")
+}
+
+func TestActiveRecoveryIntervalIncludesProbeDuration(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	now := time.Date(2026, 11, 10, 0, 1, 0, 0, time.UTC)
+	calls := 0
+	runner, controller, _ := recoveryProbeFixture(t, client, func() time.Time { return now }, func(context.Context, dynamicrouting.ObservationKey) (dynamicrouting.Sample, bool) {
+		calls++
+		started := now
+		now = now.Add(6 * time.Second)
+		server.FastForward(6 * time.Second)
+		return dynamicrouting.Sample{UpstreamStartedAt: started, ObservedAt: now, Success: true}, true
+	})
+	runner.tick(context.Background(), controller, now)
+	runner.tick(context.Background(), controller, now)
+	assert.Equal(t, 2, calls, "a slow completed probe must not add another five-second delay")
+}
+
+func TestActiveRecoveryProbeRejectsExpiredLeaseBeforeDispatchAndPublish(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	now := time.Date(2026, 11, 10, 0, 1, 0, 0, time.UTC)
+	calls := 0
+	runner, controller, key := recoveryProbeFixture(t, client, func() time.Time { return now }, func(context.Context, dynamicrouting.ObservationKey) (dynamicrouting.Sample, bool) {
+		calls++
+		return dynamicrouting.Sample{UpstreamStartedAt: now, ObservedAt: now, Success: true}, true
+	})
+	var queued []func()
+	runner.launch = func(work func()) { queued = append(queued, work) }
+	runner.tick(context.Background(), controller, now)
+	runner.tick(context.Background(), controller, now.Add(5*time.Second))
+	require.Len(t, queued, 1, "one channel/model cannot have overlapping work")
+	leaseKey, sampleKey := recoveryProbeKeys(key)
+	oldToken, err := client.Get(context.Background(), leaseKey).Result()
+	require.NoError(t, err)
+	server.FastForward(time.Minute)
+	require.NoError(t, server.Set(leaseKey, "new-owner"))
+	queued[0]()
+	assert.Zero(t, calls, "queued work must recheck lease ownership before calling the provider")
+	written, err := recoveryProbePublishScript.Run(context.Background(), client, []string{leaseKey, sampleKey}, oldToken, "old-result", recoverySampleTTL.Milliseconds(), recoveryProbeInterval.Milliseconds()).Int()
+	require.NoError(t, err)
+	assert.Zero(t, written)
+	assert.False(t, server.Exists(sampleKey), "a stale owner cannot publish recovery feedback")
+	owner, err := server.Get(leaseKey)
+	require.NoError(t, err)
+	assert.Equal(t, "new-owner", owner)
+}
+
+func TestActiveRecoveryAlsoFiltersNonStreamingRequests(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	configureDynamicRoutingForTest(t, true)
+	const name = "non-streaming-recovery-model"
+	createPrioritizedChannelSelectFixture(t, db, 3911, "default", name, 100)
+	createPrioritizedChannelSelectFixture(t, db, 3912, "default", name, 10)
+	model.InitChannelCache()
+	controller, enabled, err := currentDynamicRoutingController(true)
+	require.NoError(t, err)
+	require.True(t, enabled)
+	now := time.Now()
+	controller.Observe(dynamicrouting.ObservationKey{ChannelID: 3911, Model: name}, dynamicrouting.Sample{ObservedAt: now, HardFailure: true})
+	controller.Select(dynamicrouting.RouteKey{Group: "default", Model: name}, []dynamicrouting.Candidate{{ChannelID: 3911, Priority: 100}, {ChannelID: 3912, Priority: 10}}, now)
+	ctx := newChannelSelectContext()
+	param := &RetryParam{Ctx: ctx, ModelName: name, TokenGroup: "default", RequestPath: "/v1/chat/completions", DynamicRoutingEligible: false}
+	selected, _, err := CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, 3912, selected.Id)
+}
+
 func TestPriorityRoutingMonitorCountsOnlyPhysicalDispatchAndDoesNotEnableDynamicRouting(t *testing.T) {
 	db := setupChannelSelectAutoGroupsTest(t)
 	configureDynamicRoutingForTest(t, false)

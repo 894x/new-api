@@ -173,21 +173,13 @@ func TestRoutingPoolTuningDatabaseMatrix(t *testing.T) {
 					}
 				}
 				service.ObserveDynamicRoutingSample(dynamicrouting.ObservationKey{ChannelID: 9701, Model: name}, dynamicrouting.Sample{ObservedAt: now.Add(-15 * time.Second), HardFailure: true}, true)
-				probed := false
-				for range 4 {
-					for _, group := range []string{"default", "control"} {
-						ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-						channel, _, err := service.CacheGetRandomSatisfiedChannel(&service.RetryParam{Ctx: ctx, TokenGroup: group, ModelName: name, DynamicRoutingEligible: true})
-						require.NoError(t, err)
-						require.NotNil(t, channel)
-						if group == "default" {
-							probed = probed || channel.Id == 9701
-						} else {
-							assert.Equal(t, 9702, channel.Id, "the other pool keeps the global 30-second cooldown")
-						}
-					}
+				for _, group := range []string{"default", "control"} {
+					ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+					channel, _, err := service.CacheGetRandomSatisfiedChannel(&service.RetryParam{Ctx: ctx, TokenGroup: group, ModelName: name, DynamicRoutingEligible: true})
+					require.NoError(t, err)
+					require.NotNil(t, channel)
+					assert.Equal(t, 9702, channel.Id, "both pools keep customer requests out of fault recovery")
 				}
-				assert.True(t, probed, "the configured 10-second pool must already allow recovery probes")
 				loaded.Tuning = &dynamic_routing_setting.Overrides{}
 				require.NoError(t, model.SaveModelRoutingPool(loaded, loaded.Revision))
 				cleared, err := model.GetModelRoutingPool("default", name)

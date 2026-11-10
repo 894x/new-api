@@ -74,6 +74,7 @@ type Decision struct {
 }
 
 type Sample struct {
+	RecoveryProbe     bool
 	ObservedAt        time.Time
 	UpstreamStartedAt time.Time
 	TTFT              time.Duration
@@ -137,8 +138,6 @@ type candidateFingerprint struct {
 type hardEjection struct {
 	ejectedUntil   time.Time
 	lastEligible   time.Time
-	probeDebt      float64
-	probeIssuedAt  []time.Time
 	observingSince time.Time
 }
 
@@ -164,14 +163,15 @@ func (state *routeState) expired(config Config, now time.Time) bool {
 }
 
 type channelMeasurement struct {
-	verified   bool
-	ttft       time.Duration
-	tpot       time.Duration
-	hasTTFT    bool
-	hasTPOT    bool
-	ratio      float64
-	hardFail   bool
-	lastHardAt time.Time
+	verified      bool
+	ttft          time.Duration
+	tpot          time.Duration
+	hasTTFT       bool
+	hasTPOT       bool
+	ratio         float64
+	hardFail      bool
+	lastHardAt    time.Time
+	lastHardProbe bool
 }
 
 func NewController(config Config) (*Controller, error) {
@@ -562,83 +562,23 @@ func (c *Controller) selectAvoiding(
 	}
 
 	measurements := make(map[int]channelMeasurement, len(ordered))
-	for _, candidate := range ordered {
-		measurements[candidate.ChannelID] = c.measureChannelLocked(ObservationKey{
-			ChannelID: candidate.ChannelID,
-			Model:     key.Model,
-		}, now, config)
-	}
 	cooldownEjected := make(map[int]bool, len(ordered))
 	probeEjected := make(map[int]bool, len(ordered))
 	ejectionTransition := false
 	for _, candidate := range ordered {
-		measurement := measurements[candidate.ChannelID]
-		ejection, ejected := state.ejections[candidate.ChannelID]
-		backoff, backedOff := state.backoffs[candidate.ChannelID]
-		observationKey := ObservationKey{ChannelID: candidate.ChannelID, Model: key.Model}
-		if measurement.lastHardAt.After(backoff.lastHardAt) && (measurement.hardFail || ejected || backedOff) {
-			cooldown := config.HardFailureCooldown
-			if backedOff {
-				cooldown = max(cooldown, backoff.cooldown)
-				// Concurrent failures from traffic already in flight extend the
-				// same cooldown. A failed recovery attempt doubles it, safely capped.
-				if !ejected || !measurement.lastHardAt.Before(ejection.ejectedUntil) {
-					cooldown += min(cooldown, config.HardFailureMaxCooldown-cooldown)
-				}
-			}
-			cooldown = min(cooldown, config.HardFailureMaxCooldown)
-			state.backoffs[candidate.ChannelID] = hardFailureBackoff{
-				cooldown: cooldown, lastHardAt: measurement.lastHardAt, lastEligible: now,
-			}
-			ejection = hardEjection{
-				ejectedUntil: measurement.lastHardAt.Add(cooldown),
-				lastEligible: now,
-			}
-			state.ejections[candidate.ChannelID] = ejection
-			if cutoff := c.performanceAfter[observationKey]; measurement.lastHardAt.After(cutoff) {
-				c.performanceAfter[observationKey] = measurement.lastHardAt
-			}
-			ejected = true
-			ejectionTransition = true
-		}
-		if ejected && !now.Before(ejection.ejectedUntil) {
-			streak, lastSuccess := c.recoverySuccessStreakLocked(observationKey, ejection, now, config)
-			if streak < config.MinSamples || measurement.ratio > config.RecoveryThreshold {
-				ejection.observingSince = time.Time{}
-			} else {
-				if ejection.observingSince.IsZero() {
-					ejection.observingSince = now
-				}
-				// Time alone cannot restore traffic: require a fresh successful
-				// probe at the end of the continuous observation window as well.
-				if deadline := ejection.observingSince.Add(config.RecoveryObservationWindow); !lastSuccess.Before(deadline) {
-					delete(state.ejections, candidate.ChannelID)
-					delete(state.degraded, candidate.ChannelID)
-					backoff := state.backoffs[candidate.ChannelID]
-					backoff.recoveredAt = now
-					state.backoffs[candidate.ChannelID] = backoff
-					ejected = false
-					ejectionTransition = true
-				}
-			}
-		}
+		measurement, ejected, changed := c.updateChannelRecoveryLocked(state, ObservationKey{ChannelID: candidate.ChannelID, Model: key.Model}, now)
 		if ejected {
-			ejection.lastEligible = now
-			state.ejections[candidate.ChannelID] = ejection
-			if now.Before(ejection.ejectedUntil) {
+			if measurement.hardFail {
 				cooldownEjected[candidate.ChannelID] = true
 			} else {
 				probeEjected[candidate.ChannelID] = true
 			}
 		}
-		measurement.hardFail = cooldownEjected[candidate.ChannelID]
+		ejectionTransition = ejectionTransition || changed
 		measurements[candidate.ChannelID] = measurement
 	}
-	ejectionProbeFloors := probeFloorsForCandidates(ordered, probeEjected, config.ProbeFraction)
-	ejectionProbeChanged := capEjectedProbeShares(state, ordered, ejectionProbeFloors, cooldownEjected)
-	if ejectionProbeChanged {
-		ejectionTransition = true
-	}
+	isolationChanged := isolateRecoveringChannels(state, ordered, config.ProbeFraction)
+	ejectionTransition = ejectionTransition || isolationChanged
 	emergency := false
 	degraded := make(map[int]bool, len(ordered))
 	effectiveRatios := make(map[int]float64, len(ordered))
@@ -710,16 +650,11 @@ func (c *Controller) selectAvoiding(
 		return c.completeDecisionLocked(key, decision, excludedChannelIDs, now, ordered)
 	}
 
-	changed := ejectionProbeChanged
+	changed := isolationChanged
 	probeFloors := make(map[int]float64, len(initial))
 	for _, allocation := range initial {
 		if allocation.Probe {
 			probeFloors[allocation.ChannelID] = allocation.Share
-		}
-	}
-	for channelID, floor := range ejectionProbeFloors {
-		if floor > probeFloors[channelID] {
-			probeFloors[channelID] = floor
 		}
 	}
 	if key.discountFirst {
@@ -729,9 +664,6 @@ func (c *Controller) selectAvoiding(
 			all[candidate.ChannelID] = true
 		}
 		probeFloors = probeFloorsForCandidates(ordered, all, config.ProbeFraction)
-		for id, floor := range ejectionProbeFloors {
-			probeFloors[id] = max(probeFloors[id], floor)
-		}
 	}
 	for _, candidate := range ordered {
 		measurement := measurements[candidate.ChannelID]
@@ -837,6 +769,7 @@ func (c *Controller) cleanupExpiredLocked(now time.Time, configs ...Config) {
 		return
 	}
 	maxSamples, maxAge := c.config.MaxSamples, c.config.MaxAge
+	maxHealthAge := recoverySampleMaxAge(c.config)
 	for key, state := range c.routes {
 		if state.expired(state.config, now) {
 			delete(c.routes, key)
@@ -844,15 +777,21 @@ func (c *Controller) cleanupExpiredLocked(now time.Time, configs ...Config) {
 			continue
 		}
 		maxSamples, maxAge = max(maxSamples, state.config.MaxSamples), max(maxAge, state.config.MaxAge)
+		maxHealthAge = max(maxHealthAge, recoverySampleMaxAge(state.config))
 	}
 	for _, config := range configs {
 		maxSamples, maxAge = max(maxSamples, config.MaxSamples), max(maxAge, config.MaxAge)
+		maxHealthAge = max(maxHealthAge, recoverySampleMaxAge(config))
 	}
 	c.observationMaxSamples = maxSamples
 	cutoff := now.Add(-maxAge)
-	for _, window := range []map[ObservationKey][]Sample{c.observations, c.healthObservations} {
+	for index, window := range []map[ObservationKey][]Sample{c.observations, c.healthObservations} {
+		windowCutoff := cutoff
+		if index == 1 {
+			windowCutoff = now.Add(-maxHealthAge)
+		}
 		for key, samples := range window {
-			first := sort.Search(len(samples), func(i int) bool { return !samples[i].ObservedAt.Before(cutoff) })
+			first := sort.Search(len(samples), func(i int) bool { return !samples[i].ObservedAt.Before(windowCutoff) })
 			first = max(first, len(samples)-maxSamples)
 			if first == len(samples) {
 				delete(window, key)
@@ -897,10 +836,6 @@ func (c *Controller) completeDecisionLocked(
 	now time.Time,
 	candidates []Candidate,
 ) Decision {
-	config := c.config
-	if state := c.routes[key]; state != nil {
-		config = state.config
-	}
 	if len(decision.Allocations) == 0 {
 		delete(c.selections, key)
 		return decision
@@ -918,29 +853,6 @@ func (c *Controller) completeDecisionLocked(
 	if !hasSelectableAllocation {
 		return decision
 	}
-	forcedChannelID := 0
-	forcedDebt := 0.0
-	hasForcedProbe := false
-	route := c.routes[key]
-	if route != nil {
-		for _, allocation := range decision.Allocations {
-			ejection, ejected := route.ejections[allocation.ChannelID]
-			if !ejected || now.Before(ejection.ejectedUntil) || !allocation.Probe {
-				continue
-			}
-			ejection.probeDebt += allocation.Share
-			route.ejections[allocation.ChannelID] = ejection
-			if _, excluded := excludedChannelIDs[allocation.ChannelID]; excluded {
-				continue
-			}
-			if ejection.probeDebt >= 1-1e-12 && (!hasForcedProbe || ejection.probeDebt > forcedDebt+1e-12) {
-				forcedChannelID = allocation.ChannelID
-				forcedDebt = ejection.probeDebt
-				hasForcedProbe = true
-			}
-		}
-	}
-
 	state, exists := c.selections[key]
 	if !exists {
 		state = &selectionState{debts: make(map[int]float64, len(decision.Allocations))}
@@ -963,10 +875,6 @@ func (c *Controller) completeDecisionLocked(
 			hasSelection = true
 		}
 	}
-	if hasForcedProbe {
-		selected = forcedChannelID
-		hasSelection = true
-	}
 	for channelID := range state.debts {
 		if _, exists := active[channelID]; !exists {
 			delete(state.debts, channelID)
@@ -976,23 +884,6 @@ func (c *Controller) completeDecisionLocked(
 		state.debts[selected]--
 	}
 	state.lastAccess = now
-	if route != nil && hasSelection {
-		selectedEjectionProbe := false
-		for _, allocation := range decision.Allocations {
-			if allocation.ChannelID == selected {
-				selectedEjectionProbe = allocation.Probe
-				break
-			}
-		}
-		if ejection, ejected := route.ejections[selected]; ejected && selectedEjectionProbe && !now.Before(ejection.ejectedUntil) {
-			ejection.probeDebt = 0
-			ejection.probeIssuedAt = append(ejection.probeIssuedAt, now)
-			if len(ejection.probeIssuedAt) > config.MaxSamples {
-				ejection.probeIssuedAt = append([]time.Time(nil), ejection.probeIssuedAt[len(ejection.probeIssuedAt)-config.MaxSamples:]...)
-			}
-			route.ejections[selected] = ejection
-		}
-	}
 	// Keep accounting against the original weighted choice, so request-local
 	// prefix affinity cannot accumulate scheduling debt or starve probes.
 	// Only healthy, non-probe peers in that choice's priority/cost tier compete.
@@ -1003,7 +894,7 @@ func (c *Controller) completeDecisionLocked(
 			break
 		}
 	}
-	if hasSelection && !hasForcedProbe && hasPrefixPreference {
+	if hasSelection && hasPrefixPreference {
 		warmEligible := make(map[int]bool, len(decision.Allocations))
 		for _, allocation := range decision.Allocations {
 			_, excluded := excludedChannelIDs[allocation.ChannelID]
@@ -1056,6 +947,7 @@ func (c *Controller) measureChannelLocked(key ObservationKey, now time.Time, con
 		if sample.HardFailure {
 			if lastHardAt.IsZero() {
 				lastHardAt = sample.ObservedAt
+				measurement.lastHardProbe = sample.RecoveryProbe
 			}
 			if !seenSuccess {
 				consecutiveHardFailures++
@@ -1102,38 +994,95 @@ func (c *Controller) measureChannelLocked(key ObservationKey, now time.Time, con
 	return measurement
 }
 
+// updateChannelRecoveryLocked advances fault isolation independently of customer traffic.
+func (c *Controller) updateChannelRecoveryLocked(state *routeState, key ObservationKey, now time.Time) (channelMeasurement, bool, bool) {
+	config := state.config
+	measurement := c.measureChannelLocked(key, now, config)
+	ejection, ejected := state.ejections[key.ChannelID]
+	backoff, backedOff := state.backoffs[key.ChannelID]
+	changed := false
+	// Frequent checks during an existing cooldown must not keep pushing its
+	// deadline out. A failed check after cooldown still increases the backoff.
+	if ejected && measurement.lastHardProbe && measurement.lastHardAt.After(backoff.lastHardAt) && measurement.lastHardAt.Before(ejection.ejectedUntil) {
+		backoff.lastHardAt = measurement.lastHardAt
+		state.backoffs[key.ChannelID] = backoff
+		ejection.observingSince = time.Time{}
+	}
+	if measurement.lastHardAt.After(backoff.lastHardAt) && (measurement.hardFail || ejected || backedOff) {
+		cooldown := config.HardFailureCooldown
+		if backedOff {
+			cooldown = max(cooldown, backoff.cooldown)
+			// Concurrent failures from traffic already in flight extend the
+			// same cooldown. A failed recovery attempt doubles it, safely capped.
+			if !ejected || !measurement.lastHardAt.Before(ejection.ejectedUntil) {
+				cooldown += min(cooldown, config.HardFailureMaxCooldown-cooldown)
+			}
+		}
+		cooldown = min(cooldown, config.HardFailureMaxCooldown)
+		state.backoffs[key.ChannelID] = hardFailureBackoff{
+			cooldown: cooldown, lastHardAt: measurement.lastHardAt, lastEligible: now,
+		}
+		ejection = hardEjection{
+			ejectedUntil: measurement.lastHardAt.Add(cooldown),
+			lastEligible: now,
+		}
+		state.ejections[key.ChannelID] = ejection
+		if cutoff := c.performanceAfter[key]; measurement.lastHardAt.After(cutoff) {
+			c.performanceAfter[key] = measurement.lastHardAt
+		}
+		ejected = true
+		changed = true
+	}
+	if ejected && !now.Before(ejection.ejectedUntil) {
+		streak, lastSuccess := c.recoverySuccessStreakLocked(key, ejection, now, config)
+		if streak < config.MinSamples || measurement.ratio > config.RecoveryThreshold {
+			ejection.observingSince = time.Time{}
+		} else {
+			if ejection.observingSince.IsZero() {
+				ejection.observingSince = lastSuccess
+			}
+			// Time alone cannot restore traffic: require a fresh successful
+			// probe at the end of the continuous observation window as well.
+			if deadline := ejection.observingSince.Add(config.RecoveryObservationWindow); !lastSuccess.Before(deadline) {
+				delete(state.ejections, key.ChannelID)
+				delete(state.degraded, key.ChannelID)
+				backoff := state.backoffs[key.ChannelID]
+				backoff.recoveredAt = now
+				state.backoffs[key.ChannelID] = backoff
+				ejected = false
+				changed = true
+			}
+		}
+	}
+
+	if ejected {
+		state.ejections[key.ChannelID] = ejection
+	}
+	measurement.hardFail = ejected && now.Before(ejection.ejectedUntil)
+	return measurement, ejected, changed
+}
+
 func (c *Controller) recoverySuccessStreakLocked(key ObservationKey, ejection hardEjection, now time.Time, configs ...Config) (int, time.Time) {
-	samples := c.freshHealthSamplesLocked(key, now, configs...)
-	issuedProbes := append([]time.Time(nil), ejection.probeIssuedAt...)
-	sort.Slice(issuedProbes, func(i, j int) bool { return issuedProbes[i].Before(issuedProbes[j]) })
-	usedProbes := 0
+	config := c.config
+	if len(configs) > 0 {
+		config = configs[0]
+	}
+	config.MaxAge = recoverySampleMaxAge(config)
 	streak := 0
 	var lastSuccess time.Time
-	for _, sample := range samples {
+	for _, sample := range c.freshHealthSamplesLocked(key, now, config) {
 		if sample.ObservedAt.Before(ejection.ejectedUntil) {
 			continue
 		}
 		if sample.ObservedAt.After(now) {
 			break
 		}
-		startedAfterCooldown := !sample.UpstreamStartedAt.IsZero() &&
-			!sample.UpstreamStartedAt.Before(ejection.ejectedUntil) &&
-			!sample.UpstreamStartedAt.After(sample.ObservedAt)
-		if !sample.Success || sample.HardFailure || !startedAfterCooldown {
+		if !sample.Success || sample.HardFailure {
 			streak = 0
 			continue
 		}
-
-		availableProbes := sort.Search(len(issuedProbes), func(index int) bool {
-			return issuedProbes[index].After(sample.UpstreamStartedAt)
-		})
-		validMetric := (sample.HasTTFT && sample.TTFT > 0) || (sample.HasTPOT && sample.TPOT > 0)
-		if !validMetric && availableProbes <= usedProbes {
-			streak = 0
+		if !sample.RecoveryProbe || sample.UpstreamStartedAt.Before(ejection.ejectedUntil) || sample.UpstreamStartedAt.After(sample.ObservedAt) {
 			continue
-		}
-		if availableProbes > usedProbes {
-			usedProbes++
 		}
 		streak++
 		lastSuccess = sample.ObservedAt
@@ -1323,65 +1272,41 @@ func probeFloorsForCandidates(candidates []Candidate, included map[int]bool, tot
 	return floors
 }
 
-func capEjectedProbeShares(state *routeState, candidates []Candidate, targets map[int]float64, cooldownEjected map[int]bool) bool {
-	if len(targets) == 0 {
-		return false
-	}
-	hasSafeAlternative := false
+// isolateRecoveringChannels excludes every ejected channel, including last-resort
+// fallback traffic. Only independent active probes may test a recovering upstream.
+func isolateRecoveringChannels(state *routeState, candidates []Candidate, probeShare float64) bool {
+	available := make([]Candidate, 0, len(candidates))
+	total, changed := 0.0, false
 	for _, candidate := range candidates {
-		if _, ejected := targets[candidate.ChannelID]; !ejected && !cooldownEjected[candidate.ChannelID] {
-			hasSafeAlternative = true
-			break
-		}
-	}
-	for channelID := range targets {
-		state.probes[channelID] = true
-	}
-	if !hasSafeAlternative {
-		return false
-	}
-
-	targetTotal := 0.0
-	remainingCurrent := 0.0
-	changed := false
-	for _, candidate := range candidates {
-		channelID := candidate.ChannelID
-		if target, ejected := targets[channelID]; ejected {
-			targetTotal += target
-			if math.Abs(state.shares[channelID]-target) > 1e-9 {
-				changed = true
-			}
+		id := candidate.ChannelID
+		if _, ejected := state.ejections[id]; ejected {
+			changed = changed || state.shares[id] > 0
+			state.shares[id] = 0
 			continue
 		}
-		remainingCurrent += state.shares[channelID]
+		available = append(available, candidate)
+		total += state.shares[id]
 	}
-	remainingTarget := 1 - targetTotal
-	for channelID, target := range targets {
-		state.shares[channelID] = target
-	}
-	if remainingCurrent > 1e-9 {
-		scale := remainingTarget / remainingCurrent
-		for _, candidate := range candidates {
-			if _, ejected := targets[candidate.ChannelID]; !ejected {
-				state.shares[candidate.ChannelID] *= scale
-			}
-		}
+	if len(available) == 0 {
 		return changed
 	}
-
-	for _, candidate := range candidates {
-		if _, ejected := targets[candidate.ChannelID]; !ejected {
-			state.shares[candidate.ChannelID] = 0
+	if total > 0 && !changed {
+		return false
+	}
+	main, probes := []Candidate{}, []Candidate{}
+	for _, candidate := range available {
+		if sameCandidateTier(candidate, available[0], state.discountLimits != (DiscountLimits{})) {
+			main = append(main, candidate)
+		} else {
+			probes = append(probes, candidate)
 		}
 	}
-	safeCandidates := make([]Candidate, 0, len(candidates)-len(targets))
-	for _, candidate := range candidates {
-		if _, ejected := targets[candidate.ChannelID]; !ejected && !cooldownEjected[candidate.ChannelID] {
-			safeCandidates = append(safeCandidates, candidate)
-		}
+	if len(probes) == 0 {
+		probeShare = 0
 	}
-	for _, allocation := range allocateByWeight(safeCandidates, remainingTarget, false) {
+	for _, allocation := range append(allocateByWeight(main, 1-probeShare, false), allocateByWeight(probes, probeShare, true)...) {
 		state.shares[allocation.ChannelID] = allocation.Share
+		state.probes[allocation.ChannelID] = allocation.Probe
 	}
 	return true
 }
@@ -1463,11 +1388,20 @@ func (c *Controller) Observe(key ObservationKey, sample Sample) {
 
 	c.cleanupExpiredLocked(sample.ObservedAt)
 	validMetric := (sample.HasTTFT && sample.TTFT > 0) || (sample.HasTPOT && sample.TPOT > 0)
-	if sample.Success && !sample.HardFailure && validMetric {
+	if sample.Success && !sample.HardFailure && validMetric && !sample.RecoveryProbe {
 		c.appendWindowSampleLocked(c.observations, key, sample)
 	}
 	if sample.Success || sample.HardFailure {
 		c.appendWindowSampleLocked(c.healthObservations, key, sample)
+	}
+	if sample.HardFailure {
+		for route, state := range c.routes {
+			if route.Model == key.Model {
+				if _, candidate := state.candidates[key.ChannelID]; candidate {
+					c.updateChannelRecoveryLocked(state, key, sample.ObservedAt)
+				}
+			}
+		}
 	}
 }
 

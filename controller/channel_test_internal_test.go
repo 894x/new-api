@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
@@ -54,6 +55,49 @@ func TestChannelMonitoringRequestUsesConfiguredPromptAndBoundedOutput(t *testing
 	}
 	settings.ChannelMonitoringMaxTokens = 513
 	assert.Error(t, configureChannelMonitoringRequest(&dto.GeneralOpenAIRequest{}, settings))
+}
+
+func TestDynamicRecoveryProbeUsesBoundedSyntheticInputAndHonorsManualDisable(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	withSelfUseModeEnabled(t)
+	root := model.User{Id: 11601, Username: "active-recovery-fixture", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", Quota: 1000000}
+	require.NoError(t, db.Create(&root).Error)
+	requests := make(chan []byte, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"recovery-probe\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"recovery-probe\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2,\"total_tokens\":6}}\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(upstream.Close)
+	baseURL := upstream.URL
+	channel := model.Channel{Type: constant.ChannelTypeOpenAI, Key: "fixture-key", BaseURL: &baseURL, Models: "gpt-4o-mini", Group: "default", Status: common.ChannelStatusEnabled}
+	require.NoError(t, db.Create(&channel).Error)
+	model.InitChannelCache()
+	key := dynamicrouting.ObservationKey{ChannelID: channel.Id, Model: "gpt-4o-mini"}
+	sample, observed := probeDynamicRoutingRecovery(context.Background(), key)
+	require.True(t, observed)
+	assert.True(t, sample.Success)
+	assert.True(t, sample.RecoveryProbe)
+	assert.False(t, sample.HasTTFT)
+	assert.False(t, sample.HasTPOT)
+	select {
+	case body := <-requests:
+		assert.Equal(t, "Reply with OK.", gjson.GetBytes(body, "messages.0.content").String())
+		assert.Equal(t, int64(32), gjson.GetBytes(body, "max_tokens").Int())
+		assert.True(t, gjson.GetBytes(body, "stream").Bool())
+	default:
+		t.Fatal("the active recovery check did not reach the mock provider")
+	}
+	require.NoError(t, db.Model(&channel).Update("status", common.ChannelStatusManuallyDisabled).Error)
+	model.InitChannelCache()
+	_, observed = probeDynamicRoutingRecovery(context.Background(), key)
+	assert.False(t, observed)
+	assert.Empty(t, requests, "manual disables must prevent active upstream requests")
 }
 
 func TestChannelMonitoringLocalFailureDoesNotBecomeHealthyOrExposeUpstreamSecrets(t *testing.T) {
