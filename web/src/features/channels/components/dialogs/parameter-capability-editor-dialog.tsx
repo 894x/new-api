@@ -65,6 +65,7 @@ import { cn } from '@/lib/utils'
 import {
   evaluateParameterCapabilities,
   isBillingSensitiveParameter,
+  isVideoMediaParameterPath,
   PARAMETER_CAPABILITY_CATALOG,
   REQUEST_BODY_SIZE_CAPABILITY,
   parseParameterCapabilityConfig,
@@ -1103,7 +1104,7 @@ function ParameterCapabilityRow(props: {
           </Select>
         </Field>
       </FieldGroup>
-      {/\.video_url(?:\.url)?$/.test(props.path) && (
+      {isVideoMediaParameterPath(props.path) && (
         <VideoMediaCapabilityFields
           path={props.path}
           value={capability.media}

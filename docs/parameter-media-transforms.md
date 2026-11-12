@@ -61,3 +61,24 @@
   转换审计只保存参数路径和动作，不保存 URL/Base64；启用转换时跳过相关
   转发处理器的请求体调试输出。
 - 浏览器中的请求预览不下载媒体，只提示“需要下载”；最终结果以服务端为准。
+
+## 视频文件大小与 Messages 来源
+
+视频的 `media` 能力支持 Chat 的 `messages.*.content.*.video_url`、Responses 的
+`input.*.content.*.video_url`，以及 Messages 的 `messages.*.content.*.source`。
+Messages 只检查 `type: "video"` 或 `source.media_type` 为 `video/*` 的内容块，
+不会把图片和普通文档的 `source` 当成视频。URL 转换为 Base64 时，保留原生
+`source.type`、`source.media_type`、`source.data` 结构；反向转换使用
+`source.type: "url"` 和 `source.url`。Messages 转 Chat / Responses 时也保留视频。
+
+`media.formats.url.max_media_bytes` 与 `media.formats.base64.max_media_bytes`
+都按单个视频的原始文件字节数限制，Base64 按解码后的字节数计算。
+例如 10 MiB 应填写 `10485760`。两种格式均允许时优先原样传递；
+`media.conversions.url_to_base64: true` 允许需要时下载转换，并不强制每个 URL 下载。
+
+URL 会先通过 HEAD / Range 探测大小；未知大小仍可原样传递，源站声明也可能不准确。
+需要严格限制时，设置 `media.formats.url.supported: false`、
+`media.formats.base64.supported: true`、Base64 上限为 `10485760`，并启用
+`media.conversions.url_to_base64`。这样 URL 必须下载，实际超限时不发送给上游。
+启用 `participate_in_selection` 可筛除不兼容的渠道；下载后才确认的大小会参与重试筛选，
+所有候选都不兼容时返回 HTTP 400。转换继续受全局下载和请求体上限约束。

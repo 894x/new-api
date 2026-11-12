@@ -86,6 +86,9 @@ func CheckSelectionCapabilitiesWithBodySize(data []byte, bodySize *int64, config
 			return err
 		}
 		for _, resolvedPath := range resolvedPaths {
+			if capability.Media != nil && strings.HasSuffix(resolvedPath, ".source") && !isMessagesVideoSource(data, resolvedPath) {
+				continue
+			}
 			value := gjson.GetBytes(data, resolvedPath)
 			if !value.Exists() {
 				continue
@@ -151,6 +154,9 @@ func ApplyCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model
 			slices.Reverse(resolvedPaths)
 		}
 		for _, resolvedPath := range resolvedPaths {
+			if capability.Media != nil && strings.HasSuffix(resolvedPath, ".source") && !isMessagesVideoSource(result, resolvedPath) {
+				continue
+			}
 			value := gjson.GetBytes(result, resolvedPath)
 			if !value.Exists() {
 				continue

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -40,6 +41,14 @@ type MediaDescriber interface {
 	Describe(data []byte, path string) ([]MediaInput, error)
 }
 
+// Messages sources also carry images and documents. Video policies only apply
+// to explicit video blocks or sources declaring a video MIME type.
+func isMessagesVideoSource(data []byte, path string) bool {
+	blockPath, ok := strings.CutSuffix(path, ".source")
+	return ok && (gjson.GetBytes(data, blockPath+".type").String() == "video" ||
+		strings.HasPrefix(gjson.GetBytes(data, path+".media_type").String(), "video/"))
+}
+
 func DescribeMediaInputs(data []byte, path string, processor MediaProcessor) ([]MediaInput, error) {
 	matches, err := ResolveJSONPaths(data, path, false)
 	if err != nil {
@@ -48,21 +57,45 @@ func DescribeMediaInputs(data []byte, path string, processor MediaProcessor) ([]
 	inputs := make([]MediaInput, 0, len(matches))
 	for _, match := range matches {
 		value := gjson.GetBytes(data, match)
-		if value.IsObject() {
+		var source string
+		if strings.HasSuffix(match, ".source") {
+			if !isMessagesVideoSource(data, match) {
+				continue
+			}
+			switch value.Get("type").String() {
+			case "url":
+				url := value.Get("url")
+				if url.Type != gjson.String || (!strings.HasPrefix(url.String(), "http://") && !strings.HasPrefix(url.String(), "https://")) {
+					return nil, fmt.Errorf("Messages video URL source must contain an HTTP(S) URL")
+				}
+				source = url.String()
+			case "base64":
+				mimeType, payload := value.Get("media_type").String(), value.Get("data")
+				if !strings.HasPrefix(mimeType, "video/") || payload.Type != gjson.String || payload.String() == "" {
+					return nil, fmt.Errorf("Messages video Base64 source requires a video media_type and non-empty data")
+				}
+				source = "data:" + mimeType + ";base64," + payload.String()
+			default:
+				return nil, fmt.Errorf("Messages video source type must be url or base64")
+			}
+		} else if value.IsObject() {
 			match += ".url"
 			value = gjson.GetBytes(data, match)
 		}
-		if value.Type != gjson.String || value.String() == "" {
-			return nil, fmt.Errorf("video source must be a non-empty string")
+		if source == "" {
+			if value.Type != gjson.String || value.String() == "" {
+				return nil, fmt.Errorf("video source must be a non-empty string")
+			}
+			source = value.String()
 		}
 		if processor == nil {
 			return nil, fmt.Errorf("video media processor is unavailable")
 		}
-		info, err := processor.Inspect(value.String())
+		info, err := processor.Inspect(source)
 		if err != nil {
 			return nil, err
 		}
-		inputs = append(inputs, MediaInput{Path: match, Source: value.String(), Info: info})
+		inputs = append(inputs, MediaInput{Path: match, Source: source, Info: info})
 	}
 	return inputs, nil
 }
@@ -194,9 +227,35 @@ func ApplyMediaDelivery(data []byte, config *dto.ParameterCapabilityConfig, mode
 		if int64(len(result))-int64(len(plan.Source))+int64(len(value))+16 > 96<<20 {
 			return nil, changes, newCapabilityViolation(model, plan.Path, "", "converted media request exceeds 96 MiB")
 		}
-		result, err = sjson.SetBytes(result, plan.Path, value)
+		if strings.HasSuffix(plan.Path, ".source") {
+			var source map[string]any
+			if err := kitutil.Unmarshal([]byte(gjson.GetBytes(result, plan.Path).Raw), &source); err != nil {
+				return nil, changes, err
+			}
+			if plan.Target == "base64" {
+				if _, err := Base64VideoInfo(value); err != nil {
+					return nil, changes, newCapabilityViolation(model, plan.Path, "", "converted video must be a valid video data URI")
+				}
+				header, payload, _ := strings.Cut(value, ",")
+				source["type"] = "base64"
+				source["media_type"] = strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")
+				source["data"] = payload
+				delete(source, "url")
+			} else {
+				source["type"] = "url"
+				source["url"] = value
+				delete(source, "data")
+				delete(source, "media_type")
+			}
+			result, err = sjson.SetBytes(result, plan.Path, source)
+		} else {
+			result, err = sjson.SetBytes(result, plan.Path, value)
+		}
 		if err != nil {
 			return nil, changes, err
+		}
+		if len(result) > 96<<20 {
+			return nil, changes, newCapabilityViolation(model, plan.Path, "", "converted media request exceeds 96 MiB")
 		}
 		changes = append(changes, CapabilityChange{Parameter: plan.Path, Action: plan.Info.Format + "_to_" + plan.Target})
 	}

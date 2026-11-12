@@ -219,6 +219,39 @@ describe('ParameterCapabilityEditorDialog JSON editing', () => {
     ).toBe('image_url_to_base64')
   })
 
+  test('configures video delivery for a Messages source and saves the decoded byte limit', async () => {
+    const saved: string[] = []
+    rendered = await renderDialog((value) => saved.push(value))
+    await enterJsonDraft(
+      '{"defaults":{"messages.*.content.*.source":{"supported":true}}}'
+    )
+    await act(async () => findButton('Capabilities')?.click())
+    const { fireEvent, getByRole } = await import('@testing-library/dom')
+    await act(async () =>
+      getByRole(document.body, 'button', {
+        name: 'Configure video delivery',
+      }).click()
+    )
+    const bytes = getByRole<HTMLInputElement>(document.body, 'spinbutton', {
+      name: 'Base64 maximum bytes',
+    })
+    await act(async () => {
+      fireEvent.change(bytes, { target: { value: '10485760' } })
+    })
+    await act(async () => findButton('Save')?.click())
+    expect(saved).toHaveLength(1)
+    expect(
+      JSON.parse(saved[0]).defaults['messages.*.content.*.source']
+    ).toEqual({
+      supported: true,
+      participate_in_selection: true,
+      media: {
+        kind: 'video',
+        formats: { base64: { max_media_bytes: 10485760 } },
+      },
+    })
+  })
+
   test('shows request body size as an integer selection-only constraint', async () => {
     const saved: string[] = []
     rendered = await renderDialog((value) => saved.push(value))

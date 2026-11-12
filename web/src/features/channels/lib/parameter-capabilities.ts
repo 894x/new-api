@@ -66,6 +66,11 @@ export const PARAMETER_CAPABILITY_CATALOG = [
     kind: 'presence',
   },
   {
+    path: 'messages.*.content.*.source',
+    category: 'Multimodal',
+    kind: 'presence',
+  },
+  {
     path: 'input.*.content.*.image_url',
     category: 'Multimodal',
     kind: 'presence',
@@ -148,6 +153,10 @@ const BILLING_SENSITIVE_PARAMETER_PATHS = new Set([
 
 export function isBillingSensitiveParameter(path: string): boolean {
   return BILLING_SENSITIVE_PARAMETER_PATHS.has(path)
+}
+
+export function isVideoMediaParameterPath(path: string): boolean {
+  return /\.(?:video_url(?:\.url)?|source)$/.test(path)
 }
 
 export function createEmptyParameterCapabilityConfig(): ParameterCapabilityConfig {
@@ -483,6 +492,21 @@ export function evaluateParameterCapabilities(
         : getPathValues(request, parameter)
     if (action === 'drop') currentValues.reverse()
     for (const current of currentValues) {
+      if (capability.media && current.path.endsWith('.source')) {
+        const blockType = getPathValues(
+          request,
+          `${current.path.slice(0, -7)}.type`
+        )[0]?.value
+        const mimeType = isPlainRecord(current.value)
+          ? current.value.media_type
+          : undefined
+        if (
+          blockType !== 'video' &&
+          !(typeof mimeType === 'string' && mimeType.startsWith('video/'))
+        ) {
+          continue
+        }
+      }
       if (capability.media && capability.supported !== false) {
         evaluations.push({
           parameter: current.path,
@@ -665,7 +689,7 @@ function validateCapabilityMap(
     if (
       capability.media &&
       (!isVideoMediaCapability(capability.media) ||
-        !/\.video_url(?:\.url)?$/.test(path) ||
+        !isVideoMediaParameterPath(path) ||
         (capability.on_violation !== undefined &&
           capability.on_violation !== 'reject'))
     ) {

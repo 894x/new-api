@@ -29,6 +29,49 @@ import {
 } from '../parameter-capabilities'
 
 describe('parameter capability resolution', () => {
+  it('accepts Messages video source limits and leaves image sources out of video previews', () => {
+    const config: ParameterCapabilityConfig = {
+      defaults: {
+        'messages.*.content.*.source': {
+          supported: true,
+          participate_in_selection: true,
+          media: {
+            kind: 'video',
+            formats: {
+              url: { supported: false },
+              base64: { supported: true, max_media_bytes: 10485760 },
+            },
+            conversions: { url_to_base64: true },
+          },
+        },
+      },
+    }
+    expect(validateParameterCapabilityConfig(config)).toEqual([])
+    const result = evaluateParameterCapabilities(config, 'video-model', {
+      messages: [
+        {
+          content: [
+            {
+              type: 'image',
+              source: { type: 'url', url: 'https://example.test/image' },
+            },
+            {
+              type: 'video',
+              source: { type: 'url', url: 'https://example.test/video' },
+            },
+          ],
+        },
+      ],
+    })
+    expect(result.evaluations).toEqual([
+      {
+        parameter: 'messages.0.content.1.source',
+        status: 'pending',
+        reason: 'media_validation_required',
+      },
+    ])
+  })
+
   it('round-trips all built-in media conversions and lets exact models disable inherited conversion', () => {
     const config: ParameterCapabilityConfig = {
       defaults: {

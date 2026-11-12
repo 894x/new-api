@@ -3,14 +3,31 @@ package service
 import (
 	"bytes"
 	"errors"
+	"strings"
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/relayparam"
+	"github.com/tidwall/gjson"
 )
 
 // Requests with video fields must compare delivery tiers before using affinity.
 func RequestHasVideoMedia(body []byte) bool {
-	return bytes.Contains(body, []byte(`"video_url"`))
+	if bytes.Contains(body, []byte(`"video_url"`)) {
+		return true
+	}
+	found := false
+	gjson.GetBytes(body, "messages").ForEach(func(_, message gjson.Result) bool {
+		content := message.Get("content")
+		if !content.IsArray() {
+			return true
+		}
+		content.ForEach(func(_, block gjson.Result) bool {
+			found = block.Get("type").String() == "video" || strings.HasPrefix(block.Get("source.media_type").String(), "video/")
+			return !found
+		})
+		return !found
+	})
+	return found
 }
 
 // Media comparisons run outside the model cache lock. Only Inspect may perform

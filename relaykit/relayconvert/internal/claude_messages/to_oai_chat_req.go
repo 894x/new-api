@@ -199,6 +199,14 @@ func ClaudeMessagesRequestToOpenAIChat(ctx context.Context, claudeRequest dto.Cl
 						ImageUrl: &dto.MessageImageUrl{Url: imageData},
 					}
 					mediaMessages = append(mediaMessages, mediaMessage)
+				case "video":
+					source := claudeSourceURL(mediaMsg.Source)
+					if source == "" {
+						return nil, fmt.Errorf("Messages video source is required")
+					}
+					mediaMessages = append(mediaMessages, dto.MediaContent{
+						Type: dto.ContentTypeVideoUrl, VideoUrl: &dto.MessageVideoUrl{Url: source},
+					})
 				case "tool_use":
 					toolCall := dto.ToolCallRequest{
 						ID:   mediaMsg.Id,

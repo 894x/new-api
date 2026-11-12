@@ -201,8 +201,8 @@ func validateParameterCapabilityMap(parameters map[string]ParameterCapability) e
 			if err := capability.Media.Validate(); err != nil {
 				return fmt.Errorf("parameter %s: %w", path, err)
 			}
-			if !strings.HasSuffix(path, ".video_url") && !strings.HasSuffix(path, ".video_url.url") {
-				return fmt.Errorf("parameter %s: video media capabilities require a video_url field", path)
+			if !strings.HasSuffix(path, ".video_url") && !strings.HasSuffix(path, ".video_url.url") && !strings.HasSuffix(path, ".source") {
+				return fmt.Errorf("parameter %s: video media capabilities require a video_url or Messages source field", path)
 			}
 			if capability.OnViolation != "" && capability.OnViolation != ParameterCapabilityActionReject {
 				return fmt.Errorf("parameter %s: media capabilities must reject incompatible values", path)

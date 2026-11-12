@@ -543,6 +543,12 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
+		if errors.Is(err, model.ErrParameterCapabilityUnsupported) {
+			if violation, ok := relaycommon.AsParameterCapabilityViolation(err); ok {
+				return nil, relaycommon.NewAPIErrorFromParameterCapability(violation)
+			}
+			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
 		var capacityErr *service.ChannelModelCapacityError
 		if errors.As(err, &capacityErr) {
 			return nil, channelCapacityAPIError(c, capacityErr)

@@ -1,10 +1,11 @@
 package relayparam
 
 import (
+	"testing"
+
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestBase64VideoSizeAndValidation(t *testing.T) {
@@ -39,7 +40,73 @@ func (p *deliveryTestProcessor) Inspect(source string) (MediaInfo, error) {
 }
 func (p *deliveryTestProcessor) Convert(source, target string, limit int64) (string, error) {
 	p.conversions++
+	if target == "url" {
+		return "https://example.test/video", nil
+	}
 	return "data:video/mp4;base64,AAAA", nil
+}
+
+func TestMessagesVideoDeliveryPreservesNativeSourceAndOtherMedia(t *testing.T) {
+	yes, no := true, false
+	limit := int64(3)
+	const path = "messages.*.content.*.source"
+	for _, tc := range []struct {
+		name, source, wantSource string
+		url, base64              bool
+		conversions              int
+		wantError                bool
+	}{
+		{name: "Base64 at decoded limit", source: `{"type":"base64","media_type":"video/mp4","data":"AAAA"}`, base64: true},
+		{name: "URL converted to native Base64", source: `{"type":"url","url":"https://example.test/video"}`, wantSource: `{"type":"base64","media_type":"video/mp4","data":"AAAA"}`, base64: true, conversions: 1},
+		{name: "Base64 converted to native URL", source: `{"type":"base64","media_type":"video/mp4","data":"AAAA"}`, wantSource: `{"type":"url","url":"https://example.test/video"}`, url: true, conversions: 1},
+		{name: "Decoded video exceeds limit", source: `{"type":"base64","media_type":"video/mp4","data":"AAAAAA=="}`, base64: true, wantError: true},
+		{name: "Base64 MIME required", source: `{"type":"base64","data":"AAAA"}`, base64: true, wantError: true},
+		{name: "Malformed Base64 rejected", source: `{"type":"base64","media_type":"video/mp4","data":"A!=="}`, base64: true, wantError: true},
+		{name: "Unknown source type rejected", source: `{"type":"file","file_id":"file-test"}`, base64: true, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			urlLimit := int64(24)
+			base64Limit := limit
+			if tc.conversions > 0 {
+				base64Limit = 24
+			}
+			config := &dto.ParameterCapabilityConfig{Defaults: map[string]dto.ParameterCapability{path: {
+				ParticipateInSelection: &yes,
+				Media: &dto.MediaCapability{Kind: "video", Formats: map[string]dto.MediaFormatCapability{
+					"url": {Supported: &tc.url, MaxMediaBytes: &urlLimit}, "base64": {Supported: &tc.base64, MaxMediaBytes: &base64Limit},
+				}, Conversions: dto.MediaConversions{URLToBase64: &yes, Base64ToURL: &yes}},
+			}}}
+			require.NoError(t, config.Validate())
+			body := []byte(`{"messages":[{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"image-data"}},{"type":"video","fps":2,"source":` + tc.source + `}]}]}`)
+			processor := &deliveryTestProcessor{}
+			result, changes, err := ApplyMediaDelivery(body, config, "video-model", processor)
+			if tc.wantError {
+				require.Error(t, err)
+				assert.Zero(t, processor.conversions)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.conversions, processor.conversions)
+			assert.Len(t, changes, tc.conversions)
+			wantSource := tc.wantSource
+			if wantSource == "" {
+				wantSource = tc.source
+			}
+			assert.JSONEq(t, `{"messages":[{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"image-data"}},{"type":"video","fps":2,"source":`+wantSource+`}]}]}`, string(result))
+			_, _, err = ApplyCapabilities(result, config, "video-model")
+			require.NoError(t, err)
+		})
+	}
+
+	config := &dto.ParameterCapabilityConfig{Defaults: map[string]dto.ParameterCapability{path: {Supported: &no, ParticipateInSelection: &yes, Media: &dto.MediaCapability{Kind: "video"}}}}
+	body := []byte(`{"messages":[{"content":[{"type":"image","source":{"type":"url","url":"https://example.test/image"}},{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"pdf-data"}}]}]}`)
+	result, _, err := ApplyMediaDelivery(body, config, "video-model", &deliveryTestProcessor{})
+	require.NoError(t, err)
+	assert.JSONEq(t, string(body), string(result))
+	require.NoError(t, CheckSelectionCapabilities(body, config, "video-model"))
+	result, _, err = ApplyCapabilities(body, config, "video-model")
+	require.NoError(t, err)
+	assert.JSONEq(t, string(body), string(result))
 }
 
 func TestVideoPlanUsesAllFieldsAndNewCapabilityOverridesLegacyTransform(t *testing.T) {

@@ -192,6 +192,14 @@ func claudeMessagesToResponsesInput(messages []dto.ClaudeMessage) (json.RawMessa
 						"file_data": source,
 					})
 				}
+			case "video":
+				source := claudeSourceURL(block.Source)
+				if source == "" {
+					return nil, fmt.Errorf("Messages video source is required")
+				}
+				contentParts = append(contentParts, map[string]any{
+					"type": "input_video", "video_url": source,
+				})
 			case "tool_use":
 				flushContent()
 				arguments, err := kitutil.Marshal(block.Input)
