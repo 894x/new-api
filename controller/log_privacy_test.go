@@ -151,11 +151,25 @@ func TestGetAllLogsStatusCodeFilter(t *testing.T) {
 		}
 		allRequestIDs[len(rows)-1-i] = rows[i].RequestId
 	}
-	require.NoError(t, logDB.Create(&rows).Error)
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(func(c *gin.Context) { c.Set("role", common.RoleAdminUser) })
 	router.GET("/api/log/", GetAllLogs)
+	router.GET("/api/log/status_codes", GetLogStatusCodes)
+	router.GET("/api/log/status_code_stats", GetLogStatusCodeStats)
+	t.Run("empty history has no status choices", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/log/status_codes", nil))
+		require.Equal(t, http.StatusOK, recorder.Code)
+		var response struct {
+			Success bool  `json:"success"`
+			Data    []int `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+		assert.True(t, response.Success, recorder.Body.String())
+		assert.Equal(t, []int{}, response.Data)
+	})
+	require.NoError(t, logDB.Create(&rows).Error)
 	const filters = "username=alice&model_name=model-a&token_name=key&channel=7&start_timestamp=100&end_timestamp=200"
 	for _, tc := range []struct {
 		name  string
@@ -208,4 +222,58 @@ func TestGetAllLogsStatusCodeFilter(t *testing.T) {
 			assert.JSONEq(t, `{"success":false,"message":"Invalid HTTP status code"}`, recorder.Body.String())
 		})
 	}
+	t.Run("recorded status choices cover all pages and refresh for new logs", func(t *testing.T) {
+		for _, want := range [][]int{{200, 429, 500}, {200, 429, 500, 503}} {
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/log/status_codes?status_code=429&type=5&page_size=1&username=nobody", nil))
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var response struct {
+				Success bool  `json:"success"`
+				Data    []int `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			require.True(t, response.Success, recorder.Body.String())
+			assert.Equal(t, want, response.Data)
+			if len(want) == 3 {
+				require.NoError(t, logDB.Create(&model.Log{CreatedAt: 200, RequestId: "new-status", Type: model.LogTypeError, Other: `{"status_code":503}`}).Error)
+			}
+		}
+	})
+	t.Run("dashboard distribution counts log records within the requested scope", func(t *testing.T) {
+		// Non-HTTP activity must not turn into missing HTTP responses.
+		require.NoError(t, logDB.Create(&[]model.Log{
+			{CreatedAt: 110, RequestId: "system-activity", Type: model.LogTypeSystem, Other: `{"status_code":429}`},
+			{CreatedAt: 110, RequestId: "topup-activity", Type: model.LogTypeTopup},
+		}).Error)
+		for _, tc := range []struct {
+			name  string
+			query string
+			want  model.LogStatusCodeStats
+		}{
+			{name: "all recorded and unrecorded statuses", query: "start_timestamp=100&end_timestamp=113", want: model.LogStatusCodeStats{Items: []model.LogStatusCodeCount{{StatusCode: 200, Count: 1}, {StatusCode: 429, Count: 5}, {StatusCode: 500, Count: 1}}, Total: 14, Recorded: 7, Unrecorded: 7}},
+			{name: "exact user", query: "start_timestamp=100&end_timestamp=113&username=alice", want: model.LogStatusCodeStats{Items: []model.LogStatusCodeCount{{StatusCode: 200, Count: 1}, {StatusCode: 429, Count: 4}, {StatusCode: 500, Count: 1}}, Total: 13, Recorded: 6, Unrecorded: 7}},
+			{name: "explicit user wildcard", query: "start_timestamp=100&end_timestamp=101&username=al%25", want: model.LogStatusCodeStats{Items: []model.LogStatusCodeCount{{StatusCode: 429, Count: 2}}, Total: 2, Recorded: 2}},
+			{name: "inclusive time bounds", query: "start_timestamp=108&end_timestamp=108", want: model.LogStatusCodeStats{Items: []model.LogStatusCodeCount{{StatusCode: 200, Count: 1}}, Total: 1, Recorded: 1}},
+			{name: "empty user scope", query: "start_timestamp=100&end_timestamp=113&username=ali", want: model.LogStatusCodeStats{Items: []model.LogStatusCodeCount{}}},
+			{name: "new records enter the distribution", query: "start_timestamp=200&end_timestamp=200", want: model.LogStatusCodeStats{Items: []model.LogStatusCodeCount{{StatusCode: 503, Count: 1}}, Total: 1, Recorded: 1}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/log/status_code_stats?"+tc.query, nil))
+				require.Equal(t, http.StatusOK, recorder.Code)
+				var response struct {
+					Success bool                     `json:"success"`
+					Data    model.LogStatusCodeStats `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+				require.True(t, response.Success, recorder.Body.String())
+				assert.Equal(t, tc.want, response.Data)
+			})
+		}
+		for _, query := range []string{"", "start_timestamp=abc&end_timestamp=200", "start_timestamp=0&end_timestamp=200", "start_timestamp=200&end_timestamp=100", "start_timestamp=100&end_timestamp=9999999999999999999999"} {
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/log/status_code_stats?"+query, nil))
+			assert.Equal(t, http.StatusBadRequest, recorder.Code, query)
+		}
+	})
 }

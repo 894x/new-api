@@ -193,6 +193,9 @@ export function buildApiParams(config: {
     ...(isAdmin && searchParams.username
       ? { username: String(searchParams.username) }
       : {}),
+    ...(isAdmin && searchParams.statusCode
+      ? { status_code: Number(searchParams.statusCode) }
+      : {}),
     ...(searchParams.requestId
       ? { request_id: String(searchParams.requestId) }
       : {}),

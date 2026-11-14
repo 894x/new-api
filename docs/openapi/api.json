@@ -4207,6 +4207,82 @@
         ]
       }
     },
+    "/api/log/status_codes": {
+      "get": {
+        "summary": "获取日志中出现过的 HTTP 状态码",
+        "deprecated": false,
+        "description": "👨‍💼 需要管理员权限（Admin）。返回全部已保留日志的 other.status_code 中出现过的有效 HTTP 状态码，兼容数字和字符串，去重后按升序排列。不受当前列表筛选或分页影响；不包含 client_status_code 或嵌套状态码，也不推断成功状态。空历史返回空数组。",
+        "tags": ["日志"],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "状态码列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "data": {
+                      "type": "array",
+                      "items": { "type": "integer", "minimum": 100, "maximum": 599 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [{ "Combination343": [] }, { "Combination1243": [] }]
+      }
+    },
+    "/api/log/status_code_stats": {
+      "get": {
+        "summary": "获取 HTTP 状态码分布统计",
+        "description": "需要管理员权限。按包含边界的时间范围及可选用户名统计消费、错误日志条数；重试日志分别计入，不按请求 ID 去重。items 仅包含实际记录的有效 HTTP 状态码，按升序排列；缺失或无效状态计入 unrecorded，不推断为 HTTP 200。",
+        "tags": ["日志"],
+        "parameters": [
+          { "name": "start_timestamp", "in": "query", "required": true, "schema": { "type": "integer", "format": "int64", "minimum": 1 } },
+          { "name": "end_timestamp", "in": "query", "required": true, "schema": { "type": "integer", "format": "int64", "minimum": 1 } },
+          { "name": "username", "in": "query", "description": "默认精确匹配；显式 % 可进行模糊匹配", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "统计结果：total = recorded + unrecorded，items 各项 count 之和等于 recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "total": { "type": "integer", "format": "int64" },
+                        "recorded": { "type": "integer", "format": "int64" },
+                        "unrecorded": { "type": "integer", "format": "int64" },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "status_code": { "type": "integer", "minimum": 100, "maximum": 599 },
+                              "count": { "type": "integer", "format": "int64" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "时间范围缺失、无效或结束时间早于开始时间" }
+        },
+        "security": [{ "Combination343": [] }, { "Combination1243": [] }]
+      }
+    },
     "/api/system-task/log-cleanup": {
       "post": {
         "summary": "创建日志清理任务",

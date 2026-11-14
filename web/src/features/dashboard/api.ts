@@ -21,6 +21,7 @@ import { api } from '@/lib/api'
 import type {
   FlowQuotaDataItem,
   QuotaDataItem,
+  StatusCodeStats,
   UptimeGroupResult,
 } from './types'
 
@@ -54,6 +55,18 @@ export async function getUserQuotaDates(
 // ----------------------------------------------------------------------------
 // System Monitoring
 // ----------------------------------------------------------------------------
+
+export async function getStatusCodeStats(
+  params: { start_timestamp: number; end_timestamp: number; username?: string },
+  signal?: AbortSignal
+) {
+  const response = await api.get<{
+    success: boolean
+    message?: string
+    data: StatusCodeStats
+  }>('/api/log/status_code_stats', { params, signal })
+  return response.data
+}
 
 export async function getUserQuotaDataByUsers(params: {
   start_timestamp: number

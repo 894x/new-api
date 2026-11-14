@@ -376,6 +376,8 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/task-billing", middleware.UserAuth(), middleware.DisableCache(), middleware.SearchRateLimit(), controller.GetTaskBillingHistory)
 		logRoute.GET("/request-capture/:request_id", middleware.AdminAuth(), middleware.DisableCache(), controller.GetRequestCapture)
 		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)
+		logRoute.GET("/status_codes", middleware.AdminAuth(), middleware.DisableCache(), middleware.SearchRateLimit(), controller.GetLogStatusCodes)
+		logRoute.GET("/status_code_stats", middleware.AdminAuth(), middleware.DisableCache(), middleware.SearchRateLimit(), controller.GetLogStatusCodeStats)
 		logRoute.POST("/export", middleware.AdminAuth(), controller.ExportLogs)
 		logRoute.POST("/self/export", middleware.UserAuth(), middleware.DisableCache(), middleware.SearchRateLimit(), controller.ExportSelfLogs)
 		logRoute.GET("/export/config", middleware.UserAuth(), middleware.DisableCache(), controller.GetLogExportConfig)

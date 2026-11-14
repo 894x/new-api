@@ -92,6 +92,7 @@ function buildSearchSourceKey(values: {
   username?: unknown
   requestId?: unknown
   upstreamRequestId?: unknown
+  statusCode?: unknown
   type?: unknown
 }) {
   return [
@@ -104,6 +105,7 @@ function buildSearchSourceKey(values: {
     values.username,
     values.requestId,
     values.upstreamRequestId,
+    values.statusCode,
     Array.isArray(values.type) ? values.type.join(',') : values.type,
   ]
     .map((value) => String(value ?? ''))
@@ -158,6 +160,7 @@ export function CommonLogsFilterBar<TData>(
       username: searchParams.username,
       requestId: searchParams.requestId,
       upstreamRequestId: searchParams.upstreamRequestId,
+      statusCode: searchParams.statusCode,
       type: searchParams.type,
     }
     const filters: CommonLogFilters = {
@@ -174,6 +177,7 @@ export function CommonLogsFilterBar<TData>(
       upstreamRequestId: isAdmin
         ? searchParams.upstreamRequestId || undefined
         : undefined,
+      statusCode: isAdmin ? searchParams.statusCode || undefined : undefined,
     }
     return {
       sourceKey: buildSearchSourceKey(sourceValues),
@@ -190,6 +194,7 @@ export function CommonLogsFilterBar<TData>(
     searchParams.username,
     searchParams.requestId,
     searchParams.upstreamRequestId,
+    searchParams.statusCode,
     searchParams.type,
     isAdmin,
   ])
@@ -228,8 +233,13 @@ export function CommonLogsFilterBar<TData>(
       })
       queryClient.invalidateQueries({ queryKey: ['logs'] })
       queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
+      if (isAdmin) {
+        queryClient.invalidateQueries({
+          queryKey: ['usage-logs', 'filter-options', 'status-codes'],
+        })
+      }
     },
-    [filters, logType, navigate, queryClient]
+    [filters, logType, navigate, queryClient, isAdmin]
   )
 
   const handleReset = useCallback(() => {
@@ -274,7 +284,11 @@ export function CommonLogsFilterBar<TData>(
 
   const hasTypeFilter = logType !== LOG_TYPE_ALL_VALUE
   const hasAdditionalFilters =
-    !!filters.model || !!filters.group || hasTypeFilter || hasExpandedFilters
+    !!filters.model ||
+    !!filters.group ||
+    !!filters.statusCode ||
+    hasTypeFilter ||
+    hasExpandedFilters
 
   const expandedFilterCount = [
     filters.token,
@@ -307,6 +321,19 @@ export function CommonLogsFilterBar<TData>(
     [props.table, searchParams]
   )
   const selectedLogType = logTypeItems.find((type) => type.value === logType)
+  const statusCodeItems = useMemo(() => {
+    const options = [...filterOptions.statusCodeOptions]
+    if (
+      filters.statusCode &&
+      !options.some((option) => option.value === filters.statusCode)
+    ) {
+      options.push({
+        value: filters.statusCode,
+        label: `HTTP ${filters.statusCode}`,
+      })
+    }
+    return [{ value: '0', label: t('All') }, ...options]
+  }, [filterOptions.statusCodeOptions, filters.statusCode, t])
   const deprecatedTypeDescription = t(
     'Only used to find historical logs. New records are available in Audit Logs.'
   )
@@ -451,6 +478,34 @@ export function CommonLogsFilterBar<TData>(
       </Select>
     </LogsFilterField>
   )
+  const statusCodeFilter = isAdmin ? (
+    <LogsFilterField>
+      <Select
+        items={statusCodeItems}
+        value={filters.statusCode || '0'}
+        onValueChange={(value) =>
+          handleChange('statusCode', value && value !== '0' ? value : '')
+        }
+      >
+        <SelectTrigger aria-label={t('Status Code')}>
+          <SelectValue>
+            {filters.statusCode
+              ? `HTTP ${filters.statusCode}`
+              : t('Status Code')}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent alignItemWithTrigger={false}>
+          <SelectGroup>
+            {statusCodeItems.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </LogsFilterField>
+  ) : null
   const advancedFilters = (
     <>
       <LogsFilterField className={sensitiveInputClass}>
@@ -552,6 +607,7 @@ export function CommonLogsFilterBar<TData>(
           {modelFilter}
           {groupFilter}
           {typeFilter}
+          {statusCodeFilter}
         </>
       }
       advancedFilters={advancedFilters}
@@ -561,12 +617,17 @@ export function CommonLogsFilterBar<TData>(
           {modelFilter}
           {groupFilter}
           {typeFilter}
+          {statusCodeFilter}
           {advancedFilters}
         </>
       }
       mobileFilterCount={
-        [filters.model, filters.group, hasTypeFilter].filter(Boolean).length +
-        expandedFilterCount
+        [
+          filters.model,
+          filters.group,
+          filters.statusCode,
+          hasTypeFilter,
+        ].filter(Boolean).length + expandedFilterCount
       }
       hasAdvancedActiveFilters={hasExpandedFilters}
       advancedFilterCount={expandedFilterCount}

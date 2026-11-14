@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -518,6 +519,90 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
+// logStatusCodeExpression reads the recorded top-level status without inferring
+// success for legacy metadata or matching nested/client status codes.
+func logStatusCodeExpression() string {
+	switch common.LogDatabaseType() {
+	case common.DatabaseTypeMySQL:
+		return "JSON_UNQUOTE(JSON_EXTRACT(NULLIF(TRIM(logs.other), ''), '$.status_code'))"
+	case common.DatabaseTypePostgreSQL:
+		return "(CAST(NULLIF(TRIM(logs.other), '') AS json) ->> 'status_code')"
+	case common.DatabaseTypeClickHouse:
+		return "COALESCE(NULLIF(JSONExtractString(logs.other, 'status_code'), ''), JSONExtractRaw(logs.other, 'status_code'))"
+	default:
+		return "CAST(json_extract(NULLIF(TRIM(logs.other), ''), '$.status_code') AS TEXT)"
+	}
+}
+
+// GetLogStatusCodes returns the valid HTTP statuses recorded anywhere in the
+// retained log history, independently of list filters and pagination.
+func GetLogStatusCodes(ctx context.Context) ([]int, error) {
+	var rows []struct{ StatusCode string }
+	err := LOG_DB.WithContext(ctx).Model(&Log{}).Distinct().
+		Select("COALESCE(" + logStatusCodeExpression() + ", '') AS status_code").Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[int]struct{})
+	for _, row := range rows {
+		code, err := strconv.Atoi(row.StatusCode)
+		if err == nil && code >= 100 && code <= 599 && strconv.Itoa(code) == row.StatusCode {
+			seen[code] = struct{}{}
+		}
+	}
+	codes := make([]int, 0, len(seen))
+	for code := range seen {
+		codes = append(codes, code)
+	}
+	slices.Sort(codes)
+	return codes, nil
+}
+
+type LogStatusCodeCount struct {
+	StatusCode int   `json:"status_code"`
+	Count      int64 `json:"count"`
+}
+
+type LogStatusCodeStats struct {
+	Items      []LogStatusCodeCount `json:"items"`
+	Total      int64                `json:"total"`
+	Recorded   int64                `json:"recorded"`
+	Unrecorded int64                `json:"unrecorded"`
+}
+
+// GetLogStatusCodeStats counts consumption/error log records, including retry
+// records. Missing or invalid statuses stay separate rather than implying 200.
+func GetLogStatusCodeStats(ctx context.Context, startTimestamp, endTimestamp int64, username string) (LogStatusCodeStats, error) {
+	stats := LogStatusCodeStats{Items: []LogStatusCodeCount{}}
+	tx := LOG_DB.WithContext(ctx).Model(&Log{}).
+		Where("logs.type IN ?", []int{LogTypeConsume, LogTypeError}).
+		Where("logs.created_at >= ? AND logs.created_at <= ?", startTimestamp, endTimestamp)
+	tx, err := applyExplicitLogTextFilter(tx, "logs.username", username)
+	if err != nil {
+		return stats, err
+	}
+	var rows []struct {
+		StatusCode string
+		Count      int64
+	}
+	expression := "COALESCE(" + logStatusCodeExpression() + ", '')"
+	if err := tx.Select(expression + " AS status_code, COUNT(*) AS count").Group(expression).Scan(&rows).Error; err != nil {
+		return stats, err
+	}
+	for _, row := range rows {
+		stats.Total += row.Count
+		code, err := strconv.Atoi(row.StatusCode)
+		if err != nil || code < 100 || code > 599 || strconv.Itoa(code) != row.StatusCode {
+			stats.Unrecorded += row.Count
+			continue
+		}
+		stats.Recorded += row.Count
+		stats.Items = append(stats.Items, LogStatusCodeCount{StatusCode: code, Count: row.Count})
+	}
+	slices.SortFunc(stats.Items, func(a, b LogStatusCodeCount) int { return a.StatusCode - b.StatusCode })
+	return stats, nil
+}
+
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, statusCode int) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
@@ -554,19 +639,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
 	if statusCode != 0 {
-		// Match the recorded error status, independently of client_status_code.
-		// Empty legacy metadata has no status; do not infer a successful response.
-		status := strconv.Itoa(statusCode)
-		switch common.LogDatabaseType() {
-		case common.DatabaseTypeMySQL:
-			tx = tx.Where("JSON_UNQUOTE(JSON_EXTRACT(NULLIF(TRIM(logs.other), ''), '$.status_code')) = ?", status)
-		case common.DatabaseTypePostgreSQL:
-			tx = tx.Where("CAST(NULLIF(TRIM(logs.other), '') AS json) ->> 'status_code' = ?", status)
-		case common.DatabaseTypeClickHouse:
-			tx = tx.Where("(JSONExtractRaw(logs.other, 'status_code') = ? OR JSONExtractString(logs.other, 'status_code') = ?)", status, status)
-		default:
-			tx = tx.Where("CAST(json_extract(NULLIF(TRIM(logs.other), ''), '$.status_code') AS TEXT) = ?", status)
-		}
+		tx = tx.Where(logStatusCodeExpression()+" = ?", strconv.Itoa(statusCode))
 	}
 	err = tx.Model(&Log{}).Count(&total).Error
 	if err != nil {

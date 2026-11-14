@@ -80,8 +80,17 @@ async function fetchLogStats<T>(
 export const getAllLogs = (params: GetLogsParams = {}) =>
   fetchLogs('/api/log', params, true)
 
+export async function getLogStatusCodes(): Promise<{
+  success: boolean
+  message?: string
+  data?: number[]
+}> {
+  const response = await api.get('/api/log/status_codes')
+  return response.data
+}
+
 export const getUserLogs = (
-  params: Omit<GetLogsParams, 'username' | 'channel'> = {}
+  params: Omit<GetLogsParams, 'username' | 'channel' | 'status_code'> = {}
 ) => fetchLogs('/api/log', params, false)
 
 export const getLogStats = (params: GetLogStatsParams = {}) =>

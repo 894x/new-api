@@ -191,6 +191,13 @@ export interface DashboardFilters {
   username?: string
 }
 
+export interface StatusCodeStats {
+  items: Array<{ status_code: number; count: number }>
+  total: number
+  recorded: number
+  unrecorded: number
+}
+
 export type ConsumptionDistributionChartType = 'bar' | 'area'
 
 export type ModelAnalyticsChartTab = 'trend' | 'proportion' | 'top'

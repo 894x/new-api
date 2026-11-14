@@ -54,6 +54,34 @@ func GetTaskBillingHistory(c *gin.Context) {
 	common.ApiSuccess(c, history)
 }
 
+func GetLogStatusCodes(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	codes, err := model.GetLogStatusCodes(ctx)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, codes)
+}
+
+func GetLogStatusCodeStats(c *gin.Context) {
+	start, startErr := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
+	end, endErr := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	if startErr != nil || endErr != nil || start <= 0 || end < start {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid time range"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	stats, err := model.GetLogStatusCodeStats(ctx, start, end, c.Query("username"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, stats)
+}
+
 func GetAllLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	logType, _ := strconv.Atoi(c.Query("type"))

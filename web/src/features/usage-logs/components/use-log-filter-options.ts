@@ -27,6 +27,7 @@ import { getUsers } from '@/features/users/api'
 import { getUserModels } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
+import { getLogStatusCodes } from '../api'
 import type { LogCategory } from '../types'
 
 const FILTER_OPTIONS_STALE_TIME = 5 * 60 * 1000
@@ -76,6 +77,16 @@ export function useLogFilterOptions<TData>(
     [tableData]
   )
   const isCommon = logCategory === 'common'
+  const statusCodesQuery = useQuery({
+    queryKey: ['usage-logs', 'filter-options', 'status-codes'],
+    queryFn: async () => {
+      const result = requireServerSuccess(await getLogStatusCodes())
+      return Array.isArray(result.data) ? result.data : []
+    },
+    enabled: isCommon && isAdmin,
+    staleTime: FILTER_OPTIONS_STALE_TIME,
+    meta: { errorToast: false },
+  })
   const modelsQuery = useQuery({
     queryKey: ['usage-logs', 'filter-options', 'models'],
     queryFn: async () => {
@@ -128,6 +139,10 @@ export function useLogFilterOptions<TData>(
 
   return useMemo(
     () => ({
+      statusCodeOptions: (statusCodesQuery.data ?? []).map((code) => ({
+        value: String(code),
+        label: `HTTP ${code}`,
+      })),
       modelOptions: mergeOptions(
         (modelsQuery.data ?? []).map((model) => ({
           value: model,
@@ -189,6 +204,7 @@ export function useLogFilterOptions<TData>(
       tokensQuery.data,
       usersQuery.data,
       channelsQuery.data,
+      statusCodesQuery.data,
     ]
   )
 }
