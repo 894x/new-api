@@ -278,7 +278,14 @@ export type ChannelStatusImpact = {
 }
 
 export type ChannelStatusRoutingPool = {
-  source: 'default_pool' | 'channel_defaults' | 'user' | 'legacy_user'
+  source:
+    | 'default_pool'
+    | 'channel_defaults'
+    | 'user'
+    | 'legacy_user'
+    | 'service_type'
+  service_type_id?: number
+  service_type_name?: string
   user_id: number
   username: string
   channel_id: number

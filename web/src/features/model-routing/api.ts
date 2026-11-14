@@ -41,7 +41,9 @@ export interface UserRoutingPoolConfig extends UserChannelRoutingConfig {
   username: string
   user_role: number
   model_groups?: Record<string, string[]>
-  source: 'user' | 'default_pool' | 'channel_defaults'
+  source: 'user' | 'service_type' | 'default_pool' | 'channel_defaults'
+  service_type_id?: number
+  service_type_name?: string
   mode: RoutingMode
   configured: boolean
   strategy_mode?: RoutingMode | 'inherit'
@@ -112,6 +114,7 @@ export interface PoolCandidate {
 }
 
 export interface RoutingPool {
+  service_type_id?: number
   routing_group: string
   model: string
   mode: RoutingMode
@@ -135,6 +138,7 @@ export interface RoutingPoolView extends RoutingPool {
 }
 
 export interface PoolFilters {
+  service_type_id?: number
   scope?: 'all'
   channel_id?: number
   channel_role?: 'primary' | 'non_primary'
@@ -147,8 +151,8 @@ export interface PoolFilters {
 export const routingPoolKeys = {
   all: ['model-routing-pools'] as const,
   list: (filters: PoolFilters) => [...routingPoolKeys.all, filters] as const,
-  detail: (group: string, model: string) =>
-    [...routingPoolKeys.all, 'detail', group, model] as const,
+  detail: (group: string, model: string, serviceTypeId = 0) =>
+    [...routingPoolKeys.all, 'detail', group, model, serviceTypeId] as const,
   catalog: (group: string) => ['model-routing-catalog', group] as const,
 }
 
@@ -179,7 +183,11 @@ export async function getRoutingCatalog(group = '') {
   return requireServerSuccess(response.data).data
 }
 
-export async function getRoutingPool(group: string, model: string) {
+export async function getRoutingPool(
+  group: string,
+  model: string,
+  serviceTypeId = 0
+) {
   const response = await api.get<{
     success: boolean
     message?: string
@@ -189,7 +197,13 @@ export async function getRoutingPool(group: string, model: string) {
       effective_mode?: RoutingMode | '' | null
       tuning_defaults?: DynamicRoutingSettings
     }
-  }>('/api/channel/routing-pool', { params: { routing_group: group, model } })
+  }>('/api/channel/routing-pool', {
+    params: {
+      routing_group: group,
+      model,
+      ...(serviceTypeId ? { service_type_id: serviceTypeId } : {}),
+    },
+  })
   return requireServerSuccess(response.data).data
 }
 
@@ -210,8 +224,77 @@ export async function deleteRoutingPool(pool: RoutingPool) {
         routing_group: pool.routing_group,
         model: pool.model,
         revision: pool.revision,
+        ...(pool.service_type_id
+          ? { service_type_id: pool.service_type_id }
+          : {}),
       },
     }
+  )
+  requireServerSuccess(response.data)
+}
+
+export interface RoutingServiceType {
+  id: number
+  name: string
+  revision: string
+}
+
+export interface UserServiceTypeBinding {
+  model: string
+  routing_group: string
+  service_type_id: number
+  revision: string
+}
+
+export const serviceTypeKeys = {
+  all: ['routing-service-types'] as const,
+  user: (userId: number) => ['user-routing-service-types', userId] as const,
+}
+
+export async function listRoutingServiceTypes() {
+  const response = await api.get<{
+    success: boolean
+    data: RoutingServiceType[]
+  }>('/api/channel/routing-service-types')
+  return requireServerSuccess(response.data).data
+}
+
+export async function saveRoutingServiceType(serviceType: RoutingServiceType) {
+  const response = await api.put<{
+    success: boolean
+    data: RoutingServiceType
+  }>('/api/channel/routing-service-types', serviceType)
+  return requireServerSuccess(response.data).data
+}
+
+export async function deleteRoutingServiceType(
+  serviceType: RoutingServiceType
+) {
+  const response = await api.delete<{ success: boolean }>(
+    '/api/channel/routing-service-types',
+    { data: serviceType }
+  )
+  requireServerSuccess(response.data)
+}
+
+export async function getUserServiceTypes(userId: number) {
+  const response = await api.get<{
+    success: boolean
+    data: {
+      bindings: UserServiceTypeBinding[]
+      service_types: RoutingServiceType[]
+    }
+  }>(`/api/user/${userId}/routing-service-types`)
+  return requireServerSuccess(response.data).data
+}
+
+export async function saveUserServiceType(
+  userId: number,
+  binding: UserServiceTypeBinding & { reset?: boolean }
+) {
+  const response = await api.put<{ success: boolean }>(
+    `/api/user/${userId}/routing-service-types`,
+    binding
   )
   requireServerSuccess(response.data)
 }

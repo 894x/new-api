@@ -824,7 +824,7 @@ test('restoring inheritance requires confirmation and resets only this model and
   const { card } = await mountWorkspace()
   fireEvent.click(
     await within(card).findByRole('button', {
-      name: 'Clear and use default pool',
+      name: 'Clear and inherit routing pool',
     })
   )
   fireEvent.click(
@@ -834,11 +834,11 @@ test('restoring inheritance requires confirmation and resets only this model and
   )
   expect(patch).not.toHaveBeenCalled()
   fireEvent.click(
-    within(card).getByRole('button', { name: 'Clear and use default pool' })
+    within(card).getByRole('button', { name: 'Clear and inherit routing pool' })
   )
   fireEvent.click(
     within(screen.getByRole('alertdialog')).getByRole('button', {
-      name: 'Clear and use default pool',
+      name: 'Clear and inherit routing pool',
     })
   )
   await waitFor(() =>
@@ -1105,18 +1105,20 @@ test('clearing a configured user pool confirms that the default pool will be use
   const { card } = await mountWorkspace()
   await userEvent.click(
     await within(card).findByRole('button', {
-      name: 'Clear and use default pool',
+      name: 'Clear and inherit routing pool',
     })
   )
   const dialog = screen.getByRole('alertdialog')
   expect(
     within(dialog).getByText(
-      'Clear this user pool and use the default routing pool for this model and public group?'
+      'Clear this user pool and restore inherited routing for this model and public group?'
     )
   ).toBeVisible()
   expect(patch).not.toHaveBeenCalled()
   await userEvent.click(
-    within(dialog).getByRole('button', { name: 'Clear and use default pool' })
+    within(dialog).getByRole('button', {
+      name: 'Clear and inherit routing pool',
+    })
   )
   await waitFor(() =>
     expect(patch).toHaveBeenCalledWith(
@@ -1167,7 +1169,7 @@ test('removing the final user member explains default fallback and saves an empt
   const dialog = screen.getByRole('alertdialog')
   await userEvent.click(within(dialog).getByRole('button', { name: 'Remove' }))
   expect(within(card).getByRole('status')).toHaveTextContent(
-    'This user pool is empty. Saving will restore the default routing pool.'
+    'This user pool is empty. Saving will restore inherited routing.'
   )
   expect(within(card).queryByRole('alert')).not.toBeInTheDocument()
   await userEvent.click(within(card).getByRole('button', { name: 'Save' }))

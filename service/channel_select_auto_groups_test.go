@@ -35,6 +35,7 @@ func setupChannelSelectAutoGroupsTest(t testing.TB) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.ModelRoutingPool{}))
+	require.NoError(t, db.AutoMigrate(&model.RoutingServiceType{}, &model.RoutingServiceTypePool{}, &model.UserRoutingServiceType{}))
 	model.DB = db
 	common.MemoryCacheEnabled = true
 	common.RetryTimes = 0

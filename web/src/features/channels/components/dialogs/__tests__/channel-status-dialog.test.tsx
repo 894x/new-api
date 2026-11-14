@@ -48,6 +48,29 @@ import { DataTableTagRowActions } from '../../data-table-tag-row-actions'
 import { ChannelStatusDialog } from '../channel-status-dialog'
 
 const originalAuth = useAuthStore.getState().auth
+
+test('channel status review names an affected shared service type pool', async () => {
+  impact.routing_pools = [
+    {
+      source: 'service_type',
+      service_type_id: 7,
+      service_type_name: 'Premium service',
+      user_id: 0,
+      username: '',
+      channel_id: 58,
+      model: 'kimi-k3.1-pro',
+      routing_group: 'vip',
+      priority: 100,
+      enabled: true,
+    },
+  ]
+  render(
+    <Harness>
+      <ChannelStatusDialog target={{ ids: [58] }} onOpenChange={vi.fn()} />
+    </Harness>
+  )
+  expect(await screen.findByText('Premium service')).toBeVisible()
+})
 let client: QueryClient
 let impact: ChannelStatusImpact
 const channel = channelSchema.parse({

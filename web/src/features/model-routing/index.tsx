@@ -58,10 +58,12 @@ import {
   listRoutingPools,
   routingPoolKeys,
   type PoolFilters,
+  type RoutingServiceType,
 } from './api'
 import { CreatePoolDialog } from './create-pool-dialog'
 import { PoolCard } from './pool-card'
 import { RoutingWorkspaceDisplay } from './routing-workspace-display'
+import { ServiceTypeManager } from './service-type-manager'
 import { UserPoolCard } from './user-pool-card'
 
 export function ModelRoutingWorkspace(props: {
@@ -95,6 +97,9 @@ export function ModelRoutingWorkspace(props: {
   })
   const [dirtyPools, setDirtyPools] = useState<Record<string, boolean>>({})
   const [creating, setCreating] = useState(false)
+  const [serviceType, setServiceType] = useState<RoutingServiceType | null>(
+    null
+  )
   useEffect(() => {
     setFilters((previous) => ({ ...previous, page: 1 }))
   }, [props.allUsers])
@@ -108,7 +113,8 @@ export function ModelRoutingWorkspace(props: {
   const effectiveFilters: PoolFilters = {
     ...filters,
     model: deferredModel,
-    scope: props.allUsers ? 'all' : undefined,
+    scope: props.allUsers && !serviceType ? 'all' : undefined,
+    ...(serviceType ? { service_type_id: serviceType.id } : {}),
   }
   const strategyLabels = {
     '': t('All strategies'),
@@ -168,6 +174,15 @@ export function ModelRoutingWorkspace(props: {
         toolbar={
           <>
             {props.scopeSelect}
+            <ServiceTypeManager
+              value={serviceType}
+              canWrite={canWrite}
+              disabled={dirty}
+              onSelect={(value) => {
+                setServiceType(value)
+                setFilters((previous) => ({ ...previous, page: 1 }))
+              }}
+            />
             <Combobox
               options={[
                 { value: '', label: t('All models') },
@@ -345,9 +360,15 @@ export function ModelRoutingWorkspace(props: {
             (pools.data.items.length === 0 ? (
               <EmptyState
                 title={t('No configured routing pools')}
-                description={t(
-                  'Requests inherit channel defaults until a model and public group pool is configured.'
-                )}
+                description={
+                  serviceType
+                    ? t(
+                        'Unconfigured service type pools inherit the default routing pools.'
+                      )
+                    : t(
+                        'Requests inherit channel defaults until a model and public group pool is configured.'
+                      )
+                }
                 action={
                   <Button
                     type='button'
@@ -361,7 +382,7 @@ export function ModelRoutingWorkspace(props: {
             ) : (
               <div className='grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,21rem),1fr))] items-start gap-4'>
                 {pools.data.items.map((pool) => {
-                  const key = `${pool.user_id ?? 0}\u0000${pool.routing_group}\u0000${pool.model}`
+                  const key = `${pool.service_type_id ?? 0}\u0000${pool.user_id ?? 0}\u0000${pool.routing_group}\u0000${pool.model}`
                   const onDirtyChange = (value: boolean) => {
                     setDirtyPools((previous) =>
                       previous[key] === value
@@ -393,7 +414,10 @@ export function ModelRoutingWorkspace(props: {
                       canWrite={canWrite && !pools.isPlaceholderData}
                       groupLabel={catalog.data?.groups[pool.routing_group]}
                       targetLabel={
-                        props.allUsers ? t('Default resource pool') : undefined
+                        serviceType?.name ??
+                        (props.allUsers
+                          ? t('Default resource pool')
+                          : undefined)
                       }
                       onDirtyChange={onDirtyChange}
                     />
@@ -458,6 +482,7 @@ export function ModelRoutingWorkspace(props: {
           onOpenChange={setCreating}
           groups={catalog.data?.groups ?? {}}
           canWrite={canWrite}
+          serviceTypeId={serviceType?.id}
           onCreated={(pool) =>
             updateFilters({
               model: pool.model,

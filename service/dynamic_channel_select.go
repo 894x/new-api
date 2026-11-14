@@ -1,7 +1,6 @@
 package service
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -80,14 +79,11 @@ func (p *RetryParam) channelRecovering(group string, channelID int) (bool, error
 		if !strategy.UsesDynamicRouting() && (strategy != nil || !DynamicRoutingEnabled()) {
 			continue
 		}
-		overrides, err := p.UserChannelRoutingForGroup(selectedGroup)
+		policy, err := p.RoutingPolicyKey(selectedGroup)
 		if err != nil {
 			return false, err
 		}
-		key := dynamicrouting.RouteKey{Group: selectedGroup, Model: p.ModelName}
-		if len(overrides) > 0 || strategy != nil && strategy.UserId > 0 {
-			key.Policy = fmt.Sprintf("user:%d", common.GetContextKeyInt(p.Ctx, constant.ContextKeyUserId))
-		}
+		key := dynamicrouting.RouteKey{Group: selectedGroup, Model: p.ModelName, Policy: policy}
 		if controller.IsRecovering(key, strategy != nil && strategy.Mode == model.RoutingModeDiscount, channelID, time.Now()) {
 			return true, nil
 		}
@@ -249,8 +245,9 @@ func selectDynamicSatisfiedChannel(param *RetryParam, group string) (*model.Chan
 		Group: group,
 		Model: param.ModelName,
 	}
-	if len(filters.UserRoutingOverrides) > 0 || strategy != nil && strategy.UserId > 0 {
-		key.Policy = fmt.Sprintf("user:%d", common.GetContextKeyInt(param.Ctx, constant.ContextKeyUserId))
+	key.Policy, err = param.RoutingPolicyKey(group)
+	if err != nil {
+		return nil, true, false, err
 	}
 	var decision dynamicrouting.Decision
 	pool, err := param.ModelRoutingPool(group)

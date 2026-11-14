@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/dynamicrouting"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -102,13 +101,11 @@ func recordPriorityRoutingSelection(param *RetryParam, group string, channel *mo
 		candidates = append(candidates, dynamicrouting.Candidate{ChannelID: entry.ChannelId, Priority: priority, Weight: entry.Weight})
 	}
 	key := dynamicrouting.RouteKey{Group: group, Model: param.ModelName}
-	strategy, err := param.RoutingStrategy(group)
+	policy, err := param.RoutingPolicyKey(group)
 	if err != nil {
 		return
 	}
-	if len(filters.UserRoutingOverrides) > 0 || strategy != nil && strategy.UserId > 0 {
-		key.Policy = fmt.Sprintf("user:%d", common.GetContextKeyInt(param.Ctx, constant.ContextKeyUserId))
-	}
+	key.Policy = policy
 	priorityRoutingRuntime.Lock()
 	if priorityRoutingRuntime.controller == nil {
 		config := dynamic_routing_setting.GetSnapshot().Config

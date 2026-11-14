@@ -31,16 +31,17 @@ var (
 // of one public model and outlet group. An empty Channels list is deny-all.
 // Channel defaults, credentials and shared channel/model capacity are untouched.
 type ModelRoutingPool struct {
-	RoutingGroup string                             `json:"routing_group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
-	Model        string                             `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
-	Mode         string                             `json:"mode" gorm:"type:varchar(16);not null"`
-	Revision     string                             `json:"revision" gorm:"type:varchar(64);not null"`
-	ChannelsJSON string                             `json:"-" gorm:"type:text;not null"`
-	Channels     []ModelRoutingPoolChannel          `json:"channels" gorm:"-"`
-	MaxTTFTMS    int64                              `json:"max_ttft_ms" gorm:"column:max_ttft_ms"`
-	MaxTPOTMS    int64                              `json:"max_tpot_ms" gorm:"column:max_tpot_ms"`
-	TuningJSON   string                             `json:"-" gorm:"type:text"`
-	Tuning       *dynamic_routing_setting.Overrides `json:"tuning,omitempty" gorm:"-"`
+	ServiceTypeID int                                `json:"service_type_id,omitempty" gorm:"-"`
+	RoutingGroup  string                             `json:"routing_group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+	Model         string                             `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
+	Mode          string                             `json:"mode" gorm:"type:varchar(16);not null"`
+	Revision      string                             `json:"revision" gorm:"type:varchar(64);not null"`
+	ChannelsJSON  string                             `json:"-" gorm:"type:text;not null"`
+	Channels      []ModelRoutingPoolChannel          `json:"channels" gorm:"-"`
+	MaxTTFTMS     int64                              `json:"max_ttft_ms" gorm:"column:max_ttft_ms"`
+	MaxTPOTMS     int64                              `json:"max_tpot_ms" gorm:"column:max_tpot_ms"`
+	TuningJSON    string                             `json:"-" gorm:"type:text"`
+	Tuning        *dynamic_routing_setting.Overrides `json:"tuning,omitempty" gorm:"-"`
 }
 
 func (pool *ModelRoutingPool) DecodeTuning() error {
@@ -72,6 +73,23 @@ type ModelRoutingPoolCandidate struct {
 }
 
 func GetModelRoutingPool(group, modelName string) (*ModelRoutingPool, error) {
+	return GetModelRoutingPoolForServiceType(group, modelName, 0)
+}
+
+func GetModelRoutingPoolForServiceType(group, modelName string, serviceTypeID int) (*ModelRoutingPool, error) {
+	if serviceTypeID < 0 {
+		return nil, ErrInvalidRoutingServiceType
+	}
+	if serviceTypeID > 0 {
+		var rows []RoutingServiceTypePool
+		if err := DB.Where("service_type_id = ? AND routing_group = ? AND model = ?", serviceTypeID, group, modelName).Limit(1).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		if len(rows) == 0 {
+			return nil, nil
+		}
+		return rows[0].Decode()
+	}
 	var rows []ModelRoutingPool
 	if err := DB.Where("routing_group = ? AND model = ?", group, modelName).Limit(1).Find(&rows).Error; err != nil {
 		return nil, err
@@ -87,6 +105,27 @@ func GetModelRoutingPool(group, modelName string) (*ModelRoutingPool, error) {
 		return nil, fmt.Errorf("decode model routing tuning: %w", err)
 	}
 	return pool, nil
+}
+
+// ResolveModelRoutingPool preserves absent-versus-empty membership at each
+// inheritance layer, including the base-model fallback for request modifiers.
+func ResolveModelRoutingPool(group, modelName string, serviceTypeID int) (*ModelRoutingPool, error) {
+	for _, typeID := range []int{serviceTypeID, 0} {
+		pool, err := GetModelRoutingPoolForServiceType(group, modelName, typeID)
+		if err != nil {
+			return nil, err
+		}
+		if base := ratio_setting.RoutingMatchModelName(modelName); pool == nil && base != "" && base != modelName {
+			pool, err = GetModelRoutingPoolForServiceType(group, base, typeID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if pool != nil || typeID == 0 {
+			return pool, nil
+		}
+	}
+	return nil, nil
 }
 
 // Candidate metadata deliberately excludes credentials and provider settings.
@@ -154,6 +193,50 @@ func ListModelRoutingPoolCandidates(group, modelName string) ([]ModelRoutingPool
 func SaveModelRoutingPool(pool *ModelRoutingPool, expectedRevision string) error {
 	dynamicRoutingOptionsMu.Lock()
 	defer dynamicRoutingOptionsMu.Unlock()
+	if err := normalizeModelRoutingPool(pool); err != nil {
+		return err
+	}
+	if pool.ServiceTypeID > 0 {
+		return saveRoutingServiceTypePool(pool, expectedRevision)
+	}
+	if expectedRevision == "" {
+		result := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(pool)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrRoutingPoolConflict
+		}
+		// MySQL connections with clientFoundRows can report a matched no-op
+		// conflict as affected. Verify the stored value before reporting success.
+		current, err := GetModelRoutingPool(pool.RoutingGroup, pool.Model)
+		if err != nil {
+			return err
+		}
+		if current == nil || current.Revision != pool.Revision {
+			return ErrRoutingPoolConflict
+		}
+		return nil
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var current ModelRoutingPool
+		if err := lockForUpdate(tx).Where("routing_group = ? AND model = ?", pool.RoutingGroup, pool.Model).First(&current).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrRoutingPoolConflict
+			}
+			return err
+		}
+		if current.Revision != expectedRevision {
+			return ErrRoutingPoolConflict
+		}
+		return tx.Model(&current).Updates(map[string]any{"mode": pool.Mode, "revision": pool.Revision, "channels_json": pool.ChannelsJSON, "max_ttft_ms": pool.MaxTTFTMS, "max_tpot_ms": pool.MaxTPOTMS, "tuning_json": pool.TuningJSON}).Error
+	})
+}
+
+func normalizeModelRoutingPool(pool *ModelRoutingPool) error {
+	if pool != nil && pool.ServiceTypeID < 0 {
+		return ErrInvalidRoutingPool
+	}
 	if pool == nil || pool.RoutingGroup == "" || pool.RoutingGroup == "auto" || len(pool.RoutingGroup) > 64 || strings.TrimSpace(pool.RoutingGroup) != pool.RoutingGroup || strings.ContainsAny(pool.RoutingGroup, ",\x00\r\n") || pool.Model == "" || len(pool.Model) > 255 || strings.TrimSpace(pool.Model) != pool.Model || strings.ContainsAny(pool.Model, "\x00\r\n") || !slices.Contains([]string{RoutingModePriority, RoutingModeSmart, RoutingModeDiscount}, pool.Mode) || len(pool.Channels) > 500 || pool.MaxTTFTMS < 0 || pool.MaxTTFTMS > 3600000 || pool.MaxTPOTMS < 0 || pool.MaxTPOTMS > 60000 {
 		return ErrInvalidRoutingPool
 	}
@@ -213,44 +296,20 @@ func SaveModelRoutingPool(pool *ModelRoutingPool, expectedRevision string) error
 		revisionData += "\x00" + pool.TuningJSON
 	}
 	pool.Revision = fmt.Sprintf("%x", sha256.Sum256([]byte(revisionData)))
-	if expectedRevision == "" {
-		result := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(pool)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return ErrRoutingPoolConflict
-		}
-		// MySQL connections with clientFoundRows can report a matched no-op
-		// conflict as affected. Verify the stored value before reporting success.
-		current, err := GetModelRoutingPool(pool.RoutingGroup, pool.Model)
-		if err != nil {
-			return err
-		}
-		if current == nil || current.Revision != pool.Revision {
-			return ErrRoutingPoolConflict
-		}
-		return nil
-	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		var current ModelRoutingPool
-		if err := lockForUpdate(tx).Where("routing_group = ? AND model = ?", pool.RoutingGroup, pool.Model).First(&current).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrRoutingPoolConflict
-			}
-			return err
-		}
-		if current.Revision != expectedRevision {
-			return ErrRoutingPoolConflict
-		}
-		return tx.Model(&current).Updates(map[string]any{"mode": pool.Mode, "revision": pool.Revision, "channels_json": pool.ChannelsJSON, "max_ttft_ms": pool.MaxTTFTMS, "max_tpot_ms": pool.MaxTPOTMS, "tuning_json": pool.TuningJSON}).Error
-	})
+	return nil
 }
 
 // Deleting the explicit pool restores inheritance; emptying it does not.
 func DeleteModelRoutingPool(group, modelName, revision string) error {
+	return DeleteModelRoutingPoolForServiceType(group, modelName, revision, 0)
+}
+
+func DeleteModelRoutingPoolForServiceType(group, modelName, revision string, serviceTypeID int) error {
 	if revision == "" {
 		return ErrRoutingPoolConflict
+	}
+	if serviceTypeID > 0 {
+		return deleteRoutingServiceTypePool(group, modelName, revision, serviceTypeID)
 	}
 	result := DB.Where("routing_group = ? AND model = ? AND revision = ?", group, modelName, revision).Delete(&ModelRoutingPool{})
 	if result.Error != nil {

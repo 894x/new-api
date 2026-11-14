@@ -17,6 +17,7 @@ import (
 
 func TestCustomerGroupConfigurationAuthorization(t *testing.T) {
 	f := setupManagedUserE2E(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.RoutingServiceType{}, &model.RoutingServiceTypePool{}, &model.UserRoutingServiceType{}))
 	require.NoError(t, model.DB.AutoMigrate(&model.Option{}, &model.Channel{}, &model.Ability{}, &model.ChannelModelOverride{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.UserRoutingStrategy{}, &model.AuditLog{}))
 	versionQuery := "SELECT VERSION()"
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
@@ -63,6 +64,8 @@ func TestCustomerGroupConfigurationAuthorization(t *testing.T) {
 	endpoints := []struct{ method, path string }{
 		{http.MethodGet, "/group-config"},
 		{http.MethodGet, "/channel-routing-overrides"},
+		{http.MethodGet, "/routing-service-types"},
+		{http.MethodPut, "/routing-service-types"},
 		{http.MethodPut, "/group-config"},
 		{http.MethodPatch, "/channel-routing-overrides"},
 		{http.MethodPost, "/group-config/dedicated"},
@@ -107,12 +110,25 @@ func TestCustomerGroupConfigurationAuthorization(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "%v", response)
 	require.Equal(t, true, response["success"], "%v", response)
 	routing := response["data"].(map[string]any)
-	for _, endpoint := range endpoints[2:] {
+	status, response = f.request(t, http.MethodGet, base+"/routing-service-types", f.managerA.Id, nil)
+	require.Equal(t, http.StatusOK, status, "%v", response)
+	for _, endpoint := range endpoints {
+		if endpoint.method == http.MethodGet {
+			continue
+		}
 		status, _ := f.request(t, endpoint.method, base+endpoint.path, f.managerA.Id, nil)
 		assert.Equal(t, http.StatusForbidden, status, "read only cannot mutate %s", endpoint.path)
 	}
 
 	setCustomerGroupPermissions(t, f, f.managerA, true, true)
+	serviceType := model.RoutingServiceType{Name: "Customer service"}
+	require.NoError(t, model.SaveRoutingServiceType(&serviceType, ""))
+	status, response = f.request(t, http.MethodPut, base+"/routing-service-types", f.managerA.Id, map[string]any{"service_type_id": serviceType.ID})
+	require.Equal(t, http.StatusOK, status, "%v", response)
+	bindings, err := model.ListUserRoutingServiceTypes(f.unprivileged.Id)
+	require.NoError(t, err)
+	require.Len(t, bindings, 1)
+	assert.Equal(t, serviceType.ID, bindings[0].ServiceTypeID)
 	for _, target := range []model.User{peer, f.root} {
 		for _, endpoint := range endpoints {
 			status, _ := f.request(t, endpoint.method, fmt.Sprintf("/api/user/%d%s", target.Id, endpoint.path), f.managerA.Id, nil)

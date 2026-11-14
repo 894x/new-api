@@ -36,6 +36,8 @@ type userChannelRoutingRow struct {
 }
 
 type userChannelRoutingResponse struct {
+	ServiceTypeID        int                             `json:"service_type_id,omitempty"`
+	ServiceTypeName      string                          `json:"service_type_name,omitempty"`
 	Models               []string                        `json:"models"`
 	ConfiguredModels     []string                        `json:"configured_models"`
 	ConfiguredKeyGroups  map[string][]string             `json:"configured_key_groups"`
@@ -307,6 +309,15 @@ func GetUserChannelRouting(c *gin.Context) {
 		}
 		if pool != nil {
 			response.Source, response.Mode = "default_pool", pool.Mode
+			if pool.ServiceTypeID > 0 {
+				response.Source, response.ServiceTypeID = "service_type", pool.ServiceTypeID
+				var serviceType model.RoutingServiceType
+				if err := model.DB.First(&serviceType, pool.ServiceTypeID).Error; err != nil {
+					common.ApiError(c, err)
+					return
+				}
+				response.ServiceTypeName = serviceType.Name
+			}
 		}
 		response.StrategyMode = "inherit"
 		for _, strategy := range strategies {

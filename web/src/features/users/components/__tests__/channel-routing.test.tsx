@@ -693,6 +693,7 @@ describe('user channel routing', () => {
       await screen.findByText('No public Key groups available')
     ).toBeInTheDocument()
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Service type' })).toBeEnabled()
     expect(api.patch).not.toHaveBeenCalled()
   })
 

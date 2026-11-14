@@ -526,8 +526,9 @@ func openTaskDialectDatabase(t *testing.T, models ...any) (*gorm.DB, common.Data
 schemaLoop:
 	for _, row := range models {
 		switch row.(type) {
-		case *model.Channel, *model.Task:
+		case *model.Channel, *model.Task, *model.ModelRoutingPool, *model.UserGroupChannelRoutingOverride:
 			models = append(models, &model.ModelRoutingPool{}, &model.UserChannelRoutingOverride{}, &model.UserGroupChannelRoutingOverride{}, &model.UserRoutingStrategy{}, &model.Ability{})
+			models = append(models, &model.RoutingServiceType{}, &model.RoutingServiceTypePool{}, &model.UserRoutingServiceType{})
 			break schemaLoop
 		}
 	}

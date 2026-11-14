@@ -54,6 +54,7 @@ export function CreatePoolDialog(props: {
   onOpenChange: (open: boolean) => void
   groups: Record<string, string>
   canWrite: boolean
+  serviceTypeId?: number
   onCreated?: (pool: RoutingPool) => void
 }) {
   const { t } = useTranslation()
@@ -75,8 +76,13 @@ export function CreatePoolDialog(props: {
     meta: { errorToast: false },
   })
   const detail = useQuery({
-    queryKey: routingPoolKeys.detail(values.group, values.model),
-    queryFn: () => getRoutingPool(values.group, values.model),
+    queryKey: routingPoolKeys.detail(
+      values.group,
+      values.model,
+      props.serviceTypeId
+    ),
+    queryFn: () =>
+      getRoutingPool(values.group, values.model, props.serviceTypeId),
     enabled: props.open && !!values.group && !!values.model,
     staleTime: 0,
     refetchOnWindowFocus: false,
@@ -91,6 +97,9 @@ export function CreatePoolDialog(props: {
         throw new Error(t('This routing pool is already configured.'))
       }
       return saveRoutingPool({
+        ...(props.serviceTypeId
+          ? { service_type_id: props.serviceTypeId }
+          : {}),
         routing_group: data.group,
         model: data.model,
         mode: data.mode,
@@ -114,6 +123,9 @@ export function CreatePoolDialog(props: {
     onSuccess: async (pool) => {
       toast.success(t('Saved successfully'))
       await queryClient.invalidateQueries({ queryKey: routingPoolKeys.all })
+      await queryClient.invalidateQueries({
+        queryKey: ['routing-service-types'],
+      })
       props.onCreated?.(pool)
       props.onOpenChange(false)
       form.reset()

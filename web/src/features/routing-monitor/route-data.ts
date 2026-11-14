@@ -32,7 +32,10 @@ export function effectiveMonitorRoute(
   mode?: RoutingMode
 ): MonitorRoute | undefined {
   if (userId && !source) return undefined
-  const policy = userId && source === 'user' ? `user:${userId}` : ''
+  const policy =
+    userId && (source === 'user' || source === 'service_type')
+      ? `user:${userId}`
+      : ''
   return node?.routes.find(
     (route) =>
       route.group === group &&

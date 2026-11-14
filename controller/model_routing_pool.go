@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -16,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type modelRoutingPoolView struct {
@@ -71,14 +73,15 @@ func GetModelRoutingPoolCatalog(c *gin.Context) {
 
 func ListModelRoutingPools(c *gin.Context) {
 	filter := struct {
-		Model       string `form:"model" binding:"max=255"`
-		Group       string `form:"routing_group" binding:"max=64"`
-		Mode        string `form:"mode" binding:"omitempty,oneof=priority smart discount"`
-		Scope       string `form:"scope" binding:"omitempty,oneof=all"`
-		ChannelID   int    `form:"channel_id" binding:"gte=0"`
-		ChannelRole string `form:"channel_role" binding:"omitempty,oneof=primary non_primary"`
-		Page        int    `form:"page" binding:"gte=1,lte=1000000"`
-		PageSize    int    `form:"page_size" binding:"gte=1,lte=50"`
+		Model         string `form:"model" binding:"max=255"`
+		Group         string `form:"routing_group" binding:"max=64"`
+		Mode          string `form:"mode" binding:"omitempty,oneof=priority smart discount"`
+		Scope         string `form:"scope" binding:"omitempty,oneof=all"`
+		ChannelID     int    `form:"channel_id" binding:"gte=0"`
+		ChannelRole   string `form:"channel_role" binding:"omitempty,oneof=primary non_primary"`
+		Page          int    `form:"page" binding:"gte=1,lte=1000000"`
+		PageSize      int    `form:"page_size" binding:"gte=1,lte=50"`
+		ServiceTypeID int    `form:"service_type_id" binding:"gte=0"`
 	}{Page: 1, PageSize: 12}
 	if err := c.ShouldBindQuery(&filter); err != nil || filter.ChannelRole != "" && filter.ChannelID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid routing pool filters"})
@@ -89,6 +92,9 @@ func ListModelRoutingPools(c *gin.Context) {
 		return
 	}
 	query := model.DB.Model(&model.ModelRoutingPool{})
+	if filter.ServiceTypeID > 0 {
+		query = model.DB.Model(&model.RoutingServiceTypePool{}).Where("service_type_id = ?", filter.ServiceTypeID)
+	}
 	if filter.Model != "" {
 		query = query.Where("model LIKE ?", "%"+strings.TrimSpace(filter.Model)+"%")
 	}
@@ -96,9 +102,25 @@ func ListModelRoutingPools(c *gin.Context) {
 		query = query.Where("routing_group = ?", filter.Group)
 	}
 	var rows []model.ModelRoutingPool
-	if err := query.Order("model, routing_group").Find(&rows).Error; err != nil {
-		common.ApiError(c, err)
-		return
+	if filter.ServiceTypeID > 0 {
+		var records []model.RoutingServiceTypePool
+		if err := query.Order("model, routing_group").Find(&records).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		for _, record := range records {
+			pool, err := record.Decode()
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			rows = append(rows, *pool)
+		}
+	} else {
+		if err := query.Order("model, routing_group").Find(&rows).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	}
 	allowedPairs, err := model.GetAllowedGroupModelPairs()
 	if err != nil {
@@ -111,18 +133,20 @@ func ListModelRoutingPools(c *gin.Context) {
 	items := make([]modelRoutingPoolView, 0, len(rows))
 	defaults := make(map[string]model.ModelRoutingPool, len(rows))
 	for _, row := range rows {
-		if err := common.UnmarshalJsonStr(row.ChannelsJSON, &row.Channels); err != nil {
-			common.ApiError(c, err)
-			return
+		if row.ServiceTypeID == 0 {
+			if err := common.UnmarshalJsonStr(row.ChannelsJSON, &row.Channels); err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			if err := row.DecodeTuning(); err != nil {
+				common.ApiError(c, err)
+				return
+			}
 		}
-		if err := row.DecodeTuning(); err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		defaults[row.RoutingGroup+"\x00"+row.Model] = row
+		defaults["0\x00"+row.RoutingGroup+"\x00"+row.Model] = row
 		items = append(items, modelRoutingPoolView{ModelRoutingPool: row, TuningDefaults: dynamic_routing_setting.GetSetting()})
 	}
-	if filter.Scope == "all" {
+	if filter.Scope == "all" && filter.ServiceTypeID == 0 {
 		// Query only explicit memberships and strategy overrides. Inherited users
 		// do not create duplicate copies of every default pool.
 		var overrides []model.UserGroupChannelRoutingOverride
@@ -201,6 +225,17 @@ func ListModelRoutingPools(c *gin.Context) {
 			pool.Mode = row.Mode
 		}
 		candidateCache := make(map[string][]model.ModelRoutingPoolCandidate)
+		bindings := make(map[int][]model.UserRoutingServiceType)
+		for ids := range slices.Chunk(userIDs, 500) {
+			var rows []model.UserRoutingServiceType
+			if err := model.DB.Where("user_id IN ?", ids).Find(&rows).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			for _, row := range rows {
+				bindings[row.UserID] = append(bindings[row.UserID], row)
+			}
+		}
 		for key, pool := range userPools {
 			user, exists := byUser[key.userID]
 			_, usable := usableGroups[key.userID][key.group]
@@ -208,15 +243,14 @@ func ListModelRoutingPools(c *gin.Context) {
 			if !exists || !usable || !public || key.group == "auto" || !ratio_setting.ContainsGroupRatio(key.group) || !allowedPairs[key.group][ratio_setting.RoutingMatchModelName(key.model)] {
 				continue
 			}
-			defaultKey := key.group + "\x00" + key.model
+			serviceTypeID := 0
+			if binding := model.ResolveUserRoutingServiceType(bindings[key.userID], key.model, key.group); binding != nil {
+				serviceTypeID = binding.ServiceTypeID
+			}
+			defaultKey := strconv.Itoa(serviceTypeID) + "\x00" + key.group + "\x00" + key.model
 			inherited, cached := defaults[defaultKey]
 			if !cached {
-				defaultPool, err := model.GetModelRoutingPool(key.group, key.model)
-				if err == nil && defaultPool == nil {
-					if normalized := ratio_setting.RoutingMatchModelName(key.model); normalized != key.model {
-						defaultPool, err = model.GetModelRoutingPool(key.group, normalized)
-					}
-				}
+				defaultPool, err := model.ResolveModelRoutingPool(key.group, key.model, serviceTypeID)
 				if err != nil {
 					common.ApiError(c, err)
 					return
@@ -327,6 +361,13 @@ func ListModelRoutingPools(c *gin.Context) {
 }
 
 func GetModelRoutingPool(c *gin.Context) {
+	var scope struct {
+		ServiceTypeID int `form:"service_type_id" binding:"gte=0"`
+	}
+	if err := c.ShouldBindQuery(&scope); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid service type"})
+		return
+	}
 	group, name := c.Query("routing_group"), c.Query("model")
 	if group == "" || group == "auto" || name == "" || len(group) > 64 || len(name) > 255 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid routing pool identity"})
@@ -336,7 +377,7 @@ func GetModelRoutingPool(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "the group-model matrix does not allow this model"})
 		return
 	}
-	pool, err := model.GetModelRoutingPool(group, name)
+	pool, err := model.GetModelRoutingPoolForServiceType(group, name, scope.ServiceTypeID)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -345,7 +386,7 @@ func GetModelRoutingPool(c *gin.Context) {
 	// scheduling mode used for requests with model modifiers.
 	effectivePool := pool
 	if normalized := ratio_setting.RoutingMatchModelName(name); effectivePool == nil && normalized != "" && normalized != name {
-		effectivePool, err = model.GetModelRoutingPool(group, normalized)
+		effectivePool, err = model.GetModelRoutingPoolForServiceType(group, normalized, scope.ServiceTypeID)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -365,14 +406,15 @@ func GetModelRoutingPool(c *gin.Context) {
 
 func SaveModelRoutingPool(c *gin.Context) {
 	var request struct {
-		Group     string                           `json:"routing_group"`
-		Model     string                           `json:"model"`
-		Mode      string                           `json:"mode"`
-		Revision  string                           `json:"revision"`
-		Channels  *[]model.ModelRoutingPoolChannel `json:"channels"`
-		MaxTTFTMS int64                            `json:"max_ttft_ms"`
-		MaxTPOTMS int64                            `json:"max_tpot_ms"`
-		Tuning    json.RawMessage                  `json:"tuning"`
+		ServiceTypeID int                              `json:"service_type_id"`
+		Group         string                           `json:"routing_group"`
+		Model         string                           `json:"model"`
+		Mode          string                           `json:"mode"`
+		Revision      string                           `json:"revision"`
+		Channels      *[]model.ModelRoutingPoolChannel `json:"channels"`
+		MaxTTFTMS     int64                            `json:"max_ttft_ms"`
+		MaxTPOTMS     int64                            `json:"max_tpot_ms"`
+		Tuning        json.RawMessage                  `json:"tuning"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil || request.Channels == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid routing pool configuration"})
@@ -395,7 +437,7 @@ func SaveModelRoutingPool(c *gin.Context) {
 	} else if request.Revision != "" {
 		// Older clients editing membership do not know about tuning. Omission
 		// preserves it; an explicit empty object or null restores inheritance.
-		current, err := model.GetModelRoutingPool(request.Group, request.Model)
+		current, err := model.GetModelRoutingPoolForServiceType(request.Group, request.Model, request.ServiceTypeID)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -405,9 +447,10 @@ func SaveModelRoutingPool(c *gin.Context) {
 		}
 	}
 	pool := model.ModelRoutingPool{RoutingGroup: request.Group, Model: request.Model, Mode: request.Mode, Channels: *request.Channels, MaxTTFTMS: request.MaxTTFTMS, MaxTPOTMS: request.MaxTPOTMS, Tuning: tuning}
+	pool.ServiceTypeID = request.ServiceTypeID
 	if err := model.SaveModelRoutingPool(&pool, request.Revision); err != nil {
 		status := http.StatusInternalServerError
-		if errors.Is(err, model.ErrInvalidRoutingPool) {
+		if errors.Is(err, model.ErrInvalidRoutingPool) || errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusBadRequest
 		}
 		if errors.Is(err, model.ErrRoutingPoolConflict) {
@@ -421,15 +464,16 @@ func SaveModelRoutingPool(c *gin.Context) {
 
 func DeleteModelRoutingPool(c *gin.Context) {
 	var request struct {
-		Group    string `json:"routing_group"`
-		Model    string `json:"model"`
-		Revision string `json:"revision"`
+		ServiceTypeID int    `json:"service_type_id"`
+		Group         string `json:"routing_group"`
+		Model         string `json:"model"`
+		Revision      string `json:"revision"`
 	}
-	if err := c.ShouldBindJSON(&request); err != nil {
+	if err := c.ShouldBindJSON(&request); err != nil || request.ServiceTypeID < 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid routing pool identity"})
 		return
 	}
-	if err := model.DeleteModelRoutingPool(request.Group, request.Model, request.Revision); err != nil {
+	if err := model.DeleteModelRoutingPoolForServiceType(request.Group, request.Model, request.Revision, request.ServiceTypeID); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, model.ErrRoutingPoolConflict) {
 			status = http.StatusConflict

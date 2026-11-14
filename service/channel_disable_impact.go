@@ -131,7 +131,27 @@ func GetChannelStatusImpact(ctx context.Context, ids []int, tag *string, operato
 	// Shared public-group candidates are resolved once,
 	// rather than issuing a candidate query for every customer or API key.
 	candidates := make(map[channelImpactRoute][]model.Ability)
-	defaultPools := make(map[channelImpactRoute]*model.ModelRoutingPool)
+	type servicePoolKey struct {
+		channelImpactRoute
+		serviceTypeID int
+	}
+	defaultPools := make(map[servicePoolKey]*model.ModelRoutingPool)
+	userIDs := make([]int, 0, len(snapshot.Users))
+	for _, user := range snapshot.Users {
+		userIDs = append(userIDs, user.Id)
+	}
+	var bindings []model.UserRoutingServiceType
+	for ids := range slices.Chunk(userIDs, 500) {
+		var batch []model.UserRoutingServiceType
+		if err := model.DB.WithContext(ctx).Where("user_id IN ?", ids).Find(&batch).Error; err != nil {
+			return result, err
+		}
+		bindings = append(bindings, batch...)
+	}
+	byUser := make(map[int][]model.UserRoutingServiceType)
+	for _, binding := range bindings {
+		byUser[binding.UserID] = append(byUser[binding.UserID], binding)
+	}
 	for _, user := range snapshot.Users {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -155,20 +175,28 @@ func GetChannelStatusImpact(ctx context.Context, ids []int, tag *string, operato
 				candidates[key] = routes
 			}
 			policyKey := userModel{user.Id, name}
-			param := RetryParam{ModelName: name, userRoutingLoaded: true, userGroupRouting: scoped[policyKey]}
+			param := RetryParam{ModelName: name, userRoutingLoaded: true, userGroupRouting: scoped[policyKey], serviceTypesLoaded: true, serviceTypeBindings: byUser[user.Id]}
 			routing, err := param.UserChannelRoutingForGroup(group)
 			if err != nil {
 				return result, err
 			}
 			var poolChannels map[int]model.ModelRoutingPoolChannel
 			if len(routing) == 0 {
-				pool, loaded := defaultPools[key]
+				binding, err := param.RoutingServiceType(group)
+				if err != nil {
+					return result, err
+				}
+				poolKey := servicePoolKey{channelImpactRoute: key}
+				if binding != nil {
+					poolKey.serviceTypeID = binding.ServiceTypeID
+				}
+				pool, loaded := defaultPools[poolKey]
 				if !loaded {
 					pool, err = param.ModelRoutingPool(group)
 					if err != nil {
 						return result, err
 					}
-					defaultPools[key] = pool
+					defaultPools[poolKey] = pool
 				}
 				if pool != nil {
 					poolChannels = make(map[int]model.ModelRoutingPoolChannel, len(pool.Channels))

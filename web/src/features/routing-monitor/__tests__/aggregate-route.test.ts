@@ -132,49 +132,56 @@ test('combines channel counts and history by counts, preserves request identity 
   expect(nodes[0].routes[0].channels[0].target_share).toBe(1)
 })
 
-test('merges matching user policies only and omits stale nodes without changing individual observations', () => {
-  const nodes: MonitorNode[] = [
-    {
-      id: 'a',
-      name: 'A',
-      local: true,
-      updated_at: 20000,
-      routes: [route(49, 100), route(49, 3, 'user:7'), route(49, 80, 'user:8')],
-    },
-    {
-      id: 'b',
-      name: 'B',
-      local: false,
-      updated_at: 20000,
-      routes: [route(49, 2, 'user:7')],
-    },
-    {
-      id: 'stale',
-      name: 'Stale',
-      local: false,
-      updated_at: 4000,
-      routes: [route(49, 1000, 'user:7')],
-    },
-  ]
-  const combined = aggregateMonitorRoutes(nodes, 20000, (node) =>
-    effectiveMonitorRoute(node, 'standard', 'kimi-k3', 7, 'user', 'smart')
-  )
-  assert(combined)
-  expect(combined.selection_count).toBe(5)
-  expect(combined.channels).toHaveLength(1)
-  expect(combined.channels[0].selection_count).toBe(5)
-  expect(combined.channels[0].selected_share).toBe(1)
-  expect(combined.requests).toHaveLength(2)
-  expect(
-    effectiveMonitorRoute(nodes[0], 'standard', 'kimi-k3', 7, 'user', 'smart')
-      ?.selection_count
-  ).toBe(3)
-  expect(
-    aggregateMonitorRoutes(nodes, 20000, (node) =>
-      effectiveMonitorRoute(node, 'missing', 'kimi-k3')
+test.each(['user', 'service_type'] as const)(
+  'merges matching %s policies only and omits stale nodes without changing individual observations',
+  (source) => {
+    const nodes: MonitorNode[] = [
+      {
+        id: 'a',
+        name: 'A',
+        local: true,
+        updated_at: 20000,
+        routes: [
+          route(49, 100),
+          route(49, 3, 'user:7'),
+          route(49, 80, 'user:8'),
+        ],
+      },
+      {
+        id: 'b',
+        name: 'B',
+        local: false,
+        updated_at: 20000,
+        routes: [route(49, 2, 'user:7')],
+      },
+      {
+        id: 'stale',
+        name: 'Stale',
+        local: false,
+        updated_at: 4000,
+        routes: [route(49, 1000, 'user:7')],
+      },
+    ]
+    const combined = aggregateMonitorRoutes(nodes, 20000, (node) =>
+      effectiveMonitorRoute(node, 'standard', 'kimi-k3', 7, source, 'smart')
     )
-  ).toBeUndefined()
-})
+    assert(combined)
+    expect(combined.selection_count).toBe(5)
+    expect(combined.channels).toHaveLength(1)
+    expect(combined.channels[0].selection_count).toBe(5)
+    expect(combined.channels[0].selected_share).toBe(1)
+    expect(combined.requests).toHaveLength(2)
+    expect(
+      effectiveMonitorRoute(nodes[0], 'standard', 'kimi-k3', 7, source, 'smart')
+        ?.selection_count
+    ).toBe(3)
+    expect(
+      aggregateMonitorRoutes(nodes, 20000, (node) =>
+        effectiveMonitorRoute(node, 'missing', 'kimi-k3')
+      )
+    ).toBeUndefined()
+  }
+)
 
 test('weights TTFT and TPOT with their own valid sample counts rather than averaging node means', () => {
   const first = route(49, 6)

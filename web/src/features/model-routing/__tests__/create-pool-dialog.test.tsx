@@ -23,12 +23,13 @@ import { afterEach, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
 
+import type { RoutingPool } from '../api'
 import { CreatePoolDialog } from '../create-pool-dialog'
 
 const clients: QueryClient[] = []
 afterEach(() => clients.forEach((client) => client.clear()))
 
-function mountDialog() {
+function mountDialog(serviceTypeId?: number) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
@@ -41,11 +42,59 @@ function mountDialog() {
         onOpenChange={onOpenChange}
         groups={{ standard: 'Standard' }}
         canWrite
+        serviceTypeId={serviceTypeId}
       />
     </QueryClientProvider>
   )
   return onOpenChange
 }
+
+test('creating a shared pool sends its service type identity without replacing the default pool', async () => {
+  const get = vi.spyOn(api, 'get').mockImplementation(async (url) => ({
+    data: {
+      success: true,
+      data: url.endsWith('/catalog')
+        ? { groups: { standard: 'Standard' }, models: ['kimi-k3'] }
+        : {
+            pool: null,
+            candidates: [
+              {
+                channel_id: 1,
+                channel_name: 'Vendor',
+                priority: 10,
+                weight: 100,
+                available: true,
+              },
+            ],
+          },
+    },
+  }))
+  const put = vi.spyOn(api, 'put').mockImplementation(async (_, data) => ({
+    data: {
+      success: true,
+      data: { ...(data as RoutingPool), revision: 'saved' },
+    },
+  }))
+  mountDialog(7)
+  await chooseIdentity()
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled()
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Create' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/channel/routing-pool',
+      expect.objectContaining({
+        service_type_id: 7,
+        routing_group: 'standard',
+        model: 'kimi-k3',
+      })
+    )
+  )
+  expect(get).toHaveBeenCalledWith('/api/channel/routing-pool', {
+    params: { service_type_id: 7, routing_group: 'standard', model: 'kimi-k3' },
+  })
+})
 
 async function chooseIdentity() {
   await userEvent.click(screen.getByRole('combobox', { name: 'Public group' }))

@@ -39,6 +39,23 @@ func UpdateDynamicRoutingOptions(setting dynamic_routing_setting.DynamicRoutingS
 		}
 	}
 	values := dynamic_routing_setting.ToOptionValues(setting)
+	if DB.Migrator().HasTable(&RoutingServiceTypePool{}) {
+		var rows []RoutingServiceTypePool
+		if err := DB.Find(&rows).Error; err != nil {
+			return err
+		}
+		for _, row := range rows {
+			pool, err := row.Decode()
+			if err != nil {
+				return err
+			}
+			if pool.Tuning != nil {
+				if _, err := pool.Tuning.Resolve(setting); err != nil {
+					return fmt.Errorf("invalid tuning for service type pool %d/%s/%s: %w", row.ServiceTypeID, row.RoutingGroup, row.Model, err)
+				}
+			}
+		}
+	}
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)

@@ -32,6 +32,7 @@ import { formatNumber } from '@/lib/format'
 
 import { getUserRoutingPool, userRoutingPoolKeys } from './api'
 import { UserPoolCard } from './user-pool-card'
+import { UserServiceTypeSettings } from './user-service-type-settings'
 
 export function UserRoutingWorkspace(props: {
   userId: number
@@ -94,12 +95,13 @@ export function UserRoutingWorkspace(props: {
         <span className='text-muted-foreground text-sm'>#{props.userId}</span>
         <span className='text-muted-foreground text-xs'>
           {t(
-            'User pools define the full channel list. Empty user pools follow the default routing pool.'
+            'User pools define the full channel list. Empty user pools inherit service type or default pools.'
           )}
         </span>
       </div>
       <div className='flex shrink-0 flex-wrap items-center gap-2'>
         {props.scopeSelect}
+        <UserServiceTypeSettings userId={props.userId} disabled={dirty} />
         <Combobox
           className='h-8 min-w-40 flex-1 sm:max-w-72'
           aria-label={t('Search models')}

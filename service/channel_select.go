@@ -44,6 +44,8 @@ func AppendTaskPluginIdentityFilter(c *gin.Context, pluginKey string) {
 type RetryParam struct {
 	userRoutingLoaded      bool
 	userGroupRouting       []model.UserGroupChannelRoutingOverride
+	serviceTypesLoaded     bool
+	serviceTypeBindings    []model.UserRoutingServiceType
 	routingPools           map[string]*model.ModelRoutingPool
 	routingStrategies      map[string]*model.UserRoutingStrategy
 	retryTimesOverride     *int

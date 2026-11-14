@@ -358,7 +358,7 @@ export function UserChannelRoutingEditor(props: {
         {values.length === 0 && (
           <p role='status' className='text-muted-foreground text-xs'>
             {t(
-              'No user-specific channels are configured. The default routing pool is used.'
+              'No user-specific channels are configured. The inherited routing pool is used.'
             )}
           </p>
         )}

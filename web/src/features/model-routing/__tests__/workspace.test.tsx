@@ -54,6 +54,35 @@ import { RoutingScopeSelect } from '../scope-select'
 import { getSettingsField } from './settings-queries'
 
 const clients: QueryClient[] = []
+
+test('selecting a service type loads its pools separately from default pools', async () => {
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'root', role: ROLE.SUPER_ADMIN })
+  const get = vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    let data: unknown = { items: [], total: 0, page: 1, page_size: 12 }
+    if (url.endsWith('/catalog')) data = { groups: {}, models: [] }
+    if (url.endsWith('/routing-service-types')) {
+      data = [{ id: 7, name: 'Premium service', revision: 'v1' }]
+    }
+    return { data: { success: true, data } }
+  })
+  mountWorkspace()
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Routing service types' })
+  )
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Premium service' })
+  )
+  await waitFor(() =>
+    expect(get).toHaveBeenCalledWith(
+      '/api/channel/routing-pools',
+      expect.objectContaining({
+        params: expect.objectContaining({ service_type_id: 7 }),
+      })
+    )
+  )
+})
 afterEach(() => {
   clients.forEach((client) => client.clear())
   useAuthStore.getState().auth.setUser(null)

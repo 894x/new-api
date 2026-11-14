@@ -152,8 +152,11 @@ export function ChannelStatusDialog(props: ChannelStatusDialogProps) {
       id: 'customer',
       header: t('Routing pool'),
       className: 'w-52',
-      cell: (row) =>
-        row.user_id > 0 ? (
+      cell: (row) => {
+        if (row.source === 'service_type') {
+          return row.service_type_name || t('Service type pool')
+        }
+        return row.user_id > 0 ? (
           <div className='space-y-1'>
             <div>{`${row.username} (#${row.user_id})`}</div>
             <Badge variant='outline'>
@@ -164,7 +167,8 @@ export function ChannelStatusDialog(props: ChannelStatusDialogProps) {
           </div>
         ) : (
           t('Default channel pool')
-        ),
+        )
+      },
     },
     {
       id: 'channel',

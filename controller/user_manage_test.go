@@ -67,6 +67,7 @@ func setupManageUserTestDB(t *testing.T) *gorm.DB {
 		}
 	})
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.CasbinRule{}, &model.AuthzRole{}, &model.UserRoutingStrategy{}))
+	require.NoError(t, db.AutoMigrate(&model.RoutingServiceType{}, &model.RoutingServiceTypePool{}, &model.UserRoutingServiceType{}))
 	require.NoError(t, logDB.AutoMigrate(&model.Log{}, &model.AuditLog{}))
 	versionQuery := "SELECT version()"
 	if dialect == "sqlite" {

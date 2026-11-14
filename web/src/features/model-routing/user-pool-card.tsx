@@ -59,6 +59,7 @@ import { earlyChunkPoolSchema } from './early-chunk'
 import { PoolChannelList } from './pool-channel-list'
 import { PoolMonitorDisplay } from './pool-monitor-display'
 import { UserPoolStrategy } from './user-pool-strategy'
+import { UserServiceTypeSettings } from './user-service-type-settings'
 
 const schema = z.object({
   early_chunk: earlyChunkPoolSchema,
@@ -230,6 +231,7 @@ function UserPoolEditor(props: {
       if (
         !config.configured ||
         config.source === 'default_pool' ||
+        config.source === 'service_type' ||
         config.source === 'channel_defaults'
       ) {
         return { ...entry, retry_times_override: row?.retry_times_override }
@@ -329,6 +331,7 @@ function UserPoolEditor(props: {
   const disabled = !canWrite || !editing || save.isPending
   const sources = {
     user: t('User override'),
+    service_type: config.service_type_name || t('Service type pool'),
     default_pool: t('Default routing pool'),
     channel_defaults: t('Channel defaults'),
   }
@@ -367,11 +370,18 @@ function UserPoolEditor(props: {
             config={config}
             disabled={props.readOnly || editing || save.isPending}
           />
+          <UserServiceTypeSettings
+            userId={config.user_id}
+            model={config.model}
+            group={props.group}
+            readOnly={!canWrite}
+            disabled={editing || save.isPending}
+          />
         </div>
         {editing && (
           <p className='text-muted-foreground text-xs'>
             {t(
-              'Only channels in this user pool can be selected. Empty priority or weight inherits the channel value. Clearing the pool restores the default routing pool.'
+              'Only channels in this user pool can be selected. Empty priority or weight inherits the channel value. Clearing the pool restores inherited routing.'
             )}
           </p>
         )}
@@ -385,7 +395,7 @@ function UserPoolEditor(props: {
         {!editing && !config.configured && (
           <p role='status' className='text-muted-foreground text-xs'>
             {t(
-              'No user-specific channels are configured. The default routing pool is used.'
+              'No user-specific channels are configured. The inherited routing pool is used.'
             )}
           </p>
         )}
@@ -404,7 +414,7 @@ function UserPoolEditor(props: {
           <p role='status' className='text-muted-foreground text-sm'>
             {editing
               ? t(
-                  'This user pool is empty. Saving will restore the default routing pool.'
+                  'This user pool is empty. Saving will restore inherited routing.'
                 )
               : t('No available channels')}
           </p>
@@ -551,7 +561,7 @@ function UserPoolEditor(props: {
             disabled={!canWrite || save.isPending}
             onClick={() => setRestoreRevision(config.revision)}
           >
-            {t('Clear and use default pool')}
+            {t('Clear and inherit routing pool')}
           </Button>
         )}
       </CardFooter>
@@ -560,11 +570,11 @@ function UserPoolEditor(props: {
         onOpenChange={(open) => {
           if (!open) setRestoreRevision(null)
         }}
-        title={t('Clear and use default pool')}
+        title={t('Clear and inherit routing pool')}
         desc={t(
-          'Clear this user pool and use the default routing pool for this model and public group?'
+          'Clear this user pool and restore inherited routing for this model and public group?'
         )}
-        confirmText={t('Clear and use default pool')}
+        confirmText={t('Clear and inherit routing pool')}
         isLoading={save.isPending}
         handleConfirm={() => save.mutate(null)}
       />

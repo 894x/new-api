@@ -117,11 +117,13 @@ export function PoolCard(props: {
   const prefixControlId = useId()
   const queryClient = useQueryClient()
   const actor = useAuthStore((state) => state.auth.user)
-  const canMonitor = hasPermission(
-    actor,
-    ADMIN_PERMISSION_RESOURCES.CHANNEL,
-    ADMIN_PERMISSION_ACTIONS.READ
-  )
+  const canMonitor =
+    !props.pool.service_type_id &&
+    hasPermission(
+      actor,
+      ADMIN_PERMISSION_RESOURCES.CHANNEL,
+      ADMIN_PERMISSION_ACTIONS.READ
+    )
   const [monitorOpen, setMonitorOpen] = useState(false)
   const [overviewDirty, setOverviewDirty] = useState(false)
   const [tuningOpen, setTuningOpen] = useState(false)
@@ -182,9 +184,15 @@ export function PoolCard(props: {
   const candidates = useQuery({
     queryKey: routingPoolKeys.detail(
       props.pool.routing_group,
-      props.pool.model
+      props.pool.model,
+      props.pool.service_type_id
     ),
-    queryFn: () => getRoutingPool(props.pool.routing_group, props.pool.model),
+    queryFn: () =>
+      getRoutingPool(
+        props.pool.routing_group,
+        props.pool.model,
+        props.pool.service_type_id
+      ),
     enabled: tuningOpen || (adding && props.canWrite),
     refetchOnWindowFocus: false,
     meta: { errorToast: false },
@@ -212,6 +220,7 @@ export function PoolCard(props: {
       toast.success(t('Saved successfully'))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: routingPoolKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ['routing-service-types'] }),
         queryClient.invalidateQueries({ queryKey: ['user-routing-pools'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor-pool'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor'] }),
@@ -231,6 +240,7 @@ export function PoolCard(props: {
       setRestoring(false)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: routingPoolKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ['routing-service-types'] }),
         queryClient.invalidateQueries({ queryKey: ['user-routing-pools'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor-pool'] }),
         queryClient.invalidateQueries({ queryKey: ['routing-monitor'] }),
@@ -624,7 +634,9 @@ export function PoolCard(props: {
               disabled={disabled}
               onClick={() => setRestoring(true)}
             >
-              {t('Restore channel defaults')}
+              {props.pool.service_type_id
+                ? t('Default routing pool')
+                : t('Restore channel defaults')}
             </Button>
           </CardFooter>
         </form>
@@ -691,10 +703,20 @@ export function PoolCard(props: {
         <ConfirmDialog
           open={restoring}
           onOpenChange={setRestoring}
-          title={t('Restore channel defaults')}
-          desc={t(
-            'Remove this pool and inherit the channel defaults again? An empty pool instead rejects requests.'
-          )}
+          title={
+            props.pool.service_type_id
+              ? t('Default routing pool')
+              : t('Restore channel defaults')
+          }
+          desc={
+            props.pool.service_type_id
+              ? t(
+                  'Remove this service type pool and inherit the default routing pool? An empty pool instead rejects requests.'
+                )
+              : t(
+                  'Remove this pool and inherit the channel defaults again? An empty pool instead rejects requests.'
+                )
+          }
           confirmText={t('Restore')}
           isLoading={restore.isPending}
           handleConfirm={() => restore.mutate()}

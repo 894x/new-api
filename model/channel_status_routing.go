@@ -14,14 +14,16 @@ import (
 // ChannelStatusRoutingPool describes a configured membership, rather than
 // repeating an inherited default pool for every customer using it.
 type ChannelStatusRoutingPool struct {
-	Source       string `json:"source"`
-	UserID       int    `json:"user_id"`
-	Username     string `json:"username"`
-	ChannelID    int    `json:"channel_id"`
-	Model        string `json:"model"`
-	RoutingGroup string `json:"routing_group"`
-	Priority     *int64 `json:"priority"`
-	Enabled      bool   `json:"enabled"`
+	ServiceTypeID   int    `json:"service_type_id,omitempty"`
+	ServiceTypeName string `json:"service_type_name,omitempty"`
+	Source          string `json:"source"`
+	UserID          int    `json:"user_id"`
+	Username        string `json:"username"`
+	ChannelID       int    `json:"channel_id"`
+	Model           string `json:"model"`
+	RoutingGroup    string `json:"routing_group"`
+	Priority        *int64 `json:"priority"`
+	Enabled         bool   `json:"enabled"`
 }
 
 func LoadChannelStatusRoutingPools(ctx context.Context, ids []int, operatorRole int) ([]ChannelStatusRoutingPool, error) {
@@ -48,6 +50,29 @@ func LoadChannelStatusRoutingPools(ctx context.Context, ids []int, operatorRole 
 		for _, entry := range pool.Channels {
 			if selected[entry.ChannelID] {
 				result = append(result, ChannelStatusRoutingPool{Source: "default_pool", ChannelID: entry.ChannelID, Model: pool.Model, RoutingGroup: pool.RoutingGroup, Priority: common.GetPointer(entry.Priority), Enabled: entry.Enabled})
+			}
+		}
+	}
+	var servicePools []RoutingServiceTypePool
+	if err := db.Order("service_type_id, routing_group, model").Find(&servicePools).Error; err != nil {
+		return nil, err
+	}
+	types, err := ListRoutingServiceTypes()
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[int]string, len(types))
+	for _, row := range types {
+		names[row.ID] = row.Name
+	}
+	for _, record := range servicePools {
+		pool, err := record.Decode()
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range pool.Channels {
+			if selected[entry.ChannelID] {
+				result = append(result, ChannelStatusRoutingPool{Source: "service_type", ServiceTypeID: record.ServiceTypeID, ServiceTypeName: names[record.ServiceTypeID], ChannelID: entry.ChannelID, Model: pool.Model, RoutingGroup: pool.RoutingGroup, Priority: common.GetPointer(entry.Priority), Enabled: entry.Enabled})
 			}
 		}
 	}
@@ -93,7 +118,7 @@ func LoadChannelStatusRoutingPools(ctx context.Context, ids []int, operatorRole 
 		result = append(result, ChannelStatusRoutingPool{Source: "legacy_user", UserID: row.UserId, Username: byID[row.UserId], ChannelID: row.ChannelId, Model: row.Model, Priority: row.Priority, Enabled: !row.Disabled})
 	}
 	slices.SortFunc(result, func(a, b ChannelStatusRoutingPool) int {
-		return cmp.Or(cmp.Compare(a.UserID, b.UserID), cmp.Compare(a.Model, b.Model), cmp.Compare(a.RoutingGroup, b.RoutingGroup), cmp.Compare(a.ChannelID, b.ChannelID), cmp.Compare(a.Source, b.Source))
+		return cmp.Or(cmp.Compare(a.UserID, b.UserID), cmp.Compare(a.ServiceTypeID, b.ServiceTypeID), cmp.Compare(a.Model, b.Model), cmp.Compare(a.RoutingGroup, b.RoutingGroup), cmp.Compare(a.ChannelID, b.ChannelID), cmp.Compare(a.Source, b.Source))
 	})
 	return result, nil
 }
@@ -140,6 +165,40 @@ func SetChannelsAndRoutingPoolsEnabled(ctx context.Context, ids []int, operatorR
 			userIDs = append(userIDs, user.Id)
 		}
 		var pools []ModelRoutingPool
+		var serviceTypes []RoutingServiceType
+		if err := lockForUpdate(tx).Order("id").Find(&serviceTypes).Error; err != nil {
+			return err
+		}
+		var servicePools []RoutingServiceTypePool
+		if err := lockForUpdate(tx).Order("service_type_id, routing_group, model").Find(&servicePools).Error; err != nil {
+			return err
+		}
+		for _, record := range servicePools {
+			pool, err := record.Decode()
+			if err != nil {
+				return err
+			}
+			updated := false
+			for i := range pool.Channels {
+				if selected[pool.Channels[i].ChannelID] && pool.Channels[i].Enabled != enabled {
+					pool.Channels[i].Enabled, updated = enabled, true
+				}
+			}
+			if !updated {
+				continue
+			}
+			pool.Revision = common.GetUUID()
+			encoded, err := common.Marshal(pool)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&record).Updates(map[string]any{"config_json": string(encoded), "revision": pool.Revision}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&RoutingServiceType{}).Where("id = ?", record.ServiceTypeID).Update("revision", common.GetUUID()).Error; err != nil {
+				return err
+			}
+		}
 		if err := lockForUpdate(tx).Order("routing_group, model").Find(&pools).Error; err != nil {
 			return err
 		}

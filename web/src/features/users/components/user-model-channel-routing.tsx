@@ -28,6 +28,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
 import { Label } from '@/components/ui/label'
+import { UserServiceTypeSettings } from '@/features/model-routing/user-service-type-settings'
 
 import { getUserChannelRouting } from '../api'
 import { UserChannelRoutingRuleEditor } from './user-channel-routing-dialog'
@@ -55,7 +56,15 @@ export function UserModelChannelRouting(props: {
   const data = catalog.data.data
   const keyGroups = Object.keys(data?.key_groups ?? {}).sort()
   if (keyGroups.length === 0) {
-    return <EmptyState title={t('No public Key groups available')} />
+    return (
+      <div className='flex flex-col gap-4'>
+        <UserServiceTypeSettings
+          userId={props.userId}
+          readOnly={props.readOnly}
+        />
+        <EmptyState title={t('No public Key groups available')} />
+      </div>
+    )
   }
   const models = [
     ...new Set([
@@ -66,6 +75,10 @@ export function UserModelChannelRouting(props: {
   ]
   return (
     <div className='flex flex-col gap-4'>
+      <UserServiceTypeSettings
+        userId={props.userId}
+        readOnly={props.readOnly}
+      />
       {catalog.isError && (
         <Alert variant='destructive'>
           <AlertDescription className='flex items-center justify-between gap-3'>
