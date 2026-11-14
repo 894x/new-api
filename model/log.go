@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -517,7 +518,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, statusCode int) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB
@@ -551,6 +552,21 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	}
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
+	}
+	if statusCode != 0 {
+		// Match the recorded error status, independently of client_status_code.
+		// Empty legacy metadata has no status; do not infer a successful response.
+		status := strconv.Itoa(statusCode)
+		switch common.LogDatabaseType() {
+		case common.DatabaseTypeMySQL:
+			tx = tx.Where("JSON_UNQUOTE(JSON_EXTRACT(NULLIF(TRIM(logs.other), ''), '$.status_code')) = ?", status)
+		case common.DatabaseTypePostgreSQL:
+			tx = tx.Where("CAST(NULLIF(TRIM(logs.other), '') AS json) ->> 'status_code' = ?", status)
+		case common.DatabaseTypeClickHouse:
+			tx = tx.Where("(JSONExtractRaw(logs.other, 'status_code') = ? OR JSONExtractString(logs.other, 'status_code') = ?)", status, status)
+		default:
+			tx = tx.Where("CAST(json_extract(NULLIF(TRIM(logs.other), ''), '$.status_code') AS TEXT) = ?", status)
+		}
 	}
 	err = tx.Model(&Log{}).Count(&total).Error
 	if err != nil {

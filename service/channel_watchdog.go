@@ -80,7 +80,7 @@ func RunChannelHealthWatchdog() (*ChannelWatchdogSummary, error) {
 
 // notifyWecomBotChannelUnhealthy 推送渠道不健康聚合告警，附最近错误摘要。
 func notifyWecomBotChannelUnhealthy(channelId int, channelName string, count int64, window time.Duration, suppressed int, threshold int) {
-	logs, _, err := model.GetAllLogs(model.LogTypeError, time.Now().Add(-window).Unix(), time.Now().Unix(), "", "", "", 0, 3, channelId, "", "", "")
+	logs, _, err := model.GetAllLogs(model.LogTypeError, time.Now().Add(-window).Unix(), time.Now().Unix(), "", "", "", 0, 3, channelId, "", "", "", 0)
 	lines := []string{
 		fmt.Sprintf("渠道：%s（#%d）", channelName, channelId),
 		fmt.Sprintf("窗口：%s 内错误 %d 次（阈值 %d）", window, count, threshold),

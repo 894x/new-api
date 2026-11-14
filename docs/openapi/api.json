@@ -4165,11 +4165,35 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "status_code",
+            "in": "query",
+            "description": "精确匹配日志 other.status_code，兼容数字和字符串形式；不匹配 client_status_code。省略、留空或传 0 时不筛选；未记录状态码的日志不匹配任何具体状态码。可与其他筛选条件组合使用。",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "oneOf": [
+                {
+                  "enum": [0]
+                },
+                {
+                  "minimum": 100,
+                  "maximum": 599
+                }
+              ]
+            },
+            "example": 429
           }
         ],
         "responses": {
           "200": {
             "description": "成功",
+            "headers": {}
+          },
+          "400": {
+            "description": "status_code 格式无效或超出允许范围",
             "headers": {}
           }
         },

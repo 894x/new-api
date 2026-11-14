@@ -66,7 +66,16 @@ func GetAllLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId)
+	statusCode := 0
+	if value := c.Query("status_code"); value != "" {
+		var err error
+		statusCode, err = strconv.Atoi(value)
+		if err != nil || (statusCode != 0 && (statusCode < 100 || statusCode > 599)) {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid HTTP status code"})
+			return
+		}
+	}
+	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId, statusCode)
 	if err != nil {
 		common.ApiError(c, err)
 		return

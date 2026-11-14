@@ -321,7 +321,7 @@ func builtinTools() []Tool {
 				limit := min(max(argInt(args, "limit", 10), 1), 20)
 				channelID := argInt(args, "channel_id", 0)
 				now := time.Now().Unix()
-				logs, _, err := model.GetAllLogs(model.LogTypeError, now-int64(minutes)*60, now, "", "", "", 0, limit, channelID, "", "", "")
+				logs, _, err := model.GetAllLogs(model.LogTypeError, now-int64(minutes)*60, now, "", "", "", 0, limit, channelID, "", "", "", 0)
 				if err != nil {
 					return nil, err
 				}
