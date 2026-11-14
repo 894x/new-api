@@ -66,6 +66,11 @@ export const PARAMETER_CAPABILITY_CATALOG = [
     kind: 'presence',
   },
   {
+    path: 'messages.*.content.*.video_url.url',
+    category: 'Multimodal',
+    kind: 'presence',
+  },
+  {
     path: 'messages.*.content.*.source',
     category: 'Multimodal',
     kind: 'presence',
@@ -102,6 +107,8 @@ export interface CapabilityEvaluation {
   reason:
     | 'compatible'
     | 'unsupported'
+    | 'required'
+    | 'non_empty'
     | 'number_required'
     | 'minimum'
     | 'maximum'
@@ -128,6 +135,7 @@ export interface ParameterCapabilityConfigError {
     | 'unsafe_billing_action'
     | 'invalid_media_constraints'
     | 'invalid_request_body_size'
+    | 'invalid_presence_constraints'
   scope: string
   path?: string
 }
@@ -234,6 +242,8 @@ function isParameterCapability(value: unknown): value is ParameterCapability {
     !isPlainRecord(value) ||
     !hasOnlyKeys(value, [
       'supported',
+      'required',
+      'non_empty',
       'min',
       'max',
       'allowed_values',
@@ -256,6 +266,8 @@ function isParameterCapability(value: unknown): value is ParameterCapability {
         'video_url_to_base64',
       ].includes(String(value.transform))) &&
     (value.supported === undefined || typeof value.supported === 'boolean') &&
+    (value.required === undefined || typeof value.required === 'boolean') &&
+    (value.non_empty === undefined || typeof value.non_empty === 'boolean') &&
     (value.min === undefined ||
       (typeof value.min === 'number' && Number.isFinite(value.min))) &&
     (value.max === undefined ||
@@ -489,7 +501,7 @@ export function evaluateParameterCapabilities(
     const currentValues =
       parameter === REQUEST_BODY_SIZE_CAPABILITY
         ? [{ path: parameter, value: requestBodySize }]
-        : getPathValues(request, parameter)
+        : getPathValues(request, parameter, capability.required === true)
     if (action === 'drop') currentValues.reverse()
     for (const current of currentValues) {
       if (capability.media && current.path.endsWith('.source')) {
@@ -506,6 +518,32 @@ export function evaluateParameterCapabilities(
         ) {
           continue
         }
+      }
+      if (current.value === undefined) {
+        if (capability.required) {
+          evaluations.push({
+            parameter: current.path,
+            status: 'rejected',
+            reason: 'required',
+          })
+        }
+        continue
+      }
+      const empty =
+        capability.non_empty === true &&
+        (current.value === null ||
+          (typeof current.value === 'string' &&
+            /^\p{White_Space}*$/u.test(current.value)) ||
+          (Array.isArray(current.value) && current.value.length === 0) ||
+          (isRecord(current.value) && Object.keys(current.value).length === 0))
+      if (empty) {
+        evaluations.push({
+          parameter: current.path,
+          status: 'rejected',
+          reason: 'non_empty',
+          from: current.value,
+        })
+        continue
       }
       if (capability.media && capability.supported !== false) {
         evaluations.push({
@@ -670,6 +708,8 @@ function validateCapabilityMap(
       if (
         capability.transform !== undefined ||
         capability.supported !== undefined ||
+        capability.required !== undefined ||
+        capability.non_empty !== undefined ||
         Boolean(capability.allowed_values?.length) ||
         (capability.on_violation !== undefined &&
           capability.on_violation !== 'reject') ||
@@ -685,6 +725,13 @@ function validateCapabilityMap(
         errors.push({ code: 'inverted_range', scope, path })
       }
       continue
+    }
+    if (
+      (capability.required === true || capability.non_empty === true) &&
+      capability.on_violation !== undefined &&
+      capability.on_violation !== 'reject'
+    ) {
+      errors.push({ code: 'invalid_presence_constraints', scope, path })
     }
     if (
       capability.media &&
@@ -734,7 +781,8 @@ function validateCapabilityMap(
 
 function getPathValues(
   object: Record<string, unknown>,
-  path: string
+  path: string,
+  includeMissingLeaf = false
 ): Array<{ path: string; value: unknown }> {
   const parts = path.split('.')
   const matches: Array<{ path: string; value: unknown }> = []
@@ -770,10 +818,19 @@ function getPathValues(
     }
     if (isRecord(current) && part in current) {
       visit(current[part], index + 1, [...concrete, part])
+    } else if (
+      includeMissingLeaf &&
+      isRecord(current) &&
+      index === parts.length - 1
+    ) {
+      visit(undefined, index + 1, [...concrete, part])
     }
   }
 
   visit(object, 0, [])
+  if (includeMissingLeaf && !parts.includes('*') && matches.length === 0) {
+    matches.push({ path, value: undefined })
+  }
   return matches
 }
 

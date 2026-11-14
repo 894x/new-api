@@ -29,6 +29,132 @@ import {
 } from '../parameter-capabilities'
 
 describe('parameter capability resolution', () => {
+  it('round-trips required and non-empty rules and rejects nonboolean flags', () => {
+    const config = {
+      defaults: {
+        'messages.*.content.*.video_url.url': {
+          required: true,
+          non_empty: true,
+          participate_in_selection: true,
+        },
+      },
+      rules: [],
+    }
+    expect(
+      parseParameterCapabilityConfigStrict(JSON.stringify(config))
+    ).toEqual({
+      success: true,
+      config,
+    })
+    expect(
+      parseParameterCapabilityConfigStrict(
+        '{"defaults":{"value":{"required":"true"}}}'
+      ).success
+    ).toBe(false)
+  })
+
+  it('rejects missing video URLs without requiring video on text blocks', () => {
+    const config: ParameterCapabilityConfig = {
+      defaults: {
+        'messages.*.content.*.video_url.url': {
+          required: true,
+          non_empty: true,
+        },
+      },
+    }
+    const result = evaluateParameterCapabilities(config, 'kimi-k3', {
+      messages: [
+        {
+          content: [
+            { type: 'text', text: 'hello' },
+            { type: 'video_url', video_url: {} },
+          ],
+        },
+      ],
+    })
+    expect(result.compatible).toBe(false)
+    expect(result.evaluations).toEqual([
+      {
+        parameter: 'messages.0.content.1.video_url.url',
+        status: 'rejected',
+        reason: 'required',
+      },
+    ])
+    expect(
+      evaluateParameterCapabilities(config, 'kimi-k3', {
+        messages: [{ content: [{ type: 'text', text: 'hello' }] }],
+      }).compatible
+    ).toBe(true)
+    expect(
+      evaluateParameterCapabilities(config, 'kimi-k3', { messages: [] })
+        .compatible
+    ).toBe(true)
+  })
+
+  it.each([null, '', ' \t\u0085', {}, []].map((value) => ({ value })))(
+    'rejects empty value $value',
+    ({ value }) => {
+      const result = evaluateParameterCapabilities(
+        { defaults: { value: { non_empty: true } } },
+        'model',
+        { value }
+      )
+      expect(result.compatible).toBe(false)
+      expect(result.evaluations[0].reason).toBe('non_empty')
+    }
+  )
+
+  it.each([0, false, { url: 'video' }, ['video']].map((value) => ({ value })))(
+    'preserves nonempty value $value',
+    ({ value }) => {
+      const result = evaluateParameterCapabilities(
+        { defaults: { value: { non_empty: true } } },
+        'model',
+        { value }
+      )
+      expect(result.compatible).toBe(true)
+      expect(result.request).toEqual({ value })
+    }
+  )
+
+  it('keeps presence checks optional and allows exact models to override them', () => {
+    const config: ParameterCapabilityConfig = {
+      defaults: { value: { required: true, non_empty: true } },
+      rules: [
+        {
+          selector: { type: 'exact', value: 'optional' },
+          parameters: { value: { required: false, non_empty: false } },
+        },
+      ],
+    }
+    expect(evaluateParameterCapabilities(config, 'model', {}).compatible).toBe(
+      false
+    )
+    expect(
+      evaluateParameterCapabilities(config, 'optional', {}).compatible
+    ).toBe(true)
+    expect(
+      evaluateParameterCapabilities(config, 'optional', { value: null })
+        .compatible
+    ).toBe(true)
+    expect(
+      evaluateParameterCapabilities(
+        { defaults: { value: { non_empty: true } } },
+        'model',
+        {}
+      ).compatible
+    ).toBe(true)
+    expect(
+      validateParameterCapabilityConfig({
+        defaults: { value: { required: true, on_violation: 'drop' } },
+      })
+    ).toContainEqual({
+      code: 'invalid_presence_constraints',
+      scope: 'Channel default',
+      path: 'value',
+    })
+  })
+
   it('accepts Messages video source limits and leaves image sources out of video previews', () => {
     const config: ParameterCapabilityConfig = {
       defaults: {

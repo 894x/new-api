@@ -856,6 +856,11 @@ function ParameterCapabilityRow(props: {
     value: option.value,
     label: t(option.label),
   }))
+  const presenceItems = [
+    { value: 'inherit', label: t('Inherit') },
+    { value: 'enabled', label: t('Enabled') },
+    { value: 'disabled', label: t('Disabled') },
+  ]
   const selectionItems = SELECTION_OPTIONS.map((option) => ({
     value: option.value,
     label: t(option.label),
@@ -977,6 +982,57 @@ function ParameterCapabilityRow(props: {
             </Select>
           </Field>
         )}
+        {!isRequestBodySize &&
+          (['required', 'non_empty'] as const).map((key) => {
+            let value = 'inherit'
+            if (capability[key] !== undefined) {
+              value = capability[key] ? 'enabled' : 'disabled'
+            }
+            return (
+              <Field key={key}>
+                <FieldLabel htmlFor={`${props.path}-${key}`}>
+                  {key === 'required'
+                    ? t('Required parameter')
+                    : t('Non-empty value')}
+                </FieldLabel>
+                <Select
+                  items={presenceItems}
+                  value={value}
+                  onValueChange={(next) =>
+                    props.onChange({
+                      ...capability,
+                      [key]:
+                        next === 'inherit' ? undefined : next === 'enabled',
+                      on_violation:
+                        next === 'enabled' ? 'reject' : capability.on_violation,
+                    })
+                  }
+                >
+                  <SelectTrigger id={`${props.path}-${key}`} className='w-full'>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectGroup>
+                      {presenceItems.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>
+                  {key === 'required'
+                    ? t(
+                        'For wildcard paths, required fields are checked within existing parent objects.'
+                      )
+                    : t(
+                        'Rejects null, blank strings, empty objects, and empty arrays. Zero and false are valid.'
+                      )}
+                </FieldDescription>
+              </Field>
+            )
+          })}
         <Field>
           <FieldLabel htmlFor={`${props.path}-min`}>{t('Minimum')}</FieldLabel>
           <Input
@@ -1063,7 +1119,9 @@ function ParameterCapabilityRow(props: {
                     value={item.value}
                     disabled={
                       (isBillingSensitiveParameter(props.path) ||
-                        isRequestBodySize) &&
+                        isRequestBodySize ||
+                        capability.required === true ||
+                        capability.non_empty === true) &&
                       item.value !== 'reject'
                     }
                   >
@@ -1138,6 +1196,15 @@ function CapabilitySummary(props: { capability: ParameterCapability }) {
   }
   if (props.capability.supported === false) {
     return <Badge variant='outline'>{t('Unsupported')}</Badge>
+  }
+  if (props.capability.required || props.capability.non_empty) {
+    return (
+      <Badge variant='outline'>
+        {props.capability.required
+          ? t('Required parameter')
+          : t('Non-empty value')}
+      </Badge>
+    )
   }
   if (
     props.capability.min !== undefined ||
@@ -1382,6 +1449,10 @@ function CapabilityEvaluationMessage(props: {
       return t('Compatible')
     case 'unsupported':
       return t('Parameter is not supported')
+    case 'required':
+      return t('Parameter is required')
+    case 'non_empty':
+      return t('Value must not be empty')
     case 'number_required':
       return t('Value must be a number')
     case 'minimum':
@@ -1427,6 +1498,8 @@ function CapabilityConfigErrorMessage(props: {
       return t(
         'Media conversion cannot use numeric, allowed-value, or billing constraints.'
       )
+    case 'invalid_presence_constraints':
+      return t('Presence checks require Reject on violation.')
     case 'invalid_request_body_size':
       return t(
         '{{scope}}: request body size only supports non-negative integer byte bounds, rejection, and channel selection',

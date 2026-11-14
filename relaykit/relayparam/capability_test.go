@@ -4,9 +4,81 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestParameterPresenceConstraints(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, constraints, payload, wantPath, wantReason string
+	}{
+		{"missing required field", "value", `"required":true`, `{}`, "value", "parameter is required"},
+		{"optional missing field", "value", `"non_empty":true`, `{}`, "", ""},
+		{"required null is present", "value", `"required":true`, `{"value":null}`, "", ""},
+		{"null is empty", "value", `"non_empty":true`, `{"value":null}`, "value", "value must not be empty"},
+		{"blank string is empty", "value", `"non_empty":true`, `{"value":" \t\u0085"}`, "value", "value must not be empty"},
+		{"empty object", "value", `"non_empty":true`, `{"value":{}}`, "value", "value must not be empty"},
+		{"empty array", "value", `"non_empty":true`, `{"value":[]}`, "value", "value must not be empty"},
+		{"zero is not empty", "value", `"non_empty":true`, `{"value":0}`, "", ""},
+		{"false is not empty", "value", `"non_empty":true`, `{"value":false}`, "", ""},
+		{"nonempty object", "value", `"non_empty":true`, `{"value":{"url":"video"}}`, "", ""},
+		{"missing video URL", "messages.*.content.*.video_url.url", `"required":true,"non_empty":true`, `{"messages":[{"content":[{"type":"text","text":"hello"},{"type":"video_url","video_url":{}}]}]}`, "messages.0.content.1.video_url.url", "parameter is required"},
+		{"blank video URL", "messages.*.content.*.video_url.url", `"required":true,"non_empty":true`, `{"messages":[{"content":[{"video_url":{"url":" "}}]}]}`, "messages.0.content.0.video_url.url", "value must not be empty"},
+		{"text request has no video parent", "messages.*.content.*.video_url.url", `"required":true,"non_empty":true`, `{"messages":[{"content":[{"type":"text","text":"hello"}]}]}`, "", ""},
+		{"empty wildcard collection", "messages.*.content.*.video_url.url", `"required":true`, `{"messages":[]}`, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var config dto.ParameterCapabilityConfig
+			require.NoError(t, kitutil.Unmarshal([]byte(`{"defaults":{"`+tc.path+`":{`+tc.constraints+`,"participate_in_selection":true}}}`), &config))
+			require.NoError(t, config.Validate())
+			payload := []byte(tc.payload)
+			selectionErr := CheckSelectionCapabilities(payload, &config, "model-a")
+			result, _, forwardingErr := ApplyCapabilities(payload, &config, "model-a")
+			assert.Equal(t, tc.payload, string(payload), "selection must not mutate the request")
+			for _, err := range []error{selectionErr, forwardingErr} {
+				if tc.wantReason == "" {
+					require.NoError(t, err)
+					continue
+				}
+				var violation *CapabilityViolationError
+				require.ErrorAs(t, err, &violation)
+				assert.Equal(t, tc.wantPath, violation.Parameter)
+				assert.Equal(t, tc.wantReason, violation.Reason)
+			}
+			if tc.wantReason == "" {
+				assert.JSONEq(t, tc.payload, string(result))
+			}
+		})
+	}
+}
+
+func TestParameterPresenceOverridesAndSelectionOptOut(t *testing.T) {
+	var config dto.ParameterCapabilityConfig
+	require.NoError(t, kitutil.Unmarshal([]byte(`{"defaults":{"value":{"required":true,"non_empty":true,"participate_in_selection":false}},"rules":[{"selector":{"type":"exact","value":"optional"},"parameters":{"value":{"required":false,"non_empty":false}}}]}`), &config))
+	require.NoError(t, config.Validate())
+	require.NoError(t, CheckSelectionCapabilities([]byte(`{}`), &config, "model-a"))
+	_, _, err := ApplyCapabilities([]byte(`{}`), &config, "model-a")
+	require.ErrorContains(t, err, "parameter is required")
+	result, _, err := ApplyCapabilities([]byte(`{}`), &config, "optional")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{}`, string(result))
+	result, _, err = ApplyCapabilities([]byte(`{"value":null}`), &config, "optional")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"value":null}`, string(result))
+}
+
+func TestParameterPresenceRejectsIncompatibleConfiguration(t *testing.T) {
+	for _, configJSON := range []string{
+		`{"defaults":{"value":{"required":true,"on_violation":"drop"}}}`,
+		`{"defaults":{"value":{"non_empty":true,"on_violation":"clamp","min":0}}}`,
+		`{"defaults":{"$request.body_size_bytes":{"required":true}}}`,
+	} {
+		var config dto.ParameterCapabilityConfig
+		require.NoError(t, kitutil.Unmarshal([]byte(configJSON), &config))
+		require.Error(t, config.Validate(), configJSON)
+	}
+}
 
 func TestApplyCapabilitiesPreservesExplicitZeroAndClampsOutOfRangeValue(t *testing.T) {
 	supported := true

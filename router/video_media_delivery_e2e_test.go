@@ -42,6 +42,7 @@ func TestVideoMediaDeliveryE2E(t *testing.T) {
 			retry, rangeProbe, unknownSize, inaccurateSize bool
 			messages, messagesToChat                       bool
 			responses, messagesToResponses                 bool
+			requireVideoURL                                bool
 		}{
 			{name: "URL direct beats higher priority conversion", input: "url", output: "url", channels: []channelSpec{{0, 64}, {64, 0}}, wantChannel: 1, status: 200, heads: 1},
 			{name: "Base64 direct beats higher priority upload", input: "base64", output: "base64", channels: []channelSpec{{64, 0}, {0, 64}}, wantChannel: 1, status: 200},
@@ -51,6 +52,7 @@ func TestVideoMediaDeliveryE2E(t *testing.T) {
 			{name: "URL limit switches to larger Base64 allowance", input: "url", output: "base64", channels: []channelSpec{{8, 64}}, status: 200, heads: 1, gets: 1},
 			{name: "Both limits reject before upstream", input: "url", channels: []channelSpec{{8, 8}, {8, 0}}, status: 400, heads: 1},
 			{name: "Malformed Base64 rejected", input: "invalid", channels: []channelSpec{{64, 64}}, status: 400},
+			{name: "Required video URL reports empty objects as a parameter error", input: "empty_object", channels: []channelSpec{{64, 64}}, status: 400, requireVideoURL: true},
 			{name: "Range probe is shared across channels", input: "url", output: "url", channels: []channelSpec{{0, 64}, {64, 0}}, wantChannel: 1, status: 200, heads: 1, gets: 1, rangeProbe: true},
 			{name: "Unknown URL size can pass through", input: "url", output: "url", channels: []channelSpec{{64, 0}}, status: 200, heads: 1, gets: 1, unknownSize: true},
 			{name: "Converted download reused after upstream retry", input: "url", output: "base64", channels: []channelSpec{{0, 64}, {0, 64}}, wantChannel: 1, status: 200, heads: 1, gets: 1, retry: true},
@@ -139,6 +141,9 @@ func TestVideoMediaDeliveryE2E(t *testing.T) {
 				}))
 				t.Cleanup(source.Close)
 				user := model.User{Username: "video-media-e2e", Status: common.UserStatusEnabled, Group: "default", Quota: 1_000_000}
+				if tc.requireVideoURL {
+					user.Role = common.RoleAdminUser
+				}
 				require.NoError(t, model.DB.Create(&user).Error)
 				require.NoError(t, model.DB.Create(&model.Token{UserId: user.Id, Key: "parametercapabilitye2ekey", Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true}).Error)
 				hits := make(chan int, 4)
@@ -211,11 +216,15 @@ func TestVideoMediaDeliveryE2E(t *testing.T) {
 						channel.Type = constant.ChannelTypeAnthropic
 					}
 					mediaCapability := dto.ParameterCapability{ParticipateInSelection: common.GetPointer(true), Media: &dto.MediaCapability{Kind: "video", Formats: formats, Conversions: dto.MediaConversions{URLToBase64: common.GetPointer(true), Base64ToURL: common.GetPointer(true)}}}
-					channel.SetOtherSettings(dto.ChannelOtherSettings{ParameterCapabilities: &dto.ParameterCapabilityConfig{Defaults: map[string]dto.ParameterCapability{
+					capabilities := map[string]dto.ParameterCapability{
 						"messages.*.content.*.video_url": mediaCapability,
 						"input.*.content.*.video_url":    mediaCapability,
 						"messages.*.content.*.source":    mediaCapability,
-					}}})
+					}
+					if tc.requireVideoURL {
+						capabilities["messages.*.content.*.video_url.url"] = dto.ParameterCapability{Required: common.GetPointer(true), NonEmpty: common.GetPointer(true), ParticipateInSelection: common.GetPointer(true)}
+					}
+					channel.SetOtherSettings(dto.ChannelOtherSettings{ParameterCapabilities: &dto.ParameterCapabilityConfig{Defaults: capabilities}})
 					require.NoError(t, model.DB.Create(channel).Error)
 					require.NoError(t, channel.AddAbilities(nil))
 				}
@@ -233,6 +242,9 @@ func TestVideoMediaDeliveryE2E(t *testing.T) {
 					input = "data:video/mp4;base64,A!=="
 				}
 				body := []byte(`{"model":"kimi-k3","messages":[{"role":"user","content":[{"type":"video_url","video_url":{"url":"` + input + `","fps":2}},{"type":"video_url","video_url":{"url":"` + input + `","fps":2}}]}]}`)
+				if tc.input == "empty_object" {
+					body = []byte(`{"model":"kimi-k3","max_tokens":16,"messages":[{"role":"user","content":[{"type":"video_url","video_url":{}}]}]}`)
+				}
 				var response *http.Response
 				if tc.messages {
 					sourceJSON := `{"type":"url","url":"` + input + `"}`
@@ -261,6 +273,10 @@ func TestVideoMediaDeliveryE2E(t *testing.T) {
 				response.Body.Close()
 				require.NoError(t, err)
 				require.Equal(t, tc.status, response.StatusCode, string(result))
+				if tc.requireVideoURL {
+					assert.Contains(t, string(result), "messages.0.content.0.video_url.url")
+					assert.Contains(t, string(result), "parameter is required")
+				}
 				if tc.status >= 400 {
 					var updatedUser model.User
 					require.NoError(t, model.DB.First(&updatedUser, user.Id).Error)

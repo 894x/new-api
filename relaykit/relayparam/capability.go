@@ -81,7 +81,7 @@ func CheckSelectionCapabilitiesWithBodySize(data []byte, bodySize *int64, config
 		if len(data) == 0 {
 			continue
 		}
-		resolvedPaths, err := ResolveJSONPaths(data, path, false)
+		resolvedPaths, err := ResolveJSONPaths(data, path, capability.Required != nil && *capability.Required)
 		if err != nil {
 			return err
 		}
@@ -90,6 +90,9 @@ func CheckSelectionCapabilitiesWithBodySize(data []byte, bodySize *int64, config
 				continue
 			}
 			value := gjson.GetBytes(data, resolvedPath)
+			if reason := parameterPresenceViolation(value, capability); reason != "" {
+				return newCapabilityViolation(model, resolvedPath, "", reason)
+			}
 			if !value.Exists() {
 				continue
 			}
@@ -121,7 +124,7 @@ func newCapabilityViolation(model string, parameter string, value string, reason
 }
 
 // ApplyCapabilities validates and normalizes a converted upstream request.
-// Missing parameters are left untouched so omission remains distinct from an
+// Optional missing parameters are left untouched so omission remains distinct from an
 // explicitly supplied zero, false, or empty value.
 func ApplyCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model string) ([]byte, []CapabilityChange, error) {
 	capabilities := config.Resolve(model)
@@ -146,7 +149,7 @@ func ApplyCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model
 		if action == "" {
 			action = dto.ParameterCapabilityActionReject
 		}
-		resolvedPaths, err := ResolveJSONPaths(result, path, false)
+		resolvedPaths, err := ResolveJSONPaths(result, path, capability.Required != nil && *capability.Required)
 		if err != nil {
 			return nil, changes, err
 		}
@@ -158,6 +161,9 @@ func ApplyCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model
 				continue
 			}
 			value := gjson.GetBytes(result, resolvedPath)
+			if reason := parameterPresenceViolation(value, capability); reason != "" {
+				return nil, changes, newCapabilityViolation(model, resolvedPath, "", reason)
+			}
 			if !value.Exists() {
 				continue
 			}
@@ -250,6 +256,32 @@ func handleViolation(
 			Model: model, Parameter: parameter, Value: from, Reason: reason,
 		}
 	}
+}
+
+func parameterPresenceViolation(value gjson.Result, capability dto.ParameterCapability) string {
+	if !value.Exists() {
+		if capability.Required != nil && *capability.Required {
+			return "parameter is required"
+		}
+		return ""
+	}
+	if capability.NonEmpty == nil || !*capability.NonEmpty {
+		return ""
+	}
+	empty := value.Type == gjson.Null
+	if value.Type == gjson.String {
+		empty = strings.TrimSpace(value.String()) == ""
+	} else if value.IsObject() || value.IsArray() {
+		empty = true
+		value.ForEach(func(_, _ gjson.Result) bool {
+			empty = false
+			return false
+		})
+	}
+	if empty {
+		return "value must not be empty"
+	}
+	return ""
 }
 
 func containsAllowedValue(allowed []string, value string) bool {

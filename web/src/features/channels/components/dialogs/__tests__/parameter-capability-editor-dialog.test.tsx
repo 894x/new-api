@@ -219,6 +219,29 @@ describe('ParameterCapabilityEditorDialog JSON editing', () => {
     ).toBe('image_url_to_base64')
   })
 
+  test('configures required and non-empty fields and saves them through the form', async () => {
+    const saved: string[] = []
+    rendered = await renderDialog((value) => saved.push(value))
+    await enterJsonDraft(
+      '{"defaults":{"messages.*.content.*.video_url.url":{"on_violation":"drop"}}}'
+    )
+    await act(async () => findButton('Capabilities')?.click())
+    const { getByRole, getByLabelText } = await import('@testing-library/dom')
+    for (const label of ['Required parameter', 'Non-empty value']) {
+      const trigger = getByLabelText(document.body, label)
+      await act(async () => trigger.click())
+      await act(async () =>
+        getByRole(document.body, 'option', { name: /^Enabled$/ }).click()
+      )
+      expect(trigger.textContent).toContain('Enabled')
+    }
+    await act(async () => findButton('Save')?.click())
+    expect(saved).toHaveLength(1)
+    expect(
+      JSON.parse(saved[0]).defaults['messages.*.content.*.video_url.url']
+    ).toMatchObject({ required: true, non_empty: true, on_violation: 'reject' })
+  })
+
   test('configures video delivery for a Messages source and saves the decoded byte limit', async () => {
     const saved: string[] = []
     rendered = await renderDialog((value) => saved.push(value))

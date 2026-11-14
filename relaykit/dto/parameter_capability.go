@@ -76,6 +76,10 @@ type ParameterCapability struct {
 	AllowedValues          []string         `json:"allowed_values,omitempty"`
 	OnViolation            string           `json:"on_violation,omitempty"`
 	ParticipateInSelection *bool            `json:"participate_in_selection,omitempty"`
+	// Required checks missing leaves within existing wildcard parents.
+	Required *bool `json:"required,omitempty"`
+	// NonEmpty rejects null, blank strings, and empty collections, preserving zero and false.
+	NonEmpty *bool `json:"non_empty,omitempty"`
 }
 
 func (c *ParameterCapabilityConfig) Validate() error {
@@ -172,7 +176,7 @@ func validateParameterCapabilityMap(parameters map[string]ParameterCapability) e
 	}
 	for path, capability := range parameters {
 		if path == ParameterCapabilityRequestBodySizeBytes {
-			if capability.Media != nil || capability.Transform != "" || capability.Supported != nil || len(capability.AllowedValues) > 0 {
+			if capability.Media != nil || capability.Transform != "" || capability.Supported != nil || capability.Required != nil || capability.NonEmpty != nil || len(capability.AllowedValues) > 0 {
 				return fmt.Errorf("parameter %s only supports min, max, reject, and channel selection", path)
 			}
 			if capability.OnViolation != "" && capability.OnViolation != ParameterCapabilityActionReject {
@@ -196,6 +200,10 @@ func validateParameterCapabilityMap(parameters map[string]ParameterCapability) e
 				return fmt.Errorf("parameter %s minimum cannot exceed maximum", path)
 			}
 			continue
+		}
+		if ((capability.Required != nil && *capability.Required) || (capability.NonEmpty != nil && *capability.NonEmpty)) &&
+			capability.OnViolation != "" && capability.OnViolation != ParameterCapabilityActionReject {
+			return fmt.Errorf("parameter %s: presence checks must reject incompatible values", path)
 		}
 		if capability.Media != nil {
 			if err := capability.Media.Validate(); err != nil {
@@ -252,6 +260,12 @@ func mergeParameterCapabilityMap(target map[string]ParameterCapability, source m
 		}
 		if override.Supported != nil {
 			base.Supported = override.Supported
+		}
+		if override.Required != nil {
+			base.Required = override.Required
+		}
+		if override.NonEmpty != nil {
+			base.NonEmpty = override.NonEmpty
 		}
 		if override.Min != nil {
 			base.Min = override.Min

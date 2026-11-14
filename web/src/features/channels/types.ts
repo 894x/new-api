@@ -181,6 +181,8 @@ export interface ParameterCapability {
     | 'audio_url_to_base64'
     | 'video_url_to_base64'
   supported?: boolean
+  required?: boolean
+  non_empty?: boolean
   min?: number
   max?: number
   allowed_values?: string[]
