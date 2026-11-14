@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -19,26 +18,26 @@ import (
 // GrossProfitEvent is a durable outbox and deduplication ledger in the primary
 // database. Keep applied events: removing them would allow a replay to double count.
 type GrossProfitEvent struct {
-	EventKey      string `gorm:"type:varchar(64);primaryKey"`
-	Day           string `gorm:"type:varchar(10);not null"`
-	ChannelID     int    `gorm:"not null"`
-	Reason        string `gorm:"type:varchar(64);not null"`
-	RevenueUSD    string `gorm:"type:text;not null"`
-	CostUSD       string `gorm:"type:text;not null"`
-	NetRevenueUSD string `gorm:"type:text;not null"`
-	NetCostUSD    string `gorm:"type:text;not null"`
-	AppliedAt     int64  `gorm:"bigint;not null;index:idx_gross_profit_vat_pending,priority:1"`
-	CreatedAt     int64  `gorm:"bigint;not null;index:idx_gross_profit_vat_pending,priority:2"`
+	EventKey        string `gorm:"type:varchar(64);primaryKey"`
+	Day             string `gorm:"type:varchar(10);not null"`
+	ChannelID       int    `gorm:"not null"`
+	Reason          string `gorm:"type:varchar(64);not null"`
+	RevenueUSD      string `gorm:"type:text;not null"`
+	CostUSD         string `gorm:"type:text;not null"`
+	NetRevenueUSD   string `gorm:"type:text;not null"`
+	NetCostUSD      string `gorm:"type:text;not null"`
+	AppliedAt       int64  `gorm:"bigint;not null;index:idx_gross_profit_time_pending,priority:1"`
+	SourceCreatedAt *int64 `gorm:"bigint;index:idx_gross_profit_time_source;index:idx_gross_profit_time_pending,priority:2"`
+	CreatedAt       int64  `gorm:"bigint;not null;index:idx_gross_profit_time_pending,priority:3"`
 }
 
-// Separate accounting generations prevent tax-inclusive totals or an old
-// worker from being mixed into VAT-exclusive profit. Legacy tables are retained.
-func (GrossProfitEvent) TableName() string { return "gross_profit_vat_events" }
+// Preserve previous daily ledgers while recovering exact source timestamps.
+func (GrossProfitEvent) TableName() string { return "gross_profit_time_events" }
 
 // Text decimal amounts preserve the same precision on SQLite, MySQL and
 // PostgreSQL. Updates take a row lock and add with decimal, rather than floats.
-type GrossProfitDaily struct {
-	Day           string `gorm:"type:varchar(10);primaryKey"`
+type GrossProfitBucket struct {
+	BucketTs      int64  `gorm:"bigint;primaryKey;autoIncrement:false"`
 	ChannelID     int    `gorm:"primaryKey;autoIncrement:false"`
 	Reason        string `gorm:"type:varchar(64);primaryKey"` // empty means known cost and VAT
 	Requests      int64  `gorm:"bigint;not null"`
@@ -48,12 +47,12 @@ type GrossProfitDaily struct {
 	NetCostUSD    string `gorm:"type:text;not null"`
 }
 
-func (GrossProfitDaily) TableName() string { return "gross_profit_vat_dailies" }
+func (GrossProfitBucket) TableName() string { return "gross_profit_time_buckets" }
 
-const GrossProfitRollupName = "consume_vat_v2"
+const GrossProfitRollupName = "consume_vat_time_v3"
+const grossProfitBucketSeconds int64 = 15 * 60
 
-// The timezone is frozen once so nodes with different host timezones agree on
-// day boundaries. Explicit TZ is respected; an unset TZ defaults to UTC.
+// Storage uses UTC buckets. Each report chooses the browser's business timezone.
 type GrossProfitRollupState struct {
 	Name                   string `gorm:"type:varchar(32);primaryKey"`
 	Timezone               string `gorm:"type:varchar(64);not null"`
@@ -65,6 +64,8 @@ type GrossProfitRollupState struct {
 	BackfillComplete       bool
 	LegacyCursor           string `gorm:"type:varchar(64);not null;default:''"`
 	LegacyBackfillComplete bool
+	VATCursor              string `gorm:"type:varchar(64);not null;default:''"`
+	VATBackfillComplete    bool
 	Revision               int64 `gorm:"bigint;not null"`
 	UpdatedAt              int64 `gorm:"bigint;not null"`
 }
@@ -72,25 +73,13 @@ type GrossProfitRollupState struct {
 var grossProfitSQLiteWriter sync.Mutex
 
 func MigrateGrossProfit(db *gorm.DB) error {
-	if err := db.AutoMigrate(&GrossProfitEvent{}, &GrossProfitDaily{}, &GrossProfitRollupState{}); err != nil {
+	if err := db.AutoMigrate(&GrossProfitEvent{}, &GrossProfitBucket{}, &GrossProfitRollupState{}); err != nil {
 		return err
-	}
-	timezone := os.Getenv("TZ")
-	if timezone == "" {
-		timezone = "UTC"
-	}
-	var previous GrossProfitRollupState
-	if err := db.First(&previous, "name = ?", "consume").Error; err == nil {
-		timezone = previous.Timezone
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
-	}
-	if _, err := time.LoadLocation(timezone); err != nil {
-		return fmt.Errorf("gross profit timezone: %w", err)
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&GrossProfitRollupState{
-		Name: GrossProfitRollupName, Timezone: timezone, CursorAt: -1, FullScanStartedAt: common.GetTimestamp(),
+		Name: GrossProfitRollupName, Timezone: "UTC", CursorAt: -1, FullScanStartedAt: common.GetTimestamp(),
 		LegacyBackfillComplete: !db.Migrator().HasTable("gross_profit_events"),
+		VATBackfillComplete:    !db.Migrator().HasTable("gross_profit_vat_events"),
 	}).Error
 }
 
@@ -105,12 +94,9 @@ func QueueGrossProfitLogs(ctx context.Context, logs []Log) ([]string, error) {
 	if err := DB.WithContext(ctx).First(&state, "name = ?", GrossProfitRollupName).Error; err != nil {
 		return nil, err
 	}
-	location, err := time.LoadLocation(state.Timezone)
-	if err != nil {
-		return nil, err
-	}
 	events := make([]GrossProfitEvent, 0, len(logs))
 	keys := make([]string, 0, len(logs))
+	seen := make(map[string]struct{}, len(logs))
 	for _, entry := range logs {
 		if entry.Type != LogTypeConsume {
 			continue
@@ -127,8 +113,9 @@ func QueueGrossProfitLogs(ctx context.Context, logs []Log) ([]string, error) {
 			return nil, errors.New("invalid quota unit for gross profit")
 		}
 		event := GrossProfitEvent{
-			Day:       time.Unix(entry.CreatedAt, 0).In(location).Format(time.DateOnly),
-			ChannelID: entry.ChannelId, Reason: "snapshot_missing", CostUSD: "0",
+			Day:             time.Unix(entry.CreatedAt, 0).UTC().Format(time.DateOnly),
+			SourceCreatedAt: common.GetPointer(entry.CreatedAt),
+			ChannelID:       entry.ChannelId, Reason: "snapshot_missing", CostUSD: "0",
 			RevenueUSD: decimal.NewFromInt(int64(entry.Quota)).Div(unit).String(), CreatedAt: common.GetTimestamp(),
 			NetRevenueUSD: "0", NetCostUSD: "0",
 		}
@@ -180,13 +167,31 @@ func QueueGrossProfitLogs(ctx context.Context, logs []Log) ([]string, error) {
 			identity = string(data)
 		}
 		event.EventKey = fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
+		if _, duplicate := seen[event.EventKey]; duplicate {
+			continue
+		}
+		seen[event.EventKey] = struct{}{}
 		keys = append(keys, event.EventKey)
 		events = append(events, event)
 	}
 	if len(events) == 0 {
 		return nil, nil
 	}
-	if err := DB.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&events, 100).Error; err != nil {
+	// Imported ledgers retain their immutable monetary snapshots. Replaying an
+	// original log supplies only its missing timestamp and source date.
+	source := "excluded.source_created_at"
+	day := "excluded.day"
+	if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
+		source, day = "VALUES(source_created_at)", "VALUES(day)"
+	}
+	table := (GrossProfitEvent{}).TableName()
+	if err := DB.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "event_key"}},
+		DoUpdates: clause.Set{
+			{Column: clause.Column{Name: "day"}, Value: gorm.Expr("CASE WHEN " + table + ".source_created_at IS NULL THEN " + day + " ELSE " + table + ".day END")},
+			{Column: clause.Column{Name: "source_created_at"}, Value: gorm.Expr("COALESCE(" + table + ".source_created_at, " + source + ")")},
+		},
+	}).CreateInBatches(&events, 100).Error; err != nil {
 		return nil, err
 	}
 	return keys, nil
@@ -205,14 +210,14 @@ func ApplyGrossProfitEvent(ctx context.Context, key string) error {
 		if err := lockForUpdate(tx).First(&event, "event_key = ?", key).Error; err != nil {
 			return err
 		}
-		if event.AppliedAt != 0 {
+		if event.AppliedAt != 0 || event.SourceCreatedAt == nil {
 			return nil
 		}
-		bucket := GrossProfitDaily{Day: event.Day, ChannelID: event.ChannelID, Reason: event.Reason, RevenueUSD: "0", CostUSD: "0", NetRevenueUSD: "0", NetCostUSD: "0"}
+		bucket := GrossProfitBucket{BucketTs: grossProfitBucketStart(*event.SourceCreatedAt), ChannelID: event.ChannelID, Reason: event.Reason, RevenueUSD: "0", CostUSD: "0", NetRevenueUSD: "0", NetCostUSD: "0"}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&bucket).Error; err != nil {
 			return err
 		}
-		if err := lockForUpdate(tx).First(&bucket, "day = ? AND channel_id = ? AND reason = ?", event.Day, event.ChannelID, event.Reason).Error; err != nil {
+		if err := lockForUpdate(tx).First(&bucket, "bucket_ts = ? AND channel_id = ? AND reason = ?", bucket.BucketTs, event.ChannelID, event.Reason).Error; err != nil {
 			return err
 		}
 		updates := map[string]any{"requests": bucket.Requests + 1}
@@ -232,7 +237,7 @@ func ApplyGrossProfitEvent(ctx context.Context, key string) error {
 		}
 		// Reason is an empty string for known costs. Explicitly bind every key:
 		// GORM omits zero-valued composite primary keys from Model updates.
-		if err := tx.Model(&GrossProfitDaily{}).Where("day = ? AND channel_id = ? AND reason = ?", event.Day, event.ChannelID, event.Reason).Updates(updates).Error; err != nil {
+		if err := tx.Model(&GrossProfitBucket{}).Where("bucket_ts = ? AND channel_id = ? AND reason = ?", bucket.BucketTs, event.ChannelID, event.Reason).Updates(updates).Error; err != nil {
 			return err
 		}
 		return tx.Model(&event).Update("applied_at", common.GetTimestamp()).Error
@@ -248,7 +253,7 @@ func ReconcileGrossProfit(ctx context.Context, batchSize int, now time.Time) err
 		return errors.New("invalid gross profit reconciliation batch size")
 	}
 	var pending []GrossProfitEvent
-	if err := DB.WithContext(ctx).Where("applied_at = ?", 0).Order("created_at ASC").Limit(batchSize).Find(&pending).Error; err != nil {
+	if err := DB.WithContext(ctx).Where("applied_at = ? AND source_created_at IS NOT NULL", 0).Order("source_created_at ASC, created_at ASC").Limit(batchSize).Find(&pending).Error; err != nil {
 		return err
 	}
 	var failures error
@@ -261,31 +266,45 @@ func ReconcileGrossProfit(ctx context.Context, batchSize int, now time.Time) err
 	if err := DB.WithContext(ctx).First(&state, "name = ?", GrossProfitRollupName).Error; err != nil {
 		return errors.Join(failures, err)
 	}
-	if !state.LegacyBackfillComplete {
-		// Import the old durable ledger before retained logs. Its original keys
-		// deduplicate against log replay, including when raw logs were purged.
+	if !state.VATBackfillComplete || !state.LegacyBackfillComplete {
+		// Import the VAT ledger first so a pre-VAT duplicate cannot replace its
+		// richer snapshot. Original logs later supply exact timestamps; a
+		// purged source stays preserved and explicitly unassigned, never guessed.
+		sourceTable, cursor := "gross_profit_vat_events", state.VATCursor
+		columns := []string{"event_key", "day", "channel_id", "reason", "revenue_usd", "cost_usd", "net_revenue_usd", "net_cost_usd", "created_at"}
+		if state.VATBackfillComplete {
+			sourceTable, cursor = "gross_profit_events", state.LegacyCursor
+			columns = []string{"event_key", "day", "channel_id", "reason", "revenue_usd", "cost_usd", "created_at"}
+		}
 		var legacy []GrossProfitEvent
-		if err := DB.WithContext(ctx).Table("gross_profit_events").Select("event_key", "day", "channel_id", "reason", "revenue_usd", "cost_usd", "created_at").
-			Where("event_key > ?", state.LegacyCursor).Order("event_key ASC").Limit(batchSize).Find(&legacy).Error; err != nil {
+		if err := DB.WithContext(ctx).Table(sourceTable).Select(columns).
+			Where("event_key > ?", cursor).Order("event_key ASC").Limit(batchSize).Find(&legacy).Error; err != nil {
 			return errors.Join(failures, err)
 		}
 		for i := range legacy {
-			if legacy[i].Reason == "" {
-				legacy[i].Reason = "tax_snapshot_missing"
+			if state.VATBackfillComplete {
+				if legacy[i].Reason == "" {
+					legacy[i].Reason = "tax_snapshot_missing"
+				}
+				legacy[i].NetRevenueUSD, legacy[i].NetCostUSD = "0", "0"
 			}
-			legacy[i].NetRevenueUSD, legacy[i].NetCostUSD = "0", "0"
 		}
 		err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			if len(legacy) > 0 {
 				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&legacy, 100).Error; err != nil {
 					return err
 				}
-				state.LegacyCursor = legacy[len(legacy)-1].EventKey
+				cursor = legacy[len(legacy)-1].EventKey
 			}
-			return tx.Model(&GrossProfitRollupState{}).Where("name = ? AND revision = ?", state.Name, state.Revision).Updates(map[string]any{
-				"legacy_cursor": state.LegacyCursor, "legacy_backfill_complete": len(legacy) < batchSize,
+			updates := map[string]any{
 				"revision": state.Revision + 1, "updated_at": now.Unix(),
-			}).Error
+			}
+			if state.VATBackfillComplete {
+				updates["legacy_cursor"], updates["legacy_backfill_complete"] = cursor, len(legacy) < batchSize
+			} else {
+				updates["vat_cursor"], updates["vat_backfill_complete"] = cursor, len(legacy) < batchSize
+			}
+			return tx.Model(&GrossProfitRollupState{}).Where("name = ? AND revision = ?", state.Name, state.Revision).Updates(updates).Error
 		})
 		return errors.Join(failures, err)
 	}

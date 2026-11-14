@@ -93,6 +93,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   cleanup()
   client.clear()
   useAuthStore.setState(useAuthStore.getInitialState(), true)
@@ -181,6 +182,57 @@ test('changing to thirty days requests and displays the selected period', async 
   expect(
     dayjs(config?.params.end_date).diff(dayjs(config?.params.start_date), 'day')
   ).toBe(30)
+  expect(screen.getByText('Known channel')).toBeVisible()
+})
+
+test('date presets and API parameters follow the browser local calendar and timezone', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(2026, 1, 1, 23, 30))
+  renderAnalysis()
+  await screen.findByText('Known channel')
+  expect(vi.mocked(api.get).mock.calls[0]?.[1]?.params).toEqual({
+    start_date: '2026-01-26',
+    end_date: '2026-02-02',
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  })
+  await userEvent.click(screen.getByRole('button', { name: 'Last 30 days' }))
+  await waitFor(() =>
+    expect(vi.mocked(api.get).mock.calls.at(-1)?.[1]?.params).toEqual({
+      start_date: '2026-01-03',
+      end_date: '2026-02-02',
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    })
+  )
+})
+
+test('a different browser timezone fetches its own report for the same date selection', async () => {
+  const defaults = Intl.DateTimeFormat().resolvedOptions()
+  let timezone = 'UTC'
+  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(
+    () => ({ ...defaults, timeZone: timezone })
+  )
+  const view = renderAnalysis()
+  await screen.findByText('Known channel')
+  expect(vi.mocked(api.get).mock.calls[0]?.[1]?.params.timezone).toBe('UTC')
+  timezone = 'Asia/Kathmandu'
+  view.rerender(
+    <QueryClientProvider client={client}>
+      <GrossProfitAnalysis />
+    </QueryClientProvider>
+  )
+  await waitFor(() =>
+    expect(vi.mocked(api.get).mock.calls.at(-1)?.[1]?.params.timezone).toBe(
+      'Asia/Kathmandu'
+    )
+  )
+})
+
+test('unassignable historical timestamps show that preserved calls are excluded from daily totals', async () => {
+  report.aggregation.unassigned_history = true
+  renderAnalysis()
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    'Some historical calls have no original timestamp. Their records are preserved but excluded from local daily totals.'
+  )
   expect(screen.getByText('Known channel')).toBeVisible()
 })
 

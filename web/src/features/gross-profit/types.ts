@@ -48,6 +48,7 @@ export interface GrossProfitReport {
   timezone: string
   aggregation: {
     backfill_complete: boolean
+    unassigned_history?: boolean
     pending_events: number
     updated_at: number
   }

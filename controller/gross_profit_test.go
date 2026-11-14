@@ -67,6 +67,27 @@ type previousGrossProfitEvent struct {
 
 func (previousGrossProfitEvent) TableName() string { return "gross_profit_events" }
 
+type previousVATGrossProfitEvent struct {
+	Previous      previousGrossProfitEvent `gorm:"embedded"`
+	NetRevenueUSD string                   `gorm:"type:text;not null"`
+	NetCostUSD    string                   `gorm:"type:text;not null"`
+}
+
+func (previousVATGrossProfitEvent) TableName() string { return "gross_profit_vat_events" }
+
+type previousVATGrossProfitDaily struct {
+	Day           string `gorm:"type:varchar(10);primaryKey"`
+	ChannelID     int    `gorm:"primaryKey;autoIncrement:false"`
+	Reason        string `gorm:"type:varchar(64);primaryKey"`
+	Requests      int64  `gorm:"bigint;not null"`
+	RevenueUSD    string `gorm:"type:text;not null"`
+	CostUSD       string `gorm:"type:text;not null"`
+	NetRevenueUSD string `gorm:"type:text;not null"`
+	NetCostUSD    string `gorm:"type:text;not null"`
+}
+
+func (previousVATGrossProfitDaily) TableName() string { return "gross_profit_vat_dailies" }
+
 type previousGrossProfitState struct {
 	Name              string `gorm:"type:varchar(32);primaryKey"`
 	Timezone          string `gorm:"type:varchar(64);not null"`
@@ -162,12 +183,101 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 				}
 			})
 			t.Setenv("TZ", "UTC")
+			t.Run("Beijing midnight determines the business day regardless of host timezone", func(t *testing.T) {
+				t.Cleanup(func() {
+					require.NoError(t, db.Migrator().DropTable(&model.GrossProfitBucket{}, &model.GrossProfitEvent{}, &model.GrossProfitRollupState{}))
+				})
+				require.NoError(t, db.AutoMigrate(&model.Channel{}))
+				require.NoError(t, model.MigrateGrossProfit(db))
+				entries := []model.Log{
+					{CreatedAt: time.Date(2026, 2, 1, 15, 59, 59, 0, time.UTC).Unix(), Type: model.LogTypeConsume, ChannelId: 1, Quota: 530000, RequestId: "before-beijing-midnight"},
+					{CreatedAt: time.Date(2026, 2, 1, 16, 0, 0, 0, time.UTC).Unix(), Type: model.LogTypeConsume, ChannelId: 1, Quota: 1060000, RequestId: "at-beijing-midnight"},
+				}
+				keys, err := model.QueueGrossProfitLogs(context.Background(), entries)
+				require.NoError(t, err)
+				for _, key := range keys {
+					require.NoError(t, model.ApplyGrossProfitEvent(context.Background(), key))
+				}
+				report, err := model.GetGrossProfitReport(context.Background(), "2026-02-01", "2026-02-03", "Asia/Shanghai")
+				require.NoError(t, err)
+				assert.Equal(t, "Asia/Shanghai", report.Timezone)
+				require.Len(t, report.Series, 2)
+				assert.Equal(t, "2026-02-01", report.Series[0].Day)
+				assert.EqualValues(t, 1, report.Series[0].UnknownRequests)
+				assert.InDelta(t, 1.06, report.Series[0].UnknownRevenueUSD, 1e-12)
+				assert.Equal(t, "2026-02-02", report.Series[1].Day)
+				assert.EqualValues(t, 1, report.Series[1].UnknownRequests)
+				assert.InDelta(t, 2.12, report.Series[1].UnknownRevenueUSD, 1e-12)
+				assert.Equal(t, time.Date(2026, 2, 1, 16, 0, 0, 0, time.UTC).Unix(), report.Series[1].Timestamp)
+				recorder := httptest.NewRecorder()
+				ctx, _ := gin.CreateTestContext(recorder)
+				ctx.Set("role", common.RoleRootUser)
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/gross-profit?start_date=2026-02-01&end_date=2026-02-03&timezone=UTC", nil)
+				GetGrossProfit(ctx)
+				var response struct {
+					Success bool
+					Data    model.GrossProfitReport
+				}
+				require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+				require.True(t, response.Success, recorder.Body.String())
+				assert.Equal(t, "UTC", response.Data.Timezone)
+				require.Len(t, response.Data.Series, 1)
+				assert.EqualValues(t, 2, response.Data.Series[0].UnknownRequests)
+				for _, tc := range []struct {
+					name, zone, day, endDay, startUTC, endUTC string
+				}{
+					{"spring forward has 23 hours", "America/New_York", "2026-03-08", "2026-03-09", "2026-03-08T05:00:00Z", "2026-03-09T04:00:00Z"},
+					{"fall back has 25 hours", "America/New_York", "2026-11-01", "2026-11-02", "2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z"},
+					{"quarter-hour offset", "Asia/Kathmandu", "2026-02-02", "2026-02-03", "2026-02-01T18:15:00Z", "2026-02-02T18:15:00Z"},
+					{"skipped midnight starts at the first valid local instant", "America/Santiago", "2026-09-06", "2026-09-07", "2026-09-06T04:00:00Z", "2026-09-07T03:00:00Z"},
+					{"repeated midnight starts at its first occurrence", "America/St_Johns", "2008-11-02", "2008-11-03", "2008-11-02T02:30:00Z", "2008-11-03T03:30:00Z"},
+					{"historical second offset splits a storage bucket", "Africa/Monrovia", "1960-02-02", "1960-02-03", "1960-02-02T00:44:30Z", "1960-02-03T00:44:30Z"},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						start, err := time.Parse(time.RFC3339, tc.startUTC)
+						require.NoError(t, err)
+						end, err := time.Parse(time.RFC3339, tc.endUTC)
+						require.NoError(t, err)
+						var entries []model.Log
+						for _, timestamp := range []int64{start.Unix() - 1, start.Unix(), end.Unix() - 1, end.Unix()} {
+							entries = append(entries, model.Log{CreatedAt: timestamp, Type: model.LogTypeConsume, ChannelId: 1, Quota: 50000, RequestId: fmt.Sprintf("%s-%d", tc.zone, timestamp)})
+						}
+						keys, err := model.QueueGrossProfitLogs(context.Background(), entries)
+						require.NoError(t, err)
+						for _, key := range keys {
+							require.NoError(t, model.ApplyGrossProfitEvent(context.Background(), key))
+						}
+						report, err := model.GetGrossProfitReport(context.Background(), tc.day, tc.endDay, tc.zone)
+						require.NoError(t, err)
+						assert.EqualValues(t, 2, report.Summary.UnknownRequests)
+						assert.InDelta(t, 0.2, report.Summary.UnknownRevenueUSD, 1e-12)
+						require.Len(t, report.Series, 1)
+						assert.Equal(t, tc.day, report.Series[0].Day)
+						assert.Equal(t, start.Unix(), report.Series[0].Timestamp)
+					})
+				}
+				for _, timezone := range []string{"Local", "Not/A_Timezone"} {
+					_, err := model.GetGrossProfitReport(context.Background(), "2026-02-01", "2026-02-03", timezone)
+					require.ErrorContains(t, err, "invalid timezone")
+				}
+			})
 			// Fresh empty database and a repeated startup.
 			require.NoError(t, model.MigrateGrossProfit(db))
 			require.NoError(t, model.MigrateGrossProfit(db))
-			require.NoError(t, db.Migrator().DropTable(&model.GrossProfitDaily{}, &model.GrossProfitEvent{}, &model.GrossProfitRollupState{}))
+			require.NoError(t, db.Migrator().DropTable(&model.GrossProfitBucket{}, &model.GrossProfitEvent{}, &model.GrossProfitRollupState{}))
 			// Preserve the old durable ledger even if its original logs were purged.
 			require.NoError(t, db.AutoMigrate(&previousGrossProfitEvent{}, &previousGrossProfitState{}))
+			require.NoError(t, db.AutoMigrate(&previousVATGrossProfitEvent{}, &previousVATGrossProfitDaily{}))
+			vatSource := time.Date(2026, 2, 10, 23, 59, 59, 0, time.UTC)
+			previousVAT := previousVATGrossProfitEvent{
+				Previous:      previousGrossProfitEvent{EventKey: fmt.Sprintf("%x", sha256.Sum256([]byte("utc-vat-retained"))), Day: "2026-02-10", ChannelID: 1, RevenueUSD: "1.06", CostUSD: "0.53", AppliedAt: 1},
+				NetRevenueUSD: "1", NetCostUSD: "0.5",
+			}
+			require.NoError(t, db.Create(&previousVAT).Error)
+			previousDaily := previousVATGrossProfitDaily{Day: "2026-02-10", ChannelID: 1, Requests: 1, RevenueUSD: "1.06", CostUSD: "0.53", NetRevenueUSD: "1", NetCostUSD: "0.5"}
+			require.NoError(t, db.Create(&previousDaily).Error)
+			previousVATState := previousGrossProfitState{Name: "consume_vat_v2", Timezone: "UTC", BackfillComplete: true, CursorAt: vatSource.Unix()}
+			require.NoError(t, db.Create(&previousVATState).Error)
 			legacyTime := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -30)
 			legacyDay := legacyTime.Format(time.DateOnly)
 			legacy := []previousGrossProfitEvent{
@@ -179,6 +289,8 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			// Upgrade the latest released schema with a retained consume log.
 			require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.ChannelModelOverride{}, &model.User{}))
 			require.NoError(t, logDB.AutoMigrate(&releasedGrossProfitLog{}))
+			require.NoError(t, logDB.Create(&model.Log{CreatedAt: vatSource.Unix(), Type: model.LogTypeConsume, ChannelId: 1, Quota: 530000,
+				Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":2,"event_id":"utc-vat-retained","output_vat_rate":0.06,"input_vat_rate":0.06,"cost_usd":"0.9"}}}`}).Error)
 			require.NoError(t, logDB.Create(&model.Log{Type: model.LogTypeConsume, CreatedAt: legacyTime.Unix(), ChannelId: 1, Quota: 530000,
 				Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":1,"event_id":"legacy-replayed","cost_usd":"0.53"}}}`}).Error)
 			// A representative released log row predates all rollup tables/snapshots.
@@ -269,7 +381,10 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 					assert.True(t, gjson.Get(entry.Other, "root_info.gross_profit").Exists())
 				})
 			}
-			start := time.Now().UTC().Truncate(24 * time.Hour).Unix()
+			location, err := time.LoadLocation("Asia/Shanghai")
+			require.NoError(t, err)
+			today := time.Now().In(location)
+			start := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, location).Unix()
 
 			// Editing/deleting routing metadata must not reprice recorded calls.
 			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 1).Updates(map[string]any{"cost_discount": 0.9, "invoice_vat_rate": 0.13}).Error)
@@ -283,7 +398,8 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(recorder)
 			ctx.Set("role", common.RoleRootUser)
-			ctx.Request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/gross-profit?start_date=%s&end_date=%s", time.Unix(start, 0).UTC().Format(time.DateOnly), time.Unix(start+86400, 0).UTC().Format(time.DateOnly)), nil)
+			ctx.Request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/gross-profit?timezone=Asia%%2FShanghai&start_date=%s&end_date=%s", time.Unix(start, 0).In(location).Format(time.DateOnly), time.Unix(start+86400, 0).In(location).Format(time.DateOnly)), nil)
+			require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now()))
 			require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now()))
 			require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now()))
 			require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now()))
@@ -312,16 +428,59 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			require.Len(t, response.Data.Channels, 1)
 			assert.Len(t, response.Data.Unknown, 3)
 			assert.Len(t, response.Data.Series, 1)
-			historical, err := model.GetGrossProfitReport(context.Background(), legacyDay, legacyTime.AddDate(0, 0, 1).Format(time.DateOnly))
+			historical, err := model.GetGrossProfitReport(context.Background(), legacyDay, legacyTime.AddDate(0, 0, 1).Format(time.DateOnly), "Asia/Shanghai")
 			require.NoError(t, err)
-			assert.EqualValues(t, 2, historical.Summary.UnknownRequests, "ledger and retained log must deduplicate; purged log must remain accounted for")
-			assert.InDelta(t, 3.18, historical.Summary.UnknownRevenueUSD, 1e-12)
+			assert.EqualValues(t, 1, historical.Summary.UnknownRequests, "retained logs deduplicate; a purged timestamp must not be guessed")
+			assert.InDelta(t, 1.06, historical.Summary.UnknownRevenueUSD, 1e-12)
+			assert.True(t, historical.Aggregation.UnassignedHistory)
+			var purged model.GrossProfitEvent
+			require.NoError(t, db.First(&purged, "event_key = ?", legacy[1].EventKey).Error)
+			assert.Nil(t, purged.SourceCreatedAt)
+			assert.Equal(t, "2.12", purged.RevenueUSD)
+			assert.Zero(t, purged.AppliedAt)
 			assert.Zero(t, historical.Summary.KnownRequests)
 			require.Len(t, historical.Unknown, 1)
 			assert.Equal(t, "tax_snapshot_missing", historical.Unknown[0].Reason)
 			var retainedLegacy []previousGrossProfitEvent
 			require.NoError(t, db.Order("event_key ASC").Find(&retainedLegacy).Error)
 			assert.ElementsMatch(t, legacy, retainedLegacy)
+			t.Run("UTC ledger replay moves dates and preserves its frozen VAT amounts", func(t *testing.T) {
+				converted, err := model.GetGrossProfitReport(context.Background(), "2026-02-11", "2026-02-12", "Asia/Shanghai")
+				require.NoError(t, err)
+				assert.Equal(t, "Asia/Shanghai", converted.Timezone)
+				assert.EqualValues(t, 1, converted.Summary.KnownRequests)
+				assert.InDelta(t, 0.53, converted.Summary.CostUSD, 1e-12)
+				assert.InDelta(t, 0.5, converted.Summary.NetCostUSD, 1e-12)
+				assert.InDelta(t, 0.5, converted.Summary.ProfitUSD, 1e-12)
+				previousDay, err := model.GetGrossProfitReport(context.Background(), "2026-02-10", "2026-02-11", "Asia/Shanghai")
+				require.NoError(t, err)
+				assert.Zero(t, previousDay.Summary.KnownRequests)
+				var retained previousVATGrossProfitEvent
+				require.NoError(t, db.First(&retained, "event_key = ?", previousVAT.Previous.EventKey).Error)
+				assert.Equal(t, previousVAT, retained)
+				var oldDaily previousVATGrossProfitDaily
+				require.NoError(t, db.First(&oldDaily).Error)
+				assert.Equal(t, previousDaily, oldDaily)
+				var oldState previousGrossProfitState
+				require.NoError(t, db.First(&oldState, "name = ?", previousVATState.Name).Error)
+				assert.Equal(t, previousVATState, oldState)
+				duplicate := model.Log{CreatedAt: vatSource.Add(24 * time.Hour).Unix(), Type: model.LogTypeConsume, ChannelId: 1, Quota: 530000,
+					Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":2,"event_id":"utc-vat-retained","output_vat_rate":0.06,"input_vat_rate":0.06,"cost_usd":"0.9"}}}`}
+				keys, err := model.QueueGrossProfitLogs(context.Background(), []model.Log{duplicate, duplicate})
+				require.NoError(t, err)
+				require.Len(t, keys, 1)
+				require.NoError(t, model.ApplyGrossProfitEvent(context.Background(), keys[0]))
+				var preserved model.GrossProfitEvent
+				require.NoError(t, db.First(&preserved, "event_key = ?", keys[0]).Error)
+				require.NotNil(t, preserved.SourceCreatedAt)
+				assert.Equal(t, vatSource.Unix(), *preserved.SourceCreatedAt)
+				assert.Equal(t, "2026-02-10", preserved.Day)
+				require.NoError(t, db.Model(&model.GrossProfitRollupState{}).Where("name = ?", model.GrossProfitRollupName).Updates(map[string]any{"vat_cursor": "", "vat_backfill_complete": false}).Error)
+				require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now()))
+				replayed, err := model.GetGrossProfitReport(context.Background(), "2026-02-11", "2026-02-12", "Asia/Shanghai")
+				require.NoError(t, err)
+				assert.Equal(t, converted.Summary, replayed.Summary)
+			})
 
 			// Replaying every retained source row does not change the totals.
 			var storedLogs []model.Log
@@ -331,11 +490,11 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			for _, key := range keys {
 				require.NoError(t, model.ApplyGrossProfitEvent(context.Background(), key))
 			}
-			repeated, err := model.GetGrossProfitReport(context.Background(), time.Unix(start, 0).UTC().Format(time.DateOnly), time.Unix(start+86400, 0).UTC().Format(time.DateOnly))
+			repeated, err := model.GetGrossProfitReport(context.Background(), time.Unix(start, 0).In(location).Format(time.DateOnly), time.Unix(start+86400, 0).In(location).Format(time.DateOnly), "Asia/Shanghai")
 			require.NoError(t, err)
 			assert.Equal(t, response.Data.Summary, repeated.Summary)
 
-			for index, stage := range []string{(model.GrossProfitDaily{}).TableName(), (model.GrossProfitEvent{}).TableName()} {
+			for index, stage := range []string{(model.GrossProfitBucket{}).TableName(), (model.GrossProfitEvent{}).TableName()} {
 				t.Run("rollback and recover "+stage, func(t *testing.T) {
 					entry := model.Log{Type: model.LogTypeConsume, CreatedAt: start + int64(10+index)*86400, ChannelId: 1, Quota: 400000, RequestId: "rollback-" + stage,
 						Other: `{"quota_per_unit":500000,"root_info":{"gross_profit":{"version":2,"output_vat_rate":0.06,"input_vat_rate":0.03,"event_id":"rollback-` + stage + `","cost_usd":"0.3"}}}`}
@@ -354,12 +513,12 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 					require.NoError(t, db.First(&event, "event_key = ?", keys[0]).Error)
 					assert.Zero(t, event.AppliedAt)
 					var buckets int64
-					require.NoError(t, db.Model(&model.GrossProfitDaily{}).Where("day = ?", event.Day).Count(&buckets).Error)
+					require.NoError(t, db.Model(&model.GrossProfitBucket{}).Where("bucket_ts = ?", entry.CreatedAt).Count(&buckets).Error)
 					assert.Zero(t, buckets, "failed transaction must roll back bucket and marker together")
 					require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now()))
 					require.NoError(t, model.ApplyGrossProfitEvent(context.Background(), keys[0]))
-					var bucket model.GrossProfitDaily
-					require.NoError(t, db.First(&bucket, "day = ?", event.Day).Error)
+					var bucket model.GrossProfitBucket
+					require.NoError(t, db.First(&bucket, "bucket_ts = ?", entry.CreatedAt).Error)
 					assert.EqualValues(t, 1, bucket.Requests)
 					assert.Equal(t, "0.8", bucket.RevenueUSD)
 					assert.Equal(t, "0.3", bucket.CostUSD)
@@ -377,9 +536,9 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 				for _, key := range keys {
 					require.NoError(t, model.ApplyGrossProfitEvent(context.Background(), key))
 				}
-				day := time.Unix(start+21*86400, 0).UTC().Format(time.DateOnly)
-				next := time.Unix(start+22*86400, 0).UTC().Format(time.DateOnly)
-				report, err := model.GetGrossProfitReport(context.Background(), day, next)
+				day := time.Unix(start+21*86400, 0).In(location).Format(time.DateOnly)
+				next := time.Unix(start+22*86400, 0).In(location).Format(time.DateOnly)
+				report, err := model.GetGrossProfitReport(context.Background(), day, next, "Asia/Shanghai")
 				require.NoError(t, err)
 				assert.EqualValues(t, 1, report.Summary.KnownRequests)
 				assert.EqualValues(t, 2, report.Summary.UnknownRequests)
@@ -409,8 +568,8 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 				for _, key := range keys {
 					require.NoError(t, model.ApplyGrossProfitEvent(context.Background(), key))
 				}
-				var bucket model.GrossProfitDaily
-				require.NoError(t, db.First(&bucket, "day = ?", time.Unix(start+20*86400, 0).UTC().Format(time.DateOnly)).Error)
+				var bucket model.GrossProfitBucket
+				require.NoError(t, db.First(&bucket, "bucket_ts = ?", start+20*86400).Error)
 				assert.EqualValues(t, 2, bucket.Requests)
 				assert.Equal(t, "1.6", bucket.RevenueUSD)
 				assert.Equal(t, "0.3", bucket.CostUSD)
@@ -434,8 +593,8 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 				assert.Equal(t, before.CursorAt, after.CursorAt)
 				require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now().Add(25*time.Hour)))
 				require.NoError(t, model.ReconcileGrossProfit(context.Background(), 1000, time.Now().Add(25*time.Hour)))
-				var bucket model.GrossProfitDaily
-				require.NoError(t, db.First(&bucket, "day = ?", time.Unix(entry.CreatedAt, 0).UTC().Format(time.DateOnly)).Error)
+				var bucket model.GrossProfitBucket
+				require.NoError(t, db.First(&bucket, "bucket_ts = ?", entry.CreatedAt).Error)
 				assert.EqualValues(t, 1, bucket.Requests)
 				assert.Equal(t, "0.1", bucket.CostUSD)
 			})
@@ -498,7 +657,7 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 					keys, err = model.QueueGrossProfitLogs(context.Background(), []model.Log{entry})
 					require.NoError(t, err)
 					require.NoError(t, model.ApplyGrossProfitEvent(context.Background(), keys[0]))
-					report, err := model.GetGrossProfitReport(context.Background(), time.Unix(entry.CreatedAt, 0).UTC().Format(time.DateOnly), time.Unix(entry.CreatedAt+86400, 0).UTC().Format(time.DateOnly))
+					report, err := model.GetGrossProfitReport(context.Background(), time.Unix(entry.CreatedAt, 0).In(location).Format(time.DateOnly), time.Unix(entry.CreatedAt+86400, 0).In(location).Format(time.DateOnly), "Asia/Shanghai")
 					require.NoError(t, err)
 					if tc.reason != "" {
 						assert.Zero(t, report.Summary.KnownRequests)
@@ -523,7 +682,7 @@ func TestGrossProfitDatabaseMatrix(t *testing.T) {
 			require.NoError(t, model.MigrateGrossProfit(db))
 			// A report remains available with the source log table gone: no query-time log scans.
 			require.NoError(t, logDB.Migrator().DropTable(&model.Log{}))
-			wide, err := model.GetGrossProfitReport(context.Background(), "1900-01-01", "2100-01-01")
+			wide, err := model.GetGrossProfitReport(context.Background(), "1900-01-01", "2100-01-01", "Asia/Shanghai")
 			require.NoError(t, err)
 			assert.True(t, wide.Aggregation.BackfillComplete)
 			assert.Zero(t, wide.Aggregation.PendingEvents)

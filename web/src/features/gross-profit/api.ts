@@ -24,10 +24,11 @@ import type { GrossProfitReport } from './types'
 export async function getGrossProfit(
   start: string,
   end: string,
+  timezone: string,
   signal?: AbortSignal
 ): Promise<GrossProfitReport> {
   const response = await api.get('/api/gross-profit', {
-    params: { start_date: start, end_date: end },
+    params: { start_date: start, end_date: end, timezone },
     signal,
     disableDuplicate: Boolean(signal),
   })

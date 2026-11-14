@@ -19,7 +19,7 @@ func GetGrossProfit(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
-	report, err := model.GetGrossProfitReport(ctx, c.Query("start_date"), c.Query("end_date"))
+	report, err := model.GetGrossProfitReport(ctx, c.Query("start_date"), c.Query("end_date"), c.Query("timezone"))
 	if err != nil {
 		common.ApiError(c, err)
 		return

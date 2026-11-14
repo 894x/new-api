@@ -159,9 +159,10 @@ type GrossProfitReport struct {
 }
 
 type GrossProfitAggregation struct {
-	BackfillComplete bool  `json:"backfill_complete"`
-	PendingEvents    int64 `json:"pending_events"`
-	UpdatedAt        int64 `json:"updated_at"`
+	BackfillComplete  bool  `json:"backfill_complete"`
+	UnassignedHistory bool  `json:"unassigned_history"`
+	PendingEvents     int64 `json:"pending_events"`
+	UpdatedAt         int64 `json:"updated_at"`
 }
 
 type grossProfitAccumulator struct {
@@ -201,15 +202,56 @@ func (a *grossProfitAccumulator) totals() GrossProfitTotals {
 	return result
 }
 
-// GetGrossProfitReport reads only the primary database's daily rollups. Date
-// ranges are whole business days in the timezone frozen in the rollup state;
-// endDay is exclusive. Neither range length nor raw-log count limits apply.
-func GetGrossProfitReport(ctx context.Context, startDay, endDay string) (*GrossProfitReport, error) {
-	start, err := time.Parse(time.DateOnly, startDay)
+// grossProfitDayStart finds the first instant of a local date, including dates
+// whose midnight is skipped or repeated by a timezone transition.
+func grossProfitDayStart(day string, location *time.Location) (time.Time, error) {
+	date, err := time.Parse(time.DateOnly, day)
+	if err != nil {
+		return time.Time{}, err
+	}
+	windowEnd := date.Add(48 * time.Hour)
+	for probe := date.Add(-48 * time.Hour); probe.Before(windowEnd); {
+		local := probe.In(location)
+		_, offset := local.Zone()
+		_, zoneEnd := local.ZoneBounds()
+		segmentEnd := windowEnd
+		if !zoneEnd.IsZero() && zoneEnd.Before(segmentEnd) {
+			segmentEnd = zoneEnd
+		}
+		candidate := date.Add(-time.Duration(offset) * time.Second)
+		if candidate.Before(probe) {
+			candidate = probe
+		}
+		if candidate.Before(segmentEnd) && candidate.In(location).Format(time.DateOnly) == day {
+			return candidate.In(location), nil
+		}
+		probe = segmentEnd
+	}
+	return time.Time{}, errors.New("date does not exist in timezone")
+}
+
+func grossProfitBucketStart(timestamp int64) int64 {
+	return timestamp - (timestamp%grossProfitBucketSeconds+grossProfitBucketSeconds)%grossProfitBucketSeconds
+}
+
+// GetGrossProfitReport groups timezone-neutral rollups by the browser's local
+// calendar. endDay is exclusive. Raw usage logs are never queried here.
+func GetGrossProfitReport(ctx context.Context, startDay, endDay, timezone string) (*GrossProfitReport, error) {
+	if timezone == "" {
+		timezone = "UTC"
+	}
+	if len(timezone) > 64 || timezone == "Local" {
+		return nil, errors.New("invalid timezone")
+	}
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return nil, errors.New("invalid timezone")
+	}
+	start, err := grossProfitDayStart(startDay, location)
 	if err != nil {
 		return nil, errors.New("invalid start_date")
 	}
-	end, err := time.Parse(time.DateOnly, endDay)
+	end, err := grossProfitDayStart(endDay, location)
 	if err != nil || !end.After(start) {
 		return nil, errors.New("invalid end_date")
 	}
@@ -217,18 +259,58 @@ func GetGrossProfitReport(ctx context.Context, startDay, endDay string) (*GrossP
 	if err := DB.WithContext(ctx).First(&state, "name = ?", GrossProfitRollupName).Error; err != nil {
 		return nil, err
 	}
-	location, err := time.LoadLocation(state.Timezone)
-	if err != nil {
+	report := &GrossProfitReport{Timezone: timezone, Channels: []GrossProfitChannel{}, Unknown: []GrossProfitUnknown{}, Series: []GrossProfitPoint{}}
+	report.Aggregation.BackfillComplete = state.BackfillComplete && state.LegacyBackfillComplete && state.VATBackfillComplete
+	report.Aggregation.UpdatedAt = state.UpdatedAt
+	if err := DB.WithContext(ctx).Model(&GrossProfitEvent{}).Where("applied_at = ? AND source_created_at IS NOT NULL", 0).Count(&report.Aggregation.PendingEvents).Error; err != nil {
 		return nil, err
 	}
-	report := &GrossProfitReport{Timezone: state.Timezone, Channels: []GrossProfitChannel{}, Unknown: []GrossProfitUnknown{}, Series: []GrossProfitPoint{}}
-	report.Aggregation.BackfillComplete, report.Aggregation.UpdatedAt = state.BackfillComplete, state.UpdatedAt
-	if err := DB.WithContext(ctx).Model(&GrossProfitEvent{}).Where("applied_at = ?", 0).Count(&report.Aggregation.PendingEvents).Error; err != nil {
+	if report.Aggregation.BackfillComplete {
+		var missing []string
+		if err := DB.WithContext(ctx).Model(&GrossProfitEvent{}).Where("source_created_at IS NULL").Limit(1).Pluck("event_key", &missing).Error; err != nil {
+			return nil, err
+		}
+		report.Aggregation.UnassignedHistory = len(missing) != 0
+	}
+	var buckets []GrossProfitBucket
+	if err := DB.WithContext(ctx).Where("bucket_ts >= ? AND bucket_ts < ?", grossProfitBucketStart(start.Unix()), end.Unix()).Order("bucket_ts ASC").Find(&buckets).Error; err != nil {
 		return nil, err
 	}
-	var buckets []GrossProfitDaily
-	if err := DB.WithContext(ctx).Where("day >= ? AND day < ?", startDay, endDay).Order("day ASC").Find(&buckets).Error; err != nil {
-		return nil, err
+	// Modern timezone boundaries align with 15-minute UTC buckets. For an
+	// historical offset that splits a bucket, use only that bucket's durable
+	// timestamped events so no partial day is rounded or counted twice.
+	boundaryBuckets := map[int64]struct{}{}
+	wholeBuckets := buckets[:0]
+	for _, bucket := range buckets {
+		bucketEnd := bucket.BucketTs + grossProfitBucketSeconds
+		firstDay := time.Unix(bucket.BucketTs, 0).In(location).Format(time.DateOnly)
+		lastDay := time.Unix(bucketEnd-1, 0).In(location).Format(time.DateOnly)
+		splitsDay := firstDay != lastDay
+		_, transition := time.Unix(bucket.BucketTs, 0).In(location).ZoneBounds()
+		for !transition.IsZero() && transition.Unix() < bucketEnd {
+			if transition.Add(-time.Second).In(location).Format(time.DateOnly) != firstDay || transition.In(location).Format(time.DateOnly) != firstDay {
+				splitsDay = true
+				break
+			}
+			_, transition = transition.In(location).ZoneBounds()
+		}
+		if bucket.BucketTs < start.Unix() || bucketEnd > end.Unix() || splitsDay {
+			boundaryBuckets[bucket.BucketTs] = struct{}{}
+			continue
+		}
+		wholeBuckets = append(wholeBuckets, bucket)
+	}
+	buckets = wholeBuckets
+	for bucketTs := range boundaryBuckets {
+		var events []GrossProfitEvent
+		if err := DB.WithContext(ctx).Where("source_created_at >= ? AND source_created_at < ? AND applied_at <> ?",
+			max(bucketTs, start.Unix()), min(bucketTs+grossProfitBucketSeconds, end.Unix()), 0).Find(&events).Error; err != nil {
+			return nil, err
+		}
+		for _, event := range events {
+			buckets = append(buckets, GrossProfitBucket{BucketTs: *event.SourceCreatedAt, ChannelID: event.ChannelID, Reason: event.Reason,
+				Requests: 1, RevenueUSD: event.RevenueUSD, CostUSD: event.CostUSD, NetRevenueUSD: event.NetRevenueUSD, NetCostUSD: event.NetCostUSD})
+		}
 	}
 	var total grossProfitAccumulator
 	channels := map[int]*grossProfitAccumulator{}
@@ -239,6 +321,7 @@ func GetGrossProfitReport(ctx context.Context, startDay, endDay string) (*GrossP
 	}
 	unknown := map[unknownKey]*grossProfitAccumulator{}
 	for _, bucket := range buckets {
+		day := time.Unix(bucket.BucketTs, 0).In(location).Format(time.DateOnly)
 		revenue, err := decimal.NewFromString(bucket.RevenueUSD)
 		if err != nil {
 			return nil, err
@@ -264,10 +347,10 @@ func GetGrossProfitReport(ctx context.Context, startDay, endDay string) (*GrossP
 			channels[bucket.ChannelID] = &grossProfitAccumulator{}
 		}
 		channels[bucket.ChannelID].add(values)
-		if days[bucket.Day] == nil {
-			days[bucket.Day] = &grossProfitAccumulator{}
+		if days[day] == nil {
+			days[day] = &grossProfitAccumulator{}
 		}
-		days[bucket.Day].add(values)
+		days[day].add(values)
 		if bucket.Reason != "" {
 			key := unknownKey{bucket.ChannelID, bucket.Reason}
 			if unknown[key] == nil {
@@ -307,7 +390,7 @@ func GetGrossProfitReport(ctx context.Context, startDay, endDay string) (*GrossP
 		report.Unknown = append(report.Unknown, GrossProfitUnknown{key.channel, name, key.reason, values.unknownRequests, values.totals().UnknownRevenueUSD})
 	}
 	for day, values := range days {
-		date, err := time.ParseInLocation(time.DateOnly, day, location)
+		date, err := grossProfitDayStart(day, location)
 		if err != nil {
 			return nil, err
 		}

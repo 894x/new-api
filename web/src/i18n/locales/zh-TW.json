@@ -3653,6 +3653,7 @@
     "High-risk status code retry risk check 4": "我自願承擔系統穩定性風險：本人知悉該操作可能導致用戶端嚴重逾時及服務崩潰。若因本人開啟此功能導致請求積壓或服務不可用，後果由本人自行承擔。",
     "High-risk status code retry risk disclaimer": "### ⚠️ 高風險操作：504/524 狀態碼重試風險告知與免責聲明\n\n本專案預設對 `400`（請求錯誤）、`504`（閘道逾時）與 `524`（CDN 逾時）狀態碼不進行重試。504 與 524 錯誤通常代表**請求已成功送達上游 AI 服務，且上游正在處理，但因上游處理時間過長導致連線中斷**。這通常表示逾時源於上游服務瓶頸。\n\n開啟此類逾時狀態碼的重新導向/重試屬於**極高風險操作**。在開啟該功能前，您必須仔細閱讀並知悉以下嚴重後果：\n\n#### 一、核心風險告知（請仔細閱讀）\n\n1. 💸 雙重/多重計費風險：多數 AI 上游廠商對於已開始處理但因網路原因中斷（504/524）的請求**仍然會扣費**。此時若觸發重試，將會向上游發起全新請求，導致您被**雙重甚至多重計費**。\n2. ⏳ 用戶端嚴重逾時：單次請求已觸發逾時，疊加重試機制會使總請求耗時成倍增加，導致最終用戶端（或呼叫方）出現嚴重甚至無法接受的逾時現象。\n3. 💥 請求積壓與系統崩潰風險：強制重試逾時請求會長時間占用系統執行緒與連線數。在高併發場景下，這將導致嚴重的**請求積壓**，進而耗盡系統資源，引發雪崩效應，造成整個代理服務崩潰。\n\n#### 二、風險確認聲明\n\n若您堅持開啟該功能，即代表您作出以下確認：",
     "Higher priority channels are selected first": "優先級更高的渠道優先被選中",
+    "Some historical calls have no original timestamp. Their records are preserved but excluded from local daily totals.": "部分歷史呼叫缺少原始時間戳記。原始記錄已保留，但不計入按本地時區彙總的每日資料。",
     "Historical aggregation is in progress. Totals may be incomplete.": "歷史資料正在彙總，目前統計可能尚不完整",
     "Historical capitalization": "歷史大小寫",
     "Historical concurrency is reconstructed from completed log records; unfinished requests and truncated scans are not included. Percentiles are approximate histogram upper bounds.": "歷史並發由已完成的日誌記錄重建，不包含尚未結束的請求或截斷掃描遺漏的記錄。分位數為直方圖上界近似值。",

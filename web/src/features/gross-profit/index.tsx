@@ -33,17 +33,19 @@ import { getGrossProfit } from './api'
 import { GrossProfitResults } from './results'
 
 function grossProfitDateRange(days: number) {
+  const today = dayjs()
   return {
-    start: dayjs()
+    start: today
       .subtract(days - 1, 'day')
       .startOf('day')
       .toDate(),
-    end: dayjs().startOf('day').toDate(),
+    end: today.startOf('day').toDate(),
   }
 }
 
 export function GrossProfitAnalysis() {
   const { t } = useTranslation()
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
   const isRoot = useAuthStore(
     (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
   )
@@ -52,11 +54,17 @@ export function GrossProfitAnalysis() {
   const valid =
     draft.start != null && draft.end != null && draft.end >= draft.start
   const query = useQuery({
-    queryKey: ['gross-profit', range.start.getTime(), range.end.getTime()],
+    queryKey: [
+      'gross-profit',
+      timezone,
+      range.start.getTime(),
+      range.end.getTime(),
+    ],
     queryFn: ({ signal }) =>
       getGrossProfit(
         dayjs(range.start).format('YYYY-MM-DD'),
         dayjs(range.end).add(1, 'day').format('YYYY-MM-DD'),
+        timezone,
         signal
       ),
     enabled: isRoot,
@@ -144,6 +152,13 @@ export function GrossProfitAnalysis() {
             <p role='status' className='text-muted-foreground text-sm'>
               {t(
                 'Historical aggregation is in progress. Totals may be incomplete.'
+              )}
+            </p>
+          )}
+          {query.data.aggregation.unassigned_history && (
+            <p role='status' className='text-muted-foreground text-sm'>
+              {t(
+                'Some historical calls have no original timestamp. Their records are preserved but excluded from local daily totals.'
               )}
             </p>
           )}
