@@ -1031,7 +1031,7 @@ func TestChatEarlyChunkStreamSerialization(t *testing.T) {
 					sqlDB, _ := db.DB()
 					_ = sqlDB.Close()
 				})
-				require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.ModelRoutingPool{}, &model.UserRoutingStrategy{}, &model.UserGroupChannelRoutingOverride{}))
+				require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.ModelRoutingPool{}, &model.UserRoutingStrategy{}, &model.UserGroupChannelRoutingOverride{}, &model.UserRoutingServiceType{}))
 				require.NoError(t, db.Create(&model.User{Id: 42, Username: "early-qa", Role: 1, AffCode: "early-qa"}).Error)
 				name := "early-stream-" + variant
 				channel := model.Channel{Id: 8001, Type: 1, Models: name, Group: "default"}
