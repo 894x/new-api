@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayparam"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -233,8 +234,7 @@ func TestCachedParameterFilteringKeepsValidCandidatesWhenAnotherChannelIsMisconf
 		map[int]*dto.ParameterCapabilityConfig{761: config},
 		map[int]*Channel{761: misconfigured, 762: valid},
 		"model-a",
-		[]byte(`{"tools":[]}`),
-		nil,
+		relayparam.NewSelectionCapabilityChecker([]byte(`{"tools":[]}`), nil),
 	)
 
 	require.Len(t, filtered, 1)

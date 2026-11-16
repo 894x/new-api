@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/tidwall/gjson"
@@ -46,6 +47,41 @@ func CheckSelectionCapabilities(data []byte, config *dto.ParameterCapabilityConf
 // using the exact original client body size. data remains the JSON payload used
 // by ordinary parameter paths and may be empty for non-JSON requests.
 func CheckSelectionCapabilitiesWithBodySize(data []byte, bodySize *int64, config *dto.ParameterCapabilityConfig, model string) error {
+	checker := NewSelectionCapabilityChecker(data, bodySize)
+	return checker.Check(config, model)
+}
+
+// SelectionCapabilityChecker reuses observations of an immutable client body
+// across channels and retries. It never caches policy decisions: each Check
+// resolves the supplied model/configuration again. The caller must not mutate
+// data while the checker is in use; retain it only for the current request.
+type SelectionCapabilityChecker struct {
+	mu       sync.Mutex
+	resolver jsonPathResolver
+	bodySize *int64
+}
+
+func NewSelectionCapabilityChecker(data []byte, bodySize *int64) *SelectionCapabilityChecker {
+	if bodySize != nil {
+		size := *bodySize
+		bodySize = &size
+	}
+	return &SelectionCapabilityChecker{resolver: newJSONPathResolver(data), bodySize: bodySize}
+}
+
+// Matches identifies the same immutable backing slice and exact size metadata
+// without hashing or rescanning a potentially large request body.
+func (checker *SelectionCapabilityChecker) Matches(data []byte, bodySize *int64) bool {
+	original := checker.resolver.data
+	return len(original) == len(data) && (len(data) == 0 || &original[0] == &data[0]) &&
+		((checker.bodySize == nil && bodySize == nil) ||
+			(checker.bodySize != nil && bodySize != nil && *checker.bodySize == *bodySize))
+}
+
+func (checker *SelectionCapabilityChecker) Check(config *dto.ParameterCapabilityConfig, model string) error {
+	checker.mu.Lock()
+	defer checker.mu.Unlock()
+	data, bodySize := checker.resolver.data, checker.bodySize
 	if !config.HasSelectionConstraints() {
 		return nil
 	}
@@ -81,15 +117,15 @@ func CheckSelectionCapabilitiesWithBodySize(data []byte, bodySize *int64, config
 		if len(data) == 0 {
 			continue
 		}
-		resolvedPaths, err := ResolveJSONPaths(data, path, capability.Required != nil && *capability.Required)
+		resolvedPaths, err := checker.resolver.resolve(path, capability.Required != nil && *capability.Required)
 		if err != nil {
 			return err
 		}
 		for _, resolvedPath := range resolvedPaths {
-			if capability.Media != nil && strings.HasSuffix(resolvedPath, ".source") && !isMessagesVideoSource(data, resolvedPath) {
+			if capability.Media != nil && strings.HasSuffix(resolvedPath, ".source") && !checker.resolver.isMessagesVideoSource(resolvedPath) {
 				continue
 			}
-			value := gjson.GetBytes(data, resolvedPath)
+			value := checker.resolver.get(resolvedPath)
 			if reason := parameterPresenceViolation(value, capability); reason != "" {
 				return newCapabilityViolation(model, resolvedPath, "", reason)
 			}
@@ -139,6 +175,7 @@ func ApplyCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model
 	sort.Strings(paths)
 
 	result := data
+	resolver := newJSONPathResolver(result)
 	changes := make([]CapabilityChange, 0)
 	for _, path := range paths {
 		if path == dto.ParameterCapabilityRequestBodySizeBytes {
@@ -149,18 +186,19 @@ func ApplyCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model
 		if action == "" {
 			action = dto.ParameterCapabilityActionReject
 		}
-		resolvedPaths, err := ResolveJSONPaths(result, path, capability.Required != nil && *capability.Required)
+		resolvedPaths, err := resolver.resolve(path, capability.Required != nil && *capability.Required)
 		if err != nil {
 			return nil, changes, err
 		}
 		if action == dto.ParameterCapabilityActionDrop {
+			resolvedPaths = slices.Clone(resolvedPaths)
 			slices.Reverse(resolvedPaths)
 		}
 		for _, resolvedPath := range resolvedPaths {
-			if capability.Media != nil && strings.HasSuffix(resolvedPath, ".source") && !isMessagesVideoSource(result, resolvedPath) {
+			if capability.Media != nil && strings.HasSuffix(resolvedPath, ".source") && !resolver.isMessagesVideoSource(resolvedPath) {
 				continue
 			}
-			value := gjson.GetBytes(result, resolvedPath)
+			value := resolver.get(resolvedPath)
 			if reason := parameterPresenceViolation(value, capability); reason != "" {
 				return nil, changes, newCapabilityViolation(model, resolvedPath, "", reason)
 			}
@@ -174,6 +212,7 @@ func ApplyCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model
 				if err != nil {
 					return nil, changes, err
 				}
+				resolver = newJSONPathResolver(result)
 				continue
 			}
 
@@ -184,6 +223,7 @@ func ApplyCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model
 					if err != nil {
 						return nil, changes, err
 					}
+					resolver = newJSONPathResolver(result)
 					continue
 				}
 				number := value.Float()
@@ -203,6 +243,7 @@ func ApplyCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model
 					if err != nil {
 						return nil, changes, err
 					}
+					resolver = newJSONPathResolver(result)
 					continue
 				}
 			}
@@ -214,6 +255,7 @@ func ApplyCapabilities(data []byte, config *dto.ParameterCapabilityConfig, model
 				if err != nil {
 					return nil, changes, err
 				}
+				resolver = newJSONPathResolver(result)
 			}
 		}
 	}

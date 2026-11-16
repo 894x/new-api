@@ -216,6 +216,7 @@ func GetRandomSatisfiedChannelWithSelectionFilters(group string, model string, r
 
 // Caller holds channelSyncLock. The returned slice must not be mutated.
 func listCachedChannelCandidates(group, model string, filters ChannelSelectionFilters) ([]cachedChannelRouting, error) {
+	filters.prepareParameterChecker()
 	if !IsGroupModelAllowed(group, model) {
 		return nil, nil
 	}
@@ -299,11 +300,11 @@ func filterCachedChannelSelectionCandidates(routings []cachedChannelRouting, fil
 		routings = eligible
 	}
 	parameterCandidateCount := len(routings)
-	filtered, firstViolation, err := filterChannelRoutingsBySelectionParameters(routings, channel2parameterCapabilityConfig, channelsIDM, requestModel, filters.RequestBody, filters.RequestBodySize)
+	filtered, firstViolation, err := filterChannelRoutingsBySelectionParameters(routings, channel2parameterCapabilityConfig, channelsIDM, requestModel, filters.ParameterChecker)
 	return filtered, parameterCandidateCount, firstViolation, err
 }
 
-func filterChannelRoutingsBySelectionParameters(routings []cachedChannelRouting, configs map[int]*dto.ParameterCapabilityConfig, channels map[int]*Channel, requestModel string, requestBody []byte, requestBodySize *int64) ([]cachedChannelRouting, error, error) {
+func filterChannelRoutingsBySelectionParameters(routings []cachedChannelRouting, configs map[int]*dto.ParameterCapabilityConfig, channels map[int]*Channel, requestModel string, checker *relayparam.SelectionCapabilityChecker) ([]cachedChannelRouting, error, error) {
 	if len(routings) == 0 {
 		return routings, nil, nil
 	}
@@ -316,7 +317,7 @@ func filterChannelRoutingsBySelectionParameters(routings []cachedChannelRouting,
 			filtered = append(filtered, routing)
 			continue
 		}
-		supported, err := supportsSelectionParameters(channel, configs[routing.ChannelId], requestModel, requestBody, requestBodySize)
+		supported, err := supportsSelectionParameters(channel, configs[routing.ChannelId], requestModel, checker)
 		if err != nil {
 			var violation *relayparam.CapabilityViolationError
 			if !errors.As(err, &violation) {

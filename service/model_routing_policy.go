@@ -6,6 +6,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/relayparam"
 	"github.com/gin-gonic/gin"
 )
 
@@ -37,7 +38,28 @@ func (p *RetryParam) SelectionFilters(group string) (model.ChannelSelectionFilte
 			poolChannels[entry.ChannelID] = entry
 		}
 	}
-	return model.ChannelSelectionFilters{UserRoutingOverrides: userRouting, RoutingPoolChannels: poolChannels, Constraints: GetChannelConstraints(p.Ctx).Filters, RequestPath: p.RequestPath, RequestBody: p.RequestBody, RequestBodySize: p.RequestBodySize, AllowedChannelIds: allowed}, nil
+	return model.ChannelSelectionFilters{UserRoutingOverrides: userRouting, RoutingPoolChannels: poolChannels, Constraints: GetChannelConstraints(p.Ctx).Filters, RequestPath: p.RequestPath, RequestBody: p.RequestBody, RequestBodySize: p.RequestBodySize, ParameterChecker: p.parameterCapabilityChecker(), AllowedChannelIds: allowed}, nil
+}
+
+// Each middleware/controller RetryParam for this request shares the original
+// immutable selection body. Replacing that body or size creates a fresh checker.
+func (p *RetryParam) parameterCapabilityChecker() *relayparam.SelectionCapabilityChecker {
+	const key = "selection_parameter_checker"
+	size := p.RequestBodySize
+	if size == nil && len(p.RequestBody) > 0 {
+		inferred := int64(len(p.RequestBody))
+		size = &inferred
+	}
+	if p.Ctx != nil {
+		if checker, ok := common.GetContextKeyType[*relayparam.SelectionCapabilityChecker](p.Ctx, key); ok && checker.Matches(p.RequestBody, size) {
+			return checker
+		}
+	}
+	checker := relayparam.NewSelectionCapabilityChecker(p.RequestBody, size)
+	if p.Ctx != nil {
+		p.Ctx.Set(key, checker)
+	}
+	return checker
 }
 
 // ValidateSelectedChannelGroupPolicy protects affinity hits, pinned channels

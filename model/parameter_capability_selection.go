@@ -19,6 +19,7 @@ type ChannelSelectionFilters struct {
 	RequestPath          string
 	RequestBody          []byte
 	RequestBodySize      *int64
+	ParameterChecker     *relayparam.SelectionCapabilityChecker
 	AllowedChannelIds    map[int]struct{}
 }
 
@@ -50,24 +51,39 @@ func (channel *Channel) SupportsSelectionParameters(requestModel string, request
 }
 
 func (channel *Channel) SupportsSelectionRequest(requestModel string, requestBody []byte, requestBodySize *int64) (bool, error) {
+	filters := ChannelSelectionFilters{RequestBody: requestBody, RequestBodySize: requestBodySize}
+	filters.prepareParameterChecker()
+	return channel.SupportsSelectionRequestWithChecker(requestModel, filters.ParameterChecker)
+}
+
+// SupportsSelectionRequestWithChecker shares immutable request observations with
+// ordinary candidate filtering, including pinned and affinity-selected channels.
+func (channel *Channel) SupportsSelectionRequestWithChecker(requestModel string, checker *relayparam.SelectionCapabilityChecker) (bool, error) {
 	if channel == nil {
 		return true, nil
 	}
-	config := channel.GetOtherSettings().ParameterCapabilities
-	return supportsSelectionParameters(channel, config, requestModel, requestBody, requestBodySize)
+	return supportsSelectionParameters(channel, channel.GetOtherSettings().ParameterCapabilities, requestModel, checker)
 }
 
-func supportsSelectionParameters(channel *Channel, config *dto.ParameterCapabilityConfig, requestModel string, requestBody []byte, requestBodySize *int64) (bool, error) {
+func (filters *ChannelSelectionFilters) prepareParameterChecker() {
+	size := filters.RequestBodySize
+	if size == nil && len(filters.RequestBody) > 0 {
+		inferred := int64(len(filters.RequestBody))
+		size = &inferred
+	}
+	if filters.ParameterChecker != nil && filters.ParameterChecker.Matches(filters.RequestBody, size) {
+		return
+	}
+	filters.ParameterChecker = relayparam.NewSelectionCapabilityChecker(filters.RequestBody, size)
+}
+
+func supportsSelectionParameters(channel *Channel, config *dto.ParameterCapabilityConfig, requestModel string, checker *relayparam.SelectionCapabilityChecker) (bool, error) {
 	if channel == nil {
 		return true, nil
 	}
 	policy := GetModelRequestPolicy(requestModel)
 	if !config.HasSelectionConstraints() && (policy == nil || !policy.ParameterCapabilities.HasSelectionConstraints()) {
 		return true, nil
-	}
-	if requestBodySize == nil && len(requestBody) > 0 {
-		inferredSize := int64(len(requestBody))
-		requestBodySize = &inferredSize
 	}
 	upstreamModel, _, err := channel.ResolveUpstreamModelName(requestModel)
 	if err != nil {
@@ -77,7 +93,7 @@ func supportsSelectionParameters(channel *Channel, config *dto.ParameterCapabili
 	if !config.HasSelectionConstraints() {
 		return true, nil
 	}
-	err = relayparam.CheckSelectionCapabilitiesWithBodySize(requestBody, requestBodySize, config, hostreasoning.BaseModelName(upstreamModel))
+	err = checker.Check(config, hostreasoning.BaseModelName(upstreamModel))
 	if err == nil {
 		return true, nil
 	}

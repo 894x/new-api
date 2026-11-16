@@ -149,6 +149,7 @@ func GetChannelWithSelectionFilters(group string, model string, retry int, filte
 }
 
 func listDBChannelCandidates(group, model string, filters ChannelSelectionFilters) ([]Ability, error) {
+	filters.prepareParameterChecker()
 	if !IsGroupModelAllowed(group, model) {
 		return nil, nil
 	}
@@ -215,6 +216,7 @@ func listDBChannelCandidates(group, model string, filters ChannelSelectionFilter
 // applies request path and parameter constraints before
 // priority and weight selection.
 func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelectionFilters, model string) ([]Ability, int, int, error, error) {
+	filters.prepareParameterChecker()
 	if filters.RoutingPoolChannels != nil {
 		pooled := make([]Ability, 0, len(abilities))
 		for _, ability := range abilities {
@@ -297,7 +299,7 @@ func filterAbilitiesBySelectionFilters(abilities []Ability, filters ChannelSelec
 			filtered = append(filtered, ability)
 			continue
 		}
-		supported, checkErr := supportsSelectionParameters(channel, parameterConfigs[ability.ChannelId], model, filters.RequestBody, filters.RequestBodySize)
+		supported, checkErr := supportsSelectionParameters(channel, parameterConfigs[ability.ChannelId], model, filters.ParameterChecker)
 		if checkErr != nil {
 			var violation *relayparam.CapabilityViolationError
 			if !errors.As(checkErr, &violation) {

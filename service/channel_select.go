@@ -365,7 +365,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 				FilterKind: kind, Channel: channel,
 			}
 		}
-		parametersSupported, capabilityErr := channel.SupportsSelectionRequest(modelName, retry.RequestBody, retry.RequestBodySize)
+		parametersSupported, capabilityErr := channel.SupportsSelectionRequestWithChecker(modelName, retry.parameterCapabilityChecker())
 		if capabilityErr != nil || !parametersSupported {
 			if capabilityErr == nil {
 				capabilityErr = model.ErrParameterCapabilityUnsupported
@@ -432,7 +432,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 				affinitySatisfied, _ = model.ChannelSatisfiesFilters(preferred, modelName, constraints.Filters)
 			}
 			if affinitySatisfied {
-				parametersSupported, capabilityErr := preferred.SupportsSelectionRequest(modelName, retry.RequestBody, retry.RequestBodySize)
+				parametersSupported, capabilityErr := preferred.SupportsSelectionRequestWithChecker(modelName, retry.parameterCapabilityChecker())
 				affinitySatisfied = capabilityErr == nil && parametersSupported && ValidateSelectedChannelGroupPolicy(c, preferred.Id, modelName) == nil
 				recovering, recoveryErr := retry.channelRecovering(usingGroup, preferred.Id)
 				affinitySatisfied = affinitySatisfied && recoveryErr == nil && !recovering
