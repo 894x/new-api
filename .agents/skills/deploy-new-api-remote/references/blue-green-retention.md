@@ -11,7 +11,9 @@ Read [resource-safety.md](resource-safety.md) before discovery/build/backup work
 Establish host-specific budgets and start supervised monitoring on every affected
 host, including shared data peers. Recheck capacity before each green or standby/
 master transition clone: the peak may exceed the final two-slot footprint.
-Verify effective limits on new slots and offload or defer work if it cannot fit.
+Preserve the destination host/role's latest user-approved resource policy,
+including unlimited memory, rather than imposing a new cap on a replacement
+slot. Verify effective limits and offload or defer work if overlap cannot fit.
 Do not stop a healthy slot or force request draining to create headroom.
 
 Keep monitoring through role handoff, natural draining, historical retirement,

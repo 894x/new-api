@@ -7,6 +7,13 @@ description: Deploy or roll back a pinned new-api commit on a remote server, wit
 
 Deploy one verified commit to the authorized environment. Treat source delivery, build, backup, traffic switching, verification, and historical-instance retirement as separate gates.
 
+Preserve the latest user-approved application resource policy for each host and
+role across releases, replacement slots, and rollback. An unlimited memory policy
+must remain unlimited; deployment authorization does not authorize adding or
+changing application memory/swap/CPU limits or `GOMEMLIMIT`. Limits for temporary
+build, backup, and validation jobs are separate. Follow the resource reference
+when reconciling live settings, Compose files, and configuration generators.
+
 ## Resource safety throughout deployment
 
 Read [references/resource-safety.md](references/resource-safety.md) before adding
@@ -108,6 +115,8 @@ Resolve these values before making external changes:
 - image name/tag and build arguments
 - health/API URL and expected response
 - services and data that must remain unchanged
+- application resource policy per host and role, including explicit unlimited
+  settings and any user-authorized changes; distinguish it from auxiliary-job limits
 - affected hosts, resource budgets, monitoring ownership, warning/stop thresholds,
   and the exact auxiliary jobs that may be cancelled on pressure
 - authorized domain aliases, the current and previous release identities, and the
@@ -138,6 +147,8 @@ After connecting, inspect the live host rather than trusting remembered paths or
 - identify reverse-proxy routing for the requested hostname
 - distinguish the target application from production, test, database, Redis, and neighboring projects
 - capture target and protected container IDs, image IDs, restart counts, health, and deployed revision labels
+- compare live resource settings and effective cgroup limits with Compose files
+  and generation scripts; preserve the latest authorized policy when they differ
 - locate the actual checkout and Compose file set used by the target
 - resolve each application's database/Redis peer IDs and background-task role;
   identify all routes and established connections that use a historical slot
@@ -237,6 +248,8 @@ requested:
 Confirm all of the following with current evidence:
 
 - the target container is running and healthy
+- its effective resource policy matches the deployment contract, including any
+  unlimited memory setting; Compose files and generators preserve that policy
 - its image ID and OCI revision match the requested commit
 - bounded startup-log inspection finds no migration, connection, or panic errors;
   record the inspected window and any missing or truncated output
@@ -287,6 +300,8 @@ Return a concise deployment record containing:
 - backup path and validation result
 - health/API verification result
 - protected services confirmed unchanged
+- application resource policy before/after, any authorized changes, and effective
+  limit verification; disclose unresolved configuration or generator drift
 - rollback status or rollback command reference
 - current/previous slot roles, stopped historical container IDs, disabled restart
   policies, and any remaining old traffic or background-task owners

@@ -43,17 +43,51 @@ Before each phase, record:
   and the controller responsible for supervising and stopping those jobs.
 - Evidence that current readings and their trend permit the next phase.
 
-Choose limits from actual host capacity and workload. A fixed free-memory floor,
-load value, or container cap from a previous release is not a universal default.
-Load needs CPU-count and I/O context. `GOMEMLIMIT` is a Go runtime memory target,
-not a hard process/container RSS cap. For new slots, set appropriate limits and
-read back their effective cgroup configuration; do not retune existing live
-applications or data services without authorization.
+Choose auxiliary-job limits and monitoring thresholds from actual host capacity
+and workload. A fixed free-memory floor, load value, or container cap from a
+previous release is not a universal default. Load needs CPU-count and I/O context.
+Apply the application resource policy below to every new slot as well as existing
+services; capacity planning alone does not authorize changing that policy.
 
 If capacity is insufficient, offload to an authorized idle peer/local builder,
 reduce job concurrency, or wait. Do not stop healthy applications, database,
 Redis, proxy, workers, or scheduler to make room. Do not start a temporary clone
 unless its overlap fits the budget without forcing existing requests to end.
+
+## Preserve the application resource policy
+
+Before generating a slot, record the latest user-approved resource policy for
+its host and role. Compare selected Docker inspect fields, effective cgroup
+limits, Compose overrides, and generation scripts. Preserve existing finite
+limits unless the user changes them. Treat an explicit unlimited setting as a
+policy to preserve, not a missing value to replace with a default cap. Do not
+reintroduce a historical limit after an authorized online adjustment.
+
+Apply this policy to green slots, master handoffs, standby replacements, and
+rollback configurations. A candidate or standby template may have a different
+budget from the master: resolve the destination role's policy instead of copying
+its limits or hardcoding a new cap. Restrict temporary builders, dump clients,
+test databases, and other owned auxiliary jobs independently. If overlap cannot
+fit, offload, serialize, or defer work; do not lower an application's limit to
+make the deployment fit.
+
+For an unlimited application memory policy, omit finite `mem_limit` and
+`deploy.resources.limits.memory` values from the effective Compose configuration,
+and remove inherited restrictions from generators and overrides. Reconcile swap
+settings with the authorized policy separately. `GOMEMLIMIT` is a Go runtime
+memory target, not a hard process/container RSS cap; preserve its approved value
+or absence independently rather than deriving a new value from an unlimited
+container setting. Apply the same preservation rule to CPU and other application
+resource controls.
+
+Verify the rendered configuration before creating the slot and the actual kernel
+limits afterward, including parent cgroups that can impose a tighter limit. On
+cgroup v2, unlimited RAM is `memory.max=max`; inspect swap separately. Docker
+metadata and a healthy API alone do not prove the intended limit took effect.
+In particular, an online update with a zero memory value may leave the old limit
+unchanged. Use a verified online method for an authorized resource adjustment;
+do not restart a live service just to make the setting take effect. Keep the
+runtime, Compose files, and generators consistent, or report the remaining drift.
 
 ## Calibrate I/O warnings and stop conditions
 
