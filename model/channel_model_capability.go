@@ -260,11 +260,16 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 			configurationErrors = append(configurationErrors, mappingErr.Error())
 		}
 
+		paramOverride := make(map[string]any)
+		var overrideErr error
 		if channel.ParamOverride != nil && strings.TrimSpace(*channel.ParamOverride) != "" {
-			paramOverride := make(map[string]any)
-			if err := common.UnmarshalJsonStr(*channel.ParamOverride, &paramOverride); err != nil {
-				configurationErrors = append(configurationErrors, fmt.Sprintf("invalid parameter override: %v", err))
-			} else if len(paramOverride) > 0 {
+			overrideErr = common.UnmarshalJsonStr(*channel.ParamOverride, &paramOverride)
+		}
+		if overrideErr != nil {
+			configurationErrors = append(configurationErrors, fmt.Sprintf("invalid parameter override: %v", overrideErr))
+		} else {
+			paramOverride = EffectiveModelParamOverride(modelName, paramOverride)
+			if len(paramOverride) > 0 {
 				capability.ParameterOverrideConfigured = true
 				operationsValue, hasOperationsKey := paramOverride["operations"]
 				operations, operationsFormat := operationsValue.([]any)
@@ -409,8 +414,9 @@ func ListModelChannelCapabilities(modelName string) (ModelChannelCapabilities, e
 			capability.EndpointTypes = append(capability.EndpointTypes, string(endpointType))
 		}
 
-		if settings.ParameterCapabilities != nil && mappingErr == nil {
-			capability.ParameterCapabilities = settings.ParameterCapabilities.Resolve(upstreamModel)
+		if mappingErr == nil {
+			effective := EffectiveModelParameterCapabilities(modelName, upstreamModel, settings.ParameterCapabilities)
+			capability.ParameterCapabilities = effective.Resolve(upstreamModel)
 			capability.ParameterCapabilitiesConfigured = len(capability.ParameterCapabilities) > 0
 		}
 		capability.ConfigurationError = strings.Join(configurationErrors, "; ")

@@ -315,6 +315,16 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if strings.HasPrefix(key, ModelRequestPolicyOptionPrefix) {
+		policy, err := ParseModelRequestPolicy(value)
+		if err != nil {
+			return err
+		}
+		if key != modelRequestPolicyKey(policy.Model) {
+			return errors.New("model request policy key does not match model")
+		}
+		return nil
+	}
 	if key == GroupModelAccessOptionKey {
 		return errors.New("group-model access requires its dedicated matrix endpoint")
 	}

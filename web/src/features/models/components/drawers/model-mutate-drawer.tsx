@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -83,6 +83,12 @@ import {
 import type { Model } from '../../types'
 import { ModelConnections } from '../model-connections'
 
+const ModelRequestPolicyPanel = lazy(() =>
+  import('../model-request-policy-panel').then((module) => ({
+    default: module.ModelRequestPolicyPanel,
+  }))
+)
+
 export function ModelMutateDrawer(props: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -109,6 +115,8 @@ export function ModelMutateDrawer(props: {
     props.initialSection === 'pricing'
   )
   const [pricingDirty, setPricingDirty] = useState(false)
+  const [requestPolicyDirty, setRequestPolicyDirty] = useState(false)
+  const [requestPolicyVisited, setRequestPolicyVisited] = useState(false)
   const [pendingPricingName, setPendingPricingName] = useState<string | null>(
     null
   )
@@ -153,6 +161,8 @@ export function ModelMutateDrawer(props: {
     setPricingVisited(props.initialSection === 'pricing')
     setPricingName('')
     setPricingDirty(false)
+    setRequestPolicyDirty(false)
+    setRequestPolicyVisited(false)
     setPendingPricingName(null)
     setCloseConfirm(false)
   }, [
@@ -191,6 +201,13 @@ export function ModelMutateDrawer(props: {
     meta: { errorToast: false },
     onMutate: () => form.clearErrors('root.server'),
     mutationFn: async (values: ModelFormValues) => {
+      if (requestPolicyDirty && values.model_name !== currentRow?.model_name) {
+        throw new Error(
+          t(
+            'Save or discard request parameter changes before renaming metadata.'
+          )
+        )
+      }
       if (pricingDirty && values.model_name !== currentRow?.model_name) {
         throw new Error(
           t('Save or discard pricing changes before renaming metadata.')
@@ -222,7 +239,7 @@ export function ModelMutateDrawer(props: {
         queryClient.invalidateQueries({ queryKey: vendorsQueryKeys.all }),
       ])
       toast.success(t('Model metadata saved'))
-      if (!pricingDirty) props.onOpenChange(false)
+      if (!pricingDirty && !requestPolicyDirty) props.onOpenChange(false)
     },
     onError: (error) => {
       form.setError('root.server', {
@@ -242,7 +259,7 @@ export function ModelMutateDrawer(props: {
   const metadataDirty = form.formState.isDirty
   const close = (open: boolean) => {
     if (!open && isSubmitting) return
-    if (!open && (metadataDirty || pricingDirty)) {
+    if (!open && (metadataDirty || pricingDirty || requestPolicyDirty)) {
       setCloseConfirm(true)
       return
     }
@@ -270,10 +287,11 @@ export function ModelMutateDrawer(props: {
             onValueChange={(value) => {
               setSection(value)
               if (value === 'pricing') setPricingVisited(true)
+              if (value === 'parameters') setRequestPolicyVisited(true)
             }}
             className='shrink-0 px-4'
           >
-            <TabsList className='grid w-full grid-cols-3 group-data-horizontal/tabs:h-auto'>
+            <TabsList className='grid w-full grid-cols-2 group-data-horizontal/tabs:h-auto sm:grid-cols-4'>
               <TabsTrigger
                 value='metadata'
                 className='h-auto min-w-0 whitespace-normal'
@@ -286,6 +304,13 @@ export function ModelMutateDrawer(props: {
                 className='h-auto min-w-0 whitespace-normal'
               >
                 {t('Pricing')}
+              </TabsTrigger>
+              <TabsTrigger
+                value='parameters'
+                disabled={!hasModelName || savedModel?.name_rule !== 0}
+                className='h-auto min-w-0 whitespace-normal'
+              >
+                {t('Request parameters')}
               </TabsTrigger>
               <TabsTrigger
                 value='connections'
@@ -708,6 +733,23 @@ export function ModelMutateDrawer(props: {
                   }
                 />
               )}
+            </div>
+          )}
+          {props.open && requestPolicyVisited && savedModel && (
+            <div
+              className={
+                section === 'parameters'
+                  ? 'flex min-h-0 flex-1 flex-col'
+                  : 'hidden'
+              }
+            >
+              <Suspense fallback={<LoadingState />}>
+                <ModelRequestPolicyPanel
+                  key={savedModel.model_name}
+                  modelName={savedModel.model_name}
+                  onDirtyChange={setRequestPolicyDirty}
+                />
+              </Suspense>
             </div>
           )}
           {props.open && section === 'connections' && savedModel && (

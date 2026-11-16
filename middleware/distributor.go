@@ -692,7 +692,11 @@ func setupSelectedChannelContext(c *gin.Context, channel *model.Channel, modelNa
 	c.Set("channel_monitor_config", channel.MonitorConfig)
 	c.Set("channel_monitor_models", channel.Models)
 	common.SetContextKey(c, constant.ContextKeyChannelSetting, channel.GetSetting())
-	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, channel.GetOtherSettings())
+	otherSettings := channel.GetOtherSettings()
+	if upstreamModel, _, err := channel.ResolveUpstreamModelName(modelName); err == nil {
+		otherSettings.ParameterCapabilities = model.EffectiveModelParameterCapabilities(modelName, upstreamModel, otherSettings.ParameterCapabilities)
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, otherSettings)
 	switch channel.Type {
 	case constant.ChannelTypeTaskPlugin:
 		c.Set("task_plugin_key", channel.GetSetting().TaskPluginKey)
@@ -705,6 +709,7 @@ func setupSelectedChannelContext(c *gin.Context, channel *model.Channel, modelNa
 	}
 	logTaskPluginChannelDecision(c, channel, modelName, "channel_selected", "")
 	paramOverride := channel.GetParamOverride()
+	paramOverride = model.EffectiveModelParamOverride(modelName, paramOverride)
 	headerOverride := channel.GetHeaderOverride()
 	if mergedParam, applied := service.ApplyChannelAffinityOverrideTemplate(c, paramOverride); applied {
 		paramOverride = mergedParam

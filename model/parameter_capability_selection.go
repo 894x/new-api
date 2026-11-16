@@ -58,7 +58,11 @@ func (channel *Channel) SupportsSelectionRequest(requestModel string, requestBod
 }
 
 func supportsSelectionParameters(channel *Channel, config *dto.ParameterCapabilityConfig, requestModel string, requestBody []byte, requestBodySize *int64) (bool, error) {
-	if channel == nil || config == nil || !config.HasSelectionConstraints() {
+	if channel == nil {
+		return true, nil
+	}
+	policy := GetModelRequestPolicy(requestModel)
+	if !config.HasSelectionConstraints() && (policy == nil || !policy.ParameterCapabilities.HasSelectionConstraints()) {
 		return true, nil
 	}
 	if requestBodySize == nil && len(requestBody) > 0 {
@@ -68,6 +72,10 @@ func supportsSelectionParameters(channel *Channel, config *dto.ParameterCapabili
 	upstreamModel, _, err := channel.ResolveUpstreamModelName(requestModel)
 	if err != nil {
 		return false, err
+	}
+	config = EffectiveModelParameterCapabilities(requestModel, hostreasoning.BaseModelName(upstreamModel), config)
+	if !config.HasSelectionConstraints() {
+		return true, nil
 	}
 	err = relayparam.CheckSelectionCapabilitiesWithBodySize(requestBody, requestBodySize, config, hostreasoning.BaseModelName(upstreamModel))
 	if err == nil {

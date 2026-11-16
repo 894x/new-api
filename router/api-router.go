@@ -469,6 +469,8 @@ func SetApiRouter(router *gin.Engine) {
 		modelsRoute.Use(middleware.AdminAuth())
 		{
 			modelsRoute.GET("/sync_upstream/preview", controller.SyncUpstreamPreview)
+			modelsRoute.GET("/request-policy", controller.GetModelRequestPolicy)
+			modelsRoute.PUT("/request-policy", controller.SaveModelRequestPolicy)
 			modelsRoute.POST("/sync_upstream", controller.SyncUpstreamModels)
 			modelsRoute.POST("/delete", controller.BatchDeleteModelMeta)
 			modelsRoute.GET("/missing", controller.GetMissingModels)

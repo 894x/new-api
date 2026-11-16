@@ -90,6 +90,7 @@ export interface ParameterCapabilityEditorDialogProps {
   value: string
   models: string[]
   paramOverrideConfigured: boolean
+  modelScope?: boolean
   onOpenChange: (open: boolean) => void
   onSave: (value: string) => void
 }
@@ -149,6 +150,7 @@ export function ParameterCapabilityEditorDialog(
       value={props.value}
       models={props.models}
       paramOverrideConfigured={props.paramOverrideConfigured}
+      modelScope={props.modelScope}
       onOpenChange={props.onOpenChange}
       onSave={props.onSave}
     />
@@ -339,9 +341,15 @@ function ParameterCapabilityEditorSession(
       open
       onOpenChange={props.onOpenChange}
       title={t('Model Parameter Capabilities')}
-      description={t(
-        'Configure channel defaults, model family rules, and exact model overrides.'
-      )}
+      description={
+        props.modelScope
+          ? t(
+              'Configure defaults inherited by all channels for this public model.'
+            )
+          : t(
+              'Configure channel defaults, model family rules, and exact model overrides.'
+            )
+      }
       contentClassName='flex max-h-[94vh] flex-col gap-0 p-0 sm:max-w-7xl'
       headerClassName='border-b px-6 py-4'
       footerClassName='border-t px-6 py-4'
@@ -426,6 +434,7 @@ function ParameterCapabilityEditorSession(
         <TabsContent value='capabilities' className='min-h-0 overflow-hidden'>
           <div className='grid h-full min-h-0 grid-cols-[260px_minmax(0,1fr)]'>
             <ScopeSidebar
+              modelScope={props.modelScope}
               rules={rules}
               selection={selection}
               onSelect={setSelection}
@@ -436,10 +445,16 @@ function ParameterCapabilityEditorSession(
               <div className='flex flex-col gap-3 border-b px-5 py-4'>
                 {selection.type === 'default' ? (
                   <div>
-                    <h3 className='font-medium'>{t('Channel default')}</h3>
+                    <h3 className='font-medium'>
+                      {props.modelScope
+                        ? t('Model default')
+                        : t('Channel default')}
+                    </h3>
                     <p className='text-muted-foreground text-sm'>
                       {t(
-                        'These constraints apply to every model unless a matching rule overrides them.'
+                        props.modelScope
+                          ? 'Configure defaults inherited by all channels for this public model.'
+                          : 'These constraints apply to every model unless a matching rule overrides them.'
                       )}
                     </p>
                   </div>
@@ -527,6 +542,7 @@ function ParameterCapabilityEditorSession(
                 <div className='flex flex-col gap-3'>
                   {visibleParameters.map((path) => (
                     <ParameterCapabilityRow
+                      modelScope={props.modelScope}
                       key={path}
                       path={path}
                       configured={selectedParameters[path]}
@@ -595,6 +611,7 @@ function ParameterCapabilityEditorSession(
 }
 
 function ScopeSidebar(props: {
+  modelScope?: boolean
   rules: ModelParameterCapabilityRule[]
   selection: ScopeSelection
   onSelect: (selection: ScopeSelection) => void
@@ -612,7 +629,7 @@ function ScopeSidebar(props: {
           onClick={() => props.onSelect({ type: 'default' })}
         >
           <Settings2 data-icon='inline-start' />
-          {t('Channel default')}
+          {props.modelScope ? t('Model default') : t('Channel default')}
         </Button>
       </div>
       <ScrollArea className='min-h-0 flex-1 p-3'>
@@ -799,6 +816,7 @@ function RuleEditorHeader(props: {
 }
 
 function ParameterCapabilityRow(props: {
+  modelScope?: boolean
   path: string
   configured?: ParameterCapability
   effective?: { capability: ParameterCapability; source: string }
@@ -806,6 +824,9 @@ function ParameterCapabilityRow(props: {
 }) {
   const { t } = useTranslation()
   const capability = props.configured
+  const defaultSource = props.modelScope
+    ? t('Model default')
+    : t('Channel default')
   const isRequestBodySize = props.path === REQUEST_BODY_SIZE_CAPABILITY
   if (!capability) {
     return (
@@ -817,7 +838,7 @@ function ParameterCapabilityRow(props: {
               ? t('Inherited from {{source}}', {
                   source:
                     props.effective.source === 'Channel default'
-                      ? t('Channel default')
+                      ? defaultSource
                       : props.effective.source,
                 })
               : t('No constraint configured')}
@@ -888,7 +909,7 @@ function ParameterCapabilityRow(props: {
               ? t('Effective source: {{source}}', {
                   source:
                     props.effective.source === 'Channel default'
-                      ? t('Channel default')
+                      ? defaultSource
                       : props.effective.source,
                 })
               : t('Scope override')}

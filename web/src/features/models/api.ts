@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { ParameterCapabilityConfig } from '@/features/channels/types'
 import { api } from '@/lib/api'
 
 import type {
@@ -40,6 +41,38 @@ import type {
   ListDeploymentsResponse,
   ModelChannelCapabilitiesResponse,
 } from './types'
+
+export type ModelRequestPolicy = {
+  model: string
+  parameter_capabilities?: ParameterCapabilityConfig
+  param_override?: Record<string, unknown>
+}
+
+type ModelRequestPolicyResponse = {
+  success: boolean
+  message?: string
+  data?: ModelRequestPolicy
+}
+
+export async function getModelRequestPolicy(
+  model: string
+): Promise<ModelRequestPolicyResponse> {
+  const res = await api.get<ModelRequestPolicyResponse>(
+    '/api/models/request-policy',
+    { params: { model } }
+  )
+  return res.data
+}
+
+export async function saveModelRequestPolicy(
+  policy: ModelRequestPolicy
+): Promise<ModelRequestPolicyResponse> {
+  const res = await api.put<ModelRequestPolicyResponse>(
+    '/api/models/request-policy',
+    policy
+  )
+  return res.data
+}
 
 // ============================================================================
 // Model CRUD Operations

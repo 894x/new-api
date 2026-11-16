@@ -57,7 +57,8 @@ func filterVideoMediaChannels(param *RetryParam, group string) (*RetryParam, boo
 		if err != nil {
 			return nil, false, err
 		}
-		plans, tier, err := relayparam.PlanMediaDelivery(param.RequestBody, channel.GetOtherSettings().ParameterCapabilities, upstreamModel, processor, true)
+		capabilities := model.EffectiveModelParameterCapabilities(param.ModelName, upstreamModel, channel.GetOtherSettings().ParameterCapabilities)
+		plans, tier, err := relayparam.PlanMediaDelivery(param.RequestBody, capabilities, upstreamModel, processor, true)
 		if err != nil {
 			configured = true
 			lastViolation = err

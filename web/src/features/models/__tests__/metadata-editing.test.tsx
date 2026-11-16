@@ -312,6 +312,57 @@ describe('model pricing entry', () => {
 })
 
 describe('metadata editing', () => {
+  it('retains unsaved model parameter defaults across tabs and confirms before closing', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'get').mockImplementation(async (url) => {
+      if (url === '/api/models/7') {
+        return { data: { success: true, data: model } }
+      }
+      if (url === '/api/models/request-policy') {
+        return {
+          data: {
+            success: true,
+            data: {
+              model: model.model_name,
+              param_override: { temperature: 0.5 },
+            },
+          },
+        }
+      }
+      return { data: { success: true, data: { items: [] } } }
+    })
+    const onOpenChange = vi.fn()
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <ModelMutateDrawer
+          open
+          onOpenChange={onOpenChange}
+          currentRow={model}
+        />
+      </QueryClientProvider>
+    )
+    await screen.findByLabelText('Description')
+    expect(screen.getByRole('tablist')).toHaveClass(
+      'grid-cols-2',
+      'sm:grid-cols-4'
+    )
+    await user.click(screen.getByRole('tab', { name: 'Request parameters' }))
+    expect(
+      screen.getByRole('tab', { name: 'Request parameters' })
+    ).toHaveAttribute('aria-selected', 'true')
+    await user.click(await screen.findByRole('button', { name: 'Clear' }))
+    await user.click(screen.getByRole('tab', { name: 'Model metadata' }))
+    await user.click(screen.getByRole('tab', { name: 'Request parameters' }))
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+    await user.click(screen.getByRole('tab', { name: 'Model metadata' }))
+    await user.keyboard('{Escape}')
+    expect(await screen.findByText('Discard unsaved changes?')).toBeVisible()
+    expect(onOpenChange).not.toHaveBeenCalled()
+    client.clear()
+  })
   it.each([
     {
       name: 'business rejection',

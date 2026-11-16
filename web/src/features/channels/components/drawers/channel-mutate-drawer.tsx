@@ -208,6 +208,7 @@ import {
   nextTaskPluginBaseUrl,
 } from '../../lib/task-plugin-base-url'
 import type { Channel } from '../../types'
+import { CacheWriteSimulationSetting } from '../cache-write-simulation-setting'
 import { ChannelPluginExtensions } from '../channel-plugin-extensions'
 import { ChannelQuickOptions } from '../channel-quick-options'
 import { ChannelTypeLogo } from '../channel-type-badge'
@@ -237,7 +238,6 @@ import {
 import { ModelRedirectPanel } from '../model-redirect-panel'
 import { ModelRoutingOverridesEditor } from '../model-routing-overrides-editor'
 import { ResponsesWebSocketSetting } from '../responses-websocket-setting'
-import { CacheWriteSimulationSetting } from '../cache-write-simulation-setting'
 import { StreamResponseHeaderSetting } from '../stream-response-header-setting'
 import { UpstreamModelSelection } from '../upstream-model-selection'
 import {
@@ -4994,7 +4994,7 @@ export function ChannelMutateDrawer({
                       ) : (
                         <span className='text-muted-foreground text-sm'>
                           {t(
-                            'No parameter capabilities configured. Requests keep the channel adaptor defaults.'
+                            'No channel-specific constraints. Model defaults apply when configured.'
                           )}
                         </span>
                       )}
@@ -5030,7 +5030,9 @@ export function ChannelMutateDrawer({
                   channelType={currentType}
                   disabled={sensitiveLocked || isSubmitting}
                 />
-                <CacheWriteSimulationSetting disabled={sensitiveLocked || isSubmitting} />
+                <CacheWriteSimulationSetting
+                  disabled={sensitiveLocked || isSubmitting}
+                />
                 {formatFields}
                 <OllamaProtocolFields control={form.control} />
                 {ollamaOpenAIChatFields}
