@@ -24,20 +24,23 @@ const captureAttemptLimit = 8
 // is necessary. Tail is separate evidence after truncation, never concatenated
 // to Body as if the intervening bytes had been captured.
 type CapturePart struct {
-	Stage             string `json:"stage"`
-	Attempt           int    `json:"attempt,omitempty"`
-	ChannelID         int    `json:"channel_id,omitempty"`
-	Model             string `json:"model,omitempty"`
-	ContentType       string `json:"content_type,omitempty"`
-	StatusCode        int    `json:"status_code,omitempty"`
-	UpstreamRequestID string `json:"upstream_request_id,omitempty"`
-	Bytes             int64  `json:"bytes"`
-	Complete          bool   `json:"complete"`
-	Truncated         bool   `json:"truncated"`
-	Redacted          bool   `json:"redacted"`
-	Omitted           bool   `json:"omitted"`
-	Body              string `json:"body"`
-	Tail              string `json:"tail,omitempty"`
+	Stage             string      `json:"stage"`
+	Attempt           int         `json:"attempt,omitempty"`
+	ChannelID         int         `json:"channel_id,omitempty"`
+	Model             string      `json:"model,omitempty"`
+	ContentType       string      `json:"content_type,omitempty"`
+	StatusCode        int         `json:"status_code,omitempty"`
+	UpstreamRequestID string      `json:"upstream_request_id,omitempty"`
+	Bytes             int64       `json:"bytes"`
+	Complete          bool        `json:"complete"`
+	Truncated         bool        `json:"truncated"`
+	Redacted          bool        `json:"redacted"`
+	Omitted           bool        `json:"omitted"`
+	Body              string      `json:"body"`
+	Tail              string      `json:"tail,omitempty"`
+	Headers           http.Header `json:"headers,omitempty"`
+	HeadersTruncated  bool        `json:"headers_truncated,omitempty"`
+	HeadersRedacted   bool        `json:"headers_redacted,omitempty"`
 	head              []byte
 	tail              []byte
 }
@@ -170,6 +173,7 @@ func (r *captureReadCloser) Read(b []byte) (int, error) {
 func (s *RequestCaptureSession) CaptureClientRequest(c *gin.Context) {
 	p := s.NewPart("client_request")
 	p.ContentType = c.ContentType()
+	p.captureHeaders(c.Request.Header, c.Request.Host, c.Request.ContentLength, c.Request.TransferEncoding)
 	if c.Request.Body != nil {
 		c.Request.Body = &captureReadCloser{ReadCloser: c.Request.Body, session: s, part: p, expected: c.Request.ContentLength}
 	} else {
@@ -197,6 +201,7 @@ func CaptureUpstreamExchange(c *gin.Context, req *http.Request, channelID int, m
 	out := s.NewPart("upstream_request")
 	out.Attempt, out.ChannelID, out.Model = attempt, channelID, modelName
 	out.ContentType = req.Header.Get("Content-Type")
+	out.captureHeaders(req.Header, req.Host, req.ContentLength, req.TransferEncoding)
 	if req.Body != nil {
 		req.Body = &captureReadCloser{ReadCloser: req.Body, session: s, part: out, expected: req.ContentLength}
 	} else {
@@ -209,6 +214,7 @@ func CaptureUpstreamExchange(c *gin.Context, req *http.Request, channelID int, m
 			return
 		}
 		in.StatusCode, in.ContentType = resp.StatusCode, resp.Header.Get("Content-Type")
+		in.captureHeaders(resp.Header, "", resp.ContentLength, resp.TransferEncoding)
 		for _, key := range []string{"x-request-id", "request-id", "x-amzn-requestid"} {
 			if value := resp.Header.Get(key); value != "" {
 				in.UpstreamRequestID = common.LimitUpstreamRequestIdentifier(value)
@@ -228,9 +234,27 @@ type captureResponseWriter struct {
 	session     *RequestCaptureSession
 	part        *CapturePart
 	writeFailed bool
+	headersOnce sync.Once
+}
+
+func (w *captureResponseWriter) captureHeaders() {
+	w.headersOnce.Do(func() {
+		w.part.captureHeaders(w.Header(), "", -1, nil)
+	})
+}
+
+func (w *captureResponseWriter) WriteHeaderNow() {
+	w.captureHeaders()
+	w.ResponseWriter.WriteHeaderNow()
+}
+
+func (w *captureResponseWriter) Flush() {
+	w.captureHeaders()
+	w.ResponseWriter.Flush()
 }
 
 func (w *captureResponseWriter) Write(b []byte) (int, error) {
+	w.captureHeaders()
 	n, err := w.ResponseWriter.Write(b)
 	w.session.append(w.part, b[:n])
 	w.session.mu.Lock()
@@ -248,6 +272,7 @@ func (s *RequestCaptureSession) CaptureClientResponse(c *gin.Context) func(bool)
 	w := &captureResponseWriter{ResponseWriter: c.Writer, session: s, part: p}
 	c.Writer = w
 	return func(completed bool) {
+		w.captureHeaders()
 		s.mu.Lock()
 		p.ContentType = w.Header().Get("Content-Type")
 		p.StatusCode = w.Status()

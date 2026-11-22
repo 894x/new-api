@@ -3636,6 +3636,7 @@
     "Header Passthrough (X-Request-Id)": "Passthrough en-tête (X-Request-Id)",
     "Header Value (supports string or JSON mapping)": "Valeur de l'en-tête (chaîne ou mappage JSON)",
     "header. Anthropic-formatted endpoints accept the": ". Les points de terminaison au format Anthropic acceptent à la place",
+    "HTTP headers": "En-têtes HTTP",
     "Headers to first response": "En-têtes au premier paquet",
     "Health": "Santé",
     "Health check timeout threshold (seconds)": "Seuil de durée des contrôles (secondes)",

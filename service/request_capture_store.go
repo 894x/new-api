@@ -211,7 +211,7 @@ func (store *RequestCaptureStore) persist(session *RequestCaptureSession) {
 			p.Omitted = p.Omitted || omitted
 		}
 		p.head, p.tail = nil, nil
-		if !p.Complete || p.Truncated || p.Omitted {
+		if !p.Complete || p.Truncated || p.Omitted || p.HeadersTruncated {
 			record.Status = "partial"
 		}
 	}

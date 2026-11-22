@@ -3636,6 +3636,7 @@
     "Header Passthrough (X-Request-Id)": "Chuyển tiếp header (X-Request-Id)",
     "Header Value (supports string or JSON mapping)": "Giá trị header (hỗ trợ chuỗi hoặc ánh xạ JSON)",
     "header. Anthropic-formatted endpoints accept the": ". Các endpoint định dạng Anthropic chấp nhận header",
+    "HTTP headers": "Tiêu đề HTTP",
     "Headers to first response": "Từ tiêu đề đến phản hồi đầu tiên",
     "Health": "Sức khỏe",
     "Health check timeout threshold (seconds)": "Ngưỡng thời gian kiểm tra (giây)",

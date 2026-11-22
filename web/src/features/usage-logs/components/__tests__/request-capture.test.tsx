@@ -37,6 +37,11 @@ describe('Captured request details', () => {
                 redacted: false,
                 omitted: false,
                 body: 'captured body',
+                headers: {
+                  'X-Request-Id': ['upstream-attempt-2'],
+                  'Set-Cookie': ['[REDACTED]'],
+                },
+                headers_redacted: true,
                 tail: 'usage tail',
               },
             ],
@@ -54,6 +59,10 @@ describe('Captured request details', () => {
       expect(screen.getByText('captured body')).toBeInTheDocument()
     )
     expect(screen.getByText('usage tail')).toBeInTheDocument()
+    expect(screen.getByText('HTTP headers')).toBeInTheDocument()
+    expect(screen.getByText(/upstream-attempt-2/)).toHaveTextContent(
+      '[REDACTED]'
+    )
     expect(screen.getByText('Incomplete · Truncated')).toBeInTheDocument()
     expect(api.get).toHaveBeenLastCalledWith(
       '/api/log/request-capture/request-42',

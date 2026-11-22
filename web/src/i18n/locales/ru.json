@@ -3636,6 +3636,7 @@
     "Header Passthrough (X-Request-Id)": "Проброс заголовка (X-Request-Id)",
     "Header Value (supports string or JSON mapping)": "Значение заголовка (строка или JSON-маппинг)",
     "header. Anthropic-formatted endpoints accept the": ". Эндпоинты формата Anthropic вместо этого принимают",
+    "HTTP headers": "Заголовки HTTP",
     "Headers to first response": "От заголовков до первого ответа",
     "Health": "Здоровье",
     "Health check timeout threshold (seconds)": "Порог длительности проверки (секунды)",

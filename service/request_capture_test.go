@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -216,6 +217,11 @@ func TestRequestCaptureDisabledByDefaultAndPerUser(t *testing.T) {
 
 func TestRequestCapturePersistsFourBoundariesRetriesAndSSEWithoutChangingBytes(t *testing.T) {
 	store, c, w := captureFixture(t)
+	c.Request.Header.Set("Authorization", "Bearer client-secret")
+	c.Request.Header.Set("Cookie", "session=client-cookie")
+	c.Request.Header["x-custom-auth"] = []string{"custom-secret"}
+	c.Request.Header.Add("Accept", "application/json")
+	c.Request.Header.Add("Accept", "text/event-stream")
 	require.NoError(t, model.SetRequestCapturePolicy(context.Background(), model.RequestCapturePolicy{UserID: 7, Enabled: true}))
 	s := BeginRequestCapture(c)
 	require.NotNil(t, s)
@@ -224,21 +230,31 @@ func TestRequestCapturePersistsFourBoundariesRetriesAndSSEWithoutChangingBytes(t
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"model":"client-model","messages":[]}`, string(in))
 	finish := s.CaptureClientResponse(c)
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		req := httptest.NewRequest(http.MethodPost, "http://upstream/v1/chat/completions", strings.NewReader(`{"model":"mapped-model","api_key":"private"}`))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Request-Id", "outbound-"+strconv.Itoa(attempt+1))
+		req.Header.Set("X-Api-Key", "upstream-secret")
 		capture := CaptureUpstreamExchange(c, req, 10+attempt, "mapped-model")
+		assert.Equal(t, "upstream-secret", req.Header.Get("X-Api-Key"))
 		out, err := io.ReadAll(req.Body)
 		require.NoError(t, err)
 		assert.Contains(t, string(out), "private", "capture must not alter the outbound request")
 		data := "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n\ndata: [DONE]\n\n"
-		resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}, "X-Request-Id": {"upstream-id"}}, Body: io.NopCloser(strings.NewReader(data)), ContentLength: -1}
+		resp := &http.Response{StatusCode: 200, Header: http.Header{
+			"Content-Type": {"text/event-stream"}, "X-Request-Id": {"upstream-id"},
+			"Set-Cookie": {"session=upstream-cookie"}, "Retry-After": {strconv.Itoa(attempt + 1)},
+		}, Body: io.NopCloser(strings.NewReader(data)), ContentLength: -1}
 		capture(resp, nil)
 		actual, err := io.ReadAll(resp.Body)
 		require.NoError(t, err)
 		assert.Equal(t, data, string(actual))
 		if attempt == 1 {
 			c.Writer.Header().Set("Content-Type", "text/event-stream")
+			c.Writer.Header().Set("Set-Cookie", "session=client-side-cookie")
+			c.Writer.Header().Set("X-Request-Id", "at-commit")
+			c.Writer.Flush()
+			c.Writer.Header().Set("X-Request-Id", "after-commit")
 			_, err = c.Writer.Write(actual[:15])
 			require.NoError(t, err)
 			c.Writer.Flush()
@@ -267,6 +283,21 @@ func TestRequestCapturePersistsFourBoundariesRetriesAndSSEWithoutChangingBytes(t
 	assert.True(t, parts[2].Redacted)
 	assert.Contains(t, parts[5].Body, `"cached_tokens":80`)
 	assert.Equal(t, "upstream-id", parts[5].UpstreamRequestID)
+	assert.Equal(t, []string{"application/json", "text/event-stream"}, parts[0].Headers.Values("Accept"))
+	assert.Equal(t, "[REDACTED]", parts[0].Headers.Get("Authorization"))
+	assert.Equal(t, "[REDACTED]", parts[0].Headers.Get("Cookie"))
+	assert.Equal(t, "[REDACTED]", parts[0].Headers.Get("X-Custom-Auth"))
+	assert.Equal(t, "at-commit", parts[1].Headers.Get("X-Request-Id"))
+	assert.Equal(t, "[REDACTED]", parts[1].Headers.Get("Set-Cookie"))
+	assert.Equal(t, "upstream", parts[2].Headers.Get("Host"))
+	assert.Equal(t, "outbound-1", parts[2].Headers.Get("X-Request-Id"))
+	assert.Equal(t, "outbound-2", parts[4].Headers.Get("X-Request-Id"))
+	assert.Equal(t, "[REDACTED]", parts[4].Headers.Get("X-Api-Key"))
+	assert.Equal(t, "1", parts[3].Headers.Get("Retry-After"))
+	assert.Equal(t, "2", parts[5].Headers.Get("Retry-After"))
+	assert.Equal(t, "[REDACTED]", parts[5].Headers.Get("Set-Cookie"))
+	assert.True(t, parts[5].HeadersRedacted)
+	assert.False(t, parts[5].HeadersTruncated)
 }
 
 func TestRequestCaptureTruncationRetainsUsageTailAndMarksIncomplete(t *testing.T) {
@@ -570,4 +601,55 @@ func TestRequestCaptureHTTPErrorThenStreamingRetryRetainsActualExchanges(t *test
 	assert.Equal(t, 2, parts[5].Attempt)
 	assert.Contains(t, parts[5].Body, `"cached_tokens":30`)
 	assert.Equal(t, "ready", record.Status)
+}
+
+func TestRequestCaptureHeaderBudgetLeavesBodyIntact(t *testing.T) {
+	store, c, _ := captureFixture(t)
+	require.NoError(t, model.SetRequestCapturePolicy(context.Background(), model.RequestCapturePolicy{UserID: 7, Enabled: true}))
+	c.Request.Header.Set("User-Agent", strings.Repeat("x", 32<<10))
+	c.Request.Header.Set("Referer", "https://user:password@example.test/path?token=private#fragment")
+	c.Request.Header.Set("Proxy-Authorization", "Bearer secret")
+	s := BeginRequestCapture(c)
+	require.NotNil(t, s)
+	s.CaptureClientRequest(c)
+	_, err := io.Copy(io.Discard, c.Request.Body)
+	require.NoError(t, err)
+	finish := s.CaptureClientResponse(c)
+	c.Writer.WriteHeader(http.StatusBadRequest)
+	c.Writer.WriteHeaderNow()
+	finish(true)
+	s.Finish()
+	store.persist(<-store.queue)
+	record, err := model.FindRequestCapture(context.Background(), "capture-test-request")
+	require.NoError(t, err)
+	assert.Equal(t, "partial", record.Status)
+	parts, err := ReadRequestCapture(record)
+	require.NoError(t, err)
+	require.Len(t, parts, 2)
+	assert.True(t, parts[0].HeadersTruncated)
+	assert.True(t, parts[0].HeadersRedacted)
+	assert.False(t, parts[0].Truncated)
+	assert.JSONEq(t, `{"model":"client-model","messages":[]}`, parts[0].Body)
+	assert.Empty(t, parts[0].Headers.Get("User-Agent"))
+	assert.Equal(t, "https://example.test/path", parts[0].Headers.Get("Referer"))
+	assert.Equal(t, "[REDACTED]", parts[0].Headers.Get("Proxy-Authorization"))
+}
+
+func BenchmarkRequestCaptureHeadersFourBoundaries(b *testing.B) {
+	headers := http.Header{
+		"Accept":        {"application/json", "text/event-stream"},
+		"Authorization": {"Bearer fixture"},
+		"Content-Type":  {"application/json"},
+		"Cookie":        {"session=fixture"},
+		"User-Agent":    {"capture-benchmark/1.0"},
+		"X-Request-Id":  {"upstream-fixture-id"},
+		"X-Trace-Id":    {"c2bb18af972918f0e69a83baf0f51487"},
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		for range 4 {
+			var part CapturePart
+			part.captureHeaders(headers, "upstream.example.test", 1024, nil)
+		}
+	}
 }

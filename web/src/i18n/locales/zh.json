@@ -3636,6 +3636,7 @@
     "Header Passthrough (X-Request-Id)": "请求头透传（X-Request-Id）",
     "Header Value (supports string or JSON mapping)": "请求头值（支持字符串或 JSON 映射）",
     "header. Anthropic-formatted endpoints accept the": " 请求头。Anthropic 格式的端点也接受",
+    "HTTP headers": "HTTP 请求头或响应头",
     "Headers to first response": "响应头至首包",
     "Health": "健康",
     "Health check timeout threshold (seconds)": "健康检查耗时阈值（秒）",

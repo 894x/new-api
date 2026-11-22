@@ -20,6 +20,9 @@ type CapturePart = {
   omitted: boolean
   body: string
   tail?: string
+  headers?: Record<string, string[]>
+  headers_truncated?: boolean
+  headers_redacted?: boolean
 }
 type CaptureData = {
   status: string
@@ -197,6 +200,24 @@ export function RequestCapture({ requestId }: { requestId: string }) {
               <pre className='mt-2 max-h-80 overflow-auto text-xs break-all whitespace-pre-wrap'>
                 {part.body || t('No content')}
               </pre>
+              {(part.headers || part.headers_truncated) && (
+                <div className='mt-2 space-y-1'>
+                  <p className='text-xs font-medium'>{t('HTTP headers')}</p>
+                  <p className='text-muted-foreground text-xs'>
+                    {[
+                      part.headers_truncated && t('Truncated'),
+                      part.headers_redacted && t('Redacted'),
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                  <pre className='max-h-48 overflow-auto text-xs break-all whitespace-pre-wrap'>
+                    {part.headers
+                      ? JSON.stringify(part.headers, null, 2)
+                      : t('No content')}
+                  </pre>
+                </div>
+              )}
               {part.tail && (
                 <>
                   <p className='mt-2 text-xs font-medium'>
