@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func CloseResponseBodyGracefully(httpResponse *http.Response) {
@@ -136,6 +138,10 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 		}
 	}
 
+	// Cache headers describe the body that is about to be sent. Set them after
+	// upstream header copying so a provider header cannot replace the final counts.
+	setClaudeCacheUsageHeaders(c, data)
+
 	// set Content-Length header manually BEFORE calling WriteHeader
 	c.Writer.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 
@@ -151,4 +157,25 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 		logger.LogError(c, fmt.Sprintf("failed to copy response body: %s", err.Error()))
 	}
 	c.Writer.Flush()
+}
+
+// setClaudeCacheUsageHeaders publishes the Claude usage cache counters that
+// are only known once the final JSON body exists. A usage object with missing
+// counters is reported as zero. Responses without usage, and every other
+// protocol, leave the headers unset. Streaming callers send headers before
+// the final usage event, so they keep the counters in the SSE usage objects.
+func setClaudeCacheUsageHeaders(c *gin.Context, body []byte) {
+	if c == nil || c.Request == nil || c.Request.URL == nil || c.Writer == nil {
+		return
+	}
+	if !strings.HasSuffix(c.Request.URL.Path, "/messages") {
+		return
+	}
+	usage := gjson.GetBytes(body, "usage")
+	if !usage.Exists() || !usage.IsObject() {
+		return
+	}
+	header := c.Writer.Header()
+	header.Set("x-cache-read-input-tokens", strconv.FormatInt(usage.Get("cache_read_input_tokens").Int(), 10))
+	header.Set("x-cache-creation-input-tokens", strconv.FormatInt(usage.Get("cache_creation_input_tokens").Int(), 10))
 }

@@ -210,6 +210,24 @@ func addChatUsageAliasesToResponsesBody(body []byte, path string, usage *dto.Usa
 	return body, nil
 }
 
+// normalizeCachedTokenAliases copies provider cache-read aliases into the
+// standard prompt detail. A value already stored there stays authoritative.
+// Order is Responses details, then the top-level cached_tokens alias, then
+// prompt_cache_hit_tokens.
+func normalizeCachedTokenAliases(usage *dto.Usage) {
+	if usage == nil || usage.PromptTokensDetails.CachedTokens > 0 {
+		return
+	}
+	switch {
+	case usage.InputTokensDetails != nil && usage.InputTokensDetails.CachedTokens > 0:
+		usage.PromptTokensDetails.CachedTokens = usage.InputTokensDetails.CachedTokens
+	case usage.CachedTokens > 0:
+		usage.PromptTokensDetails.CachedTokens = usage.CachedTokens
+	case usage.PromptCacheHitTokens > 0:
+		usage.PromptTokensDetails.CachedTokens = usage.PromptCacheHitTokens
+	}
+}
+
 func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {
 	if info == nil || usage == nil {
 		return
@@ -251,6 +269,7 @@ func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, res
 			}
 		}
 	}
+	normalizeCachedTokenAliases(usage)
 }
 
 func addTopLevelCachedTokensToChatResponseBody(body []byte, usage *dto.Usage) ([]byte, error) {
