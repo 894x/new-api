@@ -43,6 +43,7 @@ func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 	}
 
 	if streamResponse.Usage != nil {
+		normalizeCachedTokenAliases(streamResponse.Usage)
 		info.EnsureClaudeConvertInfo().Usage = streamResponse.Usage
 	}
 	result, err := service.ConvertStreamResponse(c, info, types.RelayFormatClaude, &streamResponse)
@@ -222,6 +223,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		// The buffered final chunk is a new conversion step too. Without this
 		// increment, one-chunk streams miss message_start and two-chunk streams
 		// can emit it twice.
+		normalizeCachedTokenAliases(streamResponse.Usage)
 		info.SendResponseCount++
 		info.EnsureClaudeConvertInfo().Usage = usage
 
